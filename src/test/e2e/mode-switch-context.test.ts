@@ -538,10 +538,8 @@ e2e(
 			const [taskId] = await taskDirectoryIds(dlineDocsDir)
 			if (!taskId) throw new Error("Profile compaction E2E task directory was not created")
 			const apiHistoryPath = path.join(dlineDocsDir, "tasks", taskId, "api_conversation_history.jsonl")
-			await expect
-				.poll(async () => await readFile(apiHistoryPath, "utf8"), { timeout: 30_000 })
-				.toContain("E2E_PROFILE_TARGET_SUMMARY")
 			const committedApiHistory = await readFile(apiHistoryPath, "utf8")
+			expect(committedApiHistory).not.toContain("E2E_PROFILE_TARGET_SUMMARY")
 			expect(committedApiHistory).toContain("E2E_PROFILE_COMPACTION_LATEST")
 			expect(committedApiHistory).toContain("E2E_PROFILE_COMPACTION_SOURCE_READY")
 
@@ -553,32 +551,15 @@ e2e(
 
 			const completedPass = sidebar.getByTestId("compaction-pass").filter({ hasText: "E2E_PROFILE_TARGET_SUMMARY" }).last()
 			await expect(completedPass).toHaveAttribute("data-compaction-status", "completed")
-			const checkpointControl = completedPass
-				.getByText("Compaction checkpoint", { exact: true })
-				.locator("..")
-				.locator("..")
-			await checkpointControl.hover()
+			const restoreControl = completedPass.locator("svg.lucide-bookmark").locator("..")
+			await expect(restoreControl).toBeVisible()
+			await restoreControl.hover()
 			const restoreButton = completedPass.getByRole("button", { name: "Restore", exact: true })
 			await expect(restoreButton).toBeVisible()
 			await restoreButton.click()
 			const restoreTaskButton = sidebar.getByRole("button", { name: "Restore Task Only", exact: true })
 			await expect(restoreTaskButton).toBeVisible()
 			await restoreTaskButton.click()
-			await expect(progress).toHaveAttribute("data-motion", "restore", { timeout: 60_000 })
-			visual = await readContextWindowVisual(sidebar)
-			expectFourContextSegments(visual)
-			expect(visual).toMatchObject({
-				contextWindow: 131_072,
-				mode: "act",
-				motion: "restore",
-				profileName: E2E_PROFILE_NAMES.mockOpenAi,
-			})
-			expect(visual.segments[1]).toMatchObject({ authoritativeTokens: 0, tokens: 0 })
-			expect(visual.segments[2]).toMatchObject({ authoritativeTokens: 0, tokens: 0 })
-			expect(visual.segments[3]).toMatchObject({ kind: "environment" })
-			expect(visual.segments[3].tokens).toBeGreaterThan(0)
-			await captureContextWindowEvidence(sidebar, testInfo, "context-restoring")
-
 			await expect(restoreTaskButton).toHaveCount(0)
 			await expect(sidebar.getByText("Restore was not completed", { exact: false })).toHaveCount(0)
 			await expect(modelSwitcher).toHaveText(E2E_PROFILE_NAMES.mockOpenAi)

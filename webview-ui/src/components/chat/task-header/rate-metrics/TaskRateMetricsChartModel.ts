@@ -56,7 +56,7 @@ const MIN_BAR_WIDTH = 4
 const MAX_BAR_WIDTH = 36
 
 /** Return the value represented by one Task rate history point. */
-export function getTaskRateMetricValue(point: TaskRateMetricPoint, metric: TaskRateMetric): number {
+export function getTaskRateMetricValue(point: TaskRateMetricPoint, metric: TaskRateMetric): number | undefined {
 	switch (metric) {
 		case "rpm":
 			return point.requestsPerMinute
@@ -100,7 +100,10 @@ export function createTaskRateChartLayout(
 	const startMs = sortedPoints[0]?.bucketStartMs ?? 0
 	const endMs = sortedPoints.at(-1)?.bucketEndMs ?? startMs + 1
 	const durationMs = Math.max(1, endMs - startMs)
-	const maxValue = Math.max(0, ...sortedPoints.map((point) => getTaskRateMetricValue(point, metric)))
+	const availableValues = sortedPoints
+		.map((point) => getTaskRateMetricValue(point, metric))
+		.filter((value): value is number => value !== undefined)
+	const maxValue = Math.max(0, ...availableValues)
 	const axisMax = getAxisMax(maxValue)
 	const ticks = createTaskRateChartTicks(axisMax, DEFAULT_TICK_COUNT).map((value) => ({
 		value,
@@ -108,15 +111,21 @@ export function createTaskRateChartLayout(
 		label: formatTaskRateMetricValue(value),
 	}))
 
-	const chartPoints = sortedPoints.map((point) => {
+	const chartPoints: TaskRateChartPoint[] = []
+	const segments: TaskRateChartPoint[][] = []
+	let currentSegment: TaskRateChartPoint[] | undefined
+	for (const point of sortedPoints) {
+		const value = getTaskRateMetricValue(point, metric)
+		if (value === undefined) {
+			currentSegment = undefined
+			continue
+		}
 		const midpointMs = point.bucketStartMs + (point.bucketEndMs - point.bucketStartMs) / 2
 		const x = plotLeft + ((midpointMs - startMs) / durationMs) * plotWidth
-		const value = getTaskRateMetricValue(point, metric)
 		const y = plotBottom - (value / axisMax) * plotHeight
 		const bucketWidth = ((point.bucketEndMs - point.bucketStartMs) / durationMs) * plotWidth
 		const barWidth = clamp(bucketWidth * 0.72, MIN_BAR_WIDTH, MAX_BAR_WIDTH)
-
-		return {
+		const chartPoint = {
 			point,
 			value,
 			x,
@@ -126,16 +135,22 @@ export function createTaskRateChartLayout(
 			barY: y,
 			barHeight: Math.max(0, plotBottom - y),
 		}
-	})
+		chartPoints.push(chartPoint)
 
-	const segments: TaskRateChartPoint[][] = []
-	for (const point of chartPoints) {
-		const currentSegment = segments.at(-1)
 		const previousPoint = currentSegment?.at(-1)
-		if (!currentSegment || !previousPoint || point.point.bucketStartMs > previousPoint.point.bucketEndMs) {
-			segments.push([point])
+		const roundPointsAreAdjacent =
+			previousPoint !== undefined &&
+			previousPoint.point.bucketEndMs - previousPoint.point.bucketStartMs === 1 &&
+			point.bucketEndMs - point.bucketStartMs === 1
+		if (
+			!currentSegment ||
+			!previousPoint ||
+			(!roundPointsAreAdjacent && point.bucketStartMs > previousPoint.point.bucketEndMs)
+		) {
+			currentSegment = [chartPoint]
+			segments.push(currentSegment)
 		} else {
-			currentSegment.push(point)
+			currentSegment.push(chartPoint)
 		}
 	}
 

@@ -23,6 +23,7 @@ describe("MessageStateHandler Mutex Protection", () => {
 				get count() {
 					return data.length
 				},
+				findIndexByTs: (ts: number) => data.findIndex((item) => item.ts === ts),
 				overwrite: async (msgs: any[]) => {
 					data = [...msgs]
 				},
@@ -31,6 +32,9 @@ describe("MessageStateHandler Mutex Protection", () => {
 				},
 				addMessage: async (msg: any) => {
 					data.push(msg)
+				},
+				truncateByLineNum: async (count: number) => {
+					data = data.slice(0, count)
 				},
 				updateMessage: async (index: number, update: any) => {
 					data[index] = { ...data[index], ...update }
@@ -308,6 +312,17 @@ describe("MessageStateHandler Mutex Protection", () => {
 		clear.mock.calls.length.should.equal(0)
 		addMessage.mock.calls.length.should.equal(0)
 		handler.apiConversationHistory.should.deepEqual(newHistory)
+	})
+
+	it("should truncate API conversation history by durable row count", async () => {
+		const handler = createTestHandler()
+		await handler.addToApiConversationHistory({ role: "user", content: "first", ts: 1 })
+		await handler.addToApiConversationHistory({ role: "assistant", content: "second", ts: 2 })
+		await handler.addToApiConversationHistory({ role: "user", content: "third", ts: 3 })
+
+		await handler.truncateApiConversationHistory(2)
+
+		handler.apiConversationHistory.map((message) => message.content).should.deepEqual(["first", "second"])
 	})
 
 	it("upsertClineMessageInMemory then finalizeClineMessage keeps a single message", async () => {

@@ -14,6 +14,7 @@ describe("target window fitting decision", () => {
 			status: "continue",
 			projectedUsageTokens: 217_600,
 			targetContextWindow: 272_000,
+			effectiveContextLimit: 272_000,
 			fittingExitTarget: 217_600,
 		})
 	})
@@ -30,11 +31,12 @@ describe("target window fitting decision", () => {
 			status: "complete",
 			projectedUsageTokens: 217_599,
 			targetContextWindow: 272_000,
+			effectiveContextLimit: 272_000,
 			fittingExitTarget: 217_600,
 		})
 	})
 
-	it("accepts a candidate above the 80 percent target when no turn remains and the hard window still fits", () => {
+	it("fails when no complete turn remains and the candidate is still above the 80 percent target", () => {
 		expect(
 			decideTargetWindowFitting({
 				candidateEstimatedTokens: 250_000,
@@ -43,9 +45,10 @@ describe("target window fitting decision", () => {
 				hasMoreTurns: false,
 			}),
 		).toEqual({
-			status: "complete",
+			status: "exhausted",
 			projectedUsageTokens: 250_000,
 			targetContextWindow: 272_000,
+			effectiveContextLimit: 272_000,
 			fittingExitTarget: 217_600,
 		})
 	})
@@ -62,7 +65,28 @@ describe("target window fitting decision", () => {
 			status: "exhausted",
 			projectedUsageTokens: 272_000,
 			targetContextWindow: 272_000,
+			effectiveContextLimit: 272_000,
 			fittingExitTarget: 217_600,
+		})
+	})
+
+	it("uses the percentage guarded context for fitting instead of the provider window", () => {
+		expect(
+			decideTargetWindowFitting({
+				candidateEstimatedTokens: 358_720,
+				providerContextWindow: 472_000,
+				triggerPercent: 95,
+				minReserveTokens: 5_000,
+				maxReserveTokens: 30_000,
+				maxContextTokens: 0,
+				hasMoreTurns: true,
+			}),
+		).toEqual({
+			status: "continue",
+			projectedUsageTokens: 358_720,
+			targetContextWindow: 472_000,
+			effectiveContextLimit: 448_400,
+			fittingExitTarget: 358_720,
 		})
 	})
 })

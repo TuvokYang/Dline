@@ -235,11 +235,11 @@ export class TaskApiRateMetricsService {
 		const readStartedAt = performance.now()
 		let read: ApiRateMetricsReadResult
 		try {
-			read = await this.repository.readAll()
+			read = await this.repository.readRange({ startSecond: query.startSecond, endSecond: query.endSecond })
 		} catch (error) {
 			this.persistenceUnavailable = true
 			Logger.warn(`[Task ${this.taskId}] Failed to read API rate metrics; returning in-memory metrics`, error)
-			read = { records: [], degraded: true, fileBytes: 0, lineCount: 0 }
+			read = { records: [], degraded: true, storageBytes: 0, logicalRecordCount: 0, physicalRecordCount: 0 }
 		}
 		const readMs = performance.now() - readStartedAt
 		const records = [...read.records]
@@ -292,6 +292,12 @@ export class TaskApiRateMetricsService {
 		this.enqueueCompaction()
 		this.disposed = true
 		await this.waitForPersistence()
+		try {
+			await this.repository.close()
+		} catch (error) {
+			this.persistenceUnavailable = true
+			Logger.warn(`[Task ${this.taskId}] Failed to close API rate metrics repository`, error)
+		}
 	}
 
 	private canRecord(): boolean {

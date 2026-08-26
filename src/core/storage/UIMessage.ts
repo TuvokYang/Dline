@@ -1,22 +1,20 @@
 import { fileExistsAtPath } from "@utils/fs"
 import path from "path"
 import { ClineMessage } from "@/shared/ExtensionMessage"
+import type { BufferedUnifyStore } from "./backend/api/UnifyStore"
+import { openBufferedJsonlStore } from "./backend/jsonl/JsonlUnifyStore"
+import { readJsonl } from "./backend/jsonl/jsonl-utils"
 import { dedupeClineMessagesByTs, ensureTaskDirectoryExists, GlobalFileNames } from "./disk"
-import { JsonlIndexedStore } from "./JsonlIndexedStore"
-import { readJsonl } from "./jsonl-utils"
 
 /**
  * UI messages store backed by ui_messages.jsonl.
  *
- * Wraps JsonlIndexedStore<ClineMessage> and provides task-scoped
- * business-level methods for message lifecycle management.
- * All write operations are protected by JsonlIndexedStore's
- * internal Mutex + FileLock for thread and process safety.
+ * Uses the backend-neutral buffered layer over the raw JSONL backend.
  */
 export class UIMessage {
-	private store: JsonlIndexedStore<ClineMessage>
+	private store: BufferedUnifyStore<ClineMessage>
 
-	private constructor(store: JsonlIndexedStore<ClineMessage>) {
+	private constructor(store: BufferedUnifyStore<ClineMessage>) {
 		this.store = store
 	}
 
@@ -25,7 +23,10 @@ export class UIMessage {
 		const dir = await ensureTaskDirectoryExists(taskId)
 		const filePath = path.join(dir, GlobalFileNames.uiMessages)
 		const targetExists = await fileExistsAtPath(filePath)
-		const store = await JsonlIndexedStore.open<ClineMessage>(filePath)
+		const store = await openBufferedJsonlStore<ClineMessage>(filePath, {
+			schemaId: "ui-message",
+			acceptInitialItem: (message) => message.ts > 0,
+		})
 
 		if (!targetExists) {
 			for (const legacyName of ["ui_messages.json", "claude_messages.json"]) {
@@ -33,7 +34,7 @@ export class UIMessage {
 				if (!(await fileExistsAtPath(legacyPath))) continue
 				const legacyMessages = dedupeClineMessagesByTs(await readJsonl<ClineMessage>(legacyPath))
 				if (legacyMessages.length > 0) {
-					await store.transact((current) => (current.length > 0 ? dedupeClineMessagesByTs(current) : legacyMessages))
+					await store.mutate((current) => (current.length > 0 ? dedupeClineMessagesByTs(current) : legacyMessages))
 				}
 				break
 			}
@@ -41,7 +42,7 @@ export class UIMessage {
 
 		const stored = store.getAll()
 		if (new Set(stored.map((message) => message.ts)).size !== stored.length) {
-			await store.transact((current) => dedupeClineMessagesByTs(current))
+			await store.mutate((current) => dedupeClineMessagesByTs(current))
 		}
 		return new UIMessage(store)
 	}
@@ -51,13 +52,13 @@ export class UIMessage {
 		return this.store.getAll()
 	}
 	getByTs(ts: number): ClineMessage | undefined {
-		return this.store.getByTs(ts)
+		return this.store.getByTimestamp(ts)
 	}
 	getAt(index: number): ClineMessage | undefined {
 		return this.store.getAt(index)
 	}
 	findIndexByTs(ts: number): number {
-		return this.store.findIndexByTs(ts)
+		return this.store.findTimestampIndex(ts)
 	}
 	get count(): number {
 		return this.store.count
@@ -67,26 +68,29 @@ export class UIMessage {
 	async append(msg: ClineMessage): Promise<void> {
 		await this.store.append(msg)
 	}
+	async appendDurable(msg: ClineMessage): Promise<ClineMessage> {
+		return await this.store.appendDurable(msg)
+	}
 	async truncate(beforeTs: number): Promise<void> {
-		await this.store.truncate(beforeTs)
+		await this.store.truncateBeforeTimestamp(beforeTs)
 	}
 	async overwrite(items: ClineMessage[]): Promise<void> {
-		await this.store.overwrite(items)
+		await this.store.replaceAll(items)
 	}
 	async insertAt(index: number, msg: ClineMessage): Promise<void> {
 		await this.store.insertAt(index, msg)
 	}
 	async updateAt(index: number, msg: ClineMessage): Promise<void> {
-		await this.store.updateAt(index, msg)
+		await this.store.stageUpdateAt(index, msg)
 	}
 	async deleteAt(index: number): Promise<void> {
-		await this.store.deleteAt(index)
+		await this.store.removeAt(index)
 	}
 	async clear(): Promise<void> {
 		await this.store.clear()
 	}
 	async truncateByLineNum(count: number): Promise<void> {
-		await this.store.truncateByLineNum(count)
+		await this.store.truncateAt(count)
 	}
 	/** Force flush any pending dirty data to disk (cross-process safe). */
 	async flush(): Promise<void> {
@@ -126,7 +130,7 @@ export class UIMessage {
 
 		if (existingIndex >= 0) {
 			// Same ts — update through the store so close/flush observes the latest delta.
-			const updated = await this.store.patchAt(existingIndex, msg)
+			const updated = await this.store.stagePatchAt(existingIndex, msg)
 			return { index: existingIndex, message: updated }
 		}
 
@@ -138,7 +142,7 @@ export class UIMessage {
 				break
 			}
 		}
-		await this.store.insertLine(insertIndex, msg)
+		await this.store.stageInsertAt(insertIndex, msg)
 		return { index: insertIndex, message: msg }
 	}
 
@@ -151,7 +155,7 @@ export class UIMessage {
 	 */
 	async finalizeMessage(msg: ClineMessage): Promise<ClineMessage> {
 		msg.partial = false
-		await this.store.upsertByTs(msg)
+		await this.store.stageUpsertByTimestamp(msg)
 		return msg
 	}
 
@@ -164,7 +168,7 @@ export class UIMessage {
 	 * @returns The updated message
 	 */
 	async updateMessage(index: number, updates: Partial<ClineMessage>): Promise<ClineMessage> {
-		return await this.store.patchAt(index, updates)
+		return await this.store.stagePatchAt(index, updates)
 	}
 
 	/**
@@ -179,7 +183,7 @@ export class UIMessage {
 			throw new Error(`UIMessage.deleteMessage: index ${index} out of range [0, ${all.length})`)
 		}
 		const deleted = all[index]
-		await this.store.deleteAt(index)
+		await this.store.removeAt(index)
 		return deleted
 	}
 
@@ -192,7 +196,7 @@ export class UIMessage {
 	async flushMessage(index: number): Promise<void> {
 		const msg = this.store.getAt(index)
 		if (!msg || msg.partial) return
-		await this.store.upsertByTs(msg)
+		await this.store.stageUpsertByTimestamp(msg)
 		await this.store.flush()
 	}
 
@@ -214,7 +218,7 @@ export class UIMessage {
 	 */
 	async removePartialMessages(): Promise<number> {
 		let removed = 0
-		await this.store.transact((items) => {
+		await this.store.mutate((items) => {
 			const before = items.length
 			const kept = (items as unknown as ClineMessage[]).filter((m) => m.partial !== true)
 			removed = before - kept.length
@@ -233,7 +237,7 @@ export class UIMessage {
 		if (tsList.length === 0) return 0
 		const tsSet = new Set(tsList)
 		let removed = 0
-		await this.store.transact((items) => {
+		await this.store.mutate((items) => {
 			const before = items.length
 			const kept = (items as unknown as ClineMessage[]).filter((m) => !tsSet.has(m.ts))
 			removed = before - kept.length
@@ -259,7 +263,7 @@ export class UIMessage {
 	 * Force-load all entries from disk into the in-memory cache.
 	 */
 	async reload(): Promise<void> {
-		await this.store.loadAll()
+		await this.store.reload()
 	}
 
 	/** Stop accepting messages and wait until all pending data is durable. */

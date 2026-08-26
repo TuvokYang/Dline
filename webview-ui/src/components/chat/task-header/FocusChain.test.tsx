@@ -78,4 +78,18 @@ describe("FocusChain history and layout", () => {
 		expect(history).not.toHaveClass("max-h-[40vh]", "overflow-y-auto", "scrollable")
 		expect(expandedContent).toContainElement(history)
 	})
+
+	it("keeps the progress bar attached to a compact header when expanded", () => {
+		render(<FocusChain lastProgressMessageText={currentChecklist} />)
+		expandFocusChain()
+
+		const header = screen.getByTitle("Current task")
+		const progressBar = header.firstElementChild
+
+		expect(header).toHaveClass("relative", "w-full", "shrink-0")
+		expect(header).not.toHaveClass("h-full")
+		expect(progressBar).not.toBeNull()
+		expect(header).toContainElement(progressBar as HTMLElement)
+		expect(progressBar).toHaveClass("absolute", "bottom-0")
+	})
 })

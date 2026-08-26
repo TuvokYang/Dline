@@ -14,6 +14,8 @@ import { TaskApiRateMetricsService } from "./task-api-rate-metrics-service"
 class MemoryRepository implements ApiRateMetricsRepository {
 	readonly records: ApiRateMetricsDataRecord[] = []
 	readonly compactionRequests: number[] = []
+	readonly rangeQueries: Array<{ startSecond: number; endSecond: number }> = []
+	readAllCalls = 0
 
 	constructor(private readonly recovery: ApiRateMetricsRecovery = emptyRecovery()) {}
 
@@ -26,7 +28,29 @@ class MemoryRepository implements ApiRateMetricsRepository {
 	}
 
 	async readAll(): Promise<ApiRateMetricsReadResult> {
-		return { records: [...this.records], degraded: false, fileBytes: 0, lineCount: this.records.length }
+		this.readAllCalls += 1
+		return {
+			records: [...this.records],
+			degraded: false,
+			storageBytes: 0,
+			logicalRecordCount: this.records.length,
+			physicalRecordCount: this.records.length,
+		}
+	}
+
+	async readRange(query: { startSecond: number; endSecond: number }): Promise<ApiRateMetricsReadResult> {
+		this.rangeQueries.push(query)
+		const records = this.records.filter((record) => {
+			const startSecond = record.kind === "second" ? record.second : record.bucketStartSecond
+			return startSecond >= query.startSecond && startSecond < query.endSecond
+		})
+		return {
+			records,
+			degraded: false,
+			storageBytes: 0,
+			logicalRecordCount: records.length,
+			physicalRecordCount: records.length,
+		}
 	}
 
 	async replaceAll(records: readonly ApiRateMetricsDataRecord[]): Promise<void> {
@@ -40,9 +64,7 @@ class MemoryRepository implements ApiRateMetricsRepository {
 
 	async waitForWrites(): Promise<void> {}
 
-	async getFilePath(): Promise<string> {
-		return "memory://api_rate_metrics.jsonl"
-	}
+	async close(): Promise<void> {}
 }
 
 class IntegrityFailureRepository extends MemoryRepository {
@@ -64,6 +86,10 @@ class UnavailableRepository implements ApiRateMetricsRepository {
 		throw new Error("metrics storage unavailable")
 	}
 
+	async readRange(): Promise<ApiRateMetricsReadResult> {
+		throw new Error("metrics storage unavailable")
+	}
+
 	async replaceAll(): Promise<void> {
 		throw new Error("metrics storage unavailable")
 	}
@@ -74,9 +100,7 @@ class UnavailableRepository implements ApiRateMetricsRepository {
 
 	async waitForWrites(): Promise<void> {}
 
-	async getFilePath(): Promise<string> {
-		return "memory://unavailable-api-rate-metrics.jsonl"
-	}
+	async close(): Promise<void> {}
 }
 
 function emptyRecovery(): ApiRateMetricsRecovery {
@@ -133,6 +157,18 @@ describe("TaskApiRateMetricsService", () => {
 		await expect(
 			service.query({ resolution: "minute", startSecond: 1_786_356_000, endSecond: 1_786_356_060 }),
 		).resolves.toMatchObject({ degraded: true, points: [expect.objectContaining({ tokenCount: 120, provisional: true })] })
+	})
+
+	it("pushes ordinary history queries into the repository range API", async () => {
+		const repository = new MemoryRepository()
+		repository.records.push(secondRecord(10), secondRecord(70))
+		const service = new TaskApiRateMetricsService({ repository, taskId: "task-a" })
+		await service.initialize()
+
+		await service.query({ resolution: "minute", startSecond: 0, endSecond: 60 })
+
+		expect(repository.rangeQueries).toEqual([{ startSecond: 0, endSecond: 60 }])
+		expect(repository.readAllCalls).toBe(0)
 	})
 
 	it("writes one record for an active second and performs no idle writes", async () => {

@@ -750,22 +750,14 @@ describe("chat input TaskRuntimeControls", () => {
 	})
 
 	it.each([
-		["between_turns", { phase: "preflighting" }, { phase: "idle" }, false, true],
-		["between_turns", { phase: "idle" }, { phase: "compacting" }, false, false],
-		["between_turns", { phase: "idle" }, { phase: "idle" }, true, false],
-	] as const)("keeps controls editable during Task transition state %#", (phase, modeSwitch, profileSwitch, invalid, compacting) => {
+		["between_turns", { phase: "preflighting" }, { phase: "idle" }, true],
+		["between_turns", { phase: "idle" }, { phase: "compacting" }, false],
+		["between_turns", { phase: "idle" }, { phase: "idle" }, false],
+	] as const)("keeps controls editable during Task transition state %#", (phase, modeSwitch, profileSwitch, compacting) => {
 		mocks.state.taskViewState = {
 			taskId: "task-1",
 			phase,
 			...(compacting ? { contextCompaction: { active: true as const, operationId: "compaction-1" } } : {}),
-			...(invalid
-				? {
-						profileInvalid: {
-							reason: "missing" as const,
-							message: "Profile not valid",
-						},
-					}
-				: {}),
 		}
 		mocks.state.modeSwitch = modeSwitch
 		mocks.state.profileSwitch = profileSwitch

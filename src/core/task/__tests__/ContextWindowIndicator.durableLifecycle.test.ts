@@ -28,7 +28,7 @@ function createIndicator(): ContextWindowIndicator {
 }
 
 describe("ContextWindowIndicator durable lifecycle", () => {
-	it("commits a completed round directly into Durable instead of staging it for the next send", () => {
+	it("stages a completed round until the next send promotes it into Durable", () => {
 		const indicator = createIndicator()
 
 		indicator.beginSend({
@@ -44,10 +44,10 @@ describe("ContextWindowIndicator durable lifecycle", () => {
 		const settled = indicator.settle({ lineage: firstRound, updatedAt: 3 })
 
 		expect(settled.phase).toBe("stable")
-		expect(settled.durableContextTokens).toBe(440)
+		expect(settled.durableContextTokens).toBe(100)
 		expect(settled.pendingSendTokens).toBe(0)
 		expect(settled.receivingTokens).toBe(0)
-		expect(settled.stagedTokens).toBe(0)
+		expect(settled.stagedTokens).toBe(340)
 		expect(settled.environmentTokens).toBe(50)
 		expect(getContextWindowIndicatorTotalTokens(settled)).toBe(490)
 	})
@@ -72,8 +72,8 @@ describe("ContextWindowIndicator durable lifecycle", () => {
 
 		const nextSend = indicator.beginSend({
 			lineage: secondRound,
-			durableContextTokens: 440,
-			pendingSendTokens: 30,
+			durableContextTokens: 100,
+			pendingSendTokens: 370,
 			environmentTokens: 50,
 			contextWindow: 1_000,
 			mode: "act",
@@ -102,6 +102,7 @@ describe("ContextWindowIndicator durable lifecycle", () => {
 		const repeated = indicator.settle({ lineage: firstRound })
 
 		expect(repeated).toEqual(settled)
-		expect(repeated.durableContextTokens).toBe(440)
+		expect(repeated.durableContextTokens).toBe(100)
+		expect(repeated.stagedTokens).toBe(340)
 	})
 })

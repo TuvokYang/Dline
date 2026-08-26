@@ -35,6 +35,27 @@ describe("ContextTransition architecture", () => {
 		expect(method).not.toContain("projectContextTransitionCompactionContinuation")
 	})
 
+	it("keeps the context-window indicator free of compact checkpoint and restore lineage", async () => {
+		const [schema, indicator, progress] = await Promise.all([
+			read("../shared/context-window-indicator.ts"),
+			read("task/ContextWindowIndicator.ts"),
+			read("../../webview-ui/src/components/chat/task-header/ContextWindowSegmentedProgress.tsx"),
+		])
+
+		for (const source of [schema, indicator]) {
+			expect(source).not.toContain('kind: "checkpoint"')
+			expect(source).not.toContain('kind: "restore"')
+			expect(source).not.toContain("checkpointId")
+			expect(source).not.toContain("headCheckpointId")
+			expect(source).not.toContain("chainRevision")
+			expect(source).not.toContain("branchId")
+			expect(source).not.toContain("journalId")
+		}
+		expect(schema).not.toContain('"restoring"')
+		expect(indicator).not.toContain("recoverCommit(")
+		expect(progress).not.toContain('"restore"')
+	})
+
 	it("keeps conversational handlers and InteractionCoordinator unaware of compaction control signals", async () => {
 		const paths = [
 			"task/interaction/InteractionCoordinator.ts",

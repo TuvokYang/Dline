@@ -1,6 +1,8 @@
 import { resolveWebSearchRoutingPlan } from "@core/api/server-tools"
+import type { CanonicalMessageRange } from "@core/context/context-management/compaction-context-projection"
 import { ToolPromptGenerator } from "@core/prompts/generators/ToolPromptGenerator"
 import type { RequestApiScope } from "@core/task/RequestApiScope"
+import type { ClineStorageMessage } from "@shared/messages"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { ErrorService } from "@/services/error"
 import { Task } from "../index"
@@ -99,13 +101,25 @@ describe("Task.attemptApiRequest first chunk state", () => {
 			beginOrdinaryContextWindowIndicator: beginIndicator,
 			receiveOrdinaryContextWindowIndicator: receiveIndicator,
 			rollbackOrdinaryContextWindowIndicator: rollbackIndicator,
-			apiRateMetricsService: { recordRequestStarted: vi.fn() },
+			apiRateMetricsService: {
+				recordRequestStarted: vi.fn(),
+				trackProviderStream: <T>(stream: T) => stream,
+			},
+			admitOrdinaryProviderRequestRound: vi.fn(() => ({
+				bindAttempt: <T>(stream: T) => stream,
+				attachExactUsage: vi.fn(),
+			})),
 			buildThinkingSummary: vi.fn(() => undefined),
 			compactionRequestReplay: { getProviderInput: vi.fn(() => undefined), getHistoryIndex: vi.fn(() => undefined) },
 			contextManager: {
 				getNewContextMessagesAndMetadata: vi.fn(async () => ({
 					truncatedConversationHistory: conversationHistory,
 				})),
+				applyContextHistoryUpdatesToCanonical: (messages: ClineStorageMessage[]) => messages,
+				repairProviderMessagesWithRanges: (
+					messages: ClineStorageMessage[],
+					canonicalRanges: Array<CanonicalMessageRange | undefined>,
+				) => ({ messages, canonicalRanges }),
 			},
 			endAutoRetrySequence: vi.fn(),
 			messageStateHandler: {
@@ -218,13 +232,25 @@ describe("Task.attemptApiRequest first chunk state", () => {
 				clineWebToolsEnabled: true,
 				webSearchRoutingPlan: requestScope.webSearchRoutingPlan,
 			})),
-			apiRateMetricsService: { recordRequestStarted: vi.fn() },
+			apiRateMetricsService: {
+				recordRequestStarted: vi.fn(),
+				trackProviderStream: <T>(stream: T) => stream,
+			},
+			admitOrdinaryProviderRequestRound: vi.fn(() => ({
+				bindAttempt: <T>(stream: T) => stream,
+				attachExactUsage: vi.fn(),
+			})),
 			buildThinkingSummary: vi.fn(() => undefined),
 			compactionRequestReplay: { getProviderInput: vi.fn(() => undefined), getHistoryIndex: vi.fn(() => undefined) },
 			contextManager: {
 				getNewContextMessagesAndMetadata: vi.fn(async () => ({
 					truncatedConversationHistory: conversationHistory,
 				})),
+				applyContextHistoryUpdatesToCanonical: (messages: ClineStorageMessage[]) => messages,
+				repairProviderMessagesWithRanges: (
+					messages: ClineStorageMessage[],
+					canonicalRanges: Array<CanonicalMessageRange | undefined>,
+				) => ({ messages, canonicalRanges }),
 			},
 			endAutoRetrySequence: vi.fn(),
 			messageStateHandler: {

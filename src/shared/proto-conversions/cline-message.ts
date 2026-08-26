@@ -243,6 +243,15 @@ export function convertClineMessageToProto(message: AppClineMessage): ProtoCline
 		interactionId: message.interactionId ?? "",
 		commandExecutionMode: message.commandExecutionMode ?? "",
 		commandCanMoveToBackground: message.commandCanMoveToBackground ?? false,
+		compactionConversationRange: message.compactionConversationRange
+			? {
+					logicalTurnStartIndex: message.compactionConversationRange.logicalTurnRange[0],
+					logicalTurnEndIndex: message.compactionConversationRange.logicalTurnRange[1],
+					apiConversationStartIndex: message.compactionConversationRange.apiConversationRange[0],
+					apiConversationEndIndex: message.compactionConversationRange.apiConversationRange[1],
+					preCompactionApiEndIndex: message.compactionConversationRange.preCompactionApiEndIndex,
+				}
+			: undefined,
 	}
 
 	return protoMessage
@@ -308,6 +317,19 @@ export function convertProtoToClineMessage(protoMessage: ProtoClineMessage): App
 			protoMessage.conversationHistoryDeletedRange.startIndex,
 			protoMessage.conversationHistoryDeletedRange.endIndex,
 		]
+	}
+	if (protoMessage.compactionConversationRange) {
+		message.compactionConversationRange = {
+			logicalTurnRange: [
+				protoMessage.compactionConversationRange.logicalTurnStartIndex,
+				protoMessage.compactionConversationRange.logicalTurnEndIndex,
+			],
+			apiConversationRange: [
+				protoMessage.compactionConversationRange.apiConversationStartIndex,
+				protoMessage.compactionConversationRange.apiConversationEndIndex,
+			],
+			preCompactionApiEndIndex: protoMessage.compactionConversationRange.preCompactionApiEndIndex,
+		}
 	}
 
 	// Convert command state fields (commandStatus/exitCode/logPath)

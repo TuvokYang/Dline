@@ -750,19 +750,6 @@ export const ChatRowContent = memo(
 				case "summarizeTask": {
 					const status = tool.compactionStatus ?? (message.partial ? "running" : "completed")
 					const content = status === "failed" ? "" : typeof tool.content === "string" ? tool.content : ""
-					const compactionRestore =
-						status === "completed" &&
-						tool.compactionOperationId !== undefined &&
-						tool.compactionPrePassCheckpointId !== undefined &&
-						tool.compactionExpectedHeadCheckpointId !== undefined &&
-						tool.compactionExpectedChainRevision !== undefined
-							? {
-									operationId: tool.compactionOperationId,
-									prePassCheckpointId: tool.compactionPrePassCheckpointId,
-									expectedHeadCheckpointId: tool.compactionExpectedHeadCheckpointId,
-									expectedChainRevision: tool.compactionExpectedChainRevision,
-								}
-							: undefined
 					if (status === "running" && !content) return null
 					const title =
 						status === "retrying"
@@ -839,8 +826,8 @@ export const ChatRowContent = memo(
 									</div>
 								</div>
 							) : null}
-							{compactionRestore && (
-								<CheckmarkControl compactionRestore={compactionRestore} messageTs={message.ts} />
+							{status === "completed" && message.partial !== true && message.compactionConversationRange && (
+								<CheckmarkControl hasWorkspaceCheckpoint={false} messageTs={message.ts} />
 							)}
 						</div>
 					)

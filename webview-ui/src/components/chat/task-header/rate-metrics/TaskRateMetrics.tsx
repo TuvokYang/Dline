@@ -44,7 +44,7 @@ export function TaskRateMetrics({
 		`Tokens per minute: ${tokensPerMinute}`,
 		`Cache read: ${cacheReads ?? 0}`,
 		`Cache write: ${cacheWrites ?? 0}`,
-		cacheHitRate != null && cacheHitRate > 0 ? `Hit: ${cacheHitRate.toFixed(1)}%` : undefined,
+		cacheHitRate != null ? `Hit: ${cacheHitRate.toFixed(1)}%` : undefined,
 		isCostAvailable ? `Cost: ${costLabel}` : undefined,
 	]
 		.filter((value): value is string => value !== undefined)
@@ -76,7 +76,7 @@ export function TaskRateMetrics({
 							<span>TPM:{formatTokenMetric(tokensPerMinute)}</span>
 						</>
 					)}
-					{cacheHitRate != null && cacheHitRate > 0 && <span>Hit:{cacheHitRate.toFixed(1)}%</span>}
+					{cacheHitRate != null && <span>Hit:{cacheHitRate.toFixed(1)}%</span>}
 					{isCostAvailable && <span>{costLabel}</span>}
 				</span>
 			</button>

@@ -6,10 +6,12 @@ import type {
 	ClineUserToolResultContentBlock,
 } from "@shared/messages/content"
 import cloneDeep from "clone-deep"
+import type { CanonicalMessageRange } from "./compaction-context-projection"
 import { indexLogicalTurns } from "./logical-turns"
 
 export interface ContextCompactionBoundary {
 	sourceHistory: ClineStorageMessage[]
+	sourceCanonicalRanges: Array<CanonicalMessageRange | undefined>
 	targetContinuationHistory: ClineStorageMessage[]
 }
 
@@ -21,16 +23,20 @@ export interface ContextCompactionBoundaryOptions {
 /**
  * Project a self-contained compaction source while pending request content remains outside canonical history.
  *
- * Pending tool results participate in logical-turn boundary discovery. Tagged user feedback starts the next
- * user-authored round, so its real text must not enter the hidden Pass. When that feedback is the only evidence
- * that a conversational tool completed, a neutral pairing result keeps the selected source provider-projectable
- * without copying or consuming the user's pending content.
+ * Pending tool results participate in logical-turn boundary discovery. A result that closes the latest canonical
+ * turn makes that complete turn eligible for the hidden Pass, while the unsent result still belongs to the ordinary
+ * continuation. Tagged conversational feedback starts the next user-authored round, so its real text stays outside
+ * the hidden Pass; neutral pairing evidence keeps the selected source provider-projectable without consuming it.
  */
 export function projectContextCompactionBoundary(
 	activeHistory: readonly ClineStorageMessage[],
 	pendingContent: readonly ClineContent[],
 	options: ContextCompactionBoundaryOptions = {},
+	activeCanonicalRanges: readonly (CanonicalMessageRange | undefined)[] = activeHistory.map(() => undefined),
 ): ContextCompactionBoundary {
+	if (activeCanonicalRanges.length !== activeHistory.length) {
+		throw new Error("Context compaction canonical range mapping must align with active history")
+	}
 	const pendingBlocks = pendingContent.filter(
 		(block): block is ClineUserToolResultContentBlock | ClineTextContentBlock =>
 			block.type === "tool_result" || block.type === "text",
@@ -38,9 +44,10 @@ export function projectContextCompactionBoundary(
 	const completedUnpairedFunctionIds = options.shouldCompleteUnpairedToolUse
 		? collectCompletableUnpairedFunctionIds(activeHistory, options.shouldCompleteUnpairedToolUse)
 		: new Set<string>()
-	const activeBoundaryHistory = options.shouldCompleteUnpairedToolUse
-		? completePendingPairings(activeHistory, [], options.shouldCompleteUnpairedToolUse)
-		: cloneDeep([...activeHistory])
+	const activeBoundary = options.shouldCompleteUnpairedToolUse
+		? completePendingPairings(activeHistory, activeCanonicalRanges, [], options.shouldCompleteUnpairedToolUse)
+		: { messages: cloneDeep([...activeHistory]), canonicalRanges: [...activeCanonicalRanges] }
+	const activeBoundaryHistory = activeBoundary.messages
 	const pendingMessage: ClineStorageMessage | undefined =
 		pendingBlocks.length > 0 ? { role: "user", content: cloneDeep(pendingBlocks), ts: Date.now() } : undefined
 	const activeIndex = indexLogicalTurns(activeBoundaryHistory)
@@ -55,19 +62,28 @@ export function projectContextCompactionBoundary(
 		activeIndex.turns.length > 0 &&
 		activeIndex.protectedStartIndex < activeBoundaryHistory.length &&
 		activeIndex.issues.some((issue) => issue.kind === "unpaired_tool_use" && pendingResultFunctionIds.has(issue.functionId))
-	// Once earlier complete turns exist, a request-local result may close the latest
-	// canonical turn for target projection without making that turn eligible for a hidden Pass.
-	const sourceEndIndex = pendingCompletesProtectedTurn
-		? activeIndex.protectedStartIndex
-		: Math.min(boundaryIndex.protectedStartIndex, boundaryHistory.length)
+	const pendingStartsProtectedRound =
+		pendingMessage !== undefined && boundaryIndex.protectedStartIndex === activeBoundaryHistory.length
+	// The logical-turn index identifies tagged user feedback as a new protected round.
+	// Ordinary tool results close the current turn at the end of the boundary view.
+	const sourceEndIndex =
+		pendingCompletesProtectedTurn && pendingStartsProtectedRound
+			? activeIndex.protectedStartIndex
+			: Math.min(boundaryIndex.protectedStartIndex, boundaryHistory.length)
 	const sourceHistory = boundaryHistory.slice(0, sourceEndIndex)
+	const boundaryCanonicalRanges = pendingMessage
+		? [...activeBoundary.canonicalRanges, undefined]
+		: activeBoundary.canonicalRanges
+	const sourceCanonicalRanges = boundaryCanonicalRanges.slice(0, sourceEndIndex)
 	// Tool results in the protected tail may close a source tool use without making
 	// their user-authored payload eligible for the hidden Pass. The pairing helper
 	// consumes only identity and emits neutral evidence, while the real result stays
 	// in targetContinuationHistory.
 	const sourcePairingEvidence = [...collectToolResults(activeBoundaryHistory.slice(sourceEndIndex)), ...pendingBlocks]
 
-	const naturalContinuationStart = Math.min(sourceEndIndex, activeHistory.length)
+	const naturalContinuationStart = pendingCompletesProtectedTurn
+		? activeIndex.protectedStartIndex
+		: Math.min(sourceEndIndex, activeHistory.length)
 	const targetContinuationHistory = activeHistory.filter(
 		(message, messageIndex) =>
 			messageIndex >= naturalContinuationStart ||
@@ -75,8 +91,15 @@ export function projectContextCompactionBoundary(
 			messageContainsToolUse(message, pendingResultFunctionIds),
 	)
 
+	const completedSource = completePendingPairings(
+		sourceHistory,
+		sourceCanonicalRanges,
+		sourcePairingEvidence,
+		options.shouldCompleteUnpairedToolUse,
+	)
 	return {
-		sourceHistory: completePendingPairings(sourceHistory, sourcePairingEvidence, options.shouldCompleteUnpairedToolUse),
+		sourceHistory: completedSource.messages,
+		sourceCanonicalRanges: completedSource.canonicalRanges,
 		targetContinuationHistory: cloneDeep(targetContinuationHistory),
 	}
 }
@@ -106,10 +129,12 @@ function messageContainsToolUse(message: ClineStorageMessage, functionIds: Reado
 /** Materialize only the identity-level pairing evidence required by the selected hidden-Pass source. */
 function completePendingPairings(
 	sourceHistory: readonly ClineStorageMessage[],
+	sourceCanonicalRanges: readonly (CanonicalMessageRange | undefined)[],
 	pendingBlocks: readonly (ClineUserToolResultContentBlock | ClineTextContentBlock)[],
 	shouldCompleteUnpairedToolUse?: (toolUse: ClineAssistantToolUseBlock) => boolean,
-): ClineStorageMessage[] {
+): { messages: ClineStorageMessage[]; canonicalRanges: Array<CanonicalMessageRange | undefined> } {
 	const source: ClineStorageMessage[] = cloneDeep([...sourceHistory])
+	const canonicalRanges = [...sourceCanonicalRanges]
 	const sourceIndex = indexLogicalTurns(source)
 	const pendingResults = new Map(
 		pendingBlocks
@@ -132,9 +157,12 @@ function completePendingPairings(
 			},
 		]
 	})
-	if (pairingResults.length === 0) return source
+	if (pairingResults.length === 0) return { messages: source, canonicalRanges }
 
-	return [...source, { role: "user", content: pairingResults }]
+	return {
+		messages: [...source, { role: "user", content: pairingResults }],
+		canonicalRanges: [...canonicalRanges, undefined],
+	}
 }
 
 function collectToolResults(history: readonly ClineStorageMessage[]): ClineUserToolResultContentBlock[] {

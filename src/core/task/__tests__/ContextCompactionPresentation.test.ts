@@ -55,6 +55,23 @@ describe("ContextCompactionPresentation", () => {
 		})
 	})
 
+	it("turns an accepted Pass card into terminal failure when target fitting remains exhausted", () => {
+		const presentation = new ContextCompactionPresentation()
+		const firstPass = pass(0)
+
+		presentation.startPass(firstPass, attempt0)
+		presentation.partial(firstPass, attempt0, "accepted summary")
+		presentation.bindMessageTs(firstPass, 101)
+		presentation.complete(firstPass, attempt0, "accepted summary")
+
+		expect(presentation.fail("operation-1", "The rebuilt target remains above the strict exit target.")).toMatchObject({
+			existingTs: 101,
+			content: "",
+			status: "failed",
+			error: "The rebuilt target remains above the strict exit target.",
+		})
+	})
+
 	it("keeps an output-limit replay on the same card without inventing automatic retry totals", () => {
 		const presentation = new ContextCompactionPresentation()
 		const firstPass = pass(0)
@@ -72,7 +89,7 @@ describe("ContextCompactionPresentation", () => {
 		})
 	})
 
-	it("creates a new card for the next Pass and rejects stale Pass or attempt updates", () => {
+	it("reuses one operation row across Passes and rejects stale Pass or attempt updates", () => {
 		const presentation = new ContextCompactionPresentation()
 		const firstPass = pass(0)
 		const secondPass = pass(1)
@@ -82,15 +99,20 @@ describe("ContextCompactionPresentation", () => {
 		presentation.bindMessageTs(firstPass, 101)
 		expect(presentation.complete(firstPass, attempt0, "completed first")).toMatchObject({
 			existingTs: 101,
-			status: "completed",
+			status: "running",
 		})
 
 		expect(presentation.startPass(secondPass, attempt0)).toBe(true)
-		expect(presentation.partial(secondPass, attempt0, "second")).toMatchObject({ existingTs: undefined, status: "running" })
+		expect(presentation.partial(secondPass, attempt0, "second")).toMatchObject({ existingTs: 101, status: "running" })
 		expect(presentation.partial(firstPass, attempt0, "late first")).toBeUndefined()
 		expect(presentation.partial(secondPass, attempt1, "unannounced retry")).toBeUndefined()
+		expect(presentation.finalizeOperation("operation-1")).toMatchObject({
+			existingTs: 101,
+			content: "second",
+			status: "completed",
+		})
 		expect(presentation.fail("operation-1", "Terminal compaction failure")).toMatchObject({
-			existingTs: undefined,
+			existingTs: 101,
 			content: "",
 			status: "failed",
 			error: "Terminal compaction failure",

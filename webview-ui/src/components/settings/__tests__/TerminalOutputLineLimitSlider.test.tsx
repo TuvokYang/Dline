@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import TerminalOutputLineLimitSlider from "../TerminalOutputLineLimitSlider"
 
@@ -24,7 +24,7 @@ describe("TerminalOutputLineLimitSlider", () => {
 		vi.useRealTimers()
 	})
 
-	it("keeps the latest rapid input locally and persists only the final value", () => {
+	it("keeps the latest rapid input locally and persists only the final value", async () => {
 		render(<TerminalOutputLineLimitSlider />)
 		const slider = screen.getByLabelText("Terminal output limit") as HTMLInputElement
 
@@ -34,7 +34,7 @@ describe("TerminalOutputLineLimitSlider", () => {
 
 		expect(slider.value).toBe("900")
 		expect(mocks.updateSetting).not.toHaveBeenCalled()
-		vi.advanceTimersByTime(100)
+		await act(async () => vi.advanceTimersByTimeAsync(100))
 		expect(mocks.updateSetting).toHaveBeenCalledOnce()
 		expect(mocks.updateSetting).toHaveBeenCalledWith("terminalOutputLineLimit", 900)
 	})

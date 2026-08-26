@@ -4,14 +4,12 @@ import { describe, expect, it } from "vitest"
 
 const taskPath = path.resolve("src/core/task/index.ts")
 const sessionPath = path.resolve("src/core/task/ContextCompactionSession.ts")
+const preCompactExecutorPath = path.resolve("src/core/hooks/precompact-executor.ts")
 
 /** Lock the single compaction execution boundary before implementation. */
 describe("ContextCompaction architecture", () => {
 	it("routes automatic, manual, Profile, and Mode triggers through one session", async () => {
-		const [task, session] = await Promise.all([
-			readFile(taskPath, "utf8"),
-			readFile(sessionPath, "utf8").catch(() => ""),
-		])
+		const [task, session] = await Promise.all([readFile(taskPath, "utf8"), readFile(sessionPath, "utf8").catch(() => "")])
 
 		expect(session).toContain("export class ContextCompactionSession")
 		expect(session).toContain("auto_compaction")
@@ -34,6 +32,27 @@ describe("ContextCompaction architecture", () => {
 		expect(method).not.toContain("this.compactionRequestReplay.begin(")
 		expect(method).not.toContain("pendingManualCompactionRegeneration")
 		expect(method).not.toContain("overwriteApiConversationHistory(")
+	})
+
+	it("uses flush or tail truncation instead of full history rewrites in compaction cleanup", async () => {
+		const [task, preCompactExecutor] = await Promise.all([
+			readFile(taskPath, "utf8"),
+			readFile(preCompactExecutorPath, "utf8"),
+		])
+		const manualCleanupStart = task.indexOf("private async discardFailedManualCompactionAttempt(")
+		const automaticCleanupStart = task.indexOf("private async discardFailedCompactionAttempt(", manualCleanupStart)
+		const cleanupEnd = task.indexOf("private parsePreviousTokens(", automaticCleanupStart)
+		const deferredStart = task.indexOf("private async deferCurrentTurn(", cleanupEnd)
+		const deferredEnd = task.indexOf("private async restoreDeferredTurn(", deferredStart)
+		const cleanup = task.slice(manualCleanupStart, cleanupEnd)
+		const deferred = task.slice(deferredStart, deferredEnd)
+
+		expect(preCompactExecutor).toContain("await params.messageStateHandler.flushApiConversationHistory()")
+		expect(preCompactExecutor).not.toContain("overwriteApiConversationHistory(")
+		expect(cleanup).toContain("truncateApiConversationHistory(historyIndex + 1)")
+		expect(cleanup).not.toContain("overwriteApiConversationHistory(")
+		expect(deferred).toContain("truncateApiConversationHistory(apiHistory.length - 1)")
+		expect(deferred).not.toContain("overwriteApiConversationHistory(")
 	})
 
 	it("keeps Pass planning and execution out of the recursive ordinary request method", async () => {

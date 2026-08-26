@@ -82,6 +82,7 @@ interface ActiveTransition {
 	operation?: ContextTransitionOperation
 	policy: ContextTransitionPolicy<ContextTransitionRequest, ContextTransitionOperation, ContextTransitionSnapshot>
 	compactionStarted: boolean
+	compactionCompleted: boolean
 	targetAdopted: boolean
 }
 
@@ -158,6 +159,7 @@ export class ContextTransitionEngine {
 			phase: "preflighting",
 			policy: erasedPolicy,
 			compactionStarted: false,
+			compactionCompleted: false,
 			targetAdopted: false,
 		}
 		await this.publish(policy.kind, {
@@ -237,8 +239,9 @@ export class ContextTransitionEngine {
 			if (compactResult !== "completed") {
 				return this.failActive(active.policy.compactionError(compactResult), true)
 			}
+			active.compactionCompleted = true
 			if (active.policy.confirmationOrder === "commit_then_compact") {
-				await this.deps.compaction.release(active.operationId)
+				await this.deps.compaction.complete(active.operationId)
 				await this.clearActive(active.operationId)
 				return { status: "switched", operationId: active.operationId }
 			}
@@ -294,12 +297,15 @@ export class ContextTransitionEngine {
 		await this.publish(policy.kind, policy.createSnapshot(operation, "committing"))
 		try {
 			await policy.commit(operation)
-			if (releaseBarrier) await this.deps.compaction.release(operation.operationId)
+			if (releaseBarrier) await this.deps.compaction.complete(operation.operationId)
 			await this.clearActive(operation.operationId)
 			return { status: "switched", operationId: operation.operationId }
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : "Context transition commit failed."
-			return this.failActive(reason, releaseBarrier)
+			const reportedReason = this.active?.compactionCompleted
+				? `Context compaction completed, but the ${policy.kind === "mode" ? "Mode" : "Profile"} transition commit failed: ${reason}`
+				: reason
+			return this.failActive(reportedReason, releaseBarrier)
 		}
 	}
 
@@ -323,7 +329,7 @@ export class ContextTransitionEngine {
 		let reportedReason = reason
 		try {
 			if (releaseBarrier || active.compactionStarted) {
-				const cleanupError = await this.cleanupCompaction(active.operationId, reason)
+				const cleanupError = await this.cleanupCompaction(active.operationId, reason, active.compactionCompleted)
 				if (cleanupError) reportedReason = `${reason} ${cleanupError}`
 			}
 		} finally {
@@ -343,18 +349,20 @@ export class ContextTransitionEngine {
 		return { status: "rejected", operationId: active.operationId, error: reportedReason }
 	}
 
-	/** Best-effort rollback and barrier release without allowing cleanup errors to retain the shared lease. */
-	private async cleanupCompaction(operationId: string, reason: string): Promise<string | undefined> {
+	/** Best-effort compaction cleanup without allowing cleanup errors to retain the shared lease. */
+	private async cleanupCompaction(operationId: string, reason: string, completed = false): Promise<string | undefined> {
 		const failures: string[] = []
-		try {
-			await this.deps.compaction.fail(operationId, reason)
-		} catch (error) {
-			failures.push(`Rollback failed: ${error instanceof Error ? error.message : String(error)}.`)
+		if (!completed) {
+			try {
+				await this.deps.compaction.abort(operationId, reason)
+			} catch (error) {
+				failures.push(`Compaction abort failed: ${error instanceof Error ? error.message : String(error)}.`)
+			}
 		}
 		try {
-			await this.deps.compaction.release(operationId)
+			await this.deps.compaction.complete(operationId)
 		} catch (error) {
-			failures.push(`Barrier release failed: ${error instanceof Error ? error.message : String(error)}.`)
+			failures.push(`Compaction completion failed: ${error instanceof Error ? error.message : String(error)}.`)
 		}
 		return failures.length ? failures.join(" ") : undefined
 	}

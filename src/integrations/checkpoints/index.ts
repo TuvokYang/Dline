@@ -21,6 +21,7 @@ import { retryWithBackoff } from "@/utils/retry"
 import { MessageStateHandler } from "../../core/task/message-state"
 import { TaskState } from "../../core/task/TaskState"
 import type { ClineContent } from "../../shared/messages/content"
+import { type ChatRestoreBoundary, resolveChatRestoreBoundary } from "./chat-restore-boundary"
 import { CHECKPOINT_TRACKER_ATTEMPT_TIMEOUT_MS } from "./initializer"
 import { ICheckpointManager } from "./types"
 
@@ -260,6 +261,15 @@ export class TaskCheckpointManager implements ICheckpointManager {
 				return {}
 			}
 
+			const chatRestoreBoundary =
+				restoreType === "workspace"
+					? undefined
+					: resolveChatRestoreBoundary({
+							messages: clineMessages,
+							messageIndex,
+							apiCount: this.services.messageStateHandler.apiConversation?.count ?? 0,
+							uiCount: this.services.messageStateHandler.uiMessage?.count ?? clineMessages.length,
+						})
 			const workspaceRestoreResult =
 				restoreType === "task"
 					? undefined
@@ -285,6 +295,7 @@ export class TaskCheckpointManager implements ICheckpointManager {
 						messageTs,
 						editedText,
 						successfulRestoreType === "taskAndWorkspace",
+						chatRestoreBoundary as ChatRestoreBoundary,
 					)
 				}
 				await this.finalizeSuccessfulRestore(
@@ -292,6 +303,7 @@ export class TaskCheckpointManager implements ICheckpointManager {
 					messageTs,
 					editedText,
 					workspaceRestoreResult?.status === "restored" ? workspaceRestoreResult.checkpointHash : undefined,
+					chatRestoreBoundary,
 				)
 				if (this.state.conversationHistoryDeletedRange !== undefined) {
 					checkpointManagerStateUpdate.conversationHistoryDeletedRange = this.state.conversationHistoryDeletedRange
@@ -625,16 +637,19 @@ export class TaskCheckpointManager implements ICheckpointManager {
 		messageTs: number,
 		editedText: string | undefined,
 		workspaceRestored: boolean,
+		boundary: ChatRestoreBoundary,
 	): Promise<void> {
+		if (message.compactionConversationRange && editedText !== undefined) {
+			throw new Error("Editing input is unavailable when restoring a compaction card")
+		}
+		const deletedMessages = this.services.messageStateHandler.clineMessages.slice(boundary.uiKeepCount)
 		this.abortAndClearState()
-		this.state.conversationHistoryDeletedRange = message.conversationHistoryDeletedRange
-		this.taskState.conversationHistoryDeletedRange = message.conversationHistoryDeletedRange
+		this.state.conversationHistoryDeletedRange = boundary.conversationHistoryDeletedRange
+		this.taskState.conversationHistoryDeletedRange = boundary.conversationHistoryDeletedRange
 
 		const apiConversation = this.services.messageStateHandler.apiConversation
-		const userMsgIdx = (message.conversationHistoryIndex ?? -1) + 1
-
-		const keepCount = userMsgIdx + 1 // convIdx + 2 — keeps through the user message
-		await apiConversation?.truncateByLineNum(keepCount)
+		const userMsgIdx = boundary.apiKeepCount - 1
+		await apiConversation?.truncateByLineNum(boundary.apiKeepCount)
 
 		// Modify the user message text in-place when editing input,
 		// preserving tool_result blocks so the preceding assistant's
@@ -659,12 +674,12 @@ export class TaskCheckpointManager implements ICheckpointManager {
 			}
 		}
 
-		await this.services.messageStateHandler.uiMessage?.truncateByLineNum(messageIndex + 1)
+		await this.services.messageStateHandler.uiMessage?.truncateByLineNum(boundary.uiKeepCount)
 
-		await this.services.contextManager.truncateContextHistory(message.ts, await ensureTaskDirectoryExists(this.task.taskId))
-
-		const clineMessages = this.services.messageStateHandler.clineMessages
-		const deletedMessages = clineMessages.slice(messageIndex + 1)
+		await this.services.contextManager.truncateContextHistory(
+			boundary.contextAnchorTs,
+			await ensureTaskDirectoryExists(this.task.taskId),
+		)
 		const deletedApiReqsMetrics = getApiMetrics(combineApiRequests(combineCommandSequences(deletedMessages)))
 
 		if (!workspaceRestored) {
@@ -698,6 +713,7 @@ export class TaskCheckpointManager implements ICheckpointManager {
 		messageTs: number,
 		editedText: string | undefined,
 		workspaceCheckpointHash: string | undefined,
+		chatRestoreBoundary: ChatRestoreBoundary | undefined,
 	): Promise<void> {
 		switch (restoreType) {
 			case "task":
@@ -732,8 +748,9 @@ export class TaskCheckpointManager implements ICheckpointManager {
 		await this.services.messageStateHandler.updateTaskHistory()
 
 		if (restoreType !== "workspace") {
+			if (!chatRestoreBoundary) throw new Error("Chat Restore completed without a validated boundary")
 			await this.callbacks.restoreChatRuntime({
-				apiIndex: Math.max(-1, this.services.messageStateHandler.apiConversationHistory.length - 1),
+				apiIndex: chatRestoreBoundary.runtimeApiIndex,
 				...(editedText === undefined ? {} : { editedText }),
 			})
 		}

@@ -19,7 +19,7 @@ import { McpMarketplaceCatalog } from "@/shared/mcp"
 import type { ClineStorageMessage } from "@/shared/messages/content"
 import { normalizeLegacyConversation } from "@/shared/messages/legacy-identity-migration"
 import { Logger } from "@/shared/services/Logger"
-import { appendJsonl, readJsonl, writeJsonl } from "./jsonl-utils"
+import { appendJsonl, readJsonl, writeJsonl } from "./backend/jsonl/jsonl-utils"
 
 const ATOMIC_WRITE_RENAME_MAX_ATTEMPTS = 5
 const ATOMIC_WRITE_RENAME_RETRY_DELAYS_MS = [10, 25, 50, 100]
@@ -92,6 +92,7 @@ export const GlobalFileNames = {
 	taskSnapshot: "snapshot.json",
 	taskActivities: "activities.json",
 	taskApiRateMetrics: "api_rate_metrics.jsonl",
+	taskDatabase: (taskId: string) => `${taskId}.db`,
 	taskContext: "context.json",
 	apiConversationHistory: "api_conversation_history.jsonl",
 	contextHistory: "context_history.jsonl",

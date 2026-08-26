@@ -69,7 +69,7 @@ describe("profile facade preflight", () => {
 		expect(result.warnings).toEqual([])
 		expect(result.systemPrompt).toContain("You prioritize modular, decoupled solutions over monolithic code")
 		expect(result.systemPrompt).toContain("## TURN-END Tools")
-		expect(result.systemPrompt).toContain("UPDATING TASK PROGRESS")
+		expect(result.systemPrompt).toContain("# Updating Task Progress")
 		expect(result.systemPrompt).toContain("## Task Closure Contract")
 		expect(result.systemPrompt).toContain("The current working directory is `/workspace/project`")
 		expect(result.systemPrompt).not.toContain("[MISSING:")

@@ -130,6 +130,15 @@ message ConversationHistoryDeletedRange {
   int32 end_index = 2;
 }
 
+// Canonical pre-compaction boundary for ordinary Restore Chat.
+message CompactionConversationRange {
+  int32 logical_turn_start_index = 1;
+  int32 logical_turn_end_index = 2;
+  int32 api_conversation_start_index = 3;
+  int32 api_conversation_end_index = 4;
+  int32 pre_compaction_api_end_index = 5;
+}
+
 // Match entry for rename / replace_text tools
 message ClineSayMatch {
   string file = 1;
@@ -273,6 +282,7 @@ message ClineMessage {
   string interaction_id = 30;
   string command_execution_mode = 31;
   bool command_can_move_to_background = 32;
+  CompactionConversationRange compaction_conversation_range = 33;
 }
 
 message ShowWebviewEvent {

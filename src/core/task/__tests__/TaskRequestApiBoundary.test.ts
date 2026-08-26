@@ -211,7 +211,7 @@ describe("Task request API boundary", () => {
 		const method = extractMethod(
 			source,
 			"private async publishContextCompactionEvent(",
-			"/** Persist one accepted presentation snapshot",
+			"/** Apply one explicit legacy history truncation",
 		)
 		const classificationStart = method.indexOf(
 			'const isManual = input.trigger === "task_header" || input.trigger === "manual_compact_command"',
@@ -349,11 +349,11 @@ describe("Task request API boundary", () => {
 		expect(ordinaryContinuation).toBeGreaterThan(manualCleanup)
 	})
 
-	it("restores the pre-attempt mistake counter while discarding automatic compaction output", async () => {
+	it("tail-truncates failed automatic compaction output before restoring the pre-attempt mistake counter", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const method = extractMethod(source, "private async discardFailedCompactionAttempt(", "private parsePreviousTokens(")
 		const baselineRead = method.indexOf("getInitialConsecutiveMistakeCount(apiIndex)")
-		const historyRollback = method.indexOf("overwriteApiConversationHistory", baselineRead)
+		const historyRollback = method.indexOf("truncateApiConversationHistory(historyIndex + 1)", baselineRead)
 		const counterRestore = method.indexOf(
 			"this.taskState.consecutiveMistakeCount = initialConsecutiveMistakeCount",
 			historyRollback,
@@ -361,6 +361,7 @@ describe("Task request API boundary", () => {
 
 		expect(baselineRead).toBeGreaterThanOrEqual(0)
 		expect(historyRollback).toBeGreaterThan(baselineRead)
+		expect(method).not.toContain("overwriteApiConversationHistory(")
 		expect(counterRestore).toBeGreaterThan(historyRollback)
 	})
 
@@ -461,6 +462,28 @@ describe("Task request API boundary", () => {
 		expect(method).toContain("api.parseError?.(")
 		expect(method).not.toMatch(/\bthis\.api\b/)
 		expect(method).not.toContain("this.getCurrentProviderInfo()")
+	})
+
+	it("updates ordinary context selection before applying the shared compaction projection", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const builder = extractMethod(source, "private async buildProviderInput(", "/** Build the exact ordinary candidate")
+		const passBuilder = extractMethod(
+			source,
+			"private async buildContextCompactionPassRequest(",
+			"/** Rebuild the complete target candidate",
+		)
+		const targetProjection = extractMethod(
+			source,
+			"private async reprojectContextCompactionTarget(",
+			"/** Publish one Session Pass lifecycle",
+		)
+
+		const contextManagementIndex = builder.indexOf("this.contextManager.getNewContextMessagesAndMetadata(")
+		const projectionIndex = builder.indexOf("this.projectCanonicalContext(apiConversationHistory)")
+		expect(contextManagementIndex).toBeGreaterThanOrEqual(0)
+		expect(projectionIndex).toBeGreaterThan(contextManagementIndex)
+		expect(passBuilder).toContain("applyCompactionProjection: false")
+		expect(targetProjection).toContain("applyCompactionProjection: false")
 	})
 
 	it("passes frozen hosted tools and the request-scoped compaction cap without a control-tool branch", async () => {

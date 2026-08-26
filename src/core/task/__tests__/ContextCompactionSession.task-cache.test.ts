@@ -1,5 +1,4 @@
 import type { ApiHandler, ApiRequestOptions } from "@core/api"
-import type { CompactionCheckpointHead } from "@core/context/context-management/compaction-checkpoint-chain"
 import type { TargetWindowFittingDecision } from "@core/context/context-management/TargetWindowFittingService"
 import type { CompactionProviderInput } from "@core/task/compaction/CompactionRequestReplay"
 import { ExplicitInstructionRegistry } from "@core/task/explicit-instructions/ExplicitInstructionRegistry"
@@ -16,33 +15,18 @@ const HISTORY: ClineStorageMessage[] = [
 	{ role: "assistant", content: [{ type: "text", text: "answer two" }] },
 ]
 
-function checkpointHead(operationId: string, revision = 0): CompactionCheckpointHead {
-	return {
-		schemaVersion: 1,
-		operationId,
-		rootCheckpointId: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		headCheckpointId:
-			revision === 0
-				? "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-				: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		branchId: "branch-0",
-		chainRevision: revision,
-		sequence: revision,
-		depth: revision,
-	}
-}
-
 function completeProjection(): TargetWindowFittingDecision {
-	return { status: "complete", projectedUsageTokens: 100, targetContextWindow: 1_000, fittingExitTarget: 800 }
+	return {
+		status: "complete",
+		projectedUsageTokens: 100,
+		targetContextWindow: 1_000,
+		effectiveContextLimit: 1_000,
+		fittingExitTarget: 800,
+	}
 }
 
 function createPorts(): ContextCompactionSessionPorts {
 	return {
-		prepareRootCheckpoint: async (input) => checkpointHead(input.operationId),
-		checkpointAcceptedPass: async (input) => ({
-			checkpointHead: checkpointHead(input.operationId, 1),
-			projection: completeProjection(),
-		}),
 		getPassInputCeiling: () => 10_000,
 		estimatePassInput: async (_input, history) => history.length * 10,
 		buildPassRequest: async (_input, state) => {
@@ -67,9 +51,9 @@ function createPorts(): ContextCompactionSessionPorts {
 				initialAttemptId: `attempt-${state.passIndex}`,
 			}
 		},
+		reprojectTarget: async () => completeProjection(),
 		stageAcceptedPass: async () => undefined,
 		commit: async () => undefined,
-		rollback: async () => undefined,
 		publish: async () => undefined,
 		waitForRetry: async () => undefined,
 	}

@@ -68,7 +68,7 @@ function createHarness(projectedUsageTokens = 128_001): TestHarness {
 	>(async () => "completed")
 	const release = vi.fn<(operationId: string) => Promise<void>>(async () => undefined)
 	const fail = vi.fn<(operationId: string, reason: string) => Promise<void>>(async () => undefined)
-	const compaction: TaskCompactionPort = { compact, release, fail }
+	const compaction: TaskCompactionPort = { compact, complete: release, abort: fail }
 	const validate = vi.fn<(operation: ModeSwitchOperation) => boolean>(() => true)
 	const commitMode = vi.fn<(operation: ModeSwitchOperation) => Promise<void>>(async () => {})
 	const commit: ModeCommitPort = { validate, commit: commitMode }
@@ -407,16 +407,23 @@ describe("ModeSwitchCoordinator", () => {
 		expect(harness.compact).not.toHaveBeenCalled()
 	})
 
-	/** Fail and release the compaction barrier if target commit throws. */
-	it("cleans up after commit failure", async () => {
+	/** Preserve a completed compaction card when the later Mode commit fails. */
+	it("reports partial success without aborting completed compaction after commit failure", async () => {
 		harness.commitMode.mockRejectedValueOnce(new Error("commit failed"))
 		await harness.coordinator.request({ taskId: "task-1", targetMode: "act" })
 		const result = await harness.coordinator.confirm("operation-1")
 
-		expect(result.status).toBe("rejected")
-		expect(harness.fail).toHaveBeenCalledWith("operation-1", "commit failed")
+		expect(result).toEqual({
+			status: "rejected",
+			operationId: "operation-1",
+			error: "Context compaction completed, but the Mode transition commit failed: commit failed",
+		})
+		expect(harness.fail).not.toHaveBeenCalled()
 		expect(harness.release).toHaveBeenCalledWith("operation-1")
-		expect(harness.coordinator.getSnapshot()).toMatchObject({ phase: "failed", error: "commit failed" })
+		expect(harness.coordinator.getSnapshot()).toMatchObject({
+			phase: "failed",
+			error: "Context compaction completed, but the Mode transition commit failed: commit failed",
+		})
 	})
 
 	/** Clear a failed transaction when a fresh request is made. */

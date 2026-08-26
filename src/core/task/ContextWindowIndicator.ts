@@ -35,7 +35,6 @@ export interface ReceiveContextWindowIndicatorInput {
 
 export interface CommitContextWindowIndicatorInput {
 	lineage: ContextWindowIndicatorLineage
-	nextLineage?: ContextWindowIndicatorLineage
 	durableContextTokens: number
 	pendingSendTokens?: number
 	/** Adopt a smaller authoritative Durable baseline for history-replacing commits such as compaction. */
@@ -53,8 +52,7 @@ export interface RollbackContextWindowIndicatorInput {
 	updatedAt?: number
 }
 
-export interface RestoreContextWindowIndicatorInput {
-	lineage: ContextWindowIndicatorLineage
+export interface RebaseContextWindowIndicatorInput {
 	durableContextTokens: number
 	pendingSendTokens?: number
 	environmentTokens: number
@@ -64,8 +62,6 @@ export interface RestoreContextWindowIndicatorInput {
 	mode: Mode
 	updatedAt?: number
 }
-
-export type RecoverCommitContextWindowIndicatorInput = RestoreContextWindowIndicatorInput
 
 export interface SettleContextWindowIndicatorInput {
 	lineage: ContextWindowIndicatorLineage
@@ -90,6 +86,7 @@ export interface AdoptContextWindowIndicatorScopeInput {
 }
 
 export interface RefreshStableContextWindowIndicatorInput extends AdoptContextWindowIndicatorScopeInput {
+	durableContextTokens?: number
 	environmentTokens: number
 }
 
@@ -168,6 +165,10 @@ export class ContextWindowIndicator {
 		this.current = {
 			...this.current,
 			revision: this.current.revision + 1,
+			durableContextTokens:
+				input.durableContextTokens === undefined
+					? this.current.durableContextTokens
+					: normalizeTokens(input.durableContextTokens),
 			environmentTokens: normalizeTokens(input.environmentTokens),
 			contextWindow: normalizeTokens(input.contextWindow),
 			profileId: input.profileId,
@@ -280,7 +281,7 @@ export class ContextWindowIndicator {
 
 	commit(input: CommitContextWindowIndicatorInput): ContextWindowIndicatorSnapshot {
 		if (!isSameContextWindowIndicatorLineage(this.current.lineage, input.lineage)) return this.getSnapshot()
-		const lineage = cloneLineage(input.nextLineage ?? input.lineage)
+		const lineage = cloneLineage(input.lineage)
 		const replacementDurableTokens = mergeDurableTokens(input.durableContextTokens, input.pendingSendTokens)
 		this.current = {
 			...this.current,
@@ -320,28 +321,14 @@ export class ContextWindowIndicator {
 		return this.getSnapshot()
 	}
 
-	recoverCommit(input: RecoverCommitContextWindowIndicatorInput): ContextWindowIndicatorSnapshot {
-		return this.replaceDurable(input, "committing", true)
-	}
-
-	restore(input: RestoreContextWindowIndicatorInput): ContextWindowIndicatorSnapshot {
-		return this.replaceDurable(input, "restoring", true)
-	}
-
-	private replaceDurable(
-		input: RestoreContextWindowIndicatorInput,
-		phase: "committing" | "restoring",
-		allowDecrease: boolean,
-	): ContextWindowIndicatorSnapshot {
-		const replacementDurableTokens = mergeDurableTokens(input.durableContextTokens, input.pendingSendTokens)
+	/** Replace a derived Durable baseline without persisting recovery identity. */
+	rebaseDurable(input: RebaseContextWindowIndicatorInput): ContextWindowIndicatorSnapshot {
 		this.current = {
 			...this.current,
 			revision: this.current.revision + 1,
 			epoch: this.current.epoch + 1,
-			phase,
-			durableContextTokens: allowDecrease
-				? replacementDurableTokens
-				: Math.max(this.current.durableContextTokens, replacementDurableTokens),
+			phase: "committing",
+			durableContextTokens: mergeDurableTokens(input.durableContextTokens, input.pendingSendTokens),
 			pendingSendTokens: 0,
 			receivingTokens: 0,
 			stagedTokens: 0,
@@ -351,7 +338,7 @@ export class ContextWindowIndicator {
 			profileName: input.profileName,
 			mode: input.mode,
 			updatedAt: input.updatedAt ?? Date.now(),
-			lineage: cloneLineage(input.lineage),
+			lineage: { kind: "baseline" },
 		}
 		this.completedExchangeTokens = 0
 		this.pendingInputTokens = 0
@@ -430,12 +417,7 @@ export function isSameContextWindowIndicatorLineage(
 	if (left.kind !== right.kind) return false
 	switch (left.kind) {
 		case "baseline":
-			return (
-				right.kind === "baseline" &&
-				left.checkpointId === right.checkpointId &&
-				left.chainRevision === right.chainRevision &&
-				left.branchId === right.branchId
-			)
+			return right.kind === "baseline"
 		case "ordinary":
 			return (
 				right.kind === "ordinary" &&
@@ -449,28 +431,7 @@ export function isSameContextWindowIndicatorLineage(
 				left.operationId === right.operationId &&
 				left.passIndex === right.passIndex &&
 				left.attemptIndex === right.attemptIndex &&
-				left.attemptId === right.attemptId &&
-				left.headCheckpointId === right.headCheckpointId &&
-				left.chainRevision === right.chainRevision &&
-				left.branchId === right.branchId
-			)
-		case "checkpoint":
-			return (
-				right.kind === "checkpoint" &&
-				left.operationId === right.operationId &&
-				left.checkpointId === right.checkpointId &&
-				left.chainRevision === right.chainRevision &&
-				left.branchId === right.branchId
-			)
-		case "restore":
-			return (
-				right.kind === "restore" &&
-				left.operationId === right.operationId &&
-				left.journalId === right.journalId &&
-				left.targetCheckpointId === right.targetCheckpointId &&
-				left.headCheckpointId === right.headCheckpointId &&
-				left.chainRevision === right.chainRevision &&
-				left.branchId === right.branchId
+				left.attemptId === right.attemptId
 			)
 	}
 }

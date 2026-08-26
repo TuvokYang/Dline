@@ -92,6 +92,7 @@ import { appendClineStealthModels } from "./models/refreshOpenRouterModels"
 import { ProfileSwitchCoordinator } from "./profile-switch/ProfileSwitchCoordinator"
 import type { ProfileSwitchOperation, ResolvedProfileTarget } from "./profile-switch/types"
 import { cleanupStateSubscriptions, sendAccountUsageUpdate, sendStateUpdate } from "./state/subscribeToState"
+import { prepareHistoryTaskForDisplay } from "./task/history-task-readiness"
 import { startTaskLifecycle } from "./task/task-start-lifecycle"
 import { sendChatButtonClickedEvent } from "./ui/subscribeToChatButtonClicked"
 
@@ -609,14 +610,15 @@ export class Controller {
 
 		try {
 			if (historyItem) {
-				await taskInstance.displayHistory()
-				if (this.task !== taskInstance) {
+				const remainsCurrent = await prepareHistoryTaskForDisplay({
+					displayHistory: () => taskInstance.displayHistory(),
+					prepareFromHistory: (prepareOptions) => taskInstance.prepareFromHistory(prepareOptions),
+					hasTaskLock: this.taskLockAcquired,
+					isCurrent: () => this.task === taskInstance,
+					onReadyToDisplay: options?.onHistoryTaskReadyToDisplay,
+				})
+				if (!remainsCurrent) {
 					return initializedTaskId
-				}
-				if (this.taskLockAcquired) {
-					await taskInstance.prepareFromHistory({
-						onReadyToDisplay: options?.onHistoryTaskReadyToDisplay,
-					})
 				}
 				// Readonly (taskLockAcquired === false): display-only, no recovery actions.
 				// Frontend shows a lock banner with a force-unlock button.
@@ -701,9 +703,9 @@ export class Controller {
 				compact: ({ trigger, operationId, targetApi, targetMode, chatContent, transition }) =>
 					this.task?.compactForTransition(trigger, operationId, targetApi, targetMode, chatContent, transition) ??
 					Promise.resolve("failed"),
-				release: (operationId) => this.task?.releaseCompact(operationId) ?? Promise.resolve(),
-				fail: async (operationId, reason) => {
-					await this.task?.failCompact(operationId, reason)
+				complete: (operationId) => this.task?.completeContextCompaction(operationId) ?? Promise.resolve(),
+				abort: async (operationId, reason) => {
+					await this.task?.abortContextCompaction(operationId, reason)
 				},
 			},
 			postState: () => this.postStateToWebview({ immediate: true }),
@@ -970,19 +972,6 @@ export class Controller {
 
 	async cancelProfileSwitch(operationId: string): Promise<ProfileSwitchRequestResult> {
 		return this.profileSwitchCoordinator.cancel(operationId)
-	}
-
-	/** Restore the active Task to a durable compaction checkpoint using CAS identity. */
-	async restoreContextCompaction(
-		target: "previous" | "initial",
-		operationId: string,
-		expectedHeadCheckpointId: string,
-		expectedChainRevision: number,
-	) {
-		if (!this.task) throw new Error("Active task is unavailable.")
-		return target === "previous"
-			? this.task.restorePreviousContextCompactionCheckpoint(operationId, expectedHeadCheckpointId, expectedChainRevision)
-			: this.task.restoreInitialContextCompactionCheckpoint(operationId, expectedHeadCheckpointId, expectedChainRevision)
 	}
 
 	/** Compatibility wrapper for internal callers that still consume a Boolean commit result. */

@@ -2,11 +2,12 @@ import { ClineStorageMessage } from "@shared/messages/content"
 import { normalizeLegacyConversation, requiresLegacyConversationMigration } from "@shared/messages/legacy-identity-migration"
 import { fileExistsAtPath } from "@utils/fs"
 import path from "path"
+import type { BufferedUnifyStore } from "./backend/api/UnifyStore"
+import { openBufferedJsonlStore } from "./backend/jsonl/JsonlUnifyStore"
+import { readJsonl } from "./backend/jsonl/jsonl-utils"
 import { ensureTaskDirectoryExists, GlobalFileNames } from "./disk"
-import { JsonlIndexedStore } from "./JsonlIndexedStore"
-import { readJsonl } from "./jsonl-utils"
 
-/** ClineStorageMessage with guaranteed ts for JsonlIndexedStore indexing. */
+/** ClineStorageMessage with the timestamp required by the buffered projection. */
 type IndexedApiMessage = ClineStorageMessage & { ts: number }
 
 function requiresIndexedApiMigration(messages: readonly unknown[]): boolean {
@@ -41,14 +42,12 @@ function normalizeIndexedApiMessages(messages: readonly unknown[]): IndexedApiMe
 /**
  * API conversation history store backed by api_conversation_history.jsonl.
  *
- * Wraps JsonlIndexedStore<IndexedApiMessage> and provides task-scoped
- * business-level methods.  All write operations are protected by
- * JsonlIndexedStore's internal Mutex + FileLock.
+ * Uses the backend-neutral buffered layer over the raw JSONL backend.
  */
 export class ApiConversation {
-	private store: JsonlIndexedStore<IndexedApiMessage>
+	private store: BufferedUnifyStore<IndexedApiMessage>
 
-	private constructor(store: JsonlIndexedStore<IndexedApiMessage>) {
+	private constructor(store: BufferedUnifyStore<IndexedApiMessage>) {
 		this.store = store
 	}
 
@@ -58,14 +57,18 @@ export class ApiConversation {
 		const filePath = path.join(dir, GlobalFileNames.apiConversationHistory)
 		const targetExists = await fileExistsAtPath(filePath)
 		const targetNeedsMigration = targetExists && requiresIndexedApiMigration(await readJsonl<unknown>(filePath))
-		const store = await JsonlIndexedStore.open<IndexedApiMessage>(filePath, { ensureUniqueAppendTs: true })
+		const store = await openBufferedJsonlStore<IndexedApiMessage>(filePath, {
+			schemaId: "api-conversation-message",
+			ensureUniqueAppendTimestamp: true,
+			acceptInitialItem: (message) => message.ts > 0,
+		})
 
 		if (!targetExists) {
 			const legacyPath = path.join(dir, "api_conversation_history.json")
 			if (await fileExistsAtPath(legacyPath)) {
 				const legacyMessages = await readJsonl<unknown>(legacyPath)
 				if (legacyMessages.length > 0) {
-					await store.transact((current) =>
+					await store.mutate((current) =>
 						current.length > 0
 							? requiresIndexedApiMigration(current)
 								? normalizeIndexedApiMessages(current)
@@ -75,7 +78,7 @@ export class ApiConversation {
 				}
 			}
 		} else if (targetNeedsMigration) {
-			await store.transact((current) =>
+			await store.mutate((current) =>
 				requiresIndexedApiMigration(current) ? normalizeIndexedApiMessages(current) : current,
 			)
 		}
@@ -87,13 +90,13 @@ export class ApiConversation {
 		return this.store.getAll()
 	}
 	getByTs(ts: number): IndexedApiMessage | undefined {
-		return this.store.getByTs(ts)
+		return this.store.getByTimestamp(ts)
 	}
 	getAt(index: number): IndexedApiMessage | undefined {
 		return this.store.getAt(index)
 	}
 	findIndexByTs(ts: number): number {
-		return this.store.findIndexByTs(ts)
+		return this.store.findTimestampIndex(ts)
 	}
 	get count(): number {
 		return this.store.count
@@ -123,14 +126,14 @@ export class ApiConversation {
 	 * Truncate the store, keeping only entries with ts < beforeTs.
 	 */
 	async truncate(beforeTs: number): Promise<void> {
-		await this.store.truncate(beforeTs)
+		await this.store.truncateBeforeTimestamp(beforeTs)
 	}
 
 	/**
 	 * Truncate by virtual row count.  Keeps the first `count` rows.
 	 */
 	async truncateByLineNum(count: number): Promise<void> {
-		await this.store.truncateByLineNum(count)
+		await this.store.truncateAt(count)
 	}
 
 	/**
@@ -151,7 +154,7 @@ export class ApiConversation {
 	 * Prefer incremental operations (addMessage/truncate) when possible.
 	 */
 	async overwrite(messages: ClineStorageMessage[]): Promise<void> {
-		await this.store.overwrite(assignUniqueApiMessageTs(messages))
+		await this.store.replaceAll(assignUniqueApiMessageTs(messages))
 	}
 
 	/**
@@ -171,14 +174,14 @@ export class ApiConversation {
 		if (msg.ts === undefined || msg.ts === null) {
 			;(msg as unknown as Record<string, unknown>).ts = Date.now()
 		}
-		await this.store.updateAt(index, msg as IndexedApiMessage)
+		await this.store.stageUpdateAt(index, msg as IndexedApiMessage)
 	}
 
 	/**
 	 * Delete a message at the given position.
 	 */
 	async deleteAt(index: number): Promise<void> {
-		await this.store.deleteAt(index)
+		await this.store.removeAt(index)
 	}
 
 	/** Stop accepting messages and wait until all pending data is durable. */

@@ -134,10 +134,10 @@ export function TaskRateMetricsChart({ chartType = "bar", metric = "tpm", points
 					<div>
 						Selected {metricLabel}: {formatTaskRateMetricValue(activePoint.value)}
 					</div>
-					<div>TPM: {activePoint.point.tokensPerMinute.toLocaleString()}</div>
-					<div>RPM: {activePoint.point.requestsPerMinute.toLocaleString()}</div>
-					<div>Tokens: {activePoint.point.tokenCount.toLocaleString()}</div>
-					<div>Active seconds: {activePoint.point.activeSeconds}</div>
+					<div>TPM: {formatOptionalValue(activePoint.point.tokensPerMinute)}</div>
+					<div>RPM: {formatOptionalValue(activePoint.point.requestsPerMinute)}</div>
+					<div>Tokens: {formatOptionalValue(activePoint.point.tokenCount)}</div>
+					<div>Active seconds: {formatOptionalValue(activePoint.point.activeSeconds)}</div>
 					<div>Quality: {formatQuality(activePoint.point.tokenQuality)}</div>
 				</div>
 			)}
@@ -149,7 +149,12 @@ function toPath(segment: Array<{ x: number; y: number }>): string {
 	return segment.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(" ")
 }
 
-function formatQuality(quality: TaskRateTokenQuality): string {
+function formatOptionalValue(value: number | undefined): string {
+	return value === undefined ? "Unavailable" : value.toLocaleString()
+}
+
+function formatQuality(quality: TaskRateTokenQuality | undefined): string {
+	if (quality === undefined) return "Unavailable"
 	switch (quality) {
 		case TaskRateTokenQuality.TASK_RATE_TOKEN_QUALITY_MIXED:
 			return "Mixed"

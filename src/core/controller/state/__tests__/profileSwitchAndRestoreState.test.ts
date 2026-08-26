@@ -32,25 +32,8 @@ describe("Profile switch and context restore StateService handlers", () => {
 		expect(response.operationId).toBe("profile-operation-1")
 	})
 
-	it("maps previous restore with the immutable checkpoint CAS identity", async () => {
+	it("rejects the deprecated compact-specific Restore RPC without invoking Task state", async () => {
 		const controller = Object.create(Controller.prototype) as Controller
-		const restore = vi.spyOn(controller, "restoreContextCompaction").mockResolvedValue({
-			operationId: "operation-1",
-			checkpointId: "checkpoint-1",
-			head: {
-				schemaVersion: 1,
-				operationId: "operation-1",
-				rootCheckpointId: "checkpoint-0",
-				headCheckpointId: "checkpoint-1",
-				chainRevision: 4,
-				branchId: "branch-restore",
-				sequence: 2,
-				depth: 1,
-			},
-			phase: "completed",
-			fittingState: {} as never,
-		})
-
 		const response = await restoreContextCompaction(
 			controller,
 			ContextCompactionRestoreRequest.create({
@@ -61,29 +44,8 @@ describe("Profile switch and context restore StateService handlers", () => {
 			}),
 		)
 
-		expect(restore).toHaveBeenCalledWith("previous", "operation-1", "checkpoint-2", 3)
-		expect(response.status).toBe(ContextCompactionRestoreStatus.CONTEXT_COMPACTION_RESTORE_STATUS_RESTORED)
-		expect(response.headCheckpointId).toBe("checkpoint-1")
-		expect(response.chainRevision).toBe(4)
-	})
-
-	it("returns stale CAS failures as rejected responses", async () => {
-		const controller = Object.create(Controller.prototype) as Controller
-		vi.spyOn(controller, "restoreContextCompaction").mockRejectedValue(
-			new Error("Compaction checkpoint head or revision is stale."),
-		)
-
-		const response = await restoreContextCompaction(
-			controller,
-			ContextCompactionRestoreRequest.create({
-				operationId: "operation-1",
-				target: ContextCompactionRestoreTarget.CONTEXT_COMPACTION_RESTORE_TARGET_INITIAL,
-				expectedHeadCheckpointId: "stale-head",
-				expectedChainRevision: 1,
-			}),
-		)
-
 		expect(response.status).toBe(ContextCompactionRestoreStatus.CONTEXT_COMPACTION_RESTORE_STATUS_REJECTED)
-		expect(response.error).toContain("head or revision is stale")
+		expect(response.operationId).toBe("operation-1")
+		expect(response.error).toContain("deprecated")
 	})
 })

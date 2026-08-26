@@ -4,10 +4,10 @@ export interface ContextTransitionPreflightInput {
 	targetContextWindow: number
 }
 
-/** Explicit transitions confirm only when the complete candidate exceeds the target maximum. */
+/** Explicit transitions confirm when the complete candidate reaches the target compaction trigger. */
 export type ContextTransitionPreflightDecision = { kind: "commit" } | { kind: "confirm" }
 
-/** Apply the strict explicit-transition boundary without compact-trigger tolerance. */
+/** Apply the shared effective trigger without adding another estimation tolerance. */
 export function decideContextTransition(input: ContextTransitionPreflightInput): ContextTransitionPreflightDecision {
-	return input.projectedUsageTokens > input.targetContextWindow ? { kind: "confirm" } : { kind: "commit" }
+	return input.projectedUsageTokens >= input.targetContextWindow ? { kind: "confirm" } : { kind: "commit" }
 }

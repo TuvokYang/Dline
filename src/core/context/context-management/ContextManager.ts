@@ -1,8 +1,8 @@
 import { ApiHandler } from "@core/api"
 import { getPrompt } from "@core/prompts/i18n"
 import { formatResponse } from "@core/prompts/responses"
+import { appendJsonl, writeJsonl } from "@core/storage/backend/jsonl/jsonl-utils"
 import { GlobalFileNames } from "@core/storage/disk"
-import { readJsonl, writeJsonl } from "@core/storage/jsonl-utils"
 import { ClineApiReqInfo, ClineMessage } from "@shared/ExtensionMessage"
 import { USER_CONTENT_TAGS } from "@shared/messages/constants"
 import type {
@@ -18,6 +18,7 @@ import { Logger } from "@/shared/services/Logger"
 import { isTurnEndingToolName } from "../../task/assistant-message-order"
 import { createMissingToolResultMessage } from "../../task/resume/ResumeProvenance"
 import { extractUserPromptFromContent } from "../../task/utils/extractUserPromptFromContent"
+import type { CanonicalMessageRange } from "./compaction-context-projection"
 import { getContextTokens, readContextTokens, readContextWindowRequestPressure } from "./context-pressure"
 import { resolveContextWindowProjection } from "./context-window-projection"
 import {
@@ -58,6 +59,8 @@ type SerializedContextHistory = Array<
 		],
 	]
 >
+
+type ContextHistoryRecord = { kind: "snapshot"; updates: SerializedContextHistory } | { kind: "truncate"; timestamp: number }
 
 /** Keep the original task while dropping injected metadata from the first request. */
 function extractInitialTaskBlock(text: string): string | undefined {
@@ -161,17 +164,16 @@ export class ContextManager {
 	private async getSavedContextHistory(taskDirectory: string): Promise<Map<number, [number, Map<number, ContextUpdate[]>]>> {
 		try {
 			const filePath = path.join(taskDirectory, GlobalFileNames.contextHistory)
-			const entries = await readJsonl<SerializedContextHistory>(filePath)
-			// Context history is stored as a single JSONL entry (one snapshot per line)
-			const serializedUpdates = entries.length > 0 ? entries[entries.length - 1] : undefined
-			if (serializedUpdates) {
-				return new Map(
-					serializedUpdates.map(([messageIndex, [numberValue, innerMapArray]]) => [
-						messageIndex,
-						[numberValue, new Map(innerMapArray)],
-					]),
-				)
+			const entries = await readContextHistoryRecords(filePath)
+			let restored = new Map<number, [number, Map<number, ContextUpdate[]>]>()
+			for (const entry of entries) {
+				if (entry.kind === "snapshot") {
+					restored = deserializeContextHistory(entry.updates)
+					continue
+				}
+				if (Number.isFinite(entry.timestamp)) this.truncateContextHistoryAtTimestamp(restored, entry.timestamp)
 			}
+			return restored
 		} catch (error) {
 			Logger.error("Failed to load context history:", error instanceof Error ? error.message : String(error))
 			// Self-heal: delete corrupt file
@@ -193,7 +195,9 @@ export class ContextManager {
 				([messageIndex, [numberValue, innerMap]]) => [messageIndex, [numberValue, Array.from(innerMap.entries())]],
 			)
 
-			await writeJsonl(path.join(taskDirectory, GlobalFileNames.contextHistory), [serializedUpdates])
+			await writeJsonl<ContextHistoryRecord>(path.join(taskDirectory, GlobalFileNames.contextHistory), [
+				{ kind: "snapshot", updates: serializedUpdates },
+			])
 		} catch (error) {
 			Logger.error("Failed to save context history:", error)
 		}
@@ -403,6 +407,31 @@ export class ContextManager {
 		return this.getAndAlterTruncatedMessages(messages, deletedRange)
 	}
 
+	/** Apply index-preserving context-history edits before a canonical range projection. */
+	public applyContextHistoryUpdatesToCanonical(messages: ClineStorageMessage[]): ClineStorageMessage[] {
+		return this.applyContextHistoryUpdates(messages, 2)
+	}
+
+	/** Apply the provider pairing repairs to an already projected in-memory history. */
+	public repairProviderMessages(messages: ClineStorageMessage[]): ClineStorageMessage[] {
+		this.removeOrphanedToolResults(messages)
+		this.ensureToolResultsFollowToolUse(messages)
+		return messages
+	}
+
+	/** Repair provider messages while preserving an aligned canonical range mapping. */
+	public repairProviderMessagesWithRanges(
+		messages: ClineStorageMessage[],
+		canonicalRanges: Array<CanonicalMessageRange | undefined>,
+	): { messages: ClineStorageMessage[]; canonicalRanges: Array<CanonicalMessageRange | undefined> } {
+		if (messages.length !== canonicalRanges.length) {
+			throw new Error("Provider message canonical range mapping must align before repair")
+		}
+		this.removeOrphanedToolResults(messages)
+		this.ensureToolResultsFollowToolUse(messages, canonicalRanges)
+		return { messages, canonicalRanges }
+	}
+
 	/**
 	 * apply all required truncation methods to the messages in context
 	 */
@@ -518,7 +547,10 @@ export class ContextManager {
 	 * Ensures that every tool_use block in assistant messages has a corresponding tool_result in the next user message,
 	 * and that tool_result blocks immediately follow their corresponding tool_use blocks.
 	 */
-	private ensureToolResultsFollowToolUse(messages: ClineStorageMessage[]): void {
+	private ensureToolResultsFollowToolUse(
+		messages: ClineStorageMessage[],
+		canonicalRanges?: Array<CanonicalMessageRange | undefined>,
+	): void {
 		for (let i = 0; i < messages.length - 1; i++) {
 			const message = messages[i]
 
@@ -577,6 +609,7 @@ export class ContextManager {
 					content: syntheticResults,
 				}
 				messages.splice(i + 1, 0, syntheticUserMsg)
+				canonicalRanges?.splice(i + 1, 0, undefined)
 				// Retry this iteration with the newly inserted user message
 				i--
 				continue
@@ -761,9 +794,14 @@ export class ContextManager {
 	 */
 	async truncateContextHistory(timestamp: number, taskDirectory: string): Promise<void> {
 		this.truncateContextHistoryAtTimestamp(this.contextHistoryUpdates, timestamp)
-
-		// save the modified context history to disk
-		await this.saveContextHistory(taskDirectory)
+		try {
+			await appendJsonl<ContextHistoryRecord>(path.join(taskDirectory, GlobalFileNames.contextHistory), {
+				kind: "truncate",
+				timestamp,
+			})
+		} catch (error) {
+			Logger.error("Failed to append context history truncation:", error)
+		}
 	}
 
 	/**
@@ -1506,4 +1544,69 @@ export class ContextManager {
 
 		return percentCharactersSaved
 	}
+}
+
+async function readContextHistoryRecords(filePath: string): Promise<ContextHistoryRecord[]> {
+	let content: string
+	try {
+		content = await fs.readFile(filePath, "utf8")
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return []
+		throw error
+	}
+	if (!content.trim()) return []
+
+	const records: ContextHistoryRecord[] = []
+	let parsedEveryLine = true
+	for (const line of content.split("\n")) {
+		if (!line.trim()) continue
+		try {
+			const parsed = JSON.parse(line) as unknown
+			const record = normalizeContextHistoryRecord(parsed)
+			if (record) records.push(record)
+		} catch {
+			parsedEveryLine = false
+			break
+		}
+	}
+	if (parsedEveryLine) return records
+
+	const legacy = JSON.parse(content) as unknown
+	const normalized = normalizeContextHistoryRecord(legacy)
+	return normalized ? [normalized] : []
+}
+
+function normalizeContextHistoryRecord(value: unknown): ContextHistoryRecord | undefined {
+	if (isSerializedContextHistory(value)) return { kind: "snapshot", updates: value }
+	if (typeof value !== "object" || value === null) return undefined
+	const record = value as Partial<ContextHistoryRecord> & { updates?: unknown; timestamp?: unknown }
+	if (record.kind === "snapshot" && isSerializedContextHistory(record.updates)) {
+		return { kind: "snapshot", updates: record.updates }
+	}
+	if (record.kind === "truncate" && typeof record.timestamp === "number" && Number.isFinite(record.timestamp)) {
+		return { kind: "truncate", timestamp: record.timestamp }
+	}
+	return undefined
+}
+
+function isSerializedContextHistory(value: unknown): value is SerializedContextHistory {
+	return (
+		Array.isArray(value) &&
+		value.every(
+			(entry) =>
+				Array.isArray(entry) &&
+				entry.length === 2 &&
+				Number.isInteger(entry[0]) &&
+				Array.isArray(entry[1]) &&
+				entry[1].length === 2 &&
+				Number.isInteger(entry[1][0]) &&
+				Array.isArray(entry[1][1]),
+		)
+	)
+}
+
+function deserializeContextHistory(updates: SerializedContextHistory): Map<number, [number, Map<number, ContextUpdate[]>]> {
+	return new Map(
+		updates.map(([messageIndex, [numberValue, innerMapArray]]) => [messageIndex, [numberValue, new Map(innerMapArray)]]),
+	)
 }

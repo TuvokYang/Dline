@@ -69,9 +69,11 @@ describe("Task termination persistence", () => {
 				waitForPersistence: vi.fn(async () => {}),
 			},
 			apiRateMetricsService: { dispose: vi.fn(async () => {}) },
+			apiRequestRoundLifecycle: { close: vi.fn(async () => {}) },
 			browserSession: { dispose: vi.fn(async () => {}) },
 			diffViewProvider: { revertChanges: vi.fn(async () => {}) },
 			presentationScheduler: { dispose: vi.fn(async () => {}) },
+			stopContextWindowEnvironmentRefresh: vi.fn(),
 		} as unknown as Task
 
 		let completed = false
@@ -143,9 +145,11 @@ describe("Task termination persistence", () => {
 				waitForPersistence: vi.fn(async () => {}),
 			},
 			apiRateMetricsService: { dispose: vi.fn(async () => {}) },
+			apiRequestRoundLifecycle: { close: vi.fn(async () => {}) },
 			browserSession: { dispose: vi.fn(async () => {}) },
 			diffViewProvider: { revertChanges: vi.fn(async () => {}) },
 			presentationScheduler: { dispose: vi.fn(async () => {}) },
+			stopContextWindowEnvironmentRefresh: vi.fn(),
 		} as unknown as Task
 
 		await expect(Task.prototype.terminate.call(fakeTask)).resolves.toBeUndefined()

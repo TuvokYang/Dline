@@ -257,7 +257,7 @@ export async function executePreCompactHookWithCleanup(params: PreCompactHookPar
 			// Always save state before cancelling, regardless of cancellation source
 			params.taskState.didFinishAbortingStream = true
 			await params.messageStateHandler.updateTaskHistory()
-			await params.messageStateHandler.overwriteApiConversationHistory(params.messageStateHandler.apiConversationHistory)
+			await params.messageStateHandler.flushApiConversationHistory()
 			await params.postStateToWebview()
 
 			// Trigger full cancellation flow

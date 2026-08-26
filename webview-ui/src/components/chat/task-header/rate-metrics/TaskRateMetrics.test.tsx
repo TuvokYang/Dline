@@ -28,6 +28,8 @@ describe("TaskRateMetrics", () => {
 		expect(button).toHaveTextContent("Out:250")
 		expect(button).toHaveTextContent("RPM:3")
 		expect(button).toHaveTextContent("TPM:4.5K")
+		expect(button).toHaveTextContent("Hit:0.0%")
+		expect(button).toHaveAccessibleName(/Hit: 0\.0%/)
 		expect(button.textContent?.indexOf("In:1.3K")).toBeLessThan(button.textContent?.indexOf("RPM:3") ?? -1)
 		expect(button.querySelectorAll("button")).toHaveLength(0)
 		expect(button).toHaveClass("rounded-full", "bg-success/80", "text-background")

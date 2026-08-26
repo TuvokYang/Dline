@@ -1,4 +1,3 @@
-import type { CompactionCheckpointHead } from "@core/context/context-management/compaction-checkpoint-chain"
 import type { ContextCompactionSessionEvent, ContextCompactionSessionInput } from "@core/task/ContextCompactionSession"
 import {
 	type ContextWindowIndicatorLineage,
@@ -34,20 +33,6 @@ type IndicatorTaskHarness = {
 	rollbackOrdinaryContextWindowIndicator(apiIndex: number, expectedLineage?: ContextWindowIndicatorLineage): Promise<void>
 	receiveContextCompactionIndicator(event: Extract<ContextCompactionSessionEvent, { kind: "pass_receiving" }>): Promise<void>
 	commitContextCompactionIndicator(event: Extract<ContextCompactionSessionEvent, { kind: "pass_completed" }>): Promise<void>
-}
-
-function checkpointHead(operationId: string, overrides: Partial<CompactionCheckpointHead> = {}): CompactionCheckpointHead {
-	return {
-		schemaVersion: 1,
-		operationId,
-		rootCheckpointId: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		headCheckpointId: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		branchId: "branch-0",
-		chainRevision: 0,
-		sequence: 0,
-		depth: 0,
-		...overrides,
-	}
 }
 
 function createHarness(): IndicatorTaskHarness {
@@ -101,25 +86,12 @@ const passAttempt1: ContextWindowIndicatorLineage = {
 	passIndex: 0,
 	attemptIndex: 1,
 	attemptId: "pass-attempt-1",
-	headCheckpointId: "checkpoint-0",
-	chainRevision: 0,
-	branchId: "branch-0",
 }
 
 describe("Task context-window indicator stale protection", () => {
 	it("keeps the authoritative total while a hidden compaction Pass is being sent", async () => {
 		const task = createHarness()
-		const checkpoint = checkpointHead("operation-stale", {
-			headCheckpointId: "checkpoint-pass",
-		})
-		const stable = task.contextWindowIndicator.restore({
-			lineage: {
-				kind: "checkpoint",
-				operationId: "operation-stale",
-				checkpointId: "checkpoint-0",
-				chainRevision: 0,
-				branchId: "branch-0",
-			},
+		const stable = task.contextWindowIndicator.rebaseDurable({
 			durableContextTokens: 630_100,
 			environmentTokens: 0,
 			contextWindow: 1_000_000,
@@ -149,7 +121,6 @@ describe("Task context-window indicator stale protection", () => {
 			state: { cumulativeSummary: undefined },
 			passIdentity: { operationId: "operation-stale", passIndex: 0 },
 			attempt: { attemptIndex: 0, authorizationAttemptId: "pass-attempt-0" },
-			checkpointHead: checkpoint,
 			providerInput: {
 				systemPrompt: "system",
 				messages: [{ role: "user", content: [{ type: "text", text: "hidden pass source" }] }],
@@ -228,7 +199,6 @@ describe("Task context-window indicator stale protection", () => {
 			state: {},
 			passIdentity: { operationId: "operation-stale", passIndex: 0 },
 			attempt: { attemptIndex: 0, authorizationAttemptId: "pass-attempt-0" },
-			checkpointHead: checkpointHead("operation-stale"),
 			chunk: { type: "text", text: "late summary" },
 		} as unknown as Extract<ContextCompactionSessionEvent, { kind: "pass_receiving" }>
 
@@ -240,20 +210,14 @@ describe("Task context-window indicator stale protection", () => {
 		expect(task.postStateToWebview).not.toHaveBeenCalled()
 	})
 
-	it("publishes the new Durable at the accepted checkpoint and retains it as the retry baseline", async () => {
+	it("publishes the new Durable on the accepted Pass lineage and retains it as the retry baseline", async () => {
 		const task = createHarness()
-		const previousHead = checkpointHead("operation-durable-commit", {
-			headCheckpointId: "checkpoint-before-summary",
-		})
 		const passLineage: ContextWindowIndicatorLineage = {
 			kind: "compaction_pass",
 			operationId: "operation-durable-commit",
 			passIndex: 0,
 			attemptIndex: 0,
 			attemptId: "pass-attempt-durable-commit",
-			headCheckpointId: previousHead.headCheckpointId,
-			chainRevision: previousHead.chainRevision,
-			branchId: previousHead.branchId,
 		}
 		const sending = task.contextWindowIndicator.beginSend({
 			lineage: passLineage,
@@ -273,19 +237,11 @@ describe("Task context-window indicator stale protection", () => {
 			const snapshot = task.taskState.contextWindowIndicator
 			if (snapshot) published.push(snapshot)
 		})
-		const nextHead = checkpointHead("operation-durable-commit", {
-			headCheckpointId: "checkpoint-after-summary",
-			chainRevision: 1,
-			sequence: 1,
-			depth: 1,
-		})
 		const completed = {
 			kind: "pass_completed",
 			state: {},
 			passIdentity: { operationId: "operation-durable-commit", passIndex: 0 },
 			attempt: { attemptIndex: 0, authorizationAttemptId: "pass-attempt-durable-commit" },
-			previousCheckpointHead: previousHead,
-			checkpointHead: nextHead,
 			projection: {
 				status: "complete",
 				projectedUsageTokens: 300,
@@ -309,20 +265,14 @@ describe("Task context-window indicator stale protection", () => {
 			{ phase: "committing", durableContextTokens: 280 },
 			{ phase: "stable", durableContextTokens: 280 },
 		])
-		const checkpointSnapshot = task.contextWindowIndicator.getSnapshot()
-		expect(checkpointSnapshot).toMatchObject({
+		const stableSnapshot = task.contextWindowIndicator.getSnapshot()
+		expect(stableSnapshot).toMatchObject({
 			phase: "stable",
 			durableContextTokens: 280,
 			pendingSendTokens: 0,
 			receivingTokens: 0,
 			stagedTokens: 0,
-			lineage: {
-				kind: "checkpoint",
-				operationId: "operation-durable-commit",
-				checkpointId: "checkpoint-after-summary",
-				chainRevision: 1,
-				branchId: "branch-0",
-			},
+			lineage: passLineage,
 		})
 		expect(task.contextCompactionIndicatorReceivingByAttemptId.has("pass-attempt-durable-commit")).toBe(false)
 
@@ -342,22 +292,12 @@ describe("Task context-window indicator stale protection", () => {
 		})
 		const rolledBack = task.contextWindowIndicator.rollback({ lineage: ordinaryLineage })
 		expect(rolledBack.durableContextTokens).toBe(280)
-		expect(rolledBack.lineage).toEqual(checkpointSnapshot.lineage)
+		expect(rolledBack.lineage).toEqual(stableSnapshot.lineage)
 	})
 
-	it("rejects receiving and completion from a detached branch after restore", async () => {
+	it("rejects receiving and completion from a detached Pass after baseline rebase", async () => {
 		const task = createHarness()
-		const restoreLineage: ContextWindowIndicatorLineage = {
-			kind: "restore",
-			operationId: "operation-stale",
-			journalId: "restore-journal-1",
-			targetCheckpointId: "checkpoint-0",
-			headCheckpointId: "checkpoint-0",
-			chainRevision: 1,
-			branchId: "branch-1",
-		}
-		const restored = task.contextWindowIndicator.restore({
-			lineage: restoreLineage,
+		const restored = task.contextWindowIndicator.rebaseDurable({
 			durableContextTokens: 100,
 			environmentTokens: 20,
 			contextWindow: 1_000,
@@ -366,13 +306,11 @@ describe("Task context-window indicator stale protection", () => {
 		task.taskState.contextWindowIndicator = restored
 		const detachedReceiving = new ContextWindowReceivingTracker()
 		task.contextCompactionIndicatorReceivingByAttemptId.set("pass-attempt-0", detachedReceiving)
-		const oldHead = checkpointHead("operation-stale")
 		const staleReceiving = {
 			kind: "pass_receiving",
 			state: {},
 			passIdentity: { operationId: "operation-stale", passIndex: 0 },
 			attempt: { attemptIndex: 0, authorizationAttemptId: "pass-attempt-0" },
-			checkpointHead: oldHead,
 			chunk: { type: "text", text: "late detached summary" },
 		} as unknown as Extract<ContextCompactionSessionEvent, { kind: "pass_receiving" }>
 		const staleCompleted = {
@@ -380,13 +318,6 @@ describe("Task context-window indicator stale protection", () => {
 			state: {},
 			passIdentity: { operationId: "operation-stale", passIndex: 0 },
 			attempt: { attemptIndex: 0, authorizationAttemptId: "pass-attempt-0" },
-			previousCheckpointHead: oldHead,
-			checkpointHead: checkpointHead("operation-stale", {
-				headCheckpointId: "checkpoint-1",
-				chainRevision: 1,
-				sequence: 1,
-				depth: 1,
-			}),
 			projection: {
 				status: "complete",
 				projectedUsageTokens: 300,

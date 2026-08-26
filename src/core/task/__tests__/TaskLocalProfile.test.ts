@@ -190,61 +190,6 @@ describe("Task task-local Profile adoption", () => {
 		expect(fakeTask.syncContextWindowIndicatorScope).not.toHaveBeenCalled()
 	})
 
-	it("restores stable source Profile identities from a completed compaction C0", async () => {
-		const taskSm = createTaskStateManager("act")
-		taskSm.setProfileIdentityBindings({
-			plan: { profileId: "target-id", profileName: "target-profile" },
-			act: { profileId: "target-id", profileName: "target-profile" },
-		})
-		const fakeTask = {
-			taskSm,
-			resolveProfileBinding: vi.fn((profileName: string) => ({
-				profileId: `${profileName}-id`,
-				profileName,
-			})),
-			taskState: { didRespondToPlanAskBySwitchingMode: true },
-			pendingSystemPromptRefreshReason: undefined,
-			rebuildApiHandler: vi.fn(async () => undefined),
-			syncContextWindowIndicatorScope: vi.fn(),
-			stateManager: { flushPendingState: vi.fn(async () => undefined) },
-		}
-		const restoreTransition = Task.prototype as unknown as {
-			restoreContextCompactionTransition: (
-				transition: {
-					kind: "profile_switch"
-					operationId: string
-					phase: "compacting"
-					source: { mode: Mode; profile: string }
-					sourceProfiles: Partial<Record<Mode, string>>
-					target: { mode: Mode; profile: string; contextWindow: number }
-					targetModes: Mode[]
-				},
-				target: "source",
-			) => Promise<void>
-		}
-
-		await restoreTransition.restoreContextCompactionTransition.call(
-			fakeTask,
-			{
-				kind: "profile_switch",
-				operationId: "profile-operation",
-				phase: "compacting",
-				source: { mode: "act", profile: "act-source" },
-				sourceProfiles: { plan: "plan-source", act: "act-source" },
-				target: { mode: "act", profile: "target-profile", contextWindow: 128_000 },
-				targetModes: ["plan", "act"],
-			},
-			"source",
-		)
-
-		expect(taskSm.planModeProfileId).toBe("plan-source-id")
-		expect(taskSm.planModeProfile).toBe("plan-source")
-		expect(taskSm.actModeProfileId).toBe("act-source-id")
-		expect(taskSm.actModeProfile).toBe("act-source")
-		expect(fakeTask.rebuildApiHandler).toHaveBeenCalledOnce()
-		expect(fakeTask.stateManager.flushPendingState).toHaveBeenCalledOnce()
-	})
-
 	it("restores source bindings and handler when persistence fails", async () => {
 		const taskSm = createTaskStateManager("act")
 		const fakeTask = {

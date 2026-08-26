@@ -1,7 +1,7 @@
+import { readJsonl } from "@core/storage/backend/jsonl/jsonl-utils"
+import { getTaskHeaderText } from "@core/storage/disk"
 import type { ClineMessage, ExtensionState } from "@shared/ExtensionMessage"
 import { describe, expect, it, vi } from "vitest"
-import { getTaskHeaderText } from "@/core/storage/disk"
-import { readJsonl } from "@/core/storage/jsonl-utils"
 import { Controller } from "../index"
 
 // Disk boundary spies: buildState must never fall back to re-reading
@@ -12,8 +12,8 @@ vi.mock("@/core/storage/disk", async (importOriginal) => {
 	return { ...actual, getTaskHeaderText: vi.fn(async () => "") }
 })
 
-vi.mock("@/core/storage/jsonl-utils", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("@/core/storage/jsonl-utils")>()
+vi.mock("@/core/storage/backend/jsonl/jsonl-utils", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@/core/storage/backend/jsonl/jsonl-utils")>()
 	return { ...actual, readJsonl: vi.fn() }
 })
 
@@ -67,9 +67,13 @@ function createFakeController(messages: ClineMessage[]): Record<string, unknown>
 			},
 			getRuntimeState: () => ({}),
 			getApiRateSnapshot: () => ({}),
+			getContextWindowIndicator: () => undefined,
 			getPromptCacheHealth: () => undefined,
+			getPromptFreshness: () => undefined,
 			getReadyBackgroundHandoffActivityId: () => undefined,
+			getContextCompactionOperationId: () => undefined,
 			isBackgroundHandoffRequested: () => false,
+			isForceTruncateAvailable: () => false,
 			hasAutoRetrySequence: () => false,
 			hasPendingAutoRetry: () => false,
 		},

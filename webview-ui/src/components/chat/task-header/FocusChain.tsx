@@ -58,7 +58,7 @@ const ToDoListHeader = memo<{
 
 	return (
 		<div
-			className={cn("relative w-full h-full", {
+			className={cn("relative w-full shrink-0", {
 				"text-success": isCompleted,
 			})}
 			title={mainTitle || undefined}>

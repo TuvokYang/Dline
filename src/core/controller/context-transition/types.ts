@@ -23,6 +23,6 @@ export interface TaskCompactionRequest {
 /** Run target-profile compaction and control its completion barrier. */
 export interface TaskCompactionPort {
 	compact(request: TaskCompactionRequest): Promise<"completed" | "cancelled" | "failed">
-	release(operationId: string): Promise<void>
-	fail(operationId: string, reason: string): Promise<void>
+	complete(operationId: string): Promise<void>
+	abort(operationId: string, reason: string): Promise<void>
 }

@@ -123,7 +123,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	const totalInputTokens = tokensIn + (cacheWrites ?? 0) + (cacheReads ?? 0)
 	const currentContextTokens = lastApiReqTotalTokens ?? totalInputTokens
 	const isCostAvailable = totalCost != null && hasNonZeroModelPricing(pricing)
-	const hasMetrics = isCostAvailable || totalInputTokens > 0 || tokensOut > 0 || (cacheHitRate ?? 0) > 0
+	const hasMetrics = isCostAvailable || totalInputTokens > 0 || tokensOut > 0 || cacheHitRate !== undefined
 	const hasRateMetrics = (requestsPerMinute ?? 0) > 0 || (tokensPerMinute ?? 0) > 0
 	const hasUnifiedMetrics = hasMetrics || hasRateMetrics
 

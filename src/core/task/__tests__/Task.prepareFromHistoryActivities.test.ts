@@ -1,68 +1,58 @@
-import type { ClineMessage } from "@shared/ExtensionMessage"
 import { describe, expect, it, vi } from "vitest"
 import { Task } from "../index"
 
-describe("Task.prepareFromHistory activity recovery", () => {
-	it("interrupts matching command cards before publishing the resumed history", async () => {
+describe("Task.prepareFromHistory readiness", () => {
+	it("publishes Resume and readiness before starting non-blocking maintenance", async () => {
 		const order: string[] = []
-		const messages: ClineMessage[] = [
-			{
-				ts: 1,
-				type: "say",
-				say: "command",
-				text: "npm run dev",
-				activityId: "command-running",
-				commandStatus: "running",
-			},
-			{
-				ts: 2,
-				type: "ask",
-				ask: "command",
-				text: "npm test",
-				activityId: "command-pending",
-				commandStatus: "pending",
-			},
-			{
-				ts: 3,
-				type: "say",
-				say: "command",
-				text: "npm run complete",
-				activityId: "command-completed",
-				commandStatus: "completed",
-			},
-		]
-		const updateClineMessage = vi.fn(async (index: number, update: Partial<ClineMessage>) => {
-			order.push(`message:${index}`)
-			Object.assign(messages[index], update)
-		})
+		const maintenance = new Promise<void>(() => undefined)
 		const task = {
 			taskId: "task-1",
 			taskState: { abort: false },
-			activityStore: {
-				recoverInterruptedActivities: vi.fn(async () => {
-					order.push("activities")
-					return ["command-running", "command-pending", "command-completed"]
-				}),
-			},
-			messageStateHandler: { clineMessages: messages, updateClineMessage },
-			getContextCompactionRecoveryCoordinator: () => ({
-				resumePendingJournals: vi.fn(async () => {
-					order.push("compaction")
-				}),
-			}),
 			resumeCoordinator: {
 				prepare: vi.fn(async () => {
 					order.push("resume")
 				}),
 			},
-			startContextWindowEnvironmentRefresh: vi.fn(),
-			refreshStableContextWindowIndicator: vi.fn(async () => undefined),
+			startContextWindowEnvironmentRefresh: vi.fn(() => {
+				order.push("environment")
+			}),
+			historyResumeMaintenance: {
+				run: vi.fn(() => {
+					order.push("maintenance")
+					return maintenance
+				}),
+			},
 		} as unknown as Task
 
-		await Task.prototype.prepareFromHistory.call(task)
+		await Task.prototype.prepareFromHistory.call(task, {
+			isCurrent: () => true,
+			onReadyToDisplay: async () => {
+				order.push("ready")
+			},
+		})
 
 		expect(task.taskState.abort).toBe(true)
-		expect(messages.map((message) => message.commandStatus)).toEqual(["interrupted", "interrupted", "completed"])
-		expect(order).toEqual(["compaction", "activities", "message:0", "message:1", "resume"])
+		expect(order).toEqual(["resume", "environment", "ready", "maintenance"])
+	})
+
+	it("does not start maintenance after readiness loses Task identity", async () => {
+		let isCurrent = true
+		const run = vi.fn(async () => undefined)
+		const task = {
+			taskId: "task-1",
+			taskState: { abort: false },
+			resumeCoordinator: { prepare: vi.fn(async () => undefined) },
+			startContextWindowEnvironmentRefresh: vi.fn(),
+			historyResumeMaintenance: { run },
+		} as unknown as Task
+
+		await Task.prototype.prepareFromHistory.call(task, {
+			isCurrent: () => isCurrent,
+			onReadyToDisplay: async () => {
+				isCurrent = false
+			},
+		})
+
+		expect(run).not.toHaveBeenCalled()
 	})
 })

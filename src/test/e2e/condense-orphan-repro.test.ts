@@ -23,6 +23,7 @@ const WEBVIEW_ERROR_ALLOWLIST = [
 	/vscode\.mermaid-markdown-features.*legacyToolReferenceFullNames.*chatParticipantPrivate/is,
 	/\[DEP0040\].*punycode.*deprecated/is,
 	/\[DEP0169\].*url\.parse\(\).*not standardized/is,
+	/Unable to create workbench contribution 'chat\.contextContributions'.*chatSessionRoutingProviderService/is,
 	/Failed to load resource: the server responded with a status of 404/is,
 	/DialogContent.*requires a `DialogTitle`/is,
 ]
@@ -680,7 +681,7 @@ e2e(
 )
 
 e2e(
-	"Checkpoint restore - committed compaction returns to the pre-compaction task history",
+	"Restore Chat - committed compaction returns to the pre-compaction task history",
 	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(210_000)
 		await configureAutoCompact(dlineDir)
@@ -746,17 +747,12 @@ e2e(
 			})
 			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(4)
 
-			const scrollToBottomButton = sidebar.getByRole("button", { name: "Scroll to bottom", exact: true })
-			if (await scrollToBottomButton.isVisible()) {
-				await scrollToBottomButton.click()
-			}
 			const completedPass = sidebar.getByTestId("compaction-pass").filter({ hasText: summary }).last()
 			await expect(completedPass).toHaveAttribute("data-compaction-status", "completed")
-			const checkpointControl = completedPass
-				.getByText("Compaction checkpoint", { exact: true })
-				.locator("..")
-				.locator("..")
-			await checkpointControl.hover()
+			await completedPass.scrollIntoViewIfNeeded()
+			const restoreControl = completedPass.locator("svg.lucide-bookmark").locator("..")
+			await expect(restoreControl).toBeVisible()
+			await restoreControl.hover()
 			const restoreButton = completedPass.getByRole("button", { name: "Restore", exact: true })
 			await expect(restoreButton).toBeVisible()
 			await restoreButton.focus()

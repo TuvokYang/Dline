@@ -22,9 +22,6 @@ const passBranch0: ContextWindowIndicatorLineage = {
 	passIndex: 0,
 	attemptIndex: 0,
 	attemptId: "pass-attempt-0",
-	headCheckpointId: "checkpoint-0",
-	chainRevision: 0,
-	branchId: "branch-0",
 }
 
 function createIndicator() {
@@ -285,7 +282,7 @@ it("invalidates an old attempt and detached branch when a newer epoch starts", (
 	expect(current).toMatchObject({ epoch: 2, revision: 3, receivingTokens: 25 })
 })
 
-it("commits, rolls back, and restores without leaving temporary segments active", () => {
+it("commits, rolls back, and rebases Durable without recovery lineage", () => {
 	const indicator = createIndicator()
 	indicator.beginSend({
 		lineage: ordinaryAttempt0,
@@ -296,25 +293,14 @@ it("commits, rolls back, and restores without leaving temporary segments active"
 		mode: "act",
 	})
 	indicator.receive({ lineage: ordinaryAttempt0, receivingTokens: 50 })
-	const checkpointLineage: ContextWindowIndicatorLineage = {
-		kind: "checkpoint",
-		operationId: "operation-1",
-		checkpointId: "checkpoint-1",
-		chainRevision: 1,
-		branchId: "branch-0",
-	}
 	const committed = indicator.commit({
 		lineage: ordinaryAttempt0,
-		nextLineage: checkpointLineage,
 		durableContextTokens: 420,
 		pendingSendTokens: 30,
 		environmentTokens: 25,
 		updatedAt: 4,
 	})
-	const settled = indicator.settle({
-		lineage: checkpointLineage,
-		updatedAt: 5,
-	})
+	const settled = indicator.settle({ lineage: ordinaryAttempt0, updatedAt: 5 })
 	indicator.beginSend({
 		lineage: ordinaryAttempt1,
 		durableContextTokens: 450,
@@ -323,21 +309,8 @@ it("commits, rolls back, and restores without leaving temporary segments active"
 		contextWindow: 1_000,
 		mode: "act",
 	})
-	const rolledBack = indicator.rollback({
-		lineage: ordinaryAttempt1,
-		updatedAt: 7,
-	})
-	const restoreLineage: ContextWindowIndicatorLineage = {
-		kind: "restore",
-		operationId: "operation-1",
-		journalId: "restore-1",
-		targetCheckpointId: "checkpoint-0",
-		headCheckpointId: "checkpoint-0",
-		chainRevision: 2,
-		branchId: "branch-1",
-	}
-	const restored = indicator.restore({
-		lineage: restoreLineage,
+	const rolledBack = indicator.rollback({ lineage: ordinaryAttempt1, updatedAt: 7 })
+	const rebased = indicator.rebaseDurable({
 		durableContextTokens: 80,
 		pendingSendTokens: 20,
 		environmentTokens: 20,
@@ -352,7 +325,7 @@ it("commits, rolls back, and restores without leaving temporary segments active"
 		durableContextTokens: 450,
 		pendingSendTokens: 0,
 		receivingTokens: 0,
-		lineage: checkpointLineage,
+		lineage: ordinaryAttempt0,
 	})
 	expect(settled.phase).toBe("stable")
 	expect(rolledBack).toMatchObject({
@@ -360,16 +333,16 @@ it("commits, rolls back, and restores without leaving temporary segments active"
 		durableContextTokens: 450,
 		pendingSendTokens: 0,
 		receivingTokens: 0,
-		lineage: checkpointLineage,
+		lineage: ordinaryAttempt0,
 	})
-	expect(restored).toMatchObject({
-		phase: "restoring",
+	expect(rebased).toMatchObject({
+		phase: "committing",
 		epoch: 4,
 		durableContextTokens: 100,
 		pendingSendTokens: 0,
 		receivingTokens: 0,
 		environmentTokens: 20,
-		lineage: restoreLineage,
+		lineage: { kind: "baseline" },
 	})
 })
 

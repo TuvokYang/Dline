@@ -54,6 +54,19 @@ describe("getApiMetrics", () => {
 		assert.ok(Math.abs(metrics.totalCost - 0.2) < 1e-9)
 	})
 
+	it("preserves an explicitly reported zero-percent cache hit rate", () => {
+		const metrics = getApiMetrics([
+			{
+				ts: 1,
+				type: "say",
+				say: "api_req_started",
+				text: JSON.stringify({ tokensIn: 100, tokensOut: 20, cacheWrites: 0, cacheReads: 0 }),
+			},
+		])
+
+		assert.equal(metrics.cacheHitRate, 0)
+	})
+
 	it("ignores malformed usage payloads", () => {
 		const messages: ClineMessage[] = [
 			{

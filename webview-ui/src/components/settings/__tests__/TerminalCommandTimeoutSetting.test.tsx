@@ -32,6 +32,7 @@ describe("TerminalCommandTimeoutSetting", () => {
 
 		expect(input.value).toBe("30")
 		fireEvent.input(input, { target: { value: "45" } })
+		fireEvent.blur(input)
 
 		expect(mocks.updateSetting).toHaveBeenCalledWith("terminalCommandTimeoutSeconds", 2700)
 	})

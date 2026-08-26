@@ -1,24 +1,23 @@
 import chokidar, { FSWatcher } from "chokidar"
 import { HistoryItem } from "@/shared/HistoryItem"
 import { Logger } from "@/shared/services/Logger"
-import { JsonlIndexedStore } from "./JsonlIndexedStore"
+import type { BufferedUnifyStore } from "./backend/api/UnifyStore"
 
 /**
  * Task history store backed by taskHistory.jsonl.
  *
  * Manages the global task history list (one entry per task session).
- * Uses JsonlIndexedStore for lazy-loaded storage with internal
- * Mutex + FileLock for concurrency safety.
+ * Uses the backend-neutral buffered layer over the raw JSONL backend.
  *
  * There is only one taskHistory.jsonl per user.  The instance is created
  * and owned by StateManager, which passes it to consumers as needed.
  */
 export class TaskHistory {
-	private store: JsonlIndexedStore<HistoryItem>
+	private store: BufferedUnifyStore<HistoryItem>
 	private _watcher: FSWatcher | null = null
 	private _onChangeCallbacks: Array<() => void | Promise<void>> = []
 
-	constructor(store: JsonlIndexedStore<HistoryItem>) {
+	constructor(store: BufferedUnifyStore<HistoryItem>) {
 		this.store = store
 	}
 
@@ -46,7 +45,7 @@ export class TaskHistory {
 	 * Excludes soft-deleted entries.
 	 */
 	async getAll(): Promise<HistoryItem[]> {
-		await this.store.loadAll()
+		await this.store.reload()
 		const all = this.store.getAll() as ReadonlyArray<HistoryItem & { _deleted?: boolean }>
 		return [...all].filter((item) => !(item as any)._deleted).sort((a, b) => b.ts - a.ts)
 	}
@@ -85,12 +84,12 @@ export class TaskHistory {
 	// ── Write ──
 
 	/**
-	 * Insert or update a task history entry (full transact, cross-process safe).
+	 * Insert or update a task history entry with one durable mutation.
 	 *
 	 * @param item The history item to upsert
 	 */
 	async upsert(item: HistoryItem): Promise<void> {
-		await this.store.transact((items) => {
+		await this.store.mutate((items) => {
 			const existingIdx = items.findIndex((d) => (d as HistoryItem).id === item.id)
 			if (existingIdx >= 0) {
 				items[existingIdx] = item as unknown as (typeof items)[0]
@@ -118,11 +117,10 @@ export class TaskHistory {
 	}
 
 	/**
-	 * Delete a task by id — removes the entry directly from the store.
-	 * Cross-process safe via transact + FileLock.
+	 * Delete a task by id with one durable mutation.
 	 */
 	async softDelete(id: string): Promise<void> {
-		await this.store.transact((items) => {
+		await this.store.mutate((items) => {
 			const filtered = items.filter((i) => (i as HistoryItem).id !== id)
 			return filtered
 		})
@@ -135,7 +133,7 @@ export class TaskHistory {
 	 */
 	async deleteAllExceptFavorites(): Promise<number> {
 		let deleted = 0
-		await this.store.transact((items) => {
+		await this.store.mutate((items) => {
 			const before = items.length
 			const favorited = items.filter((i) => (i as HistoryItem).isFavorited === true)
 			deleted = before - favorited.length
@@ -163,7 +161,7 @@ export class TaskHistory {
 	 */
 	async reloadIndex(): Promise<void> {
 		// Force reload from disk to pick up cross-process writes (chokidar sync)
-		await this.store.loadAll(true)
+		await this.store.reload(true)
 		// Notify listeners
 		for (const cb of this._onChangeCallbacks) {
 			try {
@@ -176,19 +174,18 @@ export class TaskHistory {
 
 	/**
 	 * Upsert a task history entry by id.
-	 * Memory-layer only; disk sync handled by the store's flush timer (10s interval).
-	 * Cross-process safe: _flushLocked uses FileLock + disk merge strategy.
+	 * Staged in memory; the buffered store flushes through the JSONL backend.
 	 *
 	 * @param item The history item to upsert
 	 */
 	async upsertTaskHistory(item: HistoryItem): Promise<void> {
-		await this.store.loadAll()
+		await this.store.reload()
 		const all = this.store.getAll() as HistoryItem[]
 		const existingIndex = all.findIndex((m) => m.id === item.id)
 
 		if (existingIndex >= 0) {
 			// Replace in-place (memory-level + markDirty)
-			await this.store.updateAt(existingIndex, item as any)
+			await this.store.stageUpdateAt(existingIndex, item)
 		} else {
 			// Find insertion position by ts (ascending order)
 			let insertIndex = all.length
@@ -199,7 +196,7 @@ export class TaskHistory {
 				}
 			}
 			// Insert at correct position (memory-level + markDirty)
-			await this.store.insertLine(insertIndex, item as any)
+			await this.store.stageInsertAt(insertIndex, item)
 		}
 	}
 
@@ -235,7 +232,7 @@ export class TaskHistory {
 				.on("add", () => syncFromDisk())
 				.on("change", () => syncFromDisk())
 				.on("unlink", async () => {
-					await this.store.overwrite([])
+					await this.store.replaceAll([])
 					for (const cb of this._onChangeCallbacks) {
 						try {
 							await cb()

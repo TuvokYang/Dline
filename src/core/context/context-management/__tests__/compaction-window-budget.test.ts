@@ -34,11 +34,22 @@ describe("compaction window budget", () => {
 		expect(result.budget.estimatedInputTokens).toBeGreaterThan(0)
 		expect(result.budget.rawRemainder).toBe(32_000 - result.budget.estimatedInputTokens)
 		expect(result.budget.availableRemainder).toBe(Math.max(0, result.budget.rawRemainder))
-		expect(result.budget.providerOutputCap).toBe(Math.min(result.budget.availableRemainder, 4_096))
+		expect(result.budget.providerOutputCap).toBe(
+			Math.min(4_096, Math.floor(result.budget.availableRemainder * 0.9), result.budget.availableRemainder - 3_000),
+		)
 		expect(result.budget.outputHardLimit).toBe(result.budget.providerOutputCap)
 		expect(result.budget.decision).toBe("ready")
-		expect(result.budget.recommendedMin).toBe(Math.min(Math.floor(result.budget.availableRemainder * 0.8), 5_000))
-		expect(result.budget.recommendedMax).toBe(Math.min(Math.floor(result.budget.availableRemainder * 0.9), 30_000))
+		expect(result.budget.closureReserveTokens).toBe(3_000)
+		expect(result.budget.reservedRequestTokens).toBe(
+			result.budget.estimatedInputTokens + result.budget.providerOutputCap + result.budget.closureReserveTokens,
+		)
+		expect(result.budget.reservedRequestTokens).toBeLessThanOrEqual(32_000)
+		expect(result.budget.recommendedMax).toBe(
+			Math.min(Math.floor(result.budget.availableRemainder * 0.9), 30_000, result.budget.providerOutputCap),
+		)
+		expect(result.budget.recommendedMin).toBe(
+			Math.min(Math.floor(result.budget.availableRemainder * 0.8), 5_000, result.budget.recommendedMax),
+		)
 		expect(result.budget.recommendedMin).toBeLessThanOrEqual(result.budget.recommendedMax)
 		expect(result.budget.recommendedMax).toBeLessThanOrEqual(result.budget.availableRemainder)
 	})
@@ -81,9 +92,15 @@ describe("compaction window budget", () => {
 		const small = resolveCompactionWindowBudget({ ...common, maxOutputTokens: 1_024 })
 		const large = resolveCompactionWindowBudget({ ...common, maxOutputTokens: 500_000 })
 
-		expect(missing.budget.providerOutputCap).toBe(missing.budget.availableRemainder)
-		expect(small.budget.providerOutputCap).toBe(Math.min(small.budget.availableRemainder, 1_024))
-		expect(large.budget.providerOutputCap).toBe(Math.min(large.budget.availableRemainder, 500_000))
+		expect(missing.budget.providerOutputCap).toBe(
+			Math.min(Math.floor(missing.budget.availableRemainder * 0.9), missing.budget.availableRemainder - 3_000),
+		)
+		expect(small.budget.providerOutputCap).toBe(
+			Math.min(1_024, Math.floor(small.budget.availableRemainder * 0.9), small.budget.availableRemainder - 3_000),
+		)
+		expect(large.budget.providerOutputCap).toBe(
+			Math.min(500_000, Math.floor(large.budget.availableRemainder * 0.9), large.budget.availableRemainder - 3_000),
+		)
 		expect(small.budget.providerOutputCap).toBeLessThan(missing.budget.providerOutputCap)
 	})
 

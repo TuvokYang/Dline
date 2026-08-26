@@ -1,6 +1,5 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import { AssistantMessageContent } from "@core/assistant-message"
-import type { CompactionCheckpointHead } from "@core/context/context-management/compaction-checkpoint-chain"
 import type { TargetWindowFittingState } from "@core/context/context-management/target-window-fitting"
 import type { ContextWindowIndicatorSnapshot } from "@shared/context-window-indicator"
 import { ClineAskResponse } from "@shared/WebviewMessage"
@@ -125,8 +124,6 @@ export class TaskState {
 	compactionFittingRequired = false
 	/** In-memory rolling-merge stage; durable persistence is owned by CTX-004. */
 	targetWindowFittingState?: TargetWindowFittingState
-	/** Latest durable checkpoint head accepted by the shared compaction Session. */
-	targetWindowFittingCheckpointHead?: CompactionCheckpointHead
 	/** Latest staged target candidate projection for the context-window indicator after each fitting Pass. */
 	targetWindowFittingProjection?: {
 		projectedUsageTokens: number

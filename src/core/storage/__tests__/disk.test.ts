@@ -503,12 +503,9 @@ describe("disk - JSONL task history", () => {
 		})
 	})
 
-	// File locking tests removed — lock functions migrated to TaskHistory/JsonlIndexedStore.
-	// Use TaskHistory.upsert() with its internal transact + FileLock for cross-process safety.
+	// JSONL locking is covered by the backend FileLock and buffered-store integration tests.
 	describe("file locking", () => {
-		it("lock is handled by TaskHistory.transact internally", async () => {
-			// Placeholder — actual locking tested via JsonlIndexedStore integration
-		})
+		it("is covered by backend integration tests", async () => {})
 	})
 
 	describe("concurrent append safety", () => {

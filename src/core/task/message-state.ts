@@ -65,8 +65,9 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 	private taskId: string
 	private ulid: string
 	private taskState: TaskState
+	private readonly transientClineMessages = new Map<number, ClineMessage>()
 
-	/** UI messages (clineMessages) — single source of truth for ui_messages.jsonl */
+	/** UI messages (clineMessages) — single source of truth for ui_messages.jsonl plus transient presentation overlays. */
 	public readonly uiMessage: UIMessage | undefined
 
 	/** API conversation history — single source of truth for api_conversation_history.jsonl */
@@ -85,9 +86,13 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 
 	// ── ClineMessages (read from UIMessage store) ──
 
-	/** ClineMessages as a property getter — reads directly from uiMessage store. */
+	/** ClineMessages as a property getter — merges durable rows with transient presentation overlays by timestamp. */
 	get clineMessages(): ClineMessage[] {
-		return this.uiMessage ? (this.uiMessage.getAll() as unknown as ClineMessage[]) : []
+		const durable = this.uiMessage ? (this.uiMessage.getAll() as unknown as ClineMessage[]) : []
+		if (this.transientClineMessages.size === 0) return durable
+		const merged = new Map(durable.map((message) => [message.ts, message]))
+		for (const [ts, message] of this.transientClineMessages) merged.set(ts, message)
+		return [...merged.values()].sort((left, right) => left.ts - right.ts)
 	}
 
 	set clineMessages(msgs: ClineMessage[]) {
@@ -211,6 +216,11 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 		await this.apiConversation?.overwrite(newHistory)
 	}
 
+	/** Truncate the API conversation tail while keeping the first `count` durable rows. */
+	async truncateApiConversationHistory(count: number): Promise<void> {
+		await this.apiConversation?.truncateByLineNum(count)
+	}
+
 	/**
 	 * Force flush the API conversation history to disk immediately.
 	 * Used in hook cancellation paths where state must be persisted before abort.
@@ -285,7 +295,6 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 			msg.conversationHistoryIndex = all[existingIndex].conversationHistoryIndex
 			msg.conversationHistoryDeletedRange = all[existingIndex].conversationHistoryDeletedRange
 
-			// Use UIMessage API for in-memory upsert and dirty tracking.
 			await this.uiMessage?.upsertMessage(msg)
 			const freshAll = this.clineMessages
 
@@ -336,6 +345,7 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 		const msg = message as ClineMessage
 		const all = this.clineMessages
 		const existingIndex = all.findIndex((m) => m.ts === msg.ts)
+		const durableIndex = this.uiMessage?.findIndexByTs(msg.ts) ?? -1
 
 		if (existingIndex >= 0) {
 			msg.conversationHistoryIndex = all[existingIndex].conversationHistoryIndex
@@ -360,13 +370,14 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 			return all[existingIndex]
 		}
 
-		// Persist via store
+		// Persist via store only at the terminal boundary, then remove the transient overlay.
 		await this.uiMessage?.finalizeMessage(msg)
+		this.transientClineMessages.delete(msg.ts)
 
 		const freshAll = this.clineMessages
 		const freshIndex = freshAll.findIndex((m) => m.ts === msg.ts)
 
-		if (freshIndex >= 0) {
+		if (freshIndex >= 0 && (durableIndex >= 0 || existingIndex >= 0)) {
 			const previousMessage = { ...all[existingIndex >= 0 ? existingIndex : 0] }
 			this.emitClineMessagesChanged({
 				type: "update",
@@ -386,6 +397,58 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 
 		await this.updateTaskHistoryOnly()
 		return msg
+	}
+
+	/** Upsert a transient presentation row without marking the durable UI store dirty. */
+	upsertTransientClineMessage(message: ClineMessage): ClineMessage {
+		const previousMessages = this.clineMessages
+		const previousIndex = previousMessages.findIndex((candidate) => candidate.ts === message.ts)
+		const previousMessage = previousIndex >= 0 ? previousMessages[previousIndex] : undefined
+		this.transientClineMessages.set(message.ts, message)
+		const messages = this.clineMessages
+		const index = messages.findIndex((candidate) => candidate.ts === message.ts)
+		this.emitClineMessagesChanged({
+			type: previousMessage ? "update" : "add",
+			messages,
+			index,
+			...(previousMessage ? { previousMessage } : {}),
+			message,
+		})
+		return message
+	}
+
+	/** Commit a new transient row durably before exposing it as durable in memory. */
+	async commitTransientClineMessage(message: ClineMessage): Promise<ClineMessage> {
+		const transient = this.transientClineMessages.get(message.ts)
+		if (!transient) throw new Error(`Transient message ${message.ts} is unavailable for durable commit`)
+		if (this.uiMessage?.getByTs(message.ts)) throw new Error(`Durable message ${message.ts} already exists`)
+		const committed = await this.uiMessage?.appendDurable({ ...message, partial: false })
+		if (!committed) throw new Error("UI message store is unavailable for durable commit")
+		this.transientClineMessages.delete(message.ts)
+		const messages = this.clineMessages
+		const index = messages.findIndex((candidate) => candidate.ts === message.ts)
+		try {
+			this.emitClineMessagesChanged({ type: "update", messages, index, previousMessage: transient, message: committed })
+		} catch (error) {
+			Logger.error("Failed to publish a durably committed UI message:", error)
+		}
+		await this.updateTaskHistoryOnly()
+		return committed
+	}
+
+	/** Remove a transient presentation row without touching durable UI history. */
+	removeTransientClineMessage(ts: number): boolean {
+		const previousMessages = this.clineMessages
+		const previousMessage = this.transientClineMessages.get(ts)
+		if (!previousMessage) return false
+		this.transientClineMessages.delete(ts)
+		this.emitClineMessagesChanged({
+			type: "delete",
+			messages: this.clineMessages,
+			index: previousMessages.findIndex((message) => message.ts === ts),
+			previousMessage,
+		})
+		return true
 	}
 
 	/**

@@ -1,5 +1,6 @@
 import type { ClineStorageMessage } from "@shared/messages/content"
 import cloneDeep from "clone-deep"
+import type { CanonicalMessageRange } from "./compaction-context-projection"
 import { hashCompactionSummary, hashCompactionValue } from "./compaction-hash"
 import type { LogicalTurn, LogicalTurnIndex } from "./logical-turns"
 
@@ -31,6 +32,7 @@ export interface TargetWindowFittingState extends CompactionPassIdentity {
 	passStartMessageIndex?: number
 	passEndMessageIndex?: number
 	sourceHistory: ClineStorageMessage[]
+	sourceCanonicalRanges?: Array<CanonicalMessageRange | undefined>
 	turns: LogicalTurn[]
 	protectedTail: ClineStorageMessage[]
 	cumulativeSummary?: string
@@ -47,12 +49,20 @@ export interface AcceptedCompactionPass {
 }
 
 /** Start rolling fitting only when canonical history contains a complete logical turn. */
-export function tryStartTargetWindowFitting(index: LogicalTurnIndex, operationId: string): TargetWindowFittingState | undefined {
-	return index.turns.length === 0 ? undefined : startTargetWindowFitting(index, operationId)
+export function tryStartTargetWindowFitting(
+	index: LogicalTurnIndex,
+	operationId: string,
+	sourceCanonicalRanges: readonly (CanonicalMessageRange | undefined)[] = [],
+): TargetWindowFittingState | undefined {
+	return index.turns.length === 0 ? undefined : startTargetWindowFitting(index, operationId, sourceCanonicalRanges)
 }
 
 /** Start fitting from the earliest complete logical turn. */
-export function startTargetWindowFitting(index: LogicalTurnIndex, operationId: string): TargetWindowFittingState {
+export function startTargetWindowFitting(
+	index: LogicalTurnIndex,
+	operationId: string,
+	sourceCanonicalRanges: readonly (CanonicalMessageRange | undefined)[] = [],
+): TargetWindowFittingState {
 	if (index.turns.length === 0) {
 		throw new Error("No complete logical turn is available for compaction")
 	}
@@ -60,12 +70,17 @@ export function startTargetWindowFitting(index: LogicalTurnIndex, operationId: s
 		throw new Error("Compaction operation ID must be non-empty")
 	}
 	const sourceHistory = [...index.turns.flatMap((turn) => cloneDeep(turn.messages)), ...cloneDeep(index.protectedTail)]
+	if (sourceCanonicalRanges.length > 0 && sourceCanonicalRanges.length !== sourceHistory.length) {
+		throw new Error("Compaction source canonical range mapping must align with source history")
+	}
 	return {
 		operationId,
 		passIndex: 0,
 		summaryBaselineHash: hashSummaryBaseline(""),
 		sourceHistoryHash: hashJsonValue(sourceHistory),
 		sourceHistory,
+		sourceCanonicalRanges:
+			sourceCanonicalRanges.length > 0 ? cloneDeep([...sourceCanonicalRanges]) : sourceHistory.map(() => undefined),
 		turns: cloneDeep(index.turns),
 		protectedTail: cloneDeep(index.protectedTail),
 		coveredTurnCount: 0,
@@ -112,6 +127,7 @@ export function applyCompactionPassPlan(
 	return {
 		...state,
 		sourceHistory: cloneDeep(state.sourceHistory),
+		sourceCanonicalRanges: cloneDeep(state.sourceCanonicalRanges ?? []),
 		turns: cloneDeep(state.turns),
 		protectedTail: cloneDeep(state.protectedTail),
 		passStartTurnIndex: plan.passStartTurnIndex,
@@ -184,6 +200,7 @@ export function acceptCompactionPass(state: TargetWindowFittingState, summary: s
 			passIndex: state.passIndex + 1,
 			summaryBaselineHash: hashSummaryBaseline(cumulativeSummary),
 			sourceHistory: cloneDeep(state.sourceHistory),
+			sourceCanonicalRanges: cloneDeep(state.sourceCanonicalRanges ?? []),
 			turns: cloneDeep(state.turns),
 			protectedTail: cloneDeep(state.protectedTail),
 			coveredTurnCount,

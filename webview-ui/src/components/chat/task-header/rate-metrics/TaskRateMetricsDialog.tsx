@@ -4,6 +4,7 @@ import { Button } from "../../../ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../../ui/dialog"
 import { type TaskRateChartType, TaskRateMetricsChart } from "./TaskRateMetricsChart"
 import { getTaskRateMetricLabel, type TaskRateMetric } from "./TaskRateMetricsChartModel"
+import { TaskUsageCacheChart } from "./TaskUsageCacheChart"
 import { type TaskRateMetricsResolution, useTaskRateMetrics } from "./useTaskRateMetrics"
 
 interface TaskRateMetricsDialogProps {
@@ -13,15 +14,19 @@ interface TaskRateMetricsDialogProps {
 }
 
 const RESOLUTION_OPTIONS: Array<{ value: TaskRateMetricsResolution; label: string }> = [
+	{ value: "round", label: "Round" },
 	{ value: "minute", label: "Minute" },
 	{ value: "hour", label: "Hour" },
 	{ value: "day", label: "Day" },
 ]
 
-const METRIC_OPTIONS: Array<{ value: TaskRateMetric; icon: "tpm" | "rpm" | "tokens" }> = [
-	{ value: "tpm", icon: "tpm" },
-	{ value: "rpm", icon: "rpm" },
-	{ value: "tokens", icon: "tokens" },
+type TaskRateMetricsView = "usageCache" | TaskRateMetric
+
+const VIEW_OPTIONS: Array<{ value: TaskRateMetricsView; icon: "history" | "tpm" | "rpm" | "tokens"; label: string }> = [
+	{ value: "usageCache", icon: "history", label: "Usage & Cache" },
+	{ value: "tpm", icon: "tpm", label: getTaskRateMetricLabel("tpm") },
+	{ value: "rpm", icon: "rpm", label: getTaskRateMetricLabel("rpm") },
+	{ value: "tokens", icon: "tokens", label: "Total Tokens" },
 ]
 
 const CHART_TYPE_OPTIONS: Array<{ value: TaskRateChartType; icon: "bar" | "line"; label: string }> = [
@@ -31,9 +36,9 @@ const CHART_TYPE_OPTIONS: Array<{ value: TaskRateChartType; icon: "bar" | "line"
 
 /** Show Task-local API rate history on demand. */
 export function TaskRateMetricsDialog({ taskId, open, onOpenChange }: TaskRateMetricsDialogProps) {
-	const [resolution, setResolution] = useState<TaskRateMetricsResolution>("minute")
-	const [metric, setMetric] = useState<TaskRateMetric>("tpm")
-	const [chartType, setChartType] = useState<TaskRateChartType>("bar")
+	const [resolution, setResolution] = useState<TaskRateMetricsResolution>("round")
+	const [view, setView] = useState<TaskRateMetricsView>("usageCache")
+	const [chartType, setChartType] = useState<TaskRateChartType>("line")
 	const { data, loading, error, refresh } = useTaskRateMetrics({ taskId, resolution, enabled: open })
 
 	return (
@@ -42,7 +47,7 @@ export function TaskRateMetricsDialog({ taskId, open, onOpenChange }: TaskRateMe
 				<DialogHeader>
 					<DialogTitle>API rate history</DialogTitle>
 					<DialogDescription>
-						Rates are calculated from API-active seconds only; idle time is shown as gaps.
+						Provider rounds show Token usage and cache hit rate; TPM keeps the provider-active-second basis.
 					</DialogDescription>
 				</DialogHeader>
 
@@ -65,9 +70,9 @@ export function TaskRateMetricsDialog({ taskId, open, onOpenChange }: TaskRateMe
 						))}
 					</div>
 
-					<div aria-label="History metric" className="flex items-center gap-1" role="radiogroup">
-						{METRIC_OPTIONS.map((option) => {
-							const selected = metric === option.value
+					<div aria-label="History view" className="flex items-center gap-1" role="radiogroup">
+						{VIEW_OPTIONS.map((option) => {
+							const selected = view === option.value
 							return (
 								<button
 									aria-checked={selected}
@@ -77,29 +82,7 @@ export function TaskRateMetricsDialog({ taskId, open, onOpenChange }: TaskRateMe
 											: "bg-transparent text-description hover:bg-toolbar-hover"
 									}`}
 									key={option.value}
-									onClick={() => setMetric(option.value)}
-									role="radio"
-									type="button">
-									<MetricIcon kind={option.icon} />
-									{getTaskRateMetricLabel(option.value)}
-								</button>
-							)
-						})}
-					</div>
-
-					<div aria-label="Chart type" className="flex items-center gap-1" role="radiogroup">
-						{CHART_TYPE_OPTIONS.map((option) => {
-							const selected = chartType === option.value
-							return (
-								<button
-									aria-checked={selected}
-									className={`inline-flex items-center gap-1 rounded-sm px-2 py-1 text-xs ${
-										selected
-											? "bg-button-background text-button-foreground"
-											: "bg-transparent text-description hover:bg-toolbar-hover"
-									}`}
-									key={option.value}
-									onClick={() => setChartType(option.value)}
+									onClick={() => setView(option.value)}
 									role="radio"
 									type="button">
 									<MetricIcon kind={option.icon} />
@@ -108,6 +91,30 @@ export function TaskRateMetricsDialog({ taskId, open, onOpenChange }: TaskRateMe
 							)
 						})}
 					</div>
+
+					{view !== "usageCache" && (
+						<div aria-label="Chart type" className="flex items-center gap-1" role="radiogroup">
+							{CHART_TYPE_OPTIONS.map((option) => {
+								const selected = chartType === option.value
+								return (
+									<button
+										aria-checked={selected}
+										className={`inline-flex items-center gap-1 rounded-sm px-2 py-1 text-xs ${
+											selected
+												? "bg-button-background text-button-foreground"
+												: "bg-transparent text-description hover:bg-toolbar-hover"
+										}`}
+										key={option.value}
+										onClick={() => setChartType(option.value)}
+										role="radio"
+										type="button">
+										<MetricIcon kind={option.icon} />
+										{option.label}
+									</button>
+								)
+							})}
+						</div>
+					)}
 
 					<Button className="ml-auto" onClick={refresh} size="xs" variant="outline">
 						Refresh
@@ -139,7 +146,11 @@ export function TaskRateMetricsDialog({ taskId, open, onOpenChange }: TaskRateMe
 								<span>History retained from {new Date(data.retentionStartMs).toLocaleString()}.</span>
 							)}
 						</div>
-						<TaskRateMetricsChart chartType={chartType} metric={metric} points={data.points} />
+						{view === "usageCache" ? (
+							<TaskUsageCacheChart degraded={data.degraded} points={data.points} />
+						) : (
+							<TaskRateMetricsChart chartType={chartType} metric={view} points={data.points} />
+						)}
 					</>
 				)}
 			</DialogContent>

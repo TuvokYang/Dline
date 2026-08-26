@@ -2,6 +2,18 @@ export interface ApiRateSnapshot {
 	activeSeconds?: number
 	requestsPerMinute?: number
 	tokensPerMinute?: number
+	rpmBasis?: "execution_duration" | "provider_duration" | "legacy_active_seconds" | "unavailable"
+	executionCount?: number
+	executionDurationMs?: number
+	providerRoundCount?: number
+	totalTokensIn?: number
+	totalTokensOut?: number
+	totalCacheWrites?: number
+	totalCacheReads?: number
+	totalCost?: number
+	cacheHitRate?: number
+	cacheUsageAvailable?: boolean
+	currency?: string
 }
 
 interface ApiRateSample {

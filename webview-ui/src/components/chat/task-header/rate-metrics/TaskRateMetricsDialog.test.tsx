@@ -26,10 +26,17 @@ beforeEach(() => {
 })
 
 describe("TaskRateMetricsDialog", () => {
-	it("defaults to minute history and switches to hour and day queries", () => {
+	it("defaults to Minute and exposes only the two compact views", () => {
 		renderDialog()
 		expect(mocks.useTaskRateMetrics).toHaveBeenLastCalledWith({ enabled: true, resolution: "minute", taskId: "task-1" })
 		expect(screen.getByRole("tab", { name: "Minute" })).toHaveAttribute("aria-selected", "true")
+		expect(screen.queryByRole("tab", { name: "Round" })).not.toBeInTheDocument()
+		expect(screen.getByRole("radio", { name: "Token / Cache Hit" })).toHaveAttribute("aria-checked", "true")
+		expect(screen.getByRole("radio", { name: "TPM / RPM" })).toHaveAttribute("aria-checked", "false")
+		expect(screen.queryByRole("radio", { name: "Usage & Cache" })).not.toBeInTheDocument()
+		expect(screen.queryByRole("radio", { name: "Total Tokens" })).not.toBeInTheDocument()
+		expect(screen.getByRole("radiogroup", { name: "Chart type" })).toBeInTheDocument()
+		expect(screen.getByRole("radio", { name: "Line" })).toHaveAttribute("aria-checked", "true")
 
 		fireEvent.click(screen.getByRole("tab", { name: "Hour" }))
 		expect(mocks.useTaskRateMetrics).toHaveBeenLastCalledWith({ enabled: true, resolution: "hour", taskId: "task-1" })
@@ -86,22 +93,35 @@ describe("TaskRateMetricsDialog", () => {
 		expect(screen.getByText("History may be incomplete.")).toBeInTheDocument()
 		expect(screen.getByText("Showing the most recent available points.")).toBeInTheDocument()
 		expect(screen.getByText(/History retained from/)).toBeInTheDocument()
-		expect(screen.getByTestId("task-rate-metrics-chart")).toBeInTheDocument()
+		expect(screen.getByTestId("task-usage-cache-chart")).toBeInTheDocument()
+		expect(screen.getByRole("img", { name: "Task usage and cache hit history chart" })).toBeInTheDocument()
+		expect(screen.queryByRole("radiogroup", { name: "Chart type" })).not.toBeInTheDocument()
+
+		fireEvent.click(screen.getByRole("radio", { name: "TPM" }))
+		expect(screen.getByRole("radiogroup", { name: "Chart type" })).toBeInTheDocument()
 		expect(screen.getByRole("radio", { name: "TPM" })).toHaveAttribute("aria-checked", "true")
-		expect(screen.getByRole("radio", { name: "Bar" })).toHaveAttribute("aria-checked", "true")
+		expect(screen.getByRole("radio", { name: "Line" })).toHaveAttribute("aria-checked", "true")
 		expect(screen.getByRole("img", { name: "API rate history chart" })).toHaveAttribute("data-metric", "tpm")
+		expect(screen.getByRole("img", { name: "API rate history chart" })).toHaveAttribute("data-chart-type", "line")
+
+		fireEvent.click(screen.getByRole("radio", { name: "Bar" }))
+		expect(screen.getByRole("radio", { name: "Bar" })).toHaveAttribute("aria-checked", "true")
 		expect(screen.getByRole("img", { name: "API rate history chart" })).toHaveAttribute("data-chart-type", "bar")
 
 		fireEvent.click(screen.getByRole("radio", { name: "RPM" }))
 		expect(screen.getByRole("radio", { name: "RPM" })).toHaveAttribute("aria-checked", "true")
 		expect(screen.getByRole("img", { name: "API rate history chart" })).toHaveAttribute("data-metric", "rpm")
 
-		fireEvent.click(screen.getByRole("radio", { name: "Tokens" }))
-		expect(screen.getByRole("radio", { name: "Tokens" })).toHaveAttribute("aria-checked", "true")
+		fireEvent.click(screen.getByRole("radio", { name: "Total Tokens" }))
+		expect(screen.getByRole("radio", { name: "Total Tokens" })).toHaveAttribute("aria-checked", "true")
 		expect(screen.getByRole("img", { name: "API rate history chart" })).toHaveAttribute("data-metric", "tokens")
 
 		fireEvent.click(screen.getByRole("radio", { name: "Line" }))
 		expect(screen.getByRole("radio", { name: "Line" })).toHaveAttribute("aria-checked", "true")
 		expect(screen.getByRole("img", { name: "API rate history chart" })).toHaveAttribute("data-chart-type", "line")
+
+		fireEvent.click(screen.getByRole("radio", { name: "Usage & Cache" }))
+		expect(screen.queryByRole("radiogroup", { name: "Chart type" })).not.toBeInTheDocument()
+		expect(screen.getByTestId("task-usage-cache-chart")).toBeInTheDocument()
 	})
 })

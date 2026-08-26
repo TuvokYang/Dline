@@ -165,6 +165,8 @@ export interface ExtensionState {
 		activeSeconds?: number
 		requestsPerMinute?: number
 		tokensPerMinute?: number
+		rpmBasis?: "execution_duration" | "provider_duration" | "legacy_active_seconds" | "unavailable"
+		executionCount?: number
 	}
 	/** Authoritative segmented context-window indicator for the active Task. */
 	contextWindowIndicator?: ContextWindowIndicatorSnapshot
@@ -209,6 +211,12 @@ export interface AccountUsageQuotaData {
 	resetLabel?: string
 }
 
+export interface CompactionConversationRange {
+	logicalTurnRange: readonly [startIndex: number, endIndex: number]
+	apiConversationRange: readonly [startIndex: number, endIndex: number]
+	preCompactionApiEndIndex: number
+}
+
 export interface ClineMessage {
 	ts: number
 	type: "ask" | "say"
@@ -237,6 +245,8 @@ export interface ClineMessage {
 	isOperationOutsideWorkspace?: boolean
 	conversationHistoryIndex?: number
 	conversationHistoryDeletedRange?: [number, number] // for when conversation history is truncated for API requests
+	/** Canonical pre-compaction range stored only on a durable completed compaction card. */
+	compactionConversationRange?: CompactionConversationRange
 	modelInfo?: ClineMessageModelInfo
 }
 

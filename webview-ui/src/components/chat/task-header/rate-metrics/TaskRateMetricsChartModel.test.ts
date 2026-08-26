@@ -18,6 +18,15 @@ function point(start: number, overrides: Partial<TaskRateMetricPoint> = {}): Tas
 		tokensPerMinute: 600,
 		tokenQuality: TaskRateTokenQuality.TASK_RATE_TOKEN_QUALITY_EXACT,
 		provisional: false,
+		cacheUsageAvailable: false,
+		usageAvailable: false,
+		providerRoundCount: 0,
+		completedRoundCount: 0,
+		failedRoundCount: 0,
+		cancelledRoundCount: 0,
+		abortedRoundCount: 0,
+		rpmBasis: 3,
+		usageQuality: 1,
 		...overrides,
 	}
 }
@@ -48,6 +57,17 @@ describe("TaskRateMetricsChartModel", () => {
 		expect(layout.segments.map((segment) => segment.length)).toEqual([1, 2])
 		expect(layout.ticks[0]).toMatchObject({ label: "0", value: 0, y: layout.plotBottom })
 		expect(layout.points.every((item) => item.barWidth > 0 && item.barHeight >= 0)).toBe(true)
+	})
+
+	it("breaks a line across unavailable points while preserving an explicit zero", () => {
+		const layout = createTaskRateChartLayout(
+			[point(0, { tokenCount: 10 }), point(60_000, { tokenCount: undefined }), point(120_000, { tokenCount: 0 })],
+			"tokens",
+		)
+
+		expect(layout.points.map((item) => item.value)).toEqual([10, 0])
+		expect(layout.segments.map((segment) => segment.length)).toEqual([1, 1])
+		expect(layout.points[1]?.y).toBe(layout.plotBottom)
 	})
 
 	it("keeps an all-zero series inside a valid one-unit axis", () => {

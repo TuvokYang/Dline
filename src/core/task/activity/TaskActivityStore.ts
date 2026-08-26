@@ -64,6 +64,8 @@ export class TaskActivityStore {
 	private readonly backgroundMovers = new Map<string, () => Promise<boolean>>()
 	private readonly listeners = new Map<ActivityListener, Promise<void>>()
 	private readonly dirtyIds = new Set<string>()
+	private readonly persistedRecoveryCandidateIds = new Set<string>()
+	private persistenceDeferralDepth = 0
 	private flushTimer?: NodeJS.Timeout
 	private sequence = 0
 	private persistenceSequence = Promise.resolve()
@@ -84,13 +86,20 @@ export class TaskActivityStore {
 	async recoverInterruptedActivities(): Promise<string[]> {
 		await this.hydrate()
 		const interruptedActivityIds: string[] = []
-		for (const activity of this.activities.values()) {
-			if (!this.isTransient(activity.status) || this.cancellers.has(activity.activityId)) continue
-			interruptedActivityIds.push(activity.activityId)
-			this.update(activity.activityId, {
-				status: "interrupted",
-				latestEvent: "Interrupted before completion",
-			})
+		this.persistenceDeferralDepth += 1
+		try {
+			for (const activityId of this.persistedRecoveryCandidateIds) {
+				const activity = this.activities.get(activityId)
+				if (!activity || !this.isTransient(activity.status) || this.cancellers.has(activity.activityId)) continue
+				interruptedActivityIds.push(activity.activityId)
+				this.update(activity.activityId, {
+					status: "interrupted",
+					latestEvent: "Interrupted before completion",
+				})
+			}
+		} finally {
+			this.persistedRecoveryCandidateIds.clear()
+			this.persistenceDeferralDepth -= 1
 		}
 		await this.waitForPersistence()
 		return interruptedActivityIds
@@ -99,6 +108,7 @@ export class TaskActivityStore {
 	private async loadPersistedActivities(): Promise<void> {
 		if (!this.persistence) return
 		for (const activity of await this.persistence.load()) {
+			this.persistedRecoveryCandidateIds.add(activity.activityId)
 			if (!this.activities.has(activity.activityId)) {
 				this.activities.set(activity.activityId, this.clone(activity))
 			}
@@ -413,6 +423,7 @@ export class TaskActivityStore {
 
 	private markDirty(activityId: string, priority: boolean): void {
 		this.dirtyIds.add(activityId)
+		if (this.persistenceDeferralDepth > 0) return
 		if (priority) {
 			this.flush()
 			return

@@ -79,7 +79,7 @@ export function getApiMetrics(messages: ClineMessage[]): ApiMetrics {
 
 	// Calculate overall cache hit rate
 	const totalInput = result.totalTokensIn + (result.totalCacheWrites ?? 0) + (result.totalCacheReads ?? 0)
-	if (totalInput > 0 && result.totalCacheReads) {
+	if (totalInput > 0 && result.totalCacheReads !== undefined) {
 		result.cacheHitRate = (result.totalCacheReads / totalInput) * 100
 	}
 

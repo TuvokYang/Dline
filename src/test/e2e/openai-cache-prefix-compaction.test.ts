@@ -51,7 +51,7 @@ const FIRST_TURN_READ_CALLS = 24
 const LATER_TURN_READ_CALLS = 26
 const MIN_SEARCH_CALLS_PER_TURN = 2
 const MAX_SEARCH_CALLS_PER_TURN = 4
-const CORPUS_FILE_CHARS = 58 * 1024
+const CORPUS_FILE_CHARS = 57 * 1024
 const LARGE_TURN_EXTRA_FILE_CHARS = Math.floor(CORPUS_FILE_CHARS / 2)
 const CORPUS_USER_CHARS = 120 * 1024
 const CORPUS_SOURCE_PATH = "dist/extension.js.map"
@@ -433,7 +433,7 @@ async function send(sidebar: Frame, text: string): Promise<void> {
 }
 
 e2e(
-	"OpenAI compaction admits a complete randomized 400K+ multi-tool turn before the 472K hard window",
+	"OpenAI compaction admits a complete randomized 400K+ multi-tool turn before the hard window then terminates above 80 percent",
 	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(300_000)
 		await configureProfiles(dlineDir, 1_000)
@@ -474,7 +474,6 @@ e2e(
 		})
 
 		const summary = `E2E_LARGE_TURN_SUMMARY_${scenario.seedHex} preserves the complete randomized multi-tool round.`
-		const ready = `E2E_LARGE_TURN_READY_${scenario.seedHex}`
 		const expectedToolResults = largeTurnToolCalls.map((toolCall) => ({
 			callId: toolCall.id,
 			contentIncludes: toolCall.expectedResultIncludes,
@@ -509,14 +508,138 @@ e2e(
 				requireCompleteToolPairing: true,
 				matchRequestContract: true,
 			},
+		)
+
+		const app = await openVSCode(workspaceDir)
+		try {
+			const sidebar = await openSidebar(app, helper)
+			await waitForPromptCatalog(sidebar)
+			await setAutoApproveRead(sidebar)
+			await send(sidebar, turn.userText)
+			const footer = sidebar.getByRole("contentinfo")
+			await expect(footer.getByText("Retry", { exact: true })).toBeVisible()
+			await expect(footer.getByText("Start New Task", { exact: true })).toBeVisible()
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses"), { timeout: 180_000 }).toBe(2)
+
+			const requests = server.getMockConsumptions("openai-compatible-responses")
+			const summaryRequest = requests[1]
+			expect(requests.map(({ responseType, toolName }) => toolName ?? responseType)).toEqual(["tools", "summarize_task"])
+			expect(summaryRequest).toMatchObject({ responseType: "tool", toolName: "summarize_task" })
+			expect(summaryRequest.contractError).toBeUndefined()
+			expect(summaryRequest.requestToolPairing.complete).toBe(true)
+			expect(summaryRequest.requestToolResults).toHaveLength(largeTurnToolCalls.length)
+			if (!summaryRequest.cacheDiagnostic) throw new Error("Missing large-turn OpenAI cache diagnostic")
+			expect(summaryRequest.cacheDiagnostic.totalInputTokens).toBeGreaterThan(446_400)
+			expect(summaryRequest.cacheDiagnostic.totalInputTokens).toBeLessThan(PROVIDER_CONTEXT_WINDOW)
+			const summaryBody = summaryRequest.requestBody as { max_output_tokens?: unknown }
+			expect(summaryBody.max_output_tokens).toBe(1_000)
+			expect(summaryRequest.cacheDiagnostic.totalInputTokens + Number(summaryBody.max_output_tokens) + 3_000).toBeLessThan(
+				PROVIDER_CONTEXT_WINDOW,
+			)
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app.close()
+		}
+	},
+)
+
+e2e(
+	"OpenAI compaction keeps a sendable pending-completed latest turn in the first hidden Pass",
+	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(360_000)
+		await configureProfiles(dlineDir, 1_000)
+		await createPromptResources(workspaceDir)
+		const scenario = await prepareScenario(workspaceDir, resolveScenarioSeed())
+		const historyTurn = scenario.turns[0]
+		const uniqueReadPaths = new Set<string>()
+		const historyReadCalls = historyTurn.toolCalls.filter((toolCall) => {
+			if (toolCall.name !== "read_file" || uniqueReadPaths.has(toolCall.arguments.path)) return false
+			uniqueReadPaths.add(toolCall.arguments.path)
+			return true
+		})
+		const historySearchCalls = historyTurn.toolCalls.filter(({ name }) => name === "search_files")
+		const historyToolCalls = [...historyReadCalls, ...historySearchCalls]
+		expect(historyReadCalls).toHaveLength(FIRST_TURN_READ_CALLS - 1)
+
+		const historyReady = `E2E_PENDING_COMPLETED_HISTORY_READY_${scenario.seedHex}`
+		const latestUserMarker = `E2E_PENDING_COMPLETED_LATEST_USER_${scenario.seedHex}`
+		const summary = `E2E_PENDING_COMPLETED_SUMMARY_${scenario.seedHex} preserves both completed turns.`
+		const completed = `E2E_PENDING_COMPLETED_OK_${scenario.seedHex}`
+		const latestReadCalls = scenario.turns[1].toolCalls.filter(({ name }) => name === "read_file").slice(0, 3)
+		expect(latestReadCalls).toHaveLength(3)
+		const latestResultMarkers = latestReadCalls.map(({ expectedResultIncludes }) => expectedResultIncludes)
+		const latestResultTexts = await Promise.all(
+			latestReadCalls.map(({ arguments: toolArguments }) => readFile(path.join(workspaceDir, toolArguments.path), "utf8")),
+		)
+		const estimatedLatestTurnTokens = Math.ceil(
+			latestResultTexts.reduce((total, text) => total + Buffer.byteLength(text, "utf8"), 0) / 4,
+		)
+		const expectedHistoryToolResults = historyToolCalls.map((toolCall) => ({
+			callId: toolCall.id,
+			contentIncludes: toolCall.expectedResultIncludes,
+		}))
+
+		server.resetOpenAiMock()
+		server.enqueueResponses(
+			"openai-compatible-responses",
+			{
+				type: "tools",
+				tools: historyToolCalls.map((toolCall) => ({
+					id: toolCall.id,
+					name: toolCall.name,
+					arguments: toolCall.arguments,
+				})),
+				expectedRequestIncludes: [historyTurn.marker, RULE_MARKER, SKILL_NAME, WORKFLOW_NAME, MCP_TOOL_NAME],
+				expectedRequestExcludes: [COMPACTION_MARKER],
+				requireCompleteToolPairing: true,
+				matchRequestContract: true,
+			},
 			{
 				type: "tool",
-				id: `call_large_turn_ready_${scenario.seedHex}`,
+				id: `call_pending_completed_history_ready_${scenario.seedHex}`,
 				name: "qna_respond",
-				arguments: { response: ready },
-				expectedRequestIncludes: [summary],
+				arguments: { response: historyReady },
+				usage: { inputTokens: 390_000, outputTokens: 100 },
+				expectedToolResults: expectedHistoryToolResults,
+				requireCompleteToolPairing: true,
+				matchRequestContract: true,
+			},
+			{
+				type: "tools",
+				tools: latestReadCalls.map((toolCall) => ({
+					id: toolCall.id,
+					name: toolCall.name,
+					arguments: toolCall.arguments,
+				})),
+				usage: { inputTokens: 405_000, outputTokens: 100 },
+				expectedRequestIncludes: [historyTurn.marker, latestUserMarker],
 				expectedRequestExcludes: [COMPACTION_MARKER],
-				expectedToolResults,
+				expectedToolResults: [
+					{ callId: `call_pending_completed_history_ready_${scenario.seedHex}`, contentIncludes: latestUserMarker },
+				],
+				requireCompleteToolPairing: true,
+				matchRequestContract: true,
+			},
+			{
+				type: "tool",
+				id: `call_pending_completed_summary_${scenario.seedHex}`,
+				name: "summarize_task",
+				arguments: { context: summary },
+				expectedRequestIncludes: [COMPACTION_MARKER, historyTurn.marker],
+				requireCompleteToolPairing: true,
+				matchRequestContract: true,
+			},
+			{
+				type: "tool",
+				id: `call_pending_completed_done_${scenario.seedHex}`,
+				name: "attempt_completion",
+				arguments: { result: completed },
+				expectedRequestIncludes: [summary, latestUserMarker, ...latestResultMarkers],
+				expectedRequestExcludes: [COMPACTION_MARKER],
+				expectedToolResults: latestReadCalls.map((toolCall) => ({
+					callId: toolCall.id,
+					contentIncludes: toolCall.expectedResultIncludes,
+				})),
 				requireCompleteToolPairing: true,
 				matchRequestContract: true,
 			},
@@ -527,29 +650,57 @@ e2e(
 			const sidebar = await openSidebar(app, helper)
 			await waitForPromptCatalog(sidebar)
 			await setAutoApproveRead(sidebar)
-			await send(sidebar, turn.userText)
-			await expect(sidebar.getByText(ready, { exact: true })).toBeVisible({ timeout: 180_000 })
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses"), { timeout: 180_000 }).toBe(3)
+			await send(sidebar, historyTurn.userText)
+			await expect(sidebar.getByText(historyReady, { exact: true })).toBeVisible({ timeout: 180_000 })
+			await send(sidebar, latestUserMarker)
+			await expect(sidebar.getByText(completed, { exact: true })).toBeVisible({ timeout: 180_000 })
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses"), { timeout: 180_000 }).toBe(5)
 
 			const requests = server.getMockConsumptions("openai-compatible-responses")
-			const summaryRequest = requests[1]
-			const settlementRequest = requests[2]
-			expect(summaryRequest).toMatchObject({ responseType: "tool", toolName: "summarize_task" })
-			expect(summaryRequest.contractError).toBeUndefined()
-			expect(summaryRequest.requestToolPairing.complete).toBe(true)
-			expect(summaryRequest.requestToolResults).toHaveLength(largeTurnToolCalls.length)
-			if (!summaryRequest.cacheDiagnostic) throw new Error("Missing large-turn OpenAI cache diagnostic")
-			expect(summaryRequest.cacheDiagnostic.totalInputTokens).toBeGreaterThan(446_400)
-			expect(summaryRequest.cacheDiagnostic.totalInputTokens).toBeLessThan(PROVIDER_CONTEXT_WINDOW)
+			const summaryRequest = requests[3]
+			const postCompactionRequest = requests[4]
+			const summaryRequestText = JSON.stringify(summaryRequest.requestBody)
+			const postCompactionRequestText = JSON.stringify(postCompactionRequest.requestBody)
 			const summaryBody = summaryRequest.requestBody as { max_output_tokens?: unknown }
-			expect(summaryBody.max_output_tokens).toBe(1_000)
-			expect(summaryRequest.cacheDiagnostic.totalInputTokens + Number(summaryBody.max_output_tokens)).toBeLessThanOrEqual(
+			if (!summaryRequest.cacheDiagnostic) throw new Error("Missing pending-completed-turn cache diagnostic")
+			const diagnostic = {
+				seed: scenario.seed,
+				seedHex: scenario.seedHex,
+				historyReadCallCount: historyReadCalls.length,
+				historySearchCallCount: historySearchCalls.length,
+				estimatedLatestTurnTokens,
+				summaryInputTokens: summaryRequest.cacheDiagnostic.totalInputTokens,
+				summaryMaxOutputTokens: summaryBody.max_output_tokens,
+				summaryContainsLatestUser: summaryRequestText.includes(latestUserMarker),
+				summaryContainsAllLatestResults: latestResultMarkers.every((marker) => summaryRequestText.includes(marker)),
+				postCompactionContainsAllLatestResults: latestResultMarkers.every((marker) =>
+					postCompactionRequestText.includes(marker),
+				),
+				requestSequence: requests.map(({ responseType, toolName }) => toolName ?? responseType),
+			}
+			const diagnosticPath = e2e.info().outputPath("pending-completed-latest-turn-diagnostic.json")
+			await writeFile(diagnosticPath, `${JSON.stringify(diagnostic, null, 2)}\n`, "utf8")
+			await e2e.info().attach("pending-completed-latest-turn-diagnostic.json", {
+				path: diagnosticPath,
+				contentType: "application/json",
+			})
+
+			expect(requests.map(({ responseType, toolName }) => toolName ?? responseType)).toEqual([
+				"tools",
+				"qna_respond",
+				"tools",
+				"summarize_task",
+				"attempt_completion",
+			])
+			expect(requests.every(({ contractError }) => contractError === undefined)).toBe(true)
+			expect(summaryRequest).toMatchObject({ responseType: "tool", toolName: "summarize_task" })
+			expect(summaryRequest.cacheDiagnostic.totalInputTokens).toBeGreaterThan(350_000)
+			expect(summaryRequest.cacheDiagnostic.totalInputTokens + Number(summaryBody.max_output_tokens) + 3_000).toBeLessThan(
 				PROVIDER_CONTEXT_WINDOW,
 			)
-			expect(settlementRequest).toMatchObject({ responseType: "tool", toolName: "qna_respond" })
-			expect(settlementRequest.contractError).toBeUndefined()
-			expect(settlementRequest.requestToolPairing.complete).toBe(true)
-			expect(settlementRequest.requestToolResults).toHaveLength(largeTurnToolCalls.length)
+			expect(summaryRequestText).toContain(latestUserMarker)
+			for (const marker of latestResultMarkers) expect(summaryRequestText).toContain(marker)
+			for (const marker of latestResultMarkers) expect(postCompactionRequestText).toContain(marker)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
 			await app.close()

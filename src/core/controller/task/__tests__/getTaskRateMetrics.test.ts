@@ -1,11 +1,18 @@
-import type { ApiRateMetricsQuery, ApiRateMetricsQueryResult } from "@core/task/performance/api-rate-metrics-types"
-import { GetTaskRateMetricsRequest, TaskRateMetricsResolution, TaskRateTokenQuality } from "@shared/proto/dline/task"
+import type { TaskRateMetricsQuery, TaskRateMetricsQueryResult } from "@core/task/performance/task-rate-metrics-types"
+import {
+	GetTaskRateMetricsRequest,
+	TaskRateMetricsResolution,
+	TaskRateRoundStatus,
+	TaskRateRpmBasis,
+	TaskRateTokenQuality,
+	TaskRateUsageQuality,
+} from "@shared/proto/dline/task"
 import { describe, expect, it, vi } from "vitest"
 import { getTaskRateMetrics } from "../getTaskRateMetrics"
 
 interface RateMetricsTask {
 	taskId: string
-	queryApiRateMetrics(query: ApiRateMetricsQuery): Promise<ApiRateMetricsQueryResult>
+	queryTaskRateMetrics(query: TaskRateMetricsQuery): Promise<TaskRateMetricsQueryResult>
 }
 
 function controller(task?: RateMetricsTask): { task?: RateMetricsTask } {
@@ -24,55 +31,175 @@ function request(overrides: Partial<GetTaskRateMetricsRequest> = {}): GetTaskRat
 }
 
 describe("getTaskRateMetrics", () => {
-	it("maps the public query to the active Task and preserves history metadata", async () => {
-		const queryApiRateMetrics = vi.fn(
-			async (): Promise<ApiRateMetricsQueryResult> => ({
+	it("maps a Round query and preserves zero-valued optional usage with duration metadata", async () => {
+		const queryTaskRateMetrics = vi.fn(
+			async (): Promise<TaskRateMetricsQueryResult> => ({
 				points: [
 					{
-						bucketStartMs: 3_600_000,
-						bucketEndMs: 7_200_000,
-						activeSeconds: 12,
-						requestCount: 3,
-						tokenCount: 9_000,
-						requestsPerMinute: 15,
-						tokensPerMinute: 45_000,
+						bucketStartMs: 3_000,
+						bucketEndMs: 3_001,
+						requestCount: 1,
+						tokenCount: 120,
+						requestsPerMinute: 30,
 						tokenQuality: "exact",
-						provisional: true,
+						inputTokens: 100,
+						outputTokens: 20,
+						thoughtsTokens: 0,
+						cacheWriteTokens: 0,
+						cacheReadTokens: 0,
+						cacheHitRate: 0,
+						cacheUsageAvailable: true,
+						usageAvailable: true,
+						providerDurationMs: 2_000,
+						providerRoundCount: 1,
+						completedRoundCount: 1,
+						failedRoundCount: 0,
+						cancelledRoundCount: 0,
+						abortedRoundCount: 0,
+						rpmBasis: "provider_duration",
+						usageQuality: "exact",
+						status: "completed",
+						roundId: "round-1",
+						logicalRequestId: "request-1",
+						apiIndex: 0,
+						taskAttempt: 0,
+						providerAttempt: 0,
+						startedAtMs: 1_000,
+						completedAtMs: 3_000,
+						totalCost: 0,
+						currency: "USD",
 					},
 				],
 				degraded: true,
 				truncated: true,
-				retentionStartMs: 3_600_000,
+				retentionStartMs: 3_000,
 			}),
 		)
 
-		const response = await getTaskRateMetrics(controller({ taskId: "task-1", queryApiRateMetrics }) as never, request())
+		const response = await getTaskRateMetrics(
+			controller({ taskId: "task-1", queryTaskRateMetrics }) as never,
+			request({ resolution: TaskRateMetricsResolution.TASK_RATE_METRICS_RESOLUTION_ROUND, maxPoints: 60 }),
+		)
 
-		expect(queryApiRateMetrics).toHaveBeenCalledOnce()
-		expect(queryApiRateMetrics).toHaveBeenCalledWith({
-			resolution: "hour",
-			startSecond: 1,
-			endSecond: 62,
-			maxPoints: 24,
+		expect(queryTaskRateMetrics).toHaveBeenCalledOnce()
+		expect(queryTaskRateMetrics).toHaveBeenCalledWith({
+			resolution: "round",
+			startMs: 1_500,
+			endMs: 61_001,
+			maxPoints: 60,
 		})
 		expect(response).toMatchObject({
 			degraded: true,
 			truncated: true,
-			retentionStartMs: 3_600_000,
+			retentionStartMs: 3_000,
 			points: [
 				{
-					bucketStartMs: 3_600_000,
-					bucketEndMs: 7_200_000,
-					activeSeconds: 12,
-					requestCount: 3,
-					tokenCount: 9_000,
-					requestsPerMinute: 15,
-					tokensPerMinute: 45_000,
+					cacheHitRate: 0,
+					cacheUsageAvailable: true,
+					usageAvailable: true,
+					providerDurationMs: 2_000,
+					rpmBasis: TaskRateRpmBasis.TASK_RATE_RPM_BASIS_PROVIDER_DURATION,
+					usageQuality: TaskRateUsageQuality.TASK_RATE_USAGE_QUALITY_EXACT,
+					status: TaskRateRoundStatus.TASK_RATE_ROUND_STATUS_COMPLETED,
 					tokenQuality: TaskRateTokenQuality.TASK_RATE_TOKEN_QUALITY_EXACT,
-					provisional: true,
+					roundId: "round-1",
+					apiIndex: 0,
+					totalCost: 0,
 				},
 			],
 		})
+	})
+
+	it("maps complete-execution RPM fields and preserves zero-valued optional duration", async () => {
+		const queryTaskRateMetrics = vi.fn(
+			async (): Promise<TaskRateMetricsQueryResult> => ({
+				points: [
+					{
+						bucketStartMs: 5_000,
+						bucketEndMs: 60_000,
+						requestsPerMinute: 12,
+						cacheUsageAvailable: false,
+						usageAvailable: false,
+						executionDurationMs: 0,
+						executionCount: 5,
+						completedExecutionCount: 1,
+						failedExecutionCount: 1,
+						cancelledExecutionCount: 1,
+						abortedExecutionCount: 2,
+						providerRoundCount: 0,
+						completedRoundCount: 0,
+						failedRoundCount: 0,
+						cancelledRoundCount: 0,
+						abortedRoundCount: 0,
+						rpmBasis: "execution_duration",
+						usageQuality: "none",
+					},
+				],
+				degraded: false,
+				truncated: false,
+			}),
+		)
+
+		const response = await getTaskRateMetrics(
+			controller({ taskId: "task-1", queryTaskRateMetrics }) as never,
+			request({ resolution: TaskRateMetricsResolution.TASK_RATE_METRICS_RESOLUTION_MINUTE }),
+		)
+
+		expect(response.points[0]).toMatchObject({
+			requestsPerMinute: 12,
+			executionDurationMs: 0,
+			executionCount: 5,
+			completedExecutionCount: 1,
+			failedExecutionCount: 1,
+			cancelledExecutionCount: 1,
+			abortedExecutionCount: 2,
+			rpmBasis: TaskRateRpmBasis.TASK_RATE_RPM_BASIS_EXECUTION_DURATION,
+		})
+	})
+
+	it("maps legacy usage quality without inventing Provider duration", async () => {
+		const queryTaskRateMetrics = vi.fn(
+			async (): Promise<TaskRateMetricsQueryResult> => ({
+				points: [
+					{
+						bucketStartMs: 1_000,
+						bucketEndMs: 1_001,
+						requestCount: 1,
+						tokenCount: 120,
+						tokenQuality: "estimated",
+						inputTokens: 100,
+						outputTokens: 20,
+						cacheUsageAvailable: false,
+						usageAvailable: true,
+						providerRoundCount: 0,
+						completedRoundCount: 1,
+						failedRoundCount: 0,
+						cancelledRoundCount: 0,
+						abortedRoundCount: 0,
+						rpmBasis: "unavailable",
+						usageQuality: "legacy",
+						status: "completed",
+						roundId: "legacy-round-1",
+						logicalRequestId: "legacy-ui:1000",
+						apiIndex: 0,
+						taskAttempt: 0,
+						providerAttempt: 0,
+						startedAtMs: 1_000,
+						completedAtMs: 1_000,
+					},
+				],
+				degraded: false,
+				truncated: false,
+			}),
+		)
+
+		const response = await getTaskRateMetrics(
+			controller({ taskId: "task-1", queryTaskRateMetrics }) as never,
+			request({ resolution: TaskRateMetricsResolution.TASK_RATE_METRICS_RESOLUTION_ROUND }),
+		)
+
+		expect(response.points[0]?.usageQuality).toBe(TaskRateUsageQuality.TASK_RATE_USAGE_QUALITY_LEGACY)
+		expect(response.points[0]?.providerDurationMs).toBeUndefined()
 	})
 
 	it("rejects a query when no Task is active", async () => {
@@ -80,8 +207,8 @@ describe("getTaskRateMetrics", () => {
 	})
 
 	it("rejects a query for a different Task without reading its metrics", async () => {
-		const queryApiRateMetrics = vi.fn(
-			async (): Promise<ApiRateMetricsQueryResult> => ({
+		const queryTaskRateMetrics = vi.fn(
+			async (): Promise<TaskRateMetricsQueryResult> => ({
 				points: [],
 				degraded: false,
 				truncated: false,
@@ -89,14 +216,14 @@ describe("getTaskRateMetrics", () => {
 		)
 
 		await expect(
-			getTaskRateMetrics(controller({ taskId: "task-1", queryApiRateMetrics }) as never, request({ taskId: "task-2" })),
+			getTaskRateMetrics(controller({ taskId: "task-1", queryTaskRateMetrics }) as never, request({ taskId: "task-2" })),
 		).rejects.toThrow("active Task")
-		expect(queryApiRateMetrics).not.toHaveBeenCalled()
+		expect(queryTaskRateMetrics).not.toHaveBeenCalled()
 	})
 
 	it("rejects an unspecified resolution before querying persistence", async () => {
-		const queryApiRateMetrics = vi.fn(
-			async (): Promise<ApiRateMetricsQueryResult> => ({
+		const queryTaskRateMetrics = vi.fn(
+			async (): Promise<TaskRateMetricsQueryResult> => ({
 				points: [],
 				degraded: false,
 				truncated: false,
@@ -105,16 +232,16 @@ describe("getTaskRateMetrics", () => {
 
 		await expect(
 			getTaskRateMetrics(
-				controller({ taskId: "task-1", queryApiRateMetrics }) as never,
+				controller({ taskId: "task-1", queryTaskRateMetrics }) as never,
 				request({ resolution: TaskRateMetricsResolution.TASK_RATE_METRICS_RESOLUTION_UNSPECIFIED }),
 			),
 		).rejects.toThrow("resolution")
-		expect(queryApiRateMetrics).not.toHaveBeenCalled()
+		expect(queryTaskRateMetrics).not.toHaveBeenCalled()
 	})
 
 	it("rejects an empty time range before querying persistence", async () => {
-		const queryApiRateMetrics = vi.fn(
-			async (): Promise<ApiRateMetricsQueryResult> => ({
+		const queryTaskRateMetrics = vi.fn(
+			async (): Promise<TaskRateMetricsQueryResult> => ({
 				points: [],
 				degraded: false,
 				truncated: false,
@@ -123,10 +250,10 @@ describe("getTaskRateMetrics", () => {
 
 		await expect(
 			getTaskRateMetrics(
-				controller({ taskId: "task-1", queryApiRateMetrics }) as never,
+				controller({ taskId: "task-1", queryTaskRateMetrics }) as never,
 				request({ startMs: 10_000, endMs: 10_000 }),
 			),
 		).rejects.toThrow("time range")
-		expect(queryApiRateMetrics).not.toHaveBeenCalled()
+		expect(queryTaskRateMetrics).not.toHaveBeenCalled()
 	})
 })

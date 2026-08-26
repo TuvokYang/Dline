@@ -98,8 +98,9 @@ export interface ApiRateMetricsRecovery extends ApiRateRunningState {
 export interface ApiRateMetricsReadResult {
 	records: ApiRateMetricsDataRecord[]
 	degraded: boolean
-	fileBytes: number
-	lineCount: number
+	storageBytes: number
+	logicalRecordCount: number
+	physicalRecordCount?: number
 }
 
 export interface ApiRateMetricPoint {
@@ -136,12 +137,18 @@ export interface ApiRateExactUsage {
 	thoughtsTokens?: number
 }
 
+export interface ApiRateMetricsRangeQuery {
+	startSecond: number
+	endSecond: number
+}
+
 export interface ApiRateMetricsRepository {
 	initialize(): Promise<ApiRateMetricsRecovery>
 	append(records: readonly ApiRateMetricsDataRecord[]): Promise<void>
 	readAll(): Promise<ApiRateMetricsReadResult>
+	readRange(query: ApiRateMetricsRangeQuery): Promise<ApiRateMetricsReadResult>
 	replaceAll(records: readonly ApiRateMetricsDataRecord[]): Promise<void>
 	compactIfNeeded(nowSecond: number): Promise<boolean>
 	waitForWrites(): Promise<void>
-	getFilePath(): Promise<string>
+	close(): Promise<void>
 }

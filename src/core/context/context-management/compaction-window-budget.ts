@@ -1,5 +1,6 @@
 import cloneDeep from "clone-deep"
 import type { ClineStorageMessage } from "@/shared/messages"
+import { COMPACTION_CLOSURE_RESERVE_TOKENS } from "./context-window-utils"
 
 export const COMPACTION_WINDOW_BUDGET_MARKER = "<compaction_window_budget />"
 
@@ -10,6 +11,8 @@ export interface CompactionWindowBudget {
 	rawRemainder: number
 	availableRemainder: number
 	providerOutputCap: number
+	closureReserveTokens: number
+	reservedRequestTokens: number
 	/** Backward-compatible prompt-facing alias for providerOutputCap. */
 	outputHardLimit: number
 	recommendedMin: number
@@ -24,6 +27,7 @@ export interface ResolveCompactionWindowBudgetInput {
 	messages: ClineStorageMessage[]
 	tools?: readonly unknown[]
 	serverTools?: readonly unknown[]
+	closureReserveTokens?: number
 }
 
 export interface ResolvedCompactionWindowBudget {
@@ -72,24 +76,36 @@ function computeBudget(input: ResolveCompactionWindowBudgetInput, messages: Clin
 	})
 	const rawRemainder = Math.floor(input.contextWindow) - estimatedInputTokens
 	const availableRemainder = Math.max(0, rawRemainder)
+	const closureReserveTokens = normalizeNonNegativeInteger(input.closureReserveTokens ?? COMPACTION_CLOSURE_RESERVE_TOKENS)
 	const modelOutputLimit =
 		typeof input.maxOutputTokens === "number" && Number.isFinite(input.maxOutputTokens) && input.maxOutputTokens > 0
 			? Math.floor(input.maxOutputTokens)
 			: availableRemainder
-	const providerOutputCap = Math.min(modelOutputLimit, availableRemainder)
-	const recommendedMin = Math.min(Math.floor(availableRemainder * 0.8), 5_000)
-	const recommendedMax = Math.min(Math.floor(availableRemainder * 0.9), 30_000)
+	const providerOutputCap = Math.min(
+		modelOutputLimit,
+		Math.floor(availableRemainder * 0.9),
+		Math.max(0, availableRemainder - closureReserveTokens),
+	)
+	const recommendedMax = Math.min(Math.floor(availableRemainder * 0.9), 30_000, providerOutputCap)
+	const recommendedMin = Math.min(Math.floor(availableRemainder * 0.8), 5_000, recommendedMax)
+	const reservedRequestTokens = estimatedInputTokens + providerOutputCap + closureReserveTokens
 
 	return {
 		estimatedInputTokens,
 		rawRemainder,
 		availableRemainder,
 		providerOutputCap,
+		closureReserveTokens,
+		reservedRequestTokens,
 		outputHardLimit: providerOutputCap,
 		recommendedMin,
 		recommendedMax,
 		decision: providerOutputCap > 0 ? "ready" : "needs_smaller_input",
 	}
+}
+
+function normalizeNonNegativeInteger(value: number): number {
+	return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
 }
 
 function estimateTokens(value: unknown): number {

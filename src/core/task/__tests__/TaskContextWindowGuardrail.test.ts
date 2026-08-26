@@ -4,8 +4,6 @@ import { describe, expect, it } from "vitest"
 
 const taskSourcePath = path.resolve("src/core/task/index.ts")
 const sessionSourcePath = path.resolve("src/core/task/ContextCompactionSession.ts")
-const recoveryAdapterSourcePath = path.resolve("src/core/task/ContextCompactionRecoveryAdapter.ts")
-
 function extractMethod(source: string, startMarker: string, endMarker: string): string {
 	const start = source.indexOf(startMarker)
 	const end = source.indexOf(endMarker, start)
@@ -134,42 +132,36 @@ describe("Task context-window final admission guard", () => {
 		expect(sendIndex).toBeGreaterThan(rebuildIndex)
 	})
 
-	it("invalidates prepared and replay inputs before compaction and canonical recovery writes", async () => {
+	it("invalidates prepared and replay inputs before every compaction Session without cloning canonical history", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const invalidator = extractMethod(
 			source,
 			"private invalidatePreparedProviderInputs(): void",
-			"/** Capture the reversible source state",
+			"/** Derive the active provider context",
 		)
-		const captureMethod = extractMethod(
-			source,
-			"private captureContextCompactionSnapshot(operationId: string): void",
-			"/** Return only the currently active canonical history",
-		)
-		const fallbackMethod = extractMethod(
-			source,
-			"private async restoreContextCompactionMemoryFallback(",
-			"/** Publish one Session Pass lifecycle",
-		)
-		const adapterStart = source.indexOf("private getContextCompactionRecoveryAdapter()")
-		const adapterEnd = source.indexOf("private async applyContextCompactionIndicator(", adapterStart)
-		const adapterMethod = source.slice(adapterStart, adapterEnd)
+		const ordinary = extractMethod(source, "private async runOrdinaryContextCompaction(", "/** Execute one slash-command")
+		const manual = extractMethod(source, "private async runManualContextCompaction(", "/** Freeze the target continuation")
+		const transition = extractMethod(source, "async compactForTransition(", "/** Request one user-triggered compaction")
+		const taskHeader = extractMethod(source, "public async compactTask(", "/** Apply one explicit legacy history truncation")
 
 		expect(invalidator).toContain("this.preparedOrdinaryProviderInputs.clear()")
 		expect(invalidator).toContain("this.compactionRequestReplay.clear()")
-		expect(captureMethod).toContain("this.invalidatePreparedProviderInputs()")
-		expect(fallbackMethod).toContain("this.invalidatePreparedProviderInputs()")
-		expect(adapterMethod).toContain("this.invalidatePreparedProviderInputs()")
+		for (const method of [ordinary, manual, transition, taskHeader]) {
+			expect(method).toContain("this.invalidatePreparedProviderInputs()")
+		}
+		expect(source).not.toContain("captureContextCompactionSnapshot")
+		expect(source).not.toContain("contextCompactionSnapshots")
+		expect(source).not.toContain("restoreContextCompactionMemoryFallback")
 	})
 
 	it("rebuilds the complete ordinary target candidate with dynamic context after every accepted Pass", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
-		const method = extractMethod(source, "private async reprojectContextCompactionTarget(", "/** Journal canonical history")
+		const method = extractMethod(source, "private async reprojectContextCompactionTarget(", "/** Finalize the single durable")
 		const loadContextIndex = method.indexOf("await this.loadContext(")
 		const environmentIndex = method.indexOf("parsedContent.push", loadContextIndex)
 		const backgroundIndex = method.indexOf("await this.appendBackgroundResults(parsedContent", environmentIndex)
 		const historyIndex = method.indexOf("buildTargetCandidateHistory(", backgroundIndex)
-		const providerInputIndex = method.indexOf("this.buildOrdinaryProviderInput(", historyIndex)
+		const providerInputIndex = method.indexOf("this.buildProviderInput(", historyIndex)
 		const estimateIndex = method.indexOf("estimateContextWindowCandidate(targetInput,", providerInputIndex)
 		const decisionIndex = method.indexOf("decideTargetWindowFitting({", estimateIndex)
 
@@ -178,6 +170,7 @@ describe("Task context-window final admission guard", () => {
 		expect(backgroundIndex).toBeGreaterThan(environmentIndex)
 		expect(historyIndex).toBeGreaterThan(backgroundIndex)
 		expect(providerInputIndex).toBeGreaterThan(historyIndex)
+		expect(method).toContain("applyCompactionProjection: false")
 		expect(estimateIndex).toBeGreaterThan(providerInputIndex)
 		expect(decisionIndex).toBeGreaterThan(estimateIndex)
 		expect(method).not.toContain("getContextWindowRequestPressures(")
@@ -238,33 +231,30 @@ describe("Task context-window final admission guard", () => {
 		expect(sessionSource).not.toContain("compactionRequestReplay")
 	})
 
-	it("updates canonical history and deleted range only through the recovery adapter", async () => {
-		const [taskSource, adapterSource] = await Promise.all([
-			readFile(taskSourcePath, "utf8"),
-			readFile(recoveryAdapterSourcePath, "utf8"),
-		])
-		const requestMethod = extractMethod(taskSource, "async recursivelyMakeClineRequests(", "async loadContext(")
-		const overwriteIndex = adapterSource.indexOf("await this.ports.overwriteCanonicalHistory(payload.canonicalCommitHistory)")
-		const rangeIndex = adapterSource.indexOf(
-			"this.ports.setDeletedRange(payload.canonicalCommitDeletedRange)",
-			overwriteIndex,
+	it("commits one durable compaction card without overwriting canonical API history or deleted range", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const commit = extractMethod(
+			source,
+			"private async commitContextCompaction(",
+			"/** Present a terminal automatic-compaction failure",
 		)
 
-		expect(requestMethod).not.toContain("overwriteApiConversationHistory(")
-		expect(requestMethod).not.toContain("conversationHistoryDeletedRange = undefined")
-		expect(overwriteIndex).toBeGreaterThanOrEqual(0)
-		expect(rangeIndex).toBeGreaterThan(overwriteIndex)
+		expect(commit).toContain("createCompactionConversationRange(state")
+		expect(commit).toContain("commitTransientClineMessage(")
+		expect(commit).toContain("this.taskState.targetWindowFittingCommitted = true")
+		expect(commit).not.toContain("overwriteApiConversationHistory(")
+		expect(commit).not.toContain("flushApiConversationHistory(")
+		expect(commit).not.toContain("replaceAll(")
+		expect(commit).not.toContain("conversationHistoryDeletedRange =")
 	})
 
-	it("rolls back a terminal Pass failure before publishing the failed Session state", async () => {
+	it("publishes terminal Session failure without rollback or canonical writes", async () => {
 		const sessionSource = await readFile(sessionSourcePath, "utf8")
-		const catchIndex = sessionSource.indexOf("} catch (error) {")
-		const rollbackIndex = sessionSource.indexOf("await this.ports.rollback(input, state, reason)", catchIndex)
-		const failedIndex = sessionSource.indexOf('await this.ports.publish(input, { kind: "failed"', rollbackIndex)
+		const failedIndex = sessionSource.indexOf('await this.ports.publish(input, { kind: "failed"')
 
-		expect(catchIndex).toBeGreaterThanOrEqual(0)
-		expect(rollbackIndex).toBeGreaterThan(catchIndex)
-		expect(failedIndex).toBeGreaterThan(rollbackIndex)
+		expect(failedIndex).toBeGreaterThanOrEqual(0)
+		expect(sessionSource).not.toContain("rollback")
+		expect(sessionSource).not.toContain("checkpoint")
 	})
 
 	it("presents terminal ordinary compaction failure without treating cancellation as failure", async () => {
@@ -273,10 +263,10 @@ describe("Task context-window final admission guard", () => {
 		const presenter = extractMethod(
 			source,
 			"private async presentTerminalCompactionFailure(",
-			"private async restoreContextCompactionMemoryFallback(",
+			"/** Publish one Session Pass lifecycle",
 		)
 
-		expect(source).toContain("this.contextCompactionFailureReasons.set(input.operationId, reason)")
+		expect(source).toContain("this.contextCompactionFailureReasons.set(input.operationId, event.error)")
 		expect(source).toContain("private readonly contextCompactionRetryProgress = new Map")
 		expect(presenter).toContain("this.contextCompactionRetryProgress.get(operationId)")
 		expect(presenter).toContain("if (retriesExhausted)")
@@ -288,24 +278,23 @@ describe("Task context-window final admission guard", () => {
 		expect(requestMethod.match(/if \(result !== "completed"\) return true/g)).toHaveLength(1)
 	})
 
-	it("does not keep or replay unsent ordinary input outside the durable compaction checkpoint", async () => {
+	it("does not keep or replay unsent ordinary input outside the Session input", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 
 		expect(source).not.toContain("pendingAutomaticCompactionContinuation")
 		expect(source).not.toContain("Automatic compaction continuation is missing")
 	})
 
-	it("checkpoints an accepted Pass before staging and publishing completion", async () => {
+	it("stages an accepted Pass before publishing its transient completion", async () => {
 		const sessionSource = await readFile(sessionSourcePath, "utf8")
 		const summaryIndex = sessionSource.indexOf('kind: "pass_partial"')
-		const checkpointIndex = sessionSource.indexOf("await this.ports.checkpointAcceptedPass(input", summaryIndex)
-		const stageIndex = sessionSource.indexOf("await this.ports.stageAcceptedPass", checkpointIndex)
+		const stageIndex = sessionSource.indexOf("await this.ports.stageAcceptedPass", summaryIndex)
 		const completeIndex = sessionSource.indexOf('kind: "pass_completed"', stageIndex)
 
 		expect(summaryIndex).toBeGreaterThanOrEqual(0)
-		expect(checkpointIndex).toBeGreaterThan(summaryIndex)
-		expect(stageIndex).toBeGreaterThan(checkpointIndex)
+		expect(stageIndex).toBeGreaterThan(summaryIndex)
 		expect(completeIndex).toBeGreaterThan(stageIndex)
+		expect(sessionSource).not.toContain("checkpointAcceptedPass")
 	})
 
 	it("routes shared Session events through the per-Pass presentation owner without creating a started row", async () => {
@@ -321,8 +310,9 @@ describe("Task context-window final admission guard", () => {
 		expect(method).toContain("this.contextCompactionPresentation.retry(")
 		expect(method).toContain("this.contextCompactionPresentation.complete(")
 		expect(method).toContain("this.contextCompactionPresentation.fail(input.operationId, event.error)")
-		expect(method).toContain("this.publishContextCompactionSnapshot(snapshot)")
-		expect(method).toContain("...(snapshot.error ? { error: snapshot.error } : {})")
+		expect(method).toContain("this.publishContextCompactionSnapshot(input, snapshot)")
+		expect(method).toContain("upsertTransientClineMessage(message)")
+		expect(method).toContain("removeTransientClineMessage(snapshot.existingTs)")
 		const highFrequencyReturn = method.indexOf('if (event.kind === "pass_receiving" || event.kind === "pass_partial") return')
 		const fullStatePost = method.indexOf("await this.postStateToWebview()", highFrequencyReturn)
 		expect(highFrequencyReturn).toBeGreaterThanOrEqual(0)
@@ -339,15 +329,15 @@ describe("Task context-window final admission guard", () => {
 		const resetIndex = requestMethod.indexOf("this.taskState.targetWindowFittingCommitted = false", consumeIndex)
 		const automaticGateIndex = requestMethod.indexOf("(!targetWindowFittingCommitted &&", resetIndex)
 		const finalGuardIndex = requestMethod.indexOf("!targetWindowFittingCommitted &&", automaticGateIndex + 1)
-		const adapterStart = source.indexOf("setFittingState: (state, head, committed) => {")
-		const committedAssignment = source.indexOf("this.taskState.targetWindowFittingCommitted = committed", adapterStart)
+		const commitStart = source.indexOf("private async commitContextCompaction(")
+		const committedAssignment = source.indexOf("this.taskState.targetWindowFittingCommitted = true", commitStart)
 
 		expect(consumeIndex).toBeGreaterThanOrEqual(0)
 		expect(resetIndex).toBeGreaterThan(consumeIndex)
 		expect(automaticGateIndex).toBeGreaterThan(resetIndex)
 		expect(finalGuardIndex).toBeGreaterThan(automaticGateIndex)
-		expect(adapterStart).toBeGreaterThanOrEqual(0)
-		expect(committedAssignment).toBeGreaterThan(adapterStart)
+		expect(commitStart).toBeGreaterThanOrEqual(0)
+		expect(committedAssignment).toBeGreaterThan(commitStart)
 	})
 
 	it("does not route Provider context errors through legacy truncation when auto-condense is enabled", async () => {
@@ -372,7 +362,7 @@ describe("Task context-window final admission guard", () => {
 		const forceTruncateMethod = extractMethod(
 			source,
 			"public async forceTruncateTask(",
-			"private async restoreCompactionState(",
+			"/** Settle the completed compaction projection",
 		)
 		const truncationHelper = extractMethod(
 			source,

@@ -6,7 +6,7 @@ import { Logger } from "@shared/services/Logger"
 import type { Settings, SettingsKey } from "@shared/storage/state-keys"
 import { SettingsKeys } from "@shared/storage/state-keys"
 import chokidar, { type FSWatcher } from "chokidar"
-import { FileLock } from "../FileLock"
+import { FileLock } from "../backend/jsonl/FileLock"
 import {
 	SETTINGS_REPOSITORY_SCHEMA_VERSION,
 	type SettingsCommit,

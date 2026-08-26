@@ -75,7 +75,7 @@ function createHarness(
 	const coordinator = new ProfileSwitchCoordinator({
 		bindings,
 		pressure: { read: preflight },
-		compaction: { compact, release, fail },
+		compaction: { compact, complete: release, abort: fail },
 		commit,
 		lease,
 		postState: vi.fn(async () => undefined),

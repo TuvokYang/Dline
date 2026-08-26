@@ -43,4 +43,29 @@ describe("ClineMessage command identity conversion", () => {
 		expect(protoMessage.ask).toBe(ClineAsk.CHANGE_TODO_LIST)
 		expect(roundTripMessage.ask).toBe("change_todo_list")
 	})
+
+	it("preserves the compaction conversation range across the Webview proto boundary", () => {
+		const applicationMessage = {
+			ts: 102,
+			type: "say" as const,
+			say: "tool" as const,
+			compactionConversationRange: {
+				logicalTurnRange: [2, 5] as const,
+				apiConversationRange: [4, 11] as const,
+				preCompactionApiEndIndex: 13,
+			},
+		}
+
+		const protoMessage = convertClineMessageToProto(applicationMessage)
+		const roundTripMessage = convertProtoToClineMessage(protoMessage)
+
+		expect(protoMessage.compactionConversationRange).toEqual({
+			logicalTurnStartIndex: 2,
+			logicalTurnEndIndex: 5,
+			apiConversationStartIndex: 4,
+			apiConversationEndIndex: 11,
+			preCompactionApiEndIndex: 13,
+		})
+		expect(roundTripMessage.compactionConversationRange).toEqual(applicationMessage.compactionConversationRange)
+	})
 })

@@ -20,9 +20,11 @@ interface RestoreHarness {
 	persistTaskHistory: ReturnType<typeof vi.fn>
 	postStateToWebview: ReturnType<typeof vi.fn>
 	truncateContextHistory: ReturnType<typeof vi.fn>
+	truncateApiHistory: ReturnType<typeof vi.fn>
+	truncateUiHistory: ReturnType<typeof vi.fn>
 }
 
-function createHarness(messages: ClineMessage[], trackedFiles?: string[]): RestoreHarness {
+function createHarness(messages: ClineMessage[], trackedFiles?: string[], apiHistoryLength = 2): RestoreHarness {
 	const taskState = Object.assign(new TaskState(), {
 		taskId: "task-1",
 		userMessageContent: [{ type: "text", text: "active user content" }],
@@ -40,21 +42,23 @@ function createHarness(messages: ClineMessage[], trackedFiles?: string[]): Resto
 	const restoreFiles = vi.fn().mockResolvedValue(undefined)
 	const restoreChatRuntime = vi.fn().mockResolvedValue(undefined)
 	const resumeTask = vi.fn().mockResolvedValue(undefined)
+	const truncateApiHistory = vi.fn().mockResolvedValue(undefined)
+	const truncateUiHistory = vi.fn().mockResolvedValue(undefined)
 	const apiConversation = {
-		count: 2,
-		truncateByLineNum: vi.fn().mockResolvedValue(undefined),
+		count: apiHistoryLength,
+		truncateByLineNum: truncateApiHistory,
 		getAt: vi.fn(),
 	}
-	const uiMessage = { truncateByLineNum: vi.fn().mockResolvedValue(undefined) }
+	const uiMessage = { count: messages.length, truncateByLineNum: truncateUiHistory }
 	const persistTaskHistory = vi.fn().mockResolvedValue(undefined)
 	const postStateToWebview = vi.fn().mockResolvedValue(undefined)
 	const truncateContextHistory = vi.fn().mockResolvedValue(undefined)
 	const messageStateHandler = {
 		clineMessages: messages,
-		apiConversationHistory: [
-			{ role: "user", content: "task" },
-			{ role: "assistant", content: "answer" },
-		],
+		apiConversationHistory: Array.from({ length: apiHistoryLength }, (_, index) => ({
+			role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+			content: `message-${index}`,
+		})),
 		apiConversation,
 		uiMessage,
 		updateTaskHistory: persistTaskHistory,
@@ -97,6 +101,8 @@ function createHarness(messages: ClineMessage[], trackedFiles?: string[]): Resto
 		persistTaskHistory,
 		postStateToWebview,
 		truncateContextHistory,
+		truncateApiHistory,
+		truncateUiHistory,
 	}
 }
 
@@ -280,6 +286,68 @@ describe("TaskCheckpointManager restore isolation", () => {
 		expect(harness.persistTaskHistory).not.toHaveBeenCalled()
 		expect(harness.postStateToWebview).not.toHaveBeenCalled()
 		expect(result.checkpointManagerErrorMessage).toBe("Failed to restore checkpoint: No valid checkpoint hash found")
+	})
+
+	it("restores a completed compaction card to its pre-compaction boundary through the ordinary transaction", async () => {
+		const messages: ClineMessage[] = [
+			{ ts: 10, type: "say", say: "task", conversationHistoryIndex: 0 },
+			{ ts: 20, type: "say", say: "text", conversationHistoryIndex: 1 },
+			{
+				ts: 30,
+				type: "say",
+				say: "tool",
+				conversationHistoryIndex: 3,
+				conversationHistoryDeletedRange: [0, 1],
+				compactionConversationRange: {
+					logicalTurnRange: [0, 1],
+					apiConversationRange: [0, 2],
+					preCompactionApiEndIndex: 3,
+				},
+				text: JSON.stringify({ tool: "summarizeTask", content: "summary", compactionStatus: "completed" }),
+			},
+			{ ts: 40, type: "say", say: "text", conversationHistoryIndex: 4 },
+		]
+		const harness = createHarness(messages, undefined, 5)
+
+		await harness.manager.restoreCheckpoint(30, "task")
+
+		expect(harness.truncateApiHistory).toHaveBeenCalledOnce()
+		expect(harness.truncateApiHistory).toHaveBeenCalledWith(4)
+		expect(harness.truncateUiHistory).toHaveBeenCalledOnce()
+		expect(harness.truncateUiHistory).toHaveBeenCalledWith(2)
+		expect(harness.truncateContextHistory).toHaveBeenCalledWith(20, expect.any(String))
+		expect(harness.restoreChatRuntime).toHaveBeenCalledOnce()
+		expect(harness.restoreChatRuntime).toHaveBeenCalledWith({ apiIndex: 3 })
+		expect(harness.taskState.conversationHistoryDeletedRange).toEqual([0, 1])
+		expect(harness.resetHead).not.toHaveBeenCalled()
+	})
+
+	it("rejects an invalid compaction boundary before mutating API, UI, context, or runtime", async () => {
+		const messages: ClineMessage[] = [
+			{ ts: 10, type: "say", say: "task", conversationHistoryIndex: 0 },
+			{
+				ts: 30,
+				type: "say",
+				say: "tool",
+				conversationHistoryIndex: 8,
+				compactionConversationRange: {
+					logicalTurnRange: [0, 0],
+					apiConversationRange: [0, 1],
+					preCompactionApiEndIndex: 8,
+				},
+				text: JSON.stringify({ tool: "summarizeTask", content: "summary", compactionStatus: "completed" }),
+			},
+		]
+		const harness = createHarness(messages, undefined, 3)
+
+		const result = await harness.manager.restoreCheckpoint(30, "task")
+
+		expect(result.checkpointManagerErrorMessage).toMatch(/inconsistent with the current conversation/)
+		expect(harness.truncateApiHistory).not.toHaveBeenCalled()
+		expect(harness.truncateUiHistory).not.toHaveBeenCalled()
+		expect(harness.truncateContextHistory).not.toHaveBeenCalled()
+		expect(harness.restoreChatRuntime).not.toHaveBeenCalled()
+		expect(harness.persistTaskHistory).not.toHaveBeenCalled()
 	})
 
 	it("continues an edited chat restore exactly once through the typed runtime", async () => {

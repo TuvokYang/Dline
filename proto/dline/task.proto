@@ -128,12 +128,38 @@ enum TaskRateMetricsResolution {
   TASK_RATE_METRICS_RESOLUTION_MINUTE = 1;
   TASK_RATE_METRICS_RESOLUTION_HOUR = 2;
   TASK_RATE_METRICS_RESOLUTION_DAY = 3;
+  TASK_RATE_METRICS_RESOLUTION_ROUND = 4;
 }
 
 enum TaskRateTokenQuality {
   TASK_RATE_TOKEN_QUALITY_ESTIMATED = 0;
   TASK_RATE_TOKEN_QUALITY_MIXED = 1;
   TASK_RATE_TOKEN_QUALITY_EXACT = 2;
+}
+
+enum TaskRateRpmBasis {
+  TASK_RATE_RPM_BASIS_UNSPECIFIED = 0;
+  TASK_RATE_RPM_BASIS_PROVIDER_DURATION = 1;
+  TASK_RATE_RPM_BASIS_LEGACY_ACTIVE_SECONDS = 2;
+  TASK_RATE_RPM_BASIS_UNAVAILABLE = 3;
+  TASK_RATE_RPM_BASIS_EXECUTION_DURATION = 4;
+}
+
+enum TaskRateUsageQuality {
+  TASK_RATE_USAGE_QUALITY_UNSPECIFIED = 0;
+  TASK_RATE_USAGE_QUALITY_NONE = 1;
+  TASK_RATE_USAGE_QUALITY_ESTIMATED = 2;
+  TASK_RATE_USAGE_QUALITY_EXACT = 3;
+  TASK_RATE_USAGE_QUALITY_MIXED = 4;
+  TASK_RATE_USAGE_QUALITY_LEGACY = 5;
+}
+
+enum TaskRateRoundStatus {
+  TASK_RATE_ROUND_STATUS_UNSPECIFIED = 0;
+  TASK_RATE_ROUND_STATUS_COMPLETED = 1;
+  TASK_RATE_ROUND_STATUS_FAILED = 2;
+  TASK_RATE_ROUND_STATUS_CANCELLED = 3;
+  TASK_RATE_ROUND_STATUS_ABORTED = 4;
 }
 
 message GetTaskRateMetricsRequest {
@@ -147,13 +173,45 @@ message GetTaskRateMetricsRequest {
 message TaskRateMetricPoint {
   int64 bucket_start_ms = 1;
   int64 bucket_end_ms = 2;
-  int32 active_seconds = 3;
-  int32 request_count = 4;
-  int64 token_count = 5;
-  int32 requests_per_minute = 6;
-  int64 tokens_per_minute = 7;
-  TaskRateTokenQuality token_quality = 8;
+  optional int32 active_seconds = 3;
+  optional int32 request_count = 4;
+  optional int64 token_count = 5;
+  optional int32 requests_per_minute = 6;
+  optional int64 tokens_per_minute = 7;
+  optional TaskRateTokenQuality token_quality = 8;
   bool provisional = 9;
+  optional int64 input_tokens = 10;
+  optional int64 output_tokens = 11;
+  optional int64 thoughts_tokens = 12;
+  optional int64 cache_write_tokens = 13;
+  optional int64 cache_read_tokens = 14;
+  optional double cache_hit_rate = 15;
+  bool cache_usage_available = 16;
+  bool usage_available = 17;
+  optional int64 provider_duration_ms = 18;
+  int32 provider_round_count = 19;
+  int32 completed_round_count = 20;
+  int32 failed_round_count = 21;
+  int32 cancelled_round_count = 22;
+  int32 aborted_round_count = 23;
+  TaskRateRpmBasis rpm_basis = 24;
+  TaskRateUsageQuality usage_quality = 25;
+  optional TaskRateRoundStatus status = 26;
+  optional string round_id = 27;
+  optional string logical_request_id = 28;
+  optional int32 api_index = 29;
+  optional int32 task_attempt = 30;
+  optional int32 provider_attempt = 31;
+  optional int64 started_at_ms = 32;
+  optional int64 completed_at_ms = 33;
+  optional double total_cost = 34;
+  optional string currency = 35;
+  optional int64 execution_duration_ms = 36;
+  int32 execution_count = 37;
+  int32 completed_execution_count = 38;
+  int32 failed_execution_count = 39;
+  int32 cancelled_execution_count = 40;
+  int32 aborted_execution_count = 41;
 }
 
 message GetTaskRateMetricsResponse {

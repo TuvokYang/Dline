@@ -10,6 +10,7 @@ import {
 const SAFETY_BUFFER_RATIO = 0.03
 const SUMMARIZE_INSTRUCTION_BUDGET = 2_500
 const ESTIMATION_TOLERANCE = 2_000
+export const COMPACTION_CLOSURE_RESERVE_TOKENS = 3_000
 
 export interface CompactTriggerOptions {
 	triggerPercent?: number
@@ -23,7 +24,11 @@ export type CompactTriggerBranch = "percentage_guarded" | "absolute_cap"
 export interface CompactTriggerPolicy {
 	branch: CompactTriggerBranch
 	guardedReserveTokens: number
+	effectiveContextLimitTokens: number
+	hardPassContextWindowTokens: number
+	projectedUsageTriggerTokens: number
 	compactTriggerTokens: number
+	/** Backward-compatible alias for the hard hidden-Pass context boundary. */
 	passInputCeilingTokens: number
 }
 
@@ -82,11 +87,20 @@ export function resolveCompactTriggerPolicy(
 	const normalizedInstructionBudget = Math.max(0, Math.floor(summarizeInstructionBudget))
 	const maxContextTokens = normalizeAutoCondenseMaxContextTokens(options.maxContextTokens)
 	if (maxContextTokens > 0 && normalizedContextWindow > maxContextTokens) {
+		const effectiveContextLimitTokens = maxContextTokens
+		const hardPassContextWindowTokens = maxContextTokens
+		const projectedUsageTriggerTokens = Math.max(
+			0,
+			effectiveContextLimitTokens - normalizedInstructionBudget - COMPACTION_CLOSURE_RESERVE_TOKENS,
+		)
 		return {
 			branch: "absolute_cap",
 			guardedReserveTokens: 0,
-			compactTriggerTokens: maxContextTokens,
-			passInputCeilingTokens: Math.max(0, maxContextTokens - ESTIMATION_TOLERANCE),
+			effectiveContextLimitTokens,
+			hardPassContextWindowTokens,
+			projectedUsageTriggerTokens,
+			compactTriggerTokens: projectedUsageTriggerTokens + ESTIMATION_TOLERANCE,
+			passInputCeilingTokens: Math.max(0, hardPassContextWindowTokens - COMPACTION_CLOSURE_RESERVE_TOKENS - 1),
 		}
 	}
 
@@ -98,13 +112,20 @@ export function resolveCompactTriggerPolicy(
 	)
 	const guardedReserveTokens = clampValue(percentageReserveTokens, minReserveTokens, maxReserveTokens)
 
+	const effectiveContextLimitTokens = Math.max(0, normalizedContextWindow - guardedReserveTokens)
+	const hardPassContextWindowTokens = normalizedContextWindow
+	const projectedUsageTriggerTokens = Math.max(
+		0,
+		effectiveContextLimitTokens - normalizedInstructionBudget - COMPACTION_CLOSURE_RESERVE_TOKENS,
+	)
 	return {
 		branch: "percentage_guarded",
 		guardedReserveTokens,
-		compactTriggerTokens: Math.max(0, normalizedContextWindow - normalizedInstructionBudget - guardedReserveTokens),
-		// The proactive trigger reserve decides when fitting starts; hidden Pass admission
-		// uses the complete rendered request and leaves only estimation tolerance unused.
-		passInputCeilingTokens: Math.max(0, normalizedContextWindow - ESTIMATION_TOLERANCE),
+		effectiveContextLimitTokens,
+		hardPassContextWindowTokens,
+		projectedUsageTriggerTokens,
+		compactTriggerTokens: projectedUsageTriggerTokens + ESTIMATION_TOLERANCE,
+		passInputCeilingTokens: Math.max(0, hardPassContextWindowTokens - COMPACTION_CLOSURE_RESERVE_TOKENS - 1),
 	}
 }
 

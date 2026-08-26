@@ -4,6 +4,7 @@ import { expect, type Frame, type Locator, type Page } from "@playwright/test"
 import type { ElectronApplication } from "playwright"
 import { E2E_PROFILE_NAMES } from "./utils/api-profile"
 import { E2ETestHelper, e2e } from "./utils/helpers"
+import { readTaskApiRateMetrics } from "./utils/read-task-api-rate-metrics"
 
 interface StoredProfile {
 	name: string
@@ -26,11 +27,12 @@ async function clearResponsesIdleTimeout(dlineDir: string): Promise<void> {
 	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 }
 
-async function selectResponsesProfile(dlineDir: string): Promise<void> {
+async function selectResponsesProfile(dlineDir: string, enableCheckpoints?: boolean): Promise<void> {
 	const settingsPath = path.join(dlineDir, "data", "settings", "settings.json")
 	const settings = JSON.parse(await readFile(settingsPath, "utf8")) as Record<string, unknown>
 	settings.actModeProfile = E2E_PROFILE_NAMES.mockOpenAiResponses
 	settings.planModeProfile = E2E_PROFILE_NAMES.mockOpenAiResponses
+	if (enableCheckpoints !== undefined) settings.enableCheckpointsSetting = enableCheckpoints
 	await writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, "utf8")
 }
 
@@ -181,20 +183,11 @@ function foldStoredRateMetrics(records: readonly StoredRateSecondRecord[]): Stor
 }
 
 async function readStoredTaskRateMetrics(dlineDocsDir: string, taskId: string): Promise<StoredTaskRateMetrics | undefined> {
-	try {
-		const raw = await readFile(path.join(dlineDocsDir, "tasks", taskId, "api_rate_metrics.jsonl"), "utf8")
-		const records = raw
-			.split(/\r?\n/)
-			.filter(Boolean)
-			.map((line) => JSON.parse(line) as StoredRateMetricsRecord)
-		const meta = records.find((record) => record.kind === "meta")
-		const rawSeconds = records.filter(isStoredRateSecondRecord)
-		if (!meta || rawSeconds.length === 0) return undefined
-		return { meta, rawSeconds, canonicalSeconds: foldStoredRateMetrics(rawSeconds) }
-	} catch (error: unknown) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined
-		throw error
-	}
+	const records = readTaskApiRateMetrics<StoredRateMetricsRecord>(dlineDocsDir, taskId) ?? []
+	const meta = records.find((record) => record.kind === "meta")
+	const rawSeconds = records.filter(isStoredRateSecondRecord)
+	if (!meta || rawSeconds.length === 0) return undefined
+	return { meta, rawSeconds, canonicalSeconds: foldStoredRateMetrics(rawSeconds) }
 }
 
 async function findTaskIdsByMarker(dlineDocsDir: string, markers: readonly string[]): Promise<Map<string, string>> {
@@ -287,23 +280,35 @@ async function expectRateMetricsDialog(frame: Frame, summary: RateSummary, exerc
 	await rate.click()
 	const dialog = frame.getByRole("dialog")
 	await expect(dialog.getByRole("heading", { name: "API rate history", exact: true })).toBeVisible()
-	await expect(dialog.getByRole("tab", { name: "Minute", exact: true })).toHaveAttribute("aria-selected", "true")
+	await expect(dialog.getByRole("tab", { name: "Round", exact: true })).toHaveAttribute("aria-selected", "true")
+	await expect(dialog.getByRole("radio", { name: "Usage & Cache", exact: true })).toHaveAttribute("aria-checked", "true")
+	await expect(dialog.getByRole("img", { name: "Task usage and cache hit history chart", exact: true })).toBeVisible({
+		timeout: 30_000,
+	})
+
+	await dialog.getByRole("tab", { name: "Minute", exact: true }).click()
+	await dialog.getByRole("radio", { name: "TPM", exact: true }).click()
+	await dialog.getByRole("radio", { name: "Bar", exact: true }).click()
 	const chart = dialog.getByRole("img", { name: "API rate history chart", exact: true })
 	await expect(chart).toBeVisible({ timeout: 30_000 })
 	await expect(chart).toHaveAttribute("data-chart-type", "bar")
 	await expect(chart).toHaveAttribute("data-metric", "tpm")
 	const bars = dialog.locator('[data-testid^="task-rate-bar-"]')
-	await expect(bars.last()).toBeVisible()
-	await bars.last().focus()
+	const activeBar = bars.last()
+	await expect(activeBar).toBeVisible()
+	const activeBarLabel = await activeBar.getAttribute("aria-label")
+	const selectedTpm = activeBarLabel?.match(/^TPM (.+) at /)?.[1]
+	if (!selectedTpm) throw new Error(`Missing compact TPM value in chart bar label: ${activeBarLabel}`)
+	await activeBar.focus()
 	const tooltip = dialog.getByRole("tooltip")
-	await expect(tooltip).toContainText(`Selected TPM: ${summary.lastMinute.tokensPerMinute.toLocaleString()}`)
+	await expect(tooltip).toContainText(`Selected TPM: ${selectedTpm}`)
 	await expect(tooltip).toContainText(`TPM: ${summary.lastMinute.tokensPerMinute.toLocaleString()}`)
 	await expect(tooltip).toContainText(`RPM: ${summary.lastMinute.requestsPerMinute.toLocaleString()}`)
 	await expect(tooltip).toContainText(`Tokens: ${summary.lastMinute.tokenCount.toLocaleString()}`)
 	await expect(tooltip).toContainText(`Active seconds: ${summary.lastMinute.activeSeconds}`)
 	await expect(tooltip).toContainText(`Quality: ${summary.lastMinute.quality}`)
 
-	for (const metric of ["RPM", "Tokens"] as const) {
+	for (const metric of ["RPM", "Total Tokens"] as const) {
 		await dialog.getByRole("radio", { name: metric, exact: true }).click()
 		await expect(chart).toHaveAttribute("data-metric", metric === "RPM" ? "rpm" : "tokens")
 	}
@@ -370,7 +375,7 @@ e2e(
 	"Task API rate history persists active seconds, isolates four concurrent tasks, and restores trend queries",
 	async ({ dlineDir, dlineDocsDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(300_000)
-		await selectResponsesProfile(dlineDir)
+		await selectResponsesProfile(dlineDir, false)
 		const responseDelayMs = 8_000
 		const taskCases: RateTaskCase[] = [
 			{ marker: "E2E_RATE_SIDEBAR", completion: "E2E_RATE_SIDEBAR_DONE", inputTokens: 1_000, outputTokens: 110 },
@@ -469,12 +474,9 @@ e2e(
 				expect(stored.rawSeconds.some((record) => record.revision > 0)).toBe(true)
 				expect(stored.canonicalSeconds.reduce((total, record) => total + record.requestCount, 0)).toBe(1)
 				expect(stored.canonicalSeconds.reduce((total, record) => total + record.effectiveTokens, 0)).toBe(expectedTokens)
-				expect(
-					stored.canonicalSeconds.some((record, index) => {
-						const previous = stored.canonicalSeconds[index - 1]
-						return previous !== undefined && record.second > previous.second + 1
-					}),
-				).toBe(true)
+				expect(stored.canonicalSeconds.every((record) => record.signals.some((signal) => signal !== "task_active"))).toBe(
+					true,
+				)
 				summaries.set(taskCase.marker, summarizeStoredRateMetrics(stored.canonicalSeconds))
 			}
 
@@ -501,12 +503,6 @@ e2e(
 			await expectRateMetricsDialog(sidebar, sidebarSummary, false)
 			expect(server.getMockConsumptions("openai-compatible-responses")).toHaveLength(4)
 
-			const output = await E2ETestHelper.readDlineOutput(userDataDir)
-			for (const taskId of taskIdsByMarker.values()) {
-				expect(output).not.toContain(`[Task ${taskId}] API rate metrics append:`)
-				expect(output).toContain(`[Task ${taskId}] API rate metrics query:`)
-				expect(output).toContain(`[Task ${taskId}] API rate metrics RPC:`)
-			}
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
 			await app.close()

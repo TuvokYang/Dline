@@ -6,7 +6,7 @@ import {
 	createContextWindowIndicatorViewModel,
 	getContextWindowActiveTokens,
 } from "./ContextWindowIndicatorViewModel"
-export type ContextWindowSegmentMotion = "none" | "commit" | "rollback" | "restore"
+export type ContextWindowSegmentMotion = "none" | "commit" | "rollback"
 
 interface ContextWindowSegmentedProgressProps {
 	snapshot: ContextWindowIndicatorSnapshot
@@ -45,7 +45,6 @@ function getSegmentColor(segment: ContextWindowSegmentViewModel): string {
 function explicitMotionForPhase(phase: ContextWindowIndicatorPhase): ContextWindowSegmentMotion {
 	if (phase === "committing") return "commit"
 	if (phase === "rolling_back") return "rollback"
-	if (phase === "restoring") return "restore"
 	return "none"
 }
 
@@ -54,7 +53,6 @@ function inferSettledMotion(
 	current: ContextWindowIndicatorSnapshot,
 ): ContextWindowSegmentMotion {
 	if (!previous || current.phase !== "stable") return "none"
-	if (current.lineage.kind === "restore" && previous.lineage.kind !== "restore") return "restore"
 	if (previous.pendingSendTokens + previous.receivingTokens + (previous.stagedTokens ?? 0) <= 0) return "none"
 	return current.epoch > previous.epoch ? "rollback" : "commit"
 }
@@ -116,7 +114,7 @@ function useSegmentTransition(snapshot: ContextWindowIndicatorSnapshot): Segment
 
 function transientTransform(motion: ContextWindowSegmentMotion): string {
 	if (motion === "commit") return "translateX(-8px)"
-	if (motion === "rollback" || motion === "restore") return "translateX(8px)"
+	if (motion === "rollback") return "translateX(8px)"
 	return "translateX(0)"
 }
 

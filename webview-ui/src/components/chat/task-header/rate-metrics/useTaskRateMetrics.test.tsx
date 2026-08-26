@@ -60,7 +60,23 @@ describe("useTaskRateMetrics", () => {
 		expect(mocks.getTaskRateMetrics).not.toHaveBeenCalled()
 	})
 
-	it("queries the default minute window as the last 60 minutes", async () => {
+	it("queries the default Round view as the most recent 60 canonical rounds", async () => {
+		mocks.getTaskRateMetrics.mockResolvedValueOnce(response(4))
+		const { result } = renderHook(() => useTaskRateMetrics({ enabled: true, resolution: "round", taskId: "task-1" }))
+
+		await waitFor(() => expect(result.current.data?.points[0]?.activeSeconds).toBe(4))
+		expect(mocks.getTaskRateMetrics).toHaveBeenCalledWith(
+			expect.objectContaining({
+				taskId: "task-1",
+				resolution: ProtoResolution.TASK_RATE_METRICS_RESOLUTION_ROUND,
+				startMs: 0,
+				endMs: NOW_MS,
+				maxPoints: 60,
+			}),
+		)
+	})
+
+	it("queries the minute window as the last 60 minutes", async () => {
 		mocks.getTaskRateMetrics.mockResolvedValueOnce(response(4))
 		const { result } = renderHook(() => useTaskRateMetrics({ enabled: true, resolution: "minute", taskId: "task-1" }))
 
@@ -75,6 +91,22 @@ describe("useTaskRateMetrics", () => {
 				maxPoints: 60,
 			}),
 		)
+	})
+
+	it("does not query again when a parent rerenders for local view or chart state", async () => {
+		mocks.getTaskRateMetrics.mockResolvedValueOnce(response(4))
+		const { rerender } = renderHook(
+			({ localSelection }: { localSelection: string }) => {
+				void localSelection
+				return useTaskRateMetrics({ enabled: true, resolution: "round", taskId: "task-1" })
+			},
+			{ initialProps: { localSelection: "usage-cache-line" } },
+		)
+		await waitFor(() => expect(mocks.getTaskRateMetrics).toHaveBeenCalledTimes(1))
+
+		rerender({ localSelection: "rpm-bar" })
+		rerender({ localSelection: "tokens-line" })
+		expect(mocks.getTaskRateMetrics).toHaveBeenCalledTimes(1)
 	})
 
 	it("discards a stale response after the resolution changes", async () => {

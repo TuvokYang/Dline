@@ -9,21 +9,10 @@ const compactionLineage: ContextWindowIndicatorLineage = {
 	passIndex: 0,
 	attemptIndex: 0,
 	attemptId: "attempt-0",
-	headCheckpointId: "checkpoint-0",
-	chainRevision: 0,
-	branchId: "branch-0",
-}
-
-const checkpointLineage: ContextWindowIndicatorLineage = {
-	kind: "checkpoint",
-	operationId: "operation-1",
-	checkpointId: "checkpoint-1",
-	chainRevision: 1,
-	branchId: "branch-0",
 }
 
 describe("Task context compaction regressions", () => {
-	it("adopts a smaller authoritative Durable value after compaction commit and recovery", () => {
+	it("adopts a smaller authoritative Durable value after compaction commit and baseline rebase", () => {
 		const indicator = new ContextWindowIndicator({
 			taskId: "task-1",
 			durableContextTokens: 500,
@@ -42,7 +31,6 @@ describe("Task context compaction regressions", () => {
 
 		const committed = indicator.commit({
 			lineage: compactionLineage,
-			nextLineage: checkpointLineage,
 			durableContextTokens: 120,
 			pendingSendTokens: 10,
 			environmentTokens: 20,
@@ -50,15 +38,14 @@ describe("Task context compaction regressions", () => {
 		})
 		expect(committed.durableContextTokens).toBe(130)
 
-		const recovered = indicator.recoverCommit({
-			lineage: checkpointLineage,
+		const recovered = indicator.rebaseDurable({
 			durableContextTokens: 80,
 			pendingSendTokens: 20,
 			environmentTokens: 20,
 			contextWindow: 1_000,
 			mode: "act",
 		})
-		expect(recovered.durableContextTokens).toBe(100)
+		expect(recovered).toMatchObject({ durableContextTokens: 100, lineage: { kind: "baseline" } })
 	})
 
 	it("releases an accepted API continuation before presenting terminal compaction Retry", async () => {

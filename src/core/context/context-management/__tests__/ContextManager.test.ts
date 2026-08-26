@@ -4,6 +4,7 @@ import { expect } from "chai"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
+import { vi } from "vitest"
 import { ContextManager } from "../ContextManager"
 
 // Minimal mock for ApiHandler — only getModel().info.capabilities.contextWindow is used by shouldCompactContextWindow
@@ -18,6 +19,7 @@ function createApiReqMessage(tokens: {
 	tokensOut?: number
 	cacheWrites?: number
 	cacheReads?: number
+	estimatedContextTokens?: number
 }): ClineMessage {
 	return {
 		ts: Date.now(),
@@ -47,6 +49,61 @@ describe("ContextManager", () => {
 
 		return messages
 	}
+
+	describe("context history persistence", () => {
+		it("replays append-only truncate markers without rewriting the snapshot", async () => {
+			const taskDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "dline-context-history-marker-"))
+			const filePath = path.join(taskDirectory, "context_history.jsonl")
+			const snapshot = [
+				[
+					1,
+					[
+						0,
+						[
+							[
+								0,
+								[
+									[100, "text", ["old"], []],
+									[200, "text", ["new"], []],
+								],
+							],
+						],
+					],
+				],
+			]
+			await fs.writeFile(filePath, `${JSON.stringify(snapshot)}\n`, "utf8")
+			const messages: ClineStorageMessage[] = [
+				{ role: "user", content: [{ type: "text", text: "task" }] },
+				{ role: "assistant", content: [{ type: "text", text: "original" }] },
+			]
+			const manager = new ContextManager()
+			await manager.initializeContextHistory(taskDirectory)
+			expect((manager.applyContextHistoryUpdatesToCanonical(messages)[1].content as ClineContent[])[0]).to.deep.equal({
+				type: "text",
+				text: "new",
+			})
+
+			const writeSpy = vi.spyOn(fs, "writeFile")
+			try {
+				await manager.truncateContextHistory(150, taskDirectory)
+				expect(writeSpy.mock.calls).to.have.length(0)
+			} finally {
+				writeSpy.mockRestore()
+			}
+			expect((manager.applyContextHistoryUpdatesToCanonical(messages)[1].content as ClineContent[])[0]).to.deep.equal({
+				type: "text",
+				text: "old",
+			})
+
+			const reopened = new ContextManager()
+			await reopened.initializeContextHistory(taskDirectory)
+			expect((reopened.applyContextHistoryUpdatesToCanonical(messages)[1].content as ClineContent[])[0]).to.deep.equal({
+				type: "text",
+				text: "old",
+			})
+			await fs.rm(taskDirectory, { recursive: true, force: true })
+		})
+	})
 
 	describe("getNextTruncationRange", () => {
 		let contextManager: ContextManager
@@ -736,10 +793,10 @@ describe("ContextManager", () => {
 			expect(result).to.equal(true)
 		})
 
-		it("keeps reliable usage plus uncovered failed-request estimate growth in the early guard", () => {
+		it("keeps reliable usage plus comparable failed-request estimate growth in the early guard", () => {
 			const api = createMockApi(200_000)
 			const clineMessages: ClineMessage[] = [
-				createApiReqMessage({ tokensIn: 145_000, tokensOut: 5_000 }),
+				createApiReqMessage({ tokensIn: 145_000, tokensOut: 5_000, estimatedContextTokens: 150_000 }),
 				{
 					ts: Date.now() + 1,
 					type: "say",

@@ -55,8 +55,7 @@ describe("Task restored turn-end continuation", () => {
 				run: vi.fn(async () => "completed" as const),
 			},
 			getTaskHeaderContextCompactionBoundary: () => ({ sourceHistory: [], targetContinuationHistory: [] }),
-			captureContextCompactionSnapshot: vi.fn(),
-			contextCompactionSnapshots: new Map<string, unknown>(),
+			invalidatePreparedProviderInputs: vi.fn(),
 			contextCompactionPresentation: { clear: vi.fn() },
 			postStateToWebview: vi.fn(async () => {
 				publicationCount++

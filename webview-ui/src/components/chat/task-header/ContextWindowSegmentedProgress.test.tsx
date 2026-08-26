@@ -94,11 +94,11 @@ describe("ContextWindowSegmentedProgress", () => {
 					pendingSendTokens: 0,
 					receivingTokens: 0,
 					lineage: {
-						kind: "checkpoint",
+						kind: "compaction_pass",
 						operationId: "operation-1",
-						checkpointId: "checkpoint-1",
-						chainRevision: 1,
-						branchId: "branch-1",
+						passIndex: 0,
+						attemptIndex: 0,
+						attemptId: "attempt-0",
 					},
 				})}
 			/>,
@@ -123,11 +123,11 @@ describe("ContextWindowSegmentedProgress", () => {
 					pendingSendTokens: 0,
 					receivingTokens: 0,
 					lineage: {
-						kind: "checkpoint",
+						kind: "compaction_pass",
 						operationId: "operation-1",
-						checkpointId: "checkpoint-1",
-						chainRevision: 1,
-						branchId: "branch-1",
+						passIndex: 0,
+						attemptIndex: 0,
+						attemptId: "attempt-0",
 					},
 				})}
 			/>,
@@ -149,11 +149,11 @@ describe("ContextWindowSegmentedProgress", () => {
 					pendingSendTokens: 0,
 					receivingTokens: 0,
 					lineage: {
-						kind: "checkpoint",
+						kind: "compaction_pass",
 						operationId: "operation-1",
-						checkpointId: "checkpoint-1",
-						chainRevision: 1,
-						branchId: "branch-1",
+						passIndex: 0,
+						attemptIndex: 0,
+						attemptId: "attempt-0",
 					},
 				})}
 			/>,
@@ -218,7 +218,7 @@ describe("ContextWindowSegmentedProgress", () => {
 		}
 	})
 
-	it("animates temporary segments outward during rollback and restore", () => {
+	it("animates temporary segments outward during rollback", () => {
 		const { rerender } = render(<ContextWindowSegmentedProgress snapshot={snapshot()} />)
 
 		rerender(
@@ -235,57 +235,6 @@ describe("ContextWindowSegmentedProgress", () => {
 		expect(screen.getByTestId("context-window-segmented-progress")).toHaveAttribute("data-motion", "rollback")
 		expect(screen.getByTestId("context-window-segment-active")).toHaveAttribute("data-tokens", "10000")
 		expect(screen.getByTestId("context-window-segment-active").style.transform).toBe("translateX(8px)")
-
-		rerender(
-			<ContextWindowSegmentedProgress
-				snapshot={snapshot({
-					revision: 3,
-					phase: "restoring",
-					durableContextTokens: 75_000,
-					pendingSendTokens: 0,
-					receivingTokens: 0,
-					lineage: {
-						kind: "restore",
-						operationId: "operation-1",
-						journalId: "journal-1",
-						targetCheckpointId: "checkpoint-0",
-						headCheckpointId: "checkpoint-0",
-						chainRevision: 2,
-						branchId: "branch-2",
-					},
-				})}
-			/>,
-		)
-		expect(screen.getByTestId("context-window-segmented-progress")).toHaveAttribute("data-motion", "restore")
-	})
-
-	it("preserves restore motion when the restoring phase is coalesced into a stable snapshot", () => {
-		const { rerender } = render(
-			<ContextWindowSegmentedProgress snapshot={snapshot({ phase: "stable", pendingSendTokens: 0, receivingTokens: 0 })} />,
-		)
-
-		rerender(
-			<ContextWindowSegmentedProgress
-				snapshot={snapshot({
-					revision: 2,
-					phase: "stable",
-					durableContextTokens: 75_000,
-					pendingSendTokens: 0,
-					receivingTokens: 0,
-					lineage: {
-						kind: "restore",
-						operationId: "operation-1",
-						journalId: "journal-1",
-						targetCheckpointId: "checkpoint-0",
-						headCheckpointId: "checkpoint-0",
-						chainRevision: 2,
-						branchId: "branch-2",
-					},
-				})}
-			/>,
-		)
-
-		expect(screen.getByTestId("context-window-segmented-progress")).toHaveAttribute("data-motion", "restore")
 	})
 
 	it("provides reduced-motion fallbacks for every animated segment", () => {

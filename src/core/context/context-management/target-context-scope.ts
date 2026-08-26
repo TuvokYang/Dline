@@ -1,10 +1,13 @@
-export interface TargetContextScopeInput {
+import { type CompactTriggerOptions, computeSummarizeBudget, resolveCompactTriggerPolicy } from "./context-window-utils"
+
+export interface TargetContextScopeInput extends CompactTriggerOptions {
 	providerContextWindow: number
-	maxContextTokens?: number
 }
 
 export interface TargetContextScope {
 	targetContextWindow: number
+	effectiveContextLimit: number
+	compactTriggerTokens: number
 	fittingExitTarget: number
 }
 
@@ -16,11 +19,12 @@ export function resolveTargetContextScope(input: TargetContextScopeInput): Targe
 	if (providerContextWindow === 0) {
 		throw new Error("Target provider context window must be positive")
 	}
-	const maxContextTokens = normalizePositiveInteger(input.maxContextTokens)
-	const targetContextWindow = maxContextTokens > 0 ? Math.min(providerContextWindow, maxContextTokens) : providerContextWindow
+	const policy = resolveCompactTriggerPolicy(providerContextWindow, computeSummarizeBudget(), input)
 	return {
-		targetContextWindow,
-		fittingExitTarget: Math.floor(targetContextWindow * FITTING_EXIT_RATIO),
+		targetContextWindow: policy.hardPassContextWindowTokens,
+		effectiveContextLimit: policy.effectiveContextLimitTokens,
+		compactTriggerTokens: policy.projectedUsageTriggerTokens,
+		fittingExitTarget: Math.floor(policy.effectiveContextLimitTokens * FITTING_EXIT_RATIO),
 	}
 }
 

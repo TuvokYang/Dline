@@ -1,8 +1,9 @@
-import { fireEvent, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
+import { CheckpointsServiceClient } from "../../../services/grpc-client"
 import { ChatRowContent } from "../ChatRow"
 
-vi.mock("@/context/ExtensionStateContext", () => ({
+vi.mock("../../../context/ExtensionStateContext", () => ({
 	useExtensionState: () => ({
 		backgroundEditEnabled: true,
 		mcpServers: [],
@@ -14,6 +15,13 @@ vi.mock("@/context/ExtensionStateContext", () => ({
 		taskViewState: undefined,
 		currentTaskItem: { id: "task-1" },
 	}),
+}))
+
+vi.mock("../../../services/grpc-client", () => ({
+	CheckpointsServiceClient: {
+		checkpointDiff: vi.fn(async () => ({})),
+		checkpointRestore: vi.fn(async () => ({})),
+	},
 }))
 
 const baseProps = {
@@ -95,6 +103,77 @@ describe("ChatRow summarizeTask rendering", () => {
 
 		expect(container).toBeEmptyDOMElement()
 		expect(screen.queryByText(/Preparing a context-safe summary/i)).not.toBeInTheDocument()
+	})
+
+	it("keeps a legacy compaction summary visible without rendering its deprecated Restore control", () => {
+		render(
+			<ChatRowContent
+				{...baseProps}
+				isExpanded={true}
+				message={{
+					ts: 13,
+					type: "say",
+					say: "tool",
+					partial: false,
+					text: JSON.stringify({
+						tool: "summarizeTask",
+						content: "legacy summary remains readable",
+						compactionStatus: "completed",
+						compactionOperationId: "legacy-operation",
+						compactionPrePassCheckpointId: "sha256:pre-pass",
+						compactionExpectedHeadCheckpointId: "sha256:post-pass",
+						compactionExpectedChainRevision: 2,
+					}),
+				}}
+			/>,
+		)
+
+		expect(screen.getByText("legacy summary remains readable")).toBeInTheDocument()
+		expect(screen.queryByText("Restore")).not.toBeInTheDocument()
+		expect(screen.queryByText("Compaction checkpoint")).not.toBeInTheDocument()
+	})
+
+	it("uses ordinary chat-only Restore for a new completed compaction card", async () => {
+		vi.mocked(CheckpointsServiceClient.checkpointRestore).mockClear()
+		render(
+			<ChatRowContent
+				{...baseProps}
+				isExpanded={true}
+				message={{
+					ts: 14,
+					type: "say",
+					say: "tool",
+					partial: false,
+					conversationHistoryIndex: 3,
+					compactionConversationRange: {
+						logicalTurnRange: [0, 1],
+						apiConversationRange: [0, 3],
+						preCompactionApiEndIndex: 3,
+					},
+					text: JSON.stringify({
+						tool: "summarizeTask",
+						content: "new durable summary",
+						compactionStatus: "completed",
+					}),
+				}}
+			/>,
+		)
+
+		expect(screen.queryByRole("button", { name: "Compare", exact: true, hidden: true })).not.toBeInTheDocument()
+		fireEvent.click(screen.getByRole("button", { name: "Restore", exact: true, hidden: true }))
+		expect(screen.getByRole("button", { name: "Restore Task Only", exact: true })).toBeVisible()
+		expect(screen.queryByRole("button", { name: "Restore Files & Task", exact: true })).not.toBeInTheDocument()
+		expect(screen.queryByRole("button", { name: "Restore Files Only", exact: true })).not.toBeInTheDocument()
+
+		await act(async () => {
+			fireEvent.click(screen.getByRole("button", { name: "Restore Task Only", exact: true }))
+		})
+		const request = vi.mocked(CheckpointsServiceClient.checkpointRestore).mock.calls[0]?.[0]
+		expect(request).toMatchObject({ number: 14, restoreType: "task" })
+		expect(request?.compactionOperationId).toBeUndefined()
+		expect(request?.compactionCheckpointId).toBeUndefined()
+		expect(request?.compactionExpectedHeadCheckpointId).toBeUndefined()
+		expect(request?.compactionExpectedChainRevision).toBeUndefined()
 	})
 
 	it("renders the terminal failure detail on the compaction card", () => {

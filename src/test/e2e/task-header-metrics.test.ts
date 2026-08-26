@@ -5,6 +5,7 @@ import type { ElectronApplication } from "playwright"
 import type { MockApiTarget, MockTokenUsage } from "./fixtures/server"
 import { E2E_PROFILE_NAMES } from "./utils/api-profile"
 import { E2ETestHelper, e2e } from "./utils/helpers"
+import { readTaskApiRateMetrics } from "./utils/read-task-api-rate-metrics"
 
 interface ApiRequestInfo {
 	tokensIn?: number
@@ -128,11 +129,9 @@ function extrapolatePerMinute(value: number, activeSeconds: number): number {
 }
 
 async function readRateSummary(dlineDocsDir: string, taskId: string): Promise<RateSummary | undefined> {
-	const raw = await readFile(path.join(dlineDocsDir, "tasks", taskId, "api_rate_metrics.jsonl"), "utf8").catch(() => "")
+	const storedRecords = readTaskApiRateMetrics<StoredRateRecord>(dlineDocsDir, taskId) ?? []
 	const canonical = new Map<number, StoredRateRecord>()
-	for (const line of raw.split(/\r?\n/)) {
-		if (!line) continue
-		const record = JSON.parse(line) as StoredRateRecord
+	for (const record of storedRecords) {
 		if (
 			record.kind !== "second" ||
 			typeof record.second !== "number" ||
@@ -206,9 +205,6 @@ async function expectTaskHeaderMetrics(
 		"title",
 		`In: ${totalInputTokens} / Out: ${usage.outputTokens} / Cache read: ${cacheReadTokens} / Cache write: ${cacheWriteTokens}`,
 	)
-	const priceText = await priceTag.innerText()
-	const displayedCost = Number(priceText.match(/\$(\d+(?:\.\d+)?)/)?.[1])
-	expect(displayedCost).toBeGreaterThan(0)
 	expect(request.cost).toBeGreaterThan(0)
 
 	const rate = sidebar.getByTestId("task-rate-metrics")

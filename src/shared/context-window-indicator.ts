@@ -1,14 +1,9 @@
 import type { Mode } from "./storage/types"
 
-export type ContextWindowIndicatorPhase = "stable" | "sending" | "receiving" | "committing" | "rolling_back" | "restoring"
+export type ContextWindowIndicatorPhase = "stable" | "sending" | "receiving" | "committing" | "rolling_back"
 
 export type ContextWindowIndicatorLineage =
-	| {
-			kind: "baseline"
-			checkpointId?: string
-			chainRevision?: number
-			branchId?: string
-	  }
+	| { kind: "baseline" }
 	| {
 			kind: "ordinary"
 			requestId: string
@@ -21,25 +16,6 @@ export type ContextWindowIndicatorLineage =
 			passIndex: number
 			attemptIndex: number
 			attemptId: string
-			headCheckpointId: string
-			chainRevision: number
-			branchId: string
-	  }
-	| {
-			kind: "checkpoint"
-			operationId: string
-			checkpointId: string
-			chainRevision: number
-			branchId: string
-	  }
-	| {
-			kind: "restore"
-			operationId: string
-			journalId: string
-			targetCheckpointId: string
-			headCheckpointId: string
-			chainRevision: number
-			branchId: string
 	  }
 
 /** Authoritative Task-local context-window state consumed by Extension state and the Task Header. */

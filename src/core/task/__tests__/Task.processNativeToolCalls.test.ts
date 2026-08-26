@@ -74,6 +74,7 @@ function createParallelReadPresentation(failingDlineTid?: string) {
 		toolExecutor: {
 			isBlockApproved: () => true,
 			executeTool: vi.fn(async () => undefined),
+			takePostCommitDirective: () => undefined,
 		},
 		taskRuntime: runtime,
 		messageStateHandler: { apiConversationHistory: [{ role: "user" }, { role: "assistant" }] },
@@ -204,6 +205,7 @@ describe("Task.processNativeToolCalls", () => {
 				isBlockApproved: () => true,
 				executeTool,
 				commitInterruptedToolResult,
+				takePostCommitDirective: () => undefined,
 			},
 			messageStateHandler: { apiConversationHistory: [{ role: "user" }, { role: "assistant" }] },
 			taskState: {

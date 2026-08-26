@@ -68,6 +68,69 @@ describe("internal compaction Pass", () => {
 		expect(instructions.getPendingToolAuthorization(ClineDefaultTool.SUMMARIZE_TASK)).toBeUndefined()
 	})
 
+	it("binds the Provider attempt and attaches exact usage only after the stream reaches terminal", async () => {
+		const events: string[] = []
+		async function* stream(): ApiStream {
+			yield {
+				type: "tool_calls",
+				function_id: "call-summary",
+				phase: "completed",
+				tool_index: 0,
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.SUMMARIZE_TASK,
+						arguments: JSON.stringify({ context: "Observed summary" }),
+					},
+				},
+			}
+			events.push("tail")
+			yield { type: "usage", inputTokens: 100, outputTokens: 20, cacheReadTokens: 0 }
+		}
+		const registry = new ExplicitInstructionRegistry()
+		const instructions = new ExplicitInstructionRequestScope(registry, {
+			requestId: "request-observed",
+			attemptId: "attempt-2",
+		})
+		instructions.register({
+			type: "summarize_task",
+			source: "auto_compaction",
+			targetTool: ClineDefaultTool.SUMMARIZE_TASK,
+			operationId: "operation-observed",
+		})
+
+		const result = await runInternalCompactionPass({
+			api: createApi(stream()),
+			providerInput: {
+				systemPrompt: "system",
+				messages: [{ role: "user", content: [{ type: "text", text: "history" }] }],
+				tools: [],
+				serverTools: [],
+				providerOutputCap: 1_000,
+			},
+			explicitInstructions: instructions,
+			taskAttempt: 2,
+			providerRequestRound: {
+				bindAttempt: (providerStream, taskAttempt) => {
+					events.push(`bind:${taskAttempt}`)
+					return providerStream
+				},
+				attachExactUsage: (usage) => events.push(`usage:${JSON.stringify(usage)}`),
+				completeProviderOnly: () => undefined,
+				completeTools: () => undefined,
+				completeTurnEndAwaitingUser: () => undefined,
+			},
+		})
+
+		expect(result.summary).toBe("Observed summary")
+		expect(events).toEqual(["bind:2", "tail"])
+		await result.settlement
+		expect(events).toEqual([
+			"bind:2",
+			"tail",
+			'usage:{"inputTokens":100,"outputTokens":20,"cacheWriteTokens":0,"cacheReadTokens":0,"cacheUsageReported":true}',
+		])
+	})
+
 	it("returns one authorized summary and reliable usage without UI or canonical-history ports", async () => {
 		async function* stream(): ApiStream {
 			yield {
@@ -109,15 +172,14 @@ describe("internal compaction Pass", () => {
 			explicitInstructions: instructions,
 		})
 
-		expect(result).toEqual({
-			summary: "Cumulative summary",
-			usage: {
-				inputTokens: 100,
-				outputTokens: 20,
-				cacheWriteTokens: 0,
-				cacheReadTokens: 0,
-				totalTokens: 120,
-			},
+		await result.settlement
+		expect(result.summary).toBe("Cumulative summary")
+		expect(result.usage).toEqual({
+			inputTokens: 100,
+			outputTokens: 20,
+			cacheWriteTokens: 0,
+			cacheReadTokens: 0,
+			totalTokens: 120,
 		})
 		expect(instructions.getPendingToolAuthorization(ClineDefaultTool.SUMMARIZE_TASK)).toBeUndefined()
 	})

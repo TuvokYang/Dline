@@ -6,7 +6,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react"
 import { TaskServiceClient } from "@/services/grpc-client"
 
-export type TaskRateMetricsResolution = "minute" | "hour" | "day"
+export type TaskRateMetricsResolution = "round" | "minute" | "hour" | "day"
 
 export interface UseTaskRateMetricsOptions {
 	taskId?: string
@@ -23,24 +23,29 @@ export interface TaskRateMetricsQueryState {
 
 interface QueryWindow {
 	resolution: ProtoResolution
-	durationMs: number
+	getStartMs: (endMs: number) => number
 	maxPoints: number
 }
 
 const QUERY_WINDOWS: Record<TaskRateMetricsResolution, QueryWindow> = {
+	round: {
+		resolution: ProtoResolution.TASK_RATE_METRICS_RESOLUTION_ROUND,
+		getStartMs: () => 0,
+		maxPoints: 60,
+	},
 	minute: {
 		resolution: ProtoResolution.TASK_RATE_METRICS_RESOLUTION_MINUTE,
-		durationMs: 60 * 60 * 1_000,
+		getStartMs: (endMs) => endMs - 60 * 60 * 1_000,
 		maxPoints: 60,
 	},
 	hour: {
 		resolution: ProtoResolution.TASK_RATE_METRICS_RESOLUTION_HOUR,
-		durationMs: 24 * 60 * 60 * 1_000,
+		getStartMs: (endMs) => endMs - 24 * 60 * 60 * 1_000,
 		maxPoints: 24,
 	},
 	day: {
 		resolution: ProtoResolution.TASK_RATE_METRICS_RESOLUTION_DAY,
-		durationMs: 30 * 24 * 60 * 60 * 1_000,
+		getStartMs: (endMs) => endMs - 30 * 24 * 60 * 60 * 1_000,
 		maxPoints: 30,
 	},
 }
@@ -53,6 +58,7 @@ export function useTaskRateMetrics({ taskId, resolution, enabled }: UseTaskRateM
 	const refresh = useCallback(() => setRefreshVersion((version) => version + 1), [])
 
 	useEffect(() => {
+		void refreshVersion
 		const generation = ++requestGeneration.current
 		if (!enabled || !taskId) {
 			setState({ loading: false })
@@ -66,7 +72,7 @@ export function useTaskRateMetrics({ taskId, resolution, enabled }: UseTaskRateM
 			GetTaskRateMetricsRequest.create({
 				taskId,
 				resolution: queryWindow.resolution,
-				startMs: endMs - queryWindow.durationMs,
+				startMs: queryWindow.getStartMs(endMs),
 				endMs,
 				maxPoints: queryWindow.maxPoints,
 			}),

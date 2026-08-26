@@ -1,7 +1,10 @@
 import fs from "node:fs/promises"
 import path from "node:path"
+import { SqliteUnifyStoreBackend } from "@core/storage/backend/sqlite/SqliteUnifyStore"
 import { Logger } from "@shared/services/Logger"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { LEGACY_API_RATE_METRICS_PARTITION, LegacyApiRateMetricsWrapperEntity } from "./api-rate-metrics-legacy-wrapper-entity"
+import { ApiRateMetricsEntity, fromApiRateMetricsEntity } from "./api-rate-metrics-record-codec"
 import {
 	API_RATE_METRICS_SCHEMA_VERSION,
 	ApiRateMetricsFileIntegrityError,
@@ -31,6 +34,15 @@ function secondRecord(second: number, overrides: Partial<ApiRateSecondRecord> = 
 
 describe("TaskApiRateMetricsRepository", () => {
 	let root: string
+	const repositories: TaskApiRateMetricsRepository[] = []
+
+	function createRepository(
+		options: ConstructorParameters<typeof TaskApiRateMetricsRepository>[0],
+	): TaskApiRateMetricsRepository {
+		const repository = new TaskApiRateMetricsRepository(options)
+		repositories.push(repository)
+		return repository
+	}
 
 	beforeEach(async () => {
 		const parent = path.join(process.cwd(), "tmp")
@@ -39,13 +51,14 @@ describe("TaskApiRateMetricsRepository", () => {
 	})
 
 	afterEach(async () => {
+		await Promise.allSettled(repositories.splice(0).map((repository) => repository.close()))
 		await fs.rm(root, { recursive: true, force: true })
 	})
 
 	it("does not log ordinary append success", async () => {
 		const debug = vi.spyOn(Logger, "debug")
-		const filePath = path.join(root, "api_rate_metrics_quiet_append.jsonl")
-		const repository = new TaskApiRateMetricsRepository({ taskId: "task-a", filePath })
+		const location = path.join(root, "api_rate_metrics_quiet_append.db")
+		const repository = createRepository({ taskId: "task-a", location })
 		await repository.initialize()
 		debug.mockClear()
 
@@ -55,9 +68,9 @@ describe("TaskApiRateMetricsRepository", () => {
 		debug.mockRestore()
 	})
 
-	it("creates a Task-bound JSONL file and restores the latest running state", async () => {
-		const filePath = path.join(root, "api_rate_metrics.jsonl")
-		const repository = new TaskApiRateMetricsRepository({ taskId: "task-a", filePath, now: () => 1_000 })
+	it("creates Task-bound SQLite metrics and restores the latest running state", async () => {
+		const location = path.join(root, "api_rate_metrics.db")
+		const repository = createRepository({ taskId: "task-a", location, now: () => 1_000 })
 		await repository.initialize()
 		await repository.append([
 			secondRecord(10),
@@ -75,15 +88,13 @@ describe("TaskApiRateMetricsRepository", () => {
 		])
 		await repository.waitForWrites()
 
-		const raw = await fs.readFile(filePath, "utf8")
-		const lines = raw
-			.trim()
-			.split("\n")
-			.map((line) => JSON.parse(line) as Record<string, unknown>)
-		expect(lines[0]).toMatchObject({ schemaVersion: 1, kind: "meta", taskId: "task-a", createdAt: 1_000 })
-		expect(lines.slice(1)).toHaveLength(2)
+		const stored = await repository.readAll()
+		expect(stored.records).toHaveLength(2)
+		expect(stored.physicalRecordCount).toBe(2)
+		expect(stored.storageBytes).toBeGreaterThan(0)
+		await repository.close()
 
-		const reopened = new TaskApiRateMetricsRepository({ taskId: "task-a", filePath })
+		const reopened = createRepository({ taskId: "task-a", location })
 		await expect(reopened.initialize()).resolves.toMatchObject({
 			activeSeconds: 2,
 			requestCount: 1,
@@ -95,8 +106,8 @@ describe("TaskApiRateMetricsRepository", () => {
 	})
 
 	it("restores API-active records while ignoring task-only seconds", async () => {
-		const filePath = path.join(root, "api_rate_metrics_separate_activity.jsonl")
-		const repository = new TaskApiRateMetricsRepository({ taskId: "task-a", filePath, now: () => 1_000 })
+		const location = path.join(root, "api_rate_metrics_separate_activity.db")
+		const repository = createRepository({ taskId: "task-a", location, now: () => 1_000 })
 		await repository.initialize()
 		await repository.append([
 			secondRecord(10, {
@@ -117,7 +128,8 @@ describe("TaskApiRateMetricsRepository", () => {
 		])
 		await repository.waitForWrites()
 
-		const reopened = new TaskApiRateMetricsRepository({ taskId: "task-a", filePath })
+		await repository.close()
+		const reopened = createRepository({ taskId: "task-a", location })
 		await expect(reopened.initialize()).resolves.toMatchObject({
 			activeSeconds: 1,
 			requestCount: 1,
@@ -128,56 +140,170 @@ describe("TaskApiRateMetricsRepository", () => {
 		})
 	})
 
-	it("ignores a partial tail and marks a malformed middle line as degraded", async () => {
-		const filePath = path.join(root, "api_rate_metrics.jsonl")
-		await fs.writeFile(
-			filePath,
-			[
-				JSON.stringify({ schemaVersion: 1, kind: "meta", taskId: "task-a", createdAt: 1_000 }),
-				JSON.stringify(secondRecord(10)),
-				"{malformed}",
-				JSON.stringify(secondRecord(11, { runningActiveSeconds: 2 })),
-				'{"schemaVersion":1,"kind":"second"',
-			].join("\n"),
-			"utf8",
+	it("migrates the legacy SQLite wrapper into the flat schema without deleting the source", async () => {
+		const location = path.join(root, "api_rate_metrics_wrapper_v1.db")
+		const backend = new SqliteUnifyStoreBackend()
+		const legacyDatabase = await backend.open(location)
+		const legacyStore = await legacyDatabase.openStore(LegacyApiRateMetricsWrapperEntity)
+		const meta = { schemaVersion: 1, kind: "meta", taskId: "task-a", createdAt: 1_000 } as const
+		const revision0 = secondRecord(10, { revision: 0, effectiveTokens: 120 })
+		const revision1 = secondRecord(10, { revision: 1, effectiveTokens: 180, runningTokenCount: 180 })
+		const rollup = {
+			schemaVersion: 1,
+			kind: "rollup",
+			resolution: "minute",
+			bucketStartSecond: 60,
+			bucketSeconds: 60,
+			activeSeconds: 1,
+			requestCount: 1,
+			tokenCount: 180,
+			requestsPerMinute: 60,
+			tokensPerMinute: 10_800,
+			tokenQuality: "exact",
+		} as const
+		await legacyStore.insert([
+			new LegacyApiRateMetricsWrapperEntity(LEGACY_API_RATE_METRICS_PARTITION, "meta", -1, 0, meta),
+			new LegacyApiRateMetricsWrapperEntity(LEGACY_API_RATE_METRICS_PARTITION, "second:10", 10, 0, revision0),
+			new LegacyApiRateMetricsWrapperEntity(LEGACY_API_RATE_METRICS_PARTITION, "second:10", 10, 1, revision1),
+			new LegacyApiRateMetricsWrapperEntity(LEGACY_API_RATE_METRICS_PARTITION, "rollup:minute:60", 60, 0, rollup),
+		])
+		await legacyStore.close()
+		await legacyDatabase.close()
+
+		const repository = createRepository({ taskId: "task-a", location, migrateLegacy: false })
+		await expect(repository.initialize()).resolves.toMatchObject({
+			lastActiveSecond: 10,
+			lastRecord: expect.objectContaining({ revision: 1, effectiveTokens: 180 }),
+		})
+		const migrated = await repository.readAll()
+		expect(migrated.records.filter((record) => record.kind === "second")).toHaveLength(2)
+		expect(migrated.records.filter((record) => record.kind === "rollup")).toHaveLength(1)
+		await repository.close()
+
+		const inspectionDatabase = await backend.open(location)
+		expect(await inspectionDatabase.hasStore(LegacyApiRateMetricsWrapperEntity)).toBe(true)
+		expect(await inspectionDatabase.hasStore(ApiRateMetricsEntity)).toBe(true)
+		const source = await inspectionDatabase.openStore(LegacyApiRateMetricsWrapperEntity)
+		expect((await source.query()).records).toHaveLength(4)
+		await source.close()
+		const target = await inspectionDatabase.openStore(ApiRateMetricsEntity)
+		const targetRecords = (await target.query()).records.map(fromApiRateMetricsEntity)
+		expect(targetRecords).toContainEqual(
+			expect.objectContaining({
+				kind: "migration",
+				migrationKey: "api-rate-metrics-sqlite-wrapper-v1",
+				importedRecords: 4,
+			}),
 		)
-
-		const repository = new TaskApiRateMetricsRepository({ taskId: "task-a", filePath })
-		const recovery = await repository.initialize()
-		const read = await repository.readAll()
-
-		expect(recovery).toMatchObject({ activeSeconds: 2, lastActiveSecond: 11, degraded: true })
-		expect(read.records).toHaveLength(2)
-		expect(read.degraded).toBe(true)
+		await target.close()
+		await inspectionDatabase.close()
 	})
 
-	it("refuses an append that would exceed the hard file limit without changing existing data", async () => {
-		const filePath = path.join(root, "api_rate_metrics.jsonl")
+	it("automatically migrates legacy JSONL into SQLite and remains idempotent", async () => {
+		const location = path.join(root, "api_rate_metrics_migrated.db")
+		const legacySourcePath = path.join(root, "api_rate_metrics.jsonl")
+		const content = [
+			JSON.stringify({ schemaVersion: 1, kind: "meta", taskId: "task-a", createdAt: 1_000 }),
+			JSON.stringify(secondRecord(10, { revision: 0 })),
+			"{malformed}",
+			JSON.stringify(secondRecord(10, { revision: 1, effectiveTokens: 180, runningTokenCount: 180 })),
+			JSON.stringify({
+				schemaVersion: 1,
+				kind: "rollup",
+				resolution: "minute",
+				bucketStartSecond: 60,
+				bucketSeconds: 60,
+				activeSeconds: 1,
+				requestCount: 1,
+				tokenCount: 120,
+				requestsPerMinute: 60,
+				tokensPerMinute: 7_200,
+				tokenQuality: "estimated",
+			}),
+			'{"schemaVersion":1,"kind":"second"',
+		].join("\n")
+		await fs.writeFile(legacySourcePath, content, "utf8")
+
+		const repository = createRepository({ taskId: "task-a", location, legacySourcePath, now: () => 2_000 })
+		await expect(repository.initialize()).resolves.toMatchObject({
+			degraded: true,
+			lastActiveSecond: 10,
+			lastRecord: expect.objectContaining({ revision: 1, effectiveTokens: 180 }),
+		})
+		const firstRead = await repository.readAll()
+		expect(firstRead.degraded).toBe(true)
+		expect(firstRead.records.filter((record) => record.kind === "second")).toHaveLength(2)
+		expect(firstRead.records.filter((record) => record.kind === "rollup")).toHaveLength(1)
+		expect(await fs.readFile(legacySourcePath, "utf8")).toBe(content)
+		await repository.close()
+
+		const reopened = createRepository({ taskId: "task-a", location, legacySourcePath })
+		await reopened.initialize()
+		const reopenedRead = await reopened.readAll()
+		expect(reopenedRead.records).toEqual(firstRead.records)
+		expect(reopenedRead.physicalRecordCount).toBe(firstRead.physicalRecordCount)
+	})
+
+	it("queries only canonical records inside the requested time range", async () => {
+		const location = path.join(root, "api_rate_metrics_range.db")
+		const repository = createRepository({ taskId: "task-a", location, migrateLegacy: false, now: () => 1_000 })
+		await repository.initialize()
+		await repository.append([
+			secondRecord(9),
+			secondRecord(10, { revision: 0, effectiveTokens: 100 }),
+			secondRecord(10, { revision: 1, effectiveTokens: 180 }),
+			secondRecord(20),
+			{
+				schemaVersion: 1,
+				kind: "rollup",
+				resolution: "minute",
+				bucketStartSecond: 60,
+				bucketSeconds: 60,
+				activeSeconds: 1,
+				requestCount: 1,
+				tokenCount: 120,
+				requestsPerMinute: 60,
+				tokensPerMinute: 7_200,
+				tokenQuality: "estimated",
+			},
+		])
+
+		await expect(repository.readRange({ startSecond: 10, endSecond: 61 })).resolves.toMatchObject({
+			records: [
+				expect.objectContaining({ kind: "second", second: 10, revision: 1, effectiveTokens: 180 }),
+				expect.objectContaining({ kind: "second", second: 20 }),
+				expect.objectContaining({ kind: "rollup", bucketStartSecond: 60 }),
+			],
+			logicalRecordCount: 3,
+			physicalRecordCount: 4,
+		})
+	})
+
+	it("refuses an append that would exceed the logical hard limit without changing committed data", async () => {
+		const location = path.join(root, "api_rate_metrics_hard_limit.db")
 		const meta = { schemaVersion: 1, kind: "meta", taskId: "task-a", createdAt: 1_000 }
 		const firstRecord = secondRecord(10)
-		const initialPayload = `${JSON.stringify(meta)}\n`
-		const firstPayload = `${JSON.stringify(firstRecord)}\n`
-		await fs.writeFile(filePath, initialPayload, "utf8")
-		const repository = new TaskApiRateMetricsRepository({
+		const hardLimitBytes = Buffer.byteLength(`${JSON.stringify(meta)}\n${JSON.stringify(firstRecord)}\n`)
+		const repository = createRepository({
 			taskId: "task-a",
-			filePath,
-			hardLimitBytes: Buffer.byteLength(initialPayload) + Buffer.byteLength(firstPayload),
+			location,
+			now: () => 1_000,
+			hardLimitBytes,
 		})
 		await repository.initialize()
 		await repository.append([firstRecord])
-		await repository.waitForWrites()
-		const beforeRejectedAppend = await fs.readFile(filePath, "utf8")
+		const beforeRejectedAppend = await repository.readAll()
 
 		await expect(repository.append([secondRecord(11)])).rejects.toThrow(/hard limit/i)
 		await expect(repository.waitForWrites()).resolves.toBeUndefined()
-		expect(await fs.readFile(filePath, "utf8")).toBe(beforeRejectedAppend)
+		expect((await repository.readAll()).records).toEqual(beforeRejectedAppend.records)
 	})
 
 	it("atomically compacts files only after the configured size threshold", async () => {
-		const filePath = path.join(root, "api_rate_metrics.jsonl")
-		const repository = new TaskApiRateMetricsRepository({
+		const location = path.join(root, "api_rate_metrics_compaction.db")
+		const repository = createRepository({
 			taskId: "task-a",
-			filePath,
+			location,
 			compactionThresholdBytes: 1,
 		})
 		await repository.initialize()
@@ -200,15 +326,13 @@ describe("TaskApiRateMetricsRepository", () => {
 		])
 	})
 
-	it("rejects a metrics file owned by another Task", async () => {
-		const filePath = path.join(root, "api_rate_metrics.jsonl")
-		await fs.writeFile(
-			filePath,
-			`${JSON.stringify({ schemaVersion: 1, kind: "meta", taskId: "task-b", createdAt: 1_000 })}\n`,
-			"utf8",
-		)
+	it("rejects a metrics database owned by another Task", async () => {
+		const location = path.join(root, "api_rate_metrics_task_mismatch.db")
+		const owner = createRepository({ taskId: "task-b", location, now: () => 1_000 })
+		await owner.initialize()
+		await owner.close()
 
-		const repository = new TaskApiRateMetricsRepository({ taskId: "task-a", filePath })
+		const repository = createRepository({ taskId: "task-a", location })
 		await expect(repository.initialize()).rejects.toThrow(ApiRateMetricsFileIntegrityError)
 	})
 })

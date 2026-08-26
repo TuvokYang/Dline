@@ -45,6 +45,7 @@ import type { InteractionOutcome } from "./interaction/InteractionCoordinator"
 import { isTurnEndContinuationHandler, requiresTurnEndContinuation } from "./interaction/TurnEndContinuationRegistry"
 import { checkRepeatedToolCall, LOOP_DETECTION_SOFT_THRESHOLD, toolCallSignature } from "./loop-detection"
 import { MessageStateHandler } from "./message-state"
+import type { ProviderRequestRoundPort } from "./performance/provider-request-round-port"
 import { resolveRequestWebSearchRoutingPlan } from "./RequestApiScope"
 import { TaskController } from "./TaskController"
 import { TaskState } from "./TaskState"
@@ -389,6 +390,7 @@ export class ToolExecutor {
 		private getTaskCapabilityToggles: () => TaskCapabilityToggles,
 		private identityFactory: IdentityFactory,
 		private activityStore: TaskActivityStore,
+		private providerRequestRounds: ProviderRequestRoundPort | undefined,
 
 		// Configuration & Settings
 
@@ -533,6 +535,7 @@ export class ToolExecutor {
 			coordinator: this.coordinator,
 			identityFactory: this.identityFactory,
 			activityStore: this.activityStore,
+			providerRequestRounds: this.providerRequestRounds,
 			controllerContext: (this as any)._controllerContext,
 			subagentJobManager: this.subagentJobManager,
 		}

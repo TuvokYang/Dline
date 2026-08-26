@@ -1,10 +1,12 @@
 import type { ApiHandler } from "@core/api"
 import { isOutputLimitExceededError } from "@core/api/stream/OutputLimitExceededError"
 import { createIdentityFactory } from "@core/api/transform/block-identity"
+import type { ApiProviderStreamChunk } from "@core/api/transform/stream"
 import { ApiUsageAccumulator } from "@core/api/transform/usage-accumulator"
 import { parseAssistantMessageV2, type ToolUse } from "@core/assistant-message"
 import type { CompactionProviderInput } from "@core/task/compaction/CompactionRequestReplay"
 import type { ExplicitInstructionRequestScope } from "@core/task/explicit-instructions/ExplicitInstructionRequestScope"
+import type { ProviderRequestRoundAdmission } from "@core/task/performance/provider-request-round-port"
 import { ClineDefaultTool } from "@shared/tools"
 import cloneDeep from "clone-deep"
 import type { CompactionRetryPolicy } from "./compaction-retry-policy"
@@ -37,6 +39,8 @@ export interface RunInternalCompactionPassInput {
 	explicitInstructions: ExplicitInstructionRequestScope
 	taskNamespace?: string
 	attemptId?: string
+	providerRequestRound?: ProviderRequestRoundAdmission
+	taskAttempt?: number
 	/** Every accepted Provider chunk, before summary parsing, for request lifecycle observers. */
 	onChunk?(chunk: unknown): void | Promise<void>
 	/** Streamed summary snapshots delivered without retry lifecycle state. */
@@ -127,7 +131,7 @@ class CompactionPresentationQueue {
 export async function runInternalCompactionPass(input: RunInternalCompactionPassInput): Promise<InternalCompactionPassResult> {
 	input.explicitInstructions.beginProviderAttempt(input.attemptId)
 	const consumePort = input.explicitInstructions.createConsumePort()
-	const stream = input.api.createMessage(
+	const providerStream = input.api.createMessage(
 		input.providerInput.systemPrompt,
 		input.providerInput.messages,
 		input.providerInput.tools,
@@ -144,10 +148,12 @@ export async function runInternalCompactionPass(input: RunInternalCompactionPass
 					}),
 		},
 	)
+	const stream = input.providerRequestRound?.bindAttempt(providerStream, input.taskAttempt ?? 0) ?? providerStream
 
 	let assistantText = ""
 	let nativeSummary: string | undefined
 	let usage: InternalCompactionUsage | undefined
+	let cacheUsageReported = false
 	const usageAccumulator = new ApiUsageAccumulator()
 	const presentationQueue = new CompactionPresentationQueue()
 	let lastPublishedSummary: string | undefined
@@ -164,7 +170,7 @@ export async function runInternalCompactionPass(input: RunInternalCompactionPass
 		if (input.onSummaryUpdate) presentationQueue.enqueue(() => input.onSummaryUpdate?.(snapshot))
 	}
 
-	const processChunk = (chunk: Awaited<ReturnType<typeof stream.next>>["value"], publishChunk: boolean): void => {
+	const processChunk = (chunk: ApiProviderStreamChunk | undefined, publishChunk: boolean): void => {
 		if (!chunk) return
 		if (publishChunk && input.onChunk) presentationQueue.enqueue(() => input.onChunk?.(chunk))
 		switch (chunk.type) {
@@ -208,6 +214,7 @@ export async function runInternalCompactionPass(input: RunInternalCompactionPass
 				break
 			}
 			case "usage": {
+				cacheUsageReported ||= chunk.cacheWriteTokens !== undefined || chunk.cacheReadTokens !== undefined
 				const current = usageAccumulator.apply(chunk).usage
 				usage = {
 					...current,
@@ -219,6 +226,17 @@ export async function runInternalCompactionPass(input: RunInternalCompactionPass
 			case "server_tool":
 				break
 		}
+	}
+
+	const attachRoundUsage = (): void => {
+		if (!usage) return
+		input.providerRequestRound?.attachExactUsage({
+			inputTokens: usage.inputTokens,
+			outputTokens: usage.outputTokens,
+			cacheWriteTokens: usage.cacheWriteTokens,
+			cacheReadTokens: usage.cacheReadTokens,
+			cacheUsageReported,
+		})
 	}
 
 	const pumpStream = async (): Promise<InternalCompactionSettlement> => {
@@ -243,6 +261,8 @@ export async function runInternalCompactionPass(input: RunInternalCompactionPass
 			await presentationQueue.flush()
 			if (completedSummary !== undefined) return { usage, error }
 			throw error
+		} finally {
+			attachRoundUsage()
 		}
 	}
 
@@ -283,6 +303,8 @@ export async function runInternalCompactionPassWithRetry(
 				explicitInstructions: input.explicitInstructions,
 				taskNamespace: input.taskNamespace,
 				attemptId: currentAttempt.authorizationAttemptId,
+				providerRequestRound: input.providerRequestRound,
+				taskAttempt: currentAttempt.attemptIndex,
 				onChunk: (chunk) => input.onChunk?.(chunk, currentAttempt),
 				onSummaryUpdate: (context) => input.onSummaryUpdate?.(context, currentAttempt),
 			})

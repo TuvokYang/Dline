@@ -19,7 +19,27 @@ class MemoryRepository implements ApiRateMetricsRepository {
 	}
 
 	async readAll(): Promise<ApiRateMetricsReadResult> {
-		return { records: [...this.records], degraded: false, fileBytes: 0, lineCount: this.records.length }
+		return {
+			records: [...this.records],
+			degraded: false,
+			storageBytes: 0,
+			logicalRecordCount: this.records.length,
+			physicalRecordCount: this.records.length,
+		}
+	}
+
+	async readRange(query: { startSecond: number; endSecond: number }): Promise<ApiRateMetricsReadResult> {
+		const records = this.records.filter((record) => {
+			const startSecond = record.kind === "second" ? record.second : record.bucketStartSecond
+			return startSecond >= query.startSecond && startSecond < query.endSecond
+		})
+		return {
+			records,
+			degraded: false,
+			storageBytes: 0,
+			logicalRecordCount: records.length,
+			physicalRecordCount: records.length,
+		}
 	}
 
 	async replaceAll(records: readonly ApiRateMetricsDataRecord[]): Promise<void> {
@@ -32,9 +52,7 @@ class MemoryRepository implements ApiRateMetricsRepository {
 
 	async waitForWrites(): Promise<void> {}
 
-	async getFilePath(): Promise<string> {
-		return "memory://task-api-rate-metrics-lifecycle"
-	}
+	async close(): Promise<void> {}
 }
 
 afterEach(() => {

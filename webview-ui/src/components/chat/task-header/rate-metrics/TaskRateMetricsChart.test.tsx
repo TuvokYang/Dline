@@ -14,6 +14,15 @@ function point(start: number, overrides: Partial<TaskRateMetricPoint> = {}): Tas
 		tokensPerMinute: 600,
 		tokenQuality: TaskRateTokenQuality.TASK_RATE_TOKEN_QUALITY_EXACT,
 		provisional: false,
+		cacheUsageAvailable: false,
+		usageAvailable: false,
+		providerRoundCount: 0,
+		completedRoundCount: 0,
+		failedRoundCount: 0,
+		cancelledRoundCount: 0,
+		abortedRoundCount: 0,
+		rpmBasis: 3,
+		usageQuality: 1,
 		...overrides,
 	}
 }
@@ -35,6 +44,24 @@ describe("TaskRateMetricsChart", () => {
 		expect(screen.getByRole("img", { name: "API rate history chart" })).toHaveAttribute("data-metric", "rpm")
 		expect(screen.getAllByTestId("task-rate-series-line")).toHaveLength(2)
 		expect(screen.getAllByTestId(/task-rate-point-/)).toHaveLength(3)
+	})
+
+	it("does not render unavailable points and shows unavailable supporting metrics", () => {
+		render(
+			<TaskRateMetricsChart
+				chartType="line"
+				metric="rpm"
+				points={[
+					point(0),
+					point(60_000, { requestsPerMinute: undefined }),
+					point(120_000, { tokensPerMinute: undefined }),
+				]}
+			/>,
+		)
+
+		expect(screen.getAllByTestId(/task-rate-point-/)).toHaveLength(2)
+		fireEvent.focus(screen.getByTestId("task-rate-point-1"))
+		expect(screen.getByRole("tooltip")).toHaveTextContent("TPM: Unavailable")
 	})
 
 	it("shows a keyboard-accessible tooltip with selected and supporting metrics", () => {

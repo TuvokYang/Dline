@@ -394,6 +394,32 @@ describe("TaskActivityStore", () => {
 		).toEqual(["historical-command", "live-command"])
 	})
 
+	it("does not interrupt live activities created after persisted history hydration", async () => {
+		const historicalStore = new TaskActivityStore("task-1")
+		historicalStore.create({
+			activityId: "historical-command",
+			kind: "command",
+			executionMode: "background",
+			title: "historical",
+		})
+		const reopened = new TaskActivityStore("task-1", {
+			load: vi.fn(async () => historicalStore.list()),
+			save: vi.fn(async () => undefined),
+		})
+
+		await reopened.hydrate()
+		reopened.create({
+			activityId: "live-command",
+			kind: "command",
+			executionMode: "foreground",
+			title: "live",
+		})
+
+		expect(await reopened.recoverInterruptedActivities()).toEqual(["historical-command"])
+		expect(reopened.get("historical-command")?.status).toBe("interrupted")
+		expect(reopened.get("live-command")?.status).toBe("running")
+	})
+
 	it("recovers persisted transient activities as interrupted only when explicitly requested", async () => {
 		const historicalStore = new TaskActivityStore("task-1")
 		historicalStore.create({
@@ -463,6 +489,7 @@ describe("TaskActivityStore", () => {
 		}
 		expect(reopened.get("completed-command")?.status).toBe("completed")
 		expect(reopened.listRunning()).toEqual([])
+		expect(save).toHaveBeenCalledTimes(1)
 		expect(save.mock.calls.at(-1)?.[0].map((activity) => activity.status)).toContain("interrupted")
 
 		const saveCount = save.mock.calls.length

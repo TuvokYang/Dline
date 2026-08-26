@@ -1,3 +1,4 @@
+import type { CanonicalMessageRange } from "@core/context/context-management/compaction-context-projection"
 import { indexLogicalTurns } from "@core/context/context-management/logical-turns"
 import type { ClineStorageMessage, ClineUserToolResultContentBlock } from "@shared/messages"
 import type { ClineContent } from "@shared/messages/content"
@@ -11,9 +12,15 @@ interface BoundaryTaskHarness {
 	}
 	contextManager: {
 		getTruncatedMessages(history: ClineStorageMessage[], deletedRange?: [number, number]): ClineStorageMessage[]
+		applyContextHistoryUpdatesToCanonical(history: ClineStorageMessage[]): ClineStorageMessage[]
+		repairProviderMessagesWithRanges(
+			messages: ClineStorageMessage[],
+			canonicalRanges: Array<CanonicalMessageRange | undefined>,
+		): { messages: ClineStorageMessage[]; canonicalRanges: Array<CanonicalMessageRange | undefined> }
 	}
 	messageStateHandler: {
 		apiConversationHistory: ClineStorageMessage[]
+		clineMessages: []
 	}
 	getOrdinaryContextCompactionBoundary(pendingContent?: readonly ClineContent[]): {
 		sourceHistory: ClineStorageMessage[]
@@ -53,8 +60,13 @@ function createHarness(toolName = "qna_respond"): BoundaryTaskHarness {
 		},
 		contextManager: {
 			getTruncatedMessages: (input: ClineStorageMessage[]) => input,
+			applyContextHistoryUpdatesToCanonical: (input: ClineStorageMessage[]) => input,
+			repairProviderMessagesWithRanges: (
+				messages: ClineStorageMessage[],
+				canonicalRanges: Array<CanonicalMessageRange | undefined>,
+			) => ({ messages, canonicalRanges }),
 		},
-		messageStateHandler: { apiConversationHistory: history },
+		messageStateHandler: { apiConversationHistory: history, clineMessages: [] },
 	}) as BoundaryTaskHarness
 	return harness
 }
@@ -151,8 +163,11 @@ describe("Task ordinary context compaction boundary", () => {
 
 		const boundary = task.getOrdinaryContextCompactionBoundary()
 
-		// The latest tagged feedback and its assistant response remain one protected tail.
-		expect(boundary.sourceHistory.length).toBe(2)
+		// The real tagged feedback and its assistant response remain protected, while
+		// neutral identity evidence keeps the earlier source provider-projectable.
+		expect(boundary.sourceHistory.length).toBe(3)
+		expect(JSON.stringify(boundary.sourceHistory)).toContain("Tool qna_respond executed successfully.")
+		expect(JSON.stringify(boundary.sourceHistory)).not.toContain("user reply")
 		expect(boundary.targetContinuationHistory.length).toBe(2)
 		expect(boundary.targetContinuationHistory[0]?.role).toBe("user")
 		expect(boundary.targetContinuationHistory[1]?.role).toBe("assistant")
@@ -202,7 +217,7 @@ describe("Task ordinary context compaction boundary", () => {
 		expect(JSON.stringify(boundary.targetContinuationHistory)).not.toContain("please continue")
 	})
 
-	it("keeps the latest completed-by-pending turn protected when earlier turns remain compressible", () => {
+	it("keeps the latest conversational turn protected when pending feedback completes it", () => {
 		const task = createHarness()
 		task.messageStateHandler.apiConversationHistory = [
 			{ role: "user", content: [{ type: "text", text: "turn A" }], ts: 1 },
@@ -260,6 +275,50 @@ describe("Task ordinary context compaction boundary", () => {
 		expect(sourceText).not.toContain("fn-c")
 		expect(continuationText).toContain("fn-c")
 		expect(continuationText).not.toContain("continuation request")
+	})
+
+	it("makes a pending-completed side-effect turn compressible while preserving its ordinary continuation", () => {
+		const task = createHarness()
+		task.messageStateHandler.apiConversationHistory = [
+			{ role: "user", content: [{ type: "text", text: "older turn" }], ts: 1 },
+			{ role: "assistant", content: [{ type: "text", text: "older response" }], ts: 2 },
+			{ role: "user", content: [{ type: "text", text: "latest turn" }], ts: 3 },
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "tool_use",
+						name: "read_file",
+						input: { path: "large.txt" },
+						dline_tid: "tid-read-latest",
+						function_id: "fn-read-latest",
+					},
+				],
+				ts: 4,
+			},
+		]
+		const pendingResult: ClineUserToolResultContentBlock = {
+			type: "tool_result",
+			content: [{ type: "text", text: "large file result" }],
+			dline_tid: "tid-read-latest",
+			function_id: "fn-read-latest",
+		}
+
+		const boundary = task.getOrdinaryContextCompactionBoundary([pendingResult])
+		const sourceText = JSON.stringify(boundary.sourceHistory)
+		const continuationText = JSON.stringify(boundary.targetContinuationHistory)
+
+		expect(indexLogicalTurns(boundary.sourceHistory)).toMatchObject({
+			turns: [expect.any(Object), expect.any(Object)],
+			protectedTail: [],
+			issues: [],
+		})
+		expect(sourceText).toContain("latest turn")
+		expect(sourceText).toContain("fn-read-latest")
+		expect(sourceText).toContain("large file result")
+		expect(continuationText).toContain("latest turn")
+		expect(continuationText).toContain("fn-read-latest")
+		expect(continuationText).not.toContain("large file result")
 	})
 
 	it("pairs pending results for multiple different tools in one view", () => {

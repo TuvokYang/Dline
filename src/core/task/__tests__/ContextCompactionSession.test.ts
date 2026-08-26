@@ -1,6 +1,5 @@
 import type { ApiHandler } from "@core/api"
 import { OutputLimitExceededError } from "@core/api/stream/OutputLimitExceededError"
-import type { CompactionCheckpointHead } from "@core/context/context-management/compaction-checkpoint-chain"
 import { estimateContextWindowCandidate } from "@core/context/context-management/context-window-projection"
 import { computeSummarizeBudget, resolveCompactTriggerPolicy } from "@core/context/context-management/context-window-utils"
 import type { TargetWindowFittingDecision } from "@core/context/context-management/TargetWindowFittingService"
@@ -22,20 +21,12 @@ const HISTORY: ClineStorageMessage[] = [
 ]
 
 function decision(status: TargetWindowFittingDecision["status"]): TargetWindowFittingDecision {
-	return { status, projectedUsageTokens: 100, targetContextWindow: 1_000, fittingExitTarget: 800 }
-}
-
-function checkpointHead(operationId: string, overrides: Partial<CompactionCheckpointHead> = {}): CompactionCheckpointHead {
 	return {
-		schemaVersion: 1,
-		operationId,
-		rootCheckpointId: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		headCheckpointId: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		branchId: "branch-0",
-		chainRevision: 0,
-		sequence: 0,
-		depth: 0,
-		...overrides,
+		status,
+		projectedUsageTokens: 100,
+		targetContextWindow: 1_000,
+		effectiveContextLimit: 1_000,
+		fittingExitTarget: 800,
 	}
 }
 
@@ -53,17 +44,6 @@ function useSuccessfulCompactionStream(): void {
 
 function createPorts(): ContextCompactionSessionPorts {
 	return {
-		prepareRootCheckpoint: vi.fn(async (input) => checkpointHead(input.operationId)),
-		checkpointAcceptedPass: vi.fn(async (input, checkpoint) => ({
-			checkpointHead: checkpointHead(input.operationId, {
-				headCheckpointId: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-				branchId: checkpoint.expectedHead.branchId,
-				chainRevision: checkpoint.expectedHead.chainRevision + 1,
-				sequence: checkpoint.expectedHead.sequence + 1,
-				depth: checkpoint.expectedHead.depth + 1,
-			}),
-			projection: decision("complete"),
-		})),
 		getPassInputCeiling: () => 10_000,
 		estimatePassInput: async (_input, history) => history.length * 10,
 		buildPassRequest: vi.fn(async (_input, state) => {
@@ -83,9 +63,9 @@ function createPorts(): ContextCompactionSessionPorts {
 				initialAttemptId: `attempt-${state.passIndex}`,
 			}
 		}),
+		reprojectTarget: vi.fn(async () => decision("complete")),
 		stageAcceptedPass: vi.fn(async () => undefined),
 		commit: vi.fn(async () => undefined),
-		rollback: vi.fn(async () => undefined),
 		publish: vi.fn(async () => undefined),
 		waitForRetry: vi.fn(async () => undefined),
 	}
@@ -118,12 +98,7 @@ describe("ContextCompactionSession", () => {
 		const reason = "No complete logical turn is available for context compaction."
 		expect(result).toBe("failed")
 		expect(api.createMessage).not.toHaveBeenCalled()
-		expect(ports.prepareRootCheckpoint).not.toHaveBeenCalled()
-		expect(ports.rollback).toHaveBeenCalledWith(
-			expect.objectContaining({ operationId: "operation-no-complete-turn" }),
-			undefined,
-			reason,
-		)
+		expect(ports.reprojectTarget).not.toHaveBeenCalled()
 		expect(ports.publish).toHaveBeenCalledWith(expect.objectContaining({ operationId: "operation-no-complete-turn" }), {
 			kind: "failed",
 			error: reason,
@@ -172,8 +147,7 @@ describe("ContextCompactionSession", () => {
 
 		expect(result).toBe("completed")
 		expect(API.createMessage).toHaveBeenCalledOnce()
-		expect(ports.prepareRootCheckpoint).toHaveBeenCalledOnce()
-		expect(ports.rollback).not.toHaveBeenCalled()
+		expect(ports.reprojectTarget).toHaveBeenCalledOnce()
 	})
 
 	it("admits one complete 450K multi-tool logical turn when the full hidden request fits the 472K Provider window", async () => {
@@ -275,42 +249,6 @@ describe("ContextCompactionSession", () => {
 		expect(sentMessages).toContain("call-large-read-a")
 		expect(sentMessages).toContain("call-large-read-b")
 		expect(sentMessages).toContain("SECOND_LARGE_TOOL_RESULT")
-		expect(ports.rollback).not.toHaveBeenCalled()
-	})
-
-	it("blocks Provider admission when the durable C0 checkpoint cannot be prepared", async () => {
-		const ports = createPorts()
-		const rootError = new Error("root checkpoint write failed")
-		ports.prepareRootCheckpoint = vi.fn(async () => {
-			throw rootError
-		})
-		const api = { createMessage: vi.fn() } as unknown as ApiHandler
-		const session = new ContextCompactionSession(ports, { maxRetryAttempts: 3 })
-
-		const result = await session.run({
-			operationId: "operation-root-checkpoint-failure",
-			trigger: "auto_compaction",
-			compactionApi: api,
-			targetApi: api,
-			targetMode: "act",
-			sourceHistory: HISTORY,
-		})
-
-		expect(result).toBe("failed")
-		expect(ports.prepareRootCheckpoint).toHaveBeenCalledOnce()
-		expect(ports.buildPassRequest).not.toHaveBeenCalled()
-		expect(api.createMessage).not.toHaveBeenCalled()
-		expect(ports.stageAcceptedPass).not.toHaveBeenCalled()
-		expect(ports.commit).not.toHaveBeenCalled()
-		expect(ports.rollback).toHaveBeenCalledWith(
-			expect.objectContaining({ operationId: "operation-root-checkpoint-failure" }),
-			expect.objectContaining({ passIndex: 0, coveredTurnCount: 0 }),
-			rootError.message,
-		)
-		expect(ports.publish).toHaveBeenCalledWith(
-			expect.objectContaining({ operationId: "operation-root-checkpoint-failure" }),
-			expect.objectContaining({ kind: "failed", error: rootError.message }),
-		)
 	})
 
 	it.each([
@@ -364,7 +302,7 @@ describe("ContextCompactionSession", () => {
 		const events = vi.mocked(ports.publish).mock.calls.map(([, event]) => event)
 		expect(events.some((event) => event.kind === "pass_retry")).toBe(false)
 		expect(events.at(-1)).toMatchObject({ kind: "failed" })
-		expect(ports.rollback).toHaveBeenCalledOnce()
+		expect(ports.reprojectTarget).not.toHaveBeenCalled()
 	})
 
 	it("owns planning through commit for one accepted Pass", async () => {
@@ -384,9 +322,6 @@ describe("ContextCompactionSession", () => {
 		expect(result).toBe("completed")
 		const publish = vi.mocked(ports.publish)
 		const events = publish.mock.calls.map(([, event]) => event)
-		expect(vi.mocked(ports.prepareRootCheckpoint).mock.invocationCallOrder[0]).toBeLessThan(
-			vi.mocked(ports.buildPassRequest).mock.invocationCallOrder[0],
-		)
 		expect(vi.mocked(ports.buildPassRequest).mock.invocationCallOrder[0]).toBeLessThan(publish.mock.invocationCallOrder[0])
 		expect(events.map((event) => event.kind)).toEqual([
 			"pass_started",
@@ -404,7 +339,6 @@ describe("ContextCompactionSession", () => {
 			kind: "pass_receiving",
 			passIdentity: { operationId: "operation-1", passIndex: 0 },
 			attempt: { attemptIndex: 0, authorizationAttemptId: "attempt-0" },
-			checkpointHead: { chainRevision: 0, branchId: "branch-0" },
 			chunk: { type: "tool_calls" },
 		})
 		expect(events[1]).not.toHaveProperty("state")
@@ -419,31 +353,28 @@ describe("ContextCompactionSession", () => {
 		expect(events[3]).not.toHaveProperty("state")
 		expect(events[4]).toMatchObject({
 			kind: "pass_completed",
+			state: { passIndex: 1, coveredTurnCount: 2, cumulativeSummary: "summary" },
 			passIdentity: { operationId: "operation-1", passIndex: 0 },
 			attempt: { attemptIndex: 0, authorizationAttemptId: "attempt-0" },
 			content: "summary",
 		})
-		expect(ports.checkpointAcceptedPass).toHaveBeenCalledWith(
+		expect(ports.reprojectTarget).toHaveBeenCalledWith(
 			expect.objectContaining({ operationId: "operation-1" }),
-			expect.objectContaining({
-				expectedHead: expect.objectContaining({ chainRevision: 0, sequence: 0, depth: 0 }),
-				previousState: expect.objectContaining({ passIndex: 0, coveredTurnCount: 0 }),
-				nextState: expect.objectContaining({ passIndex: 1, coveredTurnCount: 2, cumulativeSummary: "summary" }),
-				passIdentity: expect.objectContaining({ operationId: "operation-1", passIndex: 0 }),
-				attempt: { attemptIndex: 0, authorizationAttemptId: "attempt-0" },
-				summary: "summary",
-			}),
+			expect.objectContaining({ passIndex: 1, coveredTurnCount: 2, cumulativeSummary: "summary" }),
 		)
-		expect(vi.mocked(ports.checkpointAcceptedPass).mock.invocationCallOrder[0]).toBeLessThan(
+		expect(ports.stageAcceptedPass).toHaveBeenCalledWith(
+			expect.objectContaining({ operationId: "operation-1" }),
+			expect.objectContaining({ passIndex: 1, coveredTurnCount: 2, cumulativeSummary: "summary" }),
+			decision("complete"),
+		)
+		expect(vi.mocked(ports.reprojectTarget).mock.invocationCallOrder[0]).toBeLessThan(
 			vi.mocked(ports.stageAcceptedPass).mock.invocationCallOrder[0],
 		)
 		expect(vi.mocked(ports.stageAcceptedPass).mock.invocationCallOrder[0]).toBeLessThan(publish.mock.invocationCallOrder[4])
-		expect(ports.stageAcceptedPass).toHaveBeenCalledOnce()
-		expect(ports.commit).toHaveBeenCalledOnce()
-		expect(ports.rollback).not.toHaveBeenCalled()
+		expect(publish.mock.invocationCallOrder[4]).toBeLessThan(vi.mocked(ports.commit).mock.invocationCallOrder[0])
 	})
 
-	it("commits and completes an accepted checkpoint without waiting for tail settlement", async () => {
+	it("commits an accepted projection without waiting for tail settlement", async () => {
 		const ports = createPorts()
 		let releaseTail!: () => void
 		const tailGate = new Promise<void>((resolve) => {
@@ -482,11 +413,10 @@ describe("ContextCompactionSession", () => {
 		})
 
 		await vi.waitFor(() => {
-			expect(ports.checkpointAcceptedPass).toHaveBeenCalledOnce()
+			expect(ports.stageAcceptedPass).toHaveBeenCalledOnce()
 			const events = vi.mocked(ports.publish).mock.calls.map(([, event]) => event)
 			expect(events.some((event) => event.kind === "pass_completed")).toBe(true)
 		})
-		expect(ports.rollback).not.toHaveBeenCalled()
 
 		try {
 			await vi.waitFor(() => expect(ports.commit).toHaveBeenCalledOnce(), { timeout: 100 })
@@ -496,13 +426,12 @@ describe("ContextCompactionSession", () => {
 		}
 		expect(api.createMessage).toHaveBeenCalledOnce()
 		expect(ports.commit).toHaveBeenCalledOnce()
-		expect(ports.rollback).not.toHaveBeenCalled()
 		const events = vi.mocked(ports.publish).mock.calls.map(([, event]) => event)
 		expect(events.some((event) => event.kind === "pass_retry")).toBe(false)
 		expect(events.at(-1)).toMatchObject({ kind: "pass_completed" })
 	})
 
-	it("keeps a manually accepted checkpoint after the completed summary stream fails at the tail", async () => {
+	it("keeps a manually accepted projection after the completed summary stream fails at the tail", async () => {
 		const ports = createPorts()
 		const api = {
 			createMessage: vi.fn(async function* () {
@@ -537,15 +466,14 @@ describe("ContextCompactionSession", () => {
 
 		expect(result).toBe("completed")
 		expect(api.createMessage).toHaveBeenCalledOnce()
-		expect(ports.checkpointAcceptedPass).toHaveBeenCalledOnce()
+		expect(ports.stageAcceptedPass).toHaveBeenCalledOnce()
 		expect(ports.commit).toHaveBeenCalledOnce()
-		expect(ports.rollback).not.toHaveBeenCalled()
 		const events = vi.mocked(ports.publish).mock.calls.map(([, event]) => event)
 		expect(events.some((event) => event.kind === "pass_retry")).toBe(false)
 		expect(events.at(-1)).toMatchObject({ kind: "pass_completed" })
 	})
 
-	it("regenerates the same manual Pass before checkpointing only the confirmed summary", async () => {
+	it("regenerates the same manual Pass before staging only the confirmed summary", async () => {
 		const ports = createPorts()
 		let buildCount = 0
 		ports.buildPassRequest = vi.fn(async (_input, state, feedback) => {
@@ -570,7 +498,7 @@ describe("ContextCompactionSession", () => {
 		})
 		ports.reviewPass = vi
 			.fn()
-			.mockResolvedValueOnce({ action: "regenerate", feedback: [{ type: "text", text: "preserve checkpoint" }] })
+			.mockResolvedValueOnce({ action: "regenerate", feedback: [{ type: "text", text: "preserve constraints" }] })
 			.mockResolvedValueOnce({ action: "accept" })
 		let requestCount = 0
 		const api = {
@@ -598,19 +526,17 @@ describe("ContextCompactionSession", () => {
 
 		expect(result).toBe("completed")
 		expect(ports.reviewPass).toHaveBeenCalledTimes(2)
-		expect(ports.checkpointAcceptedPass).toHaveBeenCalledOnce()
-		expect(ports.checkpointAcceptedPass).toHaveBeenCalledWith(
+		expect(ports.reprojectTarget).toHaveBeenCalledOnce()
+		expect(ports.stageAcceptedPass).toHaveBeenCalledWith(
 			expect.objectContaining({ operationId: "operation-manual-review" }),
-			expect.objectContaining({
-				attempt: { attemptIndex: 1, authorizationAttemptId: "manual-attempt-1" },
-				summary: "confirmed summary",
-			}),
+			expect.objectContaining({ cumulativeSummary: "confirmed summary", passIndex: 1 }),
+			decision("complete"),
 		)
 		expect(ports.buildPassRequest).toHaveBeenNthCalledWith(
 			2,
 			expect.objectContaining({ operationId: "operation-manual-review" }),
 			expect.objectContaining({ passIndex: 0, coveredTurnCount: 0 }),
-			[{ type: "text", text: "preserve checkpoint" }],
+			[{ type: "text", text: "preserve constraints" }],
 		)
 		const events = vi.mocked(ports.publish).mock.calls.map(([, event]) => event)
 		expect(events.filter((event) => event.kind === "pass_started")).toHaveLength(1)
@@ -631,13 +557,13 @@ describe("ContextCompactionSession", () => {
 		})
 	})
 
-	it("holds a completed transition until adoption releases or fails its barrier", async () => {
+	it("releases a completed transition immediately because adoption is not Session-owned", async () => {
 		const ports = createPorts()
 		const session = new ContextCompactionSession(ports, { maxRetryAttempts: 1 })
 		useSuccessfulCompactionStream()
 
-		await session.run({
-			operationId: "operation-barrier",
+		const result = await session.run({
+			operationId: "operation-transition",
 			trigger: "profile_switch",
 			compactionApi: API,
 			targetApi: API,
@@ -645,112 +571,37 @@ describe("ContextCompactionSession", () => {
 			sourceHistory: HISTORY,
 		})
 
-		expect(session.getActiveOperationId()).toBe("operation-barrier")
-		await session.fail("operation-barrier", "Profile adoption failed.")
-		expect(ports.rollback).toHaveBeenCalledWith(
-			expect.objectContaining({ operationId: "operation-barrier" }),
-			expect.any(Object),
-			"Profile adoption failed.",
-		)
+		expect(result).toBe("completed")
 		expect(session.getActiveOperationId()).toBeUndefined()
 	})
 
-	it("releases a completed transition without rolling back after adoption succeeds", async () => {
+	it("keeps a durable commit completed when cancellation arrives after the commit point", async () => {
+		const abortController = new AbortController()
 		const ports = createPorts()
+		ports.commit = vi.fn(async () => {
+			abortController.abort(new Error("late cancellation"))
+		})
 		const session = new ContextCompactionSession(ports, { maxRetryAttempts: 1 })
 		useSuccessfulCompactionStream()
 
-		await session.run({
-			operationId: "operation-release",
-			trigger: "mode_switch",
+		const result = await session.run({
+			operationId: "operation-late-cancel",
+			trigger: "auto_compaction",
 			compactionApi: API,
 			targetApi: API,
 			targetMode: "act",
 			sourceHistory: HISTORY,
-		})
-		session.release("operation-release")
-
-		expect(ports.rollback).not.toHaveBeenCalled()
-		expect(session.getActiveOperationId()).toBeUndefined()
-	})
-
-	it("interrupts an in-flight Pass for restore and continues from the restored branch without rollback", async () => {
-		const ports = createPorts()
-		let initialState: Parameters<ContextCompactionSessionPorts["prepareRootCheckpoint"]>[1] | undefined
-		ports.prepareRootCheckpoint = vi.fn(async (input, state) => {
-			initialState = state
-			return checkpointHead(input.operationId)
-		})
-		let rejectFirstStream: ((error: Error) => void) | undefined
-		let requestCount = 0
-		const api = {
-			createMessage: vi.fn(async function* () {
-				requestCount += 1
-				if (requestCount === 1) {
-					yield {
-						type: "tool_calls",
-						function_id: "f",
-						tool_index: 0,
-						tool_call: { function: { name: "summarize_task", arguments: '{"context":"partial"}' } },
-					}
-					await new Promise<never>((_resolve, reject) => {
-						rejectFirstStream = reject
-					})
-					return
-				}
-				yield {
-					type: "tool_calls",
-					function_id: "f",
-					tool_index: 0,
-					tool_call: { function: { name: "summarize_task", arguments: '{"context":"restored summary"}' } },
-				}
-				yield { type: "usage", inputTokens: 10, outputTokens: 5, cacheWriteTokens: 0, cacheReadTokens: 0 }
-			}),
-			abort: vi.fn(() => rejectFirstStream?.(new Error("restore interrupt"))),
-		} as unknown as ApiHandler
-		const session = new ContextCompactionSession(ports, { maxRetryAttempts: 1 })
-		const run = session.run({
-			operationId: "operation-restore",
-			trigger: "profile_switch",
-			compactionApi: api,
-			targetApi: api,
-			targetMode: "act",
-			sourceHistory: HISTORY,
-		})
-		await vi.waitFor(() =>
-			expect(ports.publish).toHaveBeenCalledWith(
-				expect.objectContaining({ operationId: "operation-restore" }),
-				expect.objectContaining({ kind: "pass_partial", content: "partial" }),
-			),
-		)
-		const restoredHead = checkpointHead("operation-restore", {
-			branchId: "branch:operation-restore:1",
-			chainRevision: 1,
-			sequence: 1,
-		})
-		if (!initialState) throw new Error("Expected the initial compaction state before restore")
-		const restoredState = initialState
-
-		await session.restore("operation-restore", {
-			prepare: async () => undefined,
-			apply: async () => ({
-				state: restoredState,
-				checkpointHead: restoredHead,
-			}),
+			signal: abortController.signal,
 		})
 
-		expect(await run).toBe("completed")
-		expect(api.abort).toHaveBeenCalledOnce()
-		expect(ports.rollback).not.toHaveBeenCalled()
-		expect(ports.checkpointAcceptedPass).toHaveBeenCalledOnce()
-		expect(ports.checkpointAcceptedPass).toHaveBeenCalledWith(
-			expect.objectContaining({ operationId: "operation-restore" }),
-			expect.objectContaining({ expectedHead: restoredHead }),
-		)
+		expect(result).toBe("completed")
 		expect(ports.commit).toHaveBeenCalledOnce()
+		const events = vi.mocked(ports.publish).mock.calls.map(([, event]) => event)
+		expect(events.at(-1)).toMatchObject({ kind: "pass_completed" })
+		expect(events.some((event) => event.kind === "failed")).toBe(false)
 	})
 
-	it("uses the target projection atomically returned by the durable checkpoint", async () => {
+	it("uses the target projection returned by the pure reprojection port", async () => {
 		const ports = createPorts()
 		const atomicProjection = {
 			...decision("complete"),
@@ -763,16 +614,7 @@ describe("ContextCompactionSession", () => {
 				mode: "act" as const,
 			},
 		}
-		ports.checkpointAcceptedPass = vi.fn(async (input, checkpoint) => ({
-			checkpointHead: checkpointHead(input.operationId, {
-				headCheckpointId: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-				branchId: checkpoint.expectedHead.branchId,
-				chainRevision: checkpoint.expectedHead.chainRevision + 1,
-				sequence: checkpoint.expectedHead.sequence + 1,
-				depth: checkpoint.expectedHead.depth + 1,
-			}),
-			projection: atomicProjection,
-		})) as unknown as ContextCompactionSessionPorts["checkpointAcceptedPass"]
+		ports.reprojectTarget = vi.fn(async () => atomicProjection)
 		const session = new ContextCompactionSession(ports, { maxRetryAttempts: 1 })
 		useSuccessfulCompactionStream()
 
@@ -786,22 +628,27 @@ describe("ContextCompactionSession", () => {
 		})
 
 		expect(result).toBe("completed")
+		expect(ports.stageAcceptedPass).toHaveBeenCalledWith(
+			expect.objectContaining({ operationId: "operation-atomic-projection" }),
+			expect.objectContaining({ passIndex: 1, cumulativeSummary: "summary" }),
+			atomicProjection,
+		)
 		expect(ports.publish).toHaveBeenCalledWith(
 			expect.objectContaining({ operationId: "operation-atomic-projection" }),
 			expect.objectContaining({ kind: "pass_completed", projection: atomicProjection }),
 		)
 	})
 
-	it("does not advance or complete a Pass when its durable checkpoint fails", async () => {
+	it("does not advance or stage a Pass when target reprojection fails", async () => {
 		const ports = createPorts()
-		ports.checkpointAcceptedPass = vi.fn(async () => {
-			throw new Error("checkpoint write failed")
+		ports.reprojectTarget = vi.fn(async () => {
+			throw new Error("target reprojection failed")
 		})
 		const session = new ContextCompactionSession(ports, { maxRetryAttempts: 1 })
 		useSuccessfulCompactionStream()
 
 		const result = await session.run({
-			operationId: "operation-checkpoint-failure",
+			operationId: "operation-reprojection-failure",
 			trigger: "profile_switch",
 			compactionApi: API,
 			targetApi: API,
@@ -812,32 +659,59 @@ describe("ContextCompactionSession", () => {
 		expect(result).toBe("failed")
 		expect(ports.stageAcceptedPass).not.toHaveBeenCalled()
 		expect(ports.commit).not.toHaveBeenCalled()
-		expect(ports.rollback).toHaveBeenCalledWith(
-			expect.objectContaining({ operationId: "operation-checkpoint-failure" }),
-			expect.objectContaining({ passIndex: 0, coveredTurnCount: 0 }),
-			"checkpoint write failed",
-		)
-		expect(vi.mocked(ports.publish).mock.calls.map(([, event]) => event.kind)).toEqual([
+		const events = vi.mocked(ports.publish).mock.calls.map(([, event]) => event)
+		expect(events.map((event) => event.kind)).toEqual([
 			"pass_started",
 			"pass_receiving",
 			"pass_partial",
 			"pass_receiving",
 			"failed",
 		])
+		expect(events.at(-1)).toMatchObject({
+			kind: "failed",
+			state: { passIndex: 0, coveredTurnCount: 0 },
+			error: "target reprojection failed",
+		})
 	})
 
-	it("rolls back instead of committing when the target remains exhausted", async () => {
+	it("does not advance or complete a Pass when staging fails", async () => {
 		const ports = createPorts()
-		ports.checkpointAcceptedPass = vi.fn(async (input, checkpoint) => ({
-			checkpointHead: checkpointHead(input.operationId, {
-				headCheckpointId: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-				branchId: checkpoint.expectedHead.branchId,
-				chainRevision: checkpoint.expectedHead.chainRevision + 1,
-				sequence: checkpoint.expectedHead.sequence + 1,
-				depth: checkpoint.expectedHead.depth + 1,
-			}),
-			projection: decision("exhausted"),
-		}))
+		ports.stageAcceptedPass = vi.fn(async () => {
+			throw new Error("accepted Pass staging failed")
+		})
+		const session = new ContextCompactionSession(ports, { maxRetryAttempts: 1 })
+		useSuccessfulCompactionStream()
+
+		const result = await session.run({
+			operationId: "operation-stage-failure",
+			trigger: "profile_switch",
+			compactionApi: API,
+			targetApi: API,
+			targetMode: "act",
+			sourceHistory: HISTORY,
+		})
+
+		expect(result).toBe("failed")
+		expect(ports.reprojectTarget).toHaveBeenCalledOnce()
+		expect(ports.commit).not.toHaveBeenCalled()
+		const events = vi.mocked(ports.publish).mock.calls.map(([, event]) => event)
+		expect(events.map((event) => event.kind)).toEqual([
+			"pass_started",
+			"pass_receiving",
+			"pass_partial",
+			"pass_receiving",
+			"failed",
+		])
+		expect(events.at(-1)).toMatchObject({
+			kind: "failed",
+			state: { passIndex: 0, coveredTurnCount: 0 },
+			error: "accepted Pass staging failed",
+		})
+	})
+
+	it("reports failure without rollback when the staged target remains exhausted", async () => {
+		const ports = createPorts()
+		ports.reprojectTarget = vi.fn(async () => decision("exhausted"))
 		const session = new ContextCompactionSession(ports, { maxRetryAttempts: 1 })
 		useSuccessfulCompactionStream()
 
@@ -851,11 +725,14 @@ describe("ContextCompactionSession", () => {
 		})
 
 		expect(result).toBe("failed")
+		expect(ports.stageAcceptedPass).toHaveBeenCalledOnce()
 		expect(ports.commit).not.toHaveBeenCalled()
-		expect(ports.rollback).toHaveBeenCalledWith(
-			expect.objectContaining({ operationId: "operation-2" }),
-			expect.anything(),
-			"Context compaction could not fit the complete target request below the hard context limit of 1000 tokens because no complete logical turn remains.",
-		)
+		const events = vi.mocked(ports.publish).mock.calls.map(([, event]) => event)
+		expect(events.at(-2)).toMatchObject({ kind: "pass_completed", state: { passIndex: 1, coveredTurnCount: 2 } })
+		expect(events.at(-1)).toMatchObject({
+			kind: "failed",
+			state: { passIndex: 1, coveredTurnCount: 2 },
+			error: "Context compaction could not fit the complete target request below the required 80% exit target of 800 tokens for the effective context limit 1000, because no complete logical turn remains.",
+		})
 	})
 })

@@ -6,7 +6,6 @@ interface RestoreControllerHarness {
 	task: {
 		taskState: { isInitialized: boolean }
 		interrupt: ReturnType<typeof vi.fn>
-		restoreContextCompactionCheckpoint: ReturnType<typeof vi.fn>
 		checkpointManager: { restoreCheckpoint: ReturnType<typeof vi.fn> }
 	}
 }
@@ -16,7 +15,6 @@ function createController(): RestoreControllerHarness {
 		task: {
 			taskState: { isInitialized: true },
 			interrupt: vi.fn().mockResolvedValue(undefined),
-			restoreContextCompactionCheckpoint: vi.fn().mockResolvedValue({}),
 			checkpointManager: {
 				restoreCheckpoint: vi.fn().mockResolvedValue({}),
 			},
@@ -34,7 +32,7 @@ describe("checkpointRestore controller", () => {
 		expect(controller.task.checkpointManager.restoreCheckpoint).toHaveBeenCalledWith(42, "workspace", undefined, undefined)
 	})
 
-	it("routes a typed compaction Restore Chat request only through the durable compaction journal", async () => {
+	it("ignores deprecated compaction restore identity and uses the ordinary task restore transaction", async () => {
 		const controller = createController()
 
 		await checkpointRestore(
@@ -49,14 +47,8 @@ describe("checkpointRestore controller", () => {
 			}),
 		)
 
-		expect(controller.task.interrupt).not.toHaveBeenCalled()
-		expect(controller.task.restoreContextCompactionCheckpoint).toHaveBeenCalledWith(
-			"operation-1",
-			"sha256:pre-pass",
-			"sha256:post-pass",
-			2,
-		)
-		expect(controller.task.checkpointManager.restoreCheckpoint).not.toHaveBeenCalled()
+		expect(controller.task.interrupt).toHaveBeenCalledOnce()
+		expect(controller.task.checkpointManager.restoreCheckpoint).toHaveBeenCalledWith(42, "task", undefined, undefined)
 	})
 
 	it.each(["task", "taskAndWorkspace"] as const)("interrupts runtime before %s restore", async (restoreType) => {
