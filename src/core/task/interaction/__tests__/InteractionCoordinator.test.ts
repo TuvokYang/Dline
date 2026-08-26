@@ -93,6 +93,62 @@ function hydrateAwaitingInteraction(input: {
 }
 
 describe("InteractionCoordinator", () => {
+	it("notifies a durable turn-ending awaiting boundary without waiting for the user response", async () => {
+		const runtime = new TaskRuntime(createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING }), createPorts())
+		const onAwaitingUserDurable = vi.fn()
+		const coordinator = new InteractionCoordinator(runtime, { onAwaitingUserDurable })
+		let settled = false
+		const outcomePromise = coordinator
+			.open({
+				turnId: "turn:tid-qna",
+				interactionId: "tid-qna",
+				kind: "qna_response",
+				presentation: JSON.stringify({ response: "Answer" }),
+			})
+			.finally(() => {
+				settled = true
+			})
+
+		await vi.waitFor(() => expect(runtime.getState().interaction?.status).toBe("awaiting"))
+		expect(onAwaitingUserDurable).toHaveBeenCalledWith({
+			turnId: "turn:tid-qna",
+			interactionId: "tid-qna",
+			kind: "qna_response",
+		})
+		expect(settled).toBe(false)
+
+		const revision = runtime.getState().revision
+		await runtime.dispatch({
+			type: "INTERACTION_RESPONDED",
+			response: {
+				taskId: "task-1",
+				turnId: "turn:tid-qna",
+				interactionId: "tid-qna",
+				actionId: "reply",
+				stateRevision: revision,
+				draft: { text: "Continue", images: [], files: [] },
+			},
+		})
+		await outcomePromise
+	})
+
+	it("does not notify the complete-execution hook for ordinary approval interactions", async () => {
+		const runtime = new TaskRuntime(createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING }), createPorts())
+		const onAwaitingUserDurable = vi.fn()
+		const coordinator = new InteractionCoordinator(runtime, { onAwaitingUserDurable })
+		const outcomePromise = coordinator.open({
+			turnId: "turn:tid-tool",
+			interactionId: "tid-tool",
+			kind: "tool_approval",
+			presentation: "Approve tool",
+		})
+		await vi.waitFor(() => expect(runtime.getState().interaction?.status).toBe("awaiting"))
+		expect(onAwaitingUserDurable).not.toHaveBeenCalled()
+
+		expect(coordinator.cancelPendingInteraction("tid-tool", "test_complete")).toBe(true)
+		await expect(outcomePromise).rejects.toThrow("test_complete")
+	})
+
 	it("continues a live plan interaction with an empty causal mode-switch response", async () => {
 		const runtime = new TaskRuntime(createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING }), createPorts())
 		const coordinator = new InteractionCoordinator(runtime)

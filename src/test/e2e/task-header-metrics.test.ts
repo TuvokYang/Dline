@@ -213,8 +213,9 @@ async function expectTaskHeaderMetrics(
 		const persistedRate = await readRateSummary(dlineDocsDir, taskId)
 		if (!persistedRate || persistedRate.tokenCount !== expectedTotalTokens(usage)) return undefined
 		const ariaLabel = await rate.getAttribute("aria-label")
-		if (!ariaLabel?.includes(`Requests per minute: ${persistedRate.requestsPerMinute}`)) return undefined
-		if (!ariaLabel.includes(`Tokens per minute: ${persistedRate.tokensPerMinute}`)) return undefined
+		if (!ariaLabel?.match(/(?:^|; )RPM: [1-9]\d*(?:;|$)/)) return undefined
+		if (!ariaLabel.includes(`TPM: ${persistedRate.tokensPerMinute}`)) return undefined
+		if (ariaLabel.includes("Request")) return undefined
 		return persistedRate
 	}, 30_000)
 	expect(stableRate.tokensPerMinute).toBeGreaterThan(0)

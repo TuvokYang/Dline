@@ -1,6 +1,11 @@
 import "should"
 import { Anthropic } from "@anthropic-ai/sdk"
 import { ApiProfile } from "@shared/proto/dline/profile"
+import {
+	bindProviderAttemptScope,
+	observeProviderStreamResponse,
+	type ProviderAttemptTerminalStatus,
+} from "@shared/provider-attempt-observer"
 import { SapAiCoreHandler } from "../sapaicore"
 
 describe("SapAiCoreHandler", () => {
@@ -102,6 +107,75 @@ describe("SapAiCoreHandler", () => {
 				model.info.capabilities?.maxTokens?.should.be.a.Number()
 				model.info.capabilities?.contextWindow?.should.be.a.Number()
 			})
+		})
+	})
+
+	describe("Provider stream lifecycle", () => {
+		it("fails only after a non-success deployment response body is fully drained", async () => {
+			let tailConsumed = false
+			const response = {
+				status: 500,
+				headers: { "content-type": "application/json" },
+				data: (async function* () {
+					yield Buffer.from('{"error":"upstream failed"}')
+					tailConsumed = true
+				})(),
+			}
+			const statuses: ProviderAttemptTerminalStatus[] = []
+			const observer = {
+				beginAttempt: () => 1,
+				finishAttempt: (_handle: number, status: ProviderAttemptTerminalStatus) => {
+					statuses.push(status)
+				},
+			}
+			const privateHandler = handler as unknown as {
+				selectDeploymentStream(value: typeof response): AsyncIterable<unknown> | undefined
+			}
+			const source = (async function* () {
+				const { stream } = await observeProviderStreamResponse(
+					async () => response,
+					(value) => privateHandler.selectDeploymentStream(value),
+				)
+				if (!stream) throw new Error("Expected a failed deployment stream")
+				for await (const chunk of stream) yield chunk
+			})()
+			let caught: unknown
+
+			try {
+				for await (const _chunk of bindProviderAttemptScope(source, observer)) {
+					// The failed stream does not produce model chunks.
+				}
+			} catch (error) {
+				caught = error
+			}
+
+			tailConsumed.should.equal(true)
+			statuses.should.deepEqual(["failed"])
+			if (!(caught instanceof Error) || !("response" in caught)) throw new Error("Expected a response-bearing error")
+			const errorResponse = (caught as Error & { response: { status: number; data: string } }).response
+			errorResponse.status.should.equal(500)
+			errorResponse.data.should.equal('{"error":"upstream failed"}')
+		})
+
+		it("drains the GPT transport stream to EOF after the protocol DONE event", async () => {
+			let tailConsumed = false
+			const stream = (async function* () {
+				yield Buffer.from("data: [DONE]\n")
+				tailConsumed = true
+				yield Buffer.from('data: {"ignored":true}\n')
+			})()
+			const chunks: unknown[] = []
+			const privateHandler = handler as unknown as {
+				streamCompletionGPT(
+					source: AsyncIterable<Buffer>,
+					model: ReturnType<SapAiCoreHandler["getModel"]>,
+				): AsyncIterable<unknown>
+			}
+
+			for await (const chunk of privateHandler.streamCompletionGPT(stream, handler.getModel())) chunks.push(chunk)
+
+			tailConsumed.should.equal(true)
+			chunks.should.deepEqual([{ type: "usage", inputTokens: 0, outputTokens: 0 }])
 		})
 	})
 

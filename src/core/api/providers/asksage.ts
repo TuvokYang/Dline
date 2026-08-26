@@ -1,7 +1,7 @@
 import { AskSageModelId, askSageDefaultModelId, askSageDefaultURL, askSageModels, ModelInfo } from "@shared/api"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { ClineStorageMessage } from "@/shared/messages/content"
-import { fetch } from "@/shared/net"
+import { fetch, providerFetch } from "@/shared/net"
 import { Logger } from "@/shared/services/Logger"
 import { ApiHandler, ApiHandlerContext } from ".."
 import { withRetry } from "../retry"
@@ -106,7 +106,7 @@ export class AskSageHandler implements ApiHandler {
 			}
 
 			// Make request to AskSage API
-			const response = await fetch(`${this.apiUrl}/query`, {
+			const response = await providerFetch(`${this.apiUrl}/query`, {
 				method: "POST",
 				headers: this.headers(),
 				body: JSON.stringify(request),

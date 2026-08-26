@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs"
 import { ModelInfo, QwenCodeModelId, qwenCodeDefaultModelId, qwenCodeModels } from "@shared/api"
+import { providerFetch } from "@shared/net"
 import OpenAI from "openai"
 import type { ChatCompletionTool as OpenAITool } from "openai/resources/chat/completions"
 import * as os from "os"
@@ -77,7 +78,7 @@ export class QwenCodeHandler implements ApiHandler {
 				apiKey: "dummy-key-will-be-replaced",
 				baseURL: this.baseUrl || "https://dashscope.aliyuncs.com/compatible-mode/v1",
 				defaultHeaders: externalHeaders,
-				fetch,
+				fetch: providerFetch,
 			})
 		}
 		return this.client

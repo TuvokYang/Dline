@@ -2,9 +2,8 @@ import { useState } from "react"
 import { MetricIcon } from "../../../common/metrics/MetricIcon"
 import { Button } from "../../../ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../../ui/dialog"
-import { type TaskRateChartType, TaskRateMetricsChart } from "./TaskRateMetricsChart"
-import { getTaskRateMetricLabel, type TaskRateMetric } from "./TaskRateMetricsChartModel"
-import { TaskUsageCacheChart } from "./TaskUsageCacheChart"
+import { TaskMetricsChart } from "./TaskMetricsChart"
+import type { TaskMetricsChartType, TaskMetricsView } from "./TaskMetricsChartModel"
 import { type TaskRateMetricsResolution, useTaskRateMetrics } from "./useTaskRateMetrics"
 
 interface TaskRateMetricsDialogProps {
@@ -14,69 +13,60 @@ interface TaskRateMetricsDialogProps {
 }
 
 const RESOLUTION_OPTIONS: Array<{ value: TaskRateMetricsResolution; label: string }> = [
-	{ value: "round", label: "Round" },
 	{ value: "minute", label: "Minute" },
 	{ value: "hour", label: "Hour" },
 	{ value: "day", label: "Day" },
 ]
 
-type TaskRateMetricsView = "usageCache" | TaskRateMetric
-
-const VIEW_OPTIONS: Array<{ value: TaskRateMetricsView; icon: "history" | "tpm" | "rpm" | "tokens"; label: string }> = [
-	{ value: "usageCache", icon: "history", label: "Usage & Cache" },
-	{ value: "tpm", icon: "tpm", label: getTaskRateMetricLabel("tpm") },
-	{ value: "rpm", icon: "rpm", label: getTaskRateMetricLabel("rpm") },
-	{ value: "tokens", icon: "tokens", label: "Total Tokens" },
+const VIEW_OPTIONS: Array<{ value: TaskMetricsView; label: string }> = [
+	{ value: "tokenCache", label: "Token/Cache Hit" },
+	{ value: "rates", label: "TPM/RPM" },
 ]
 
-const CHART_TYPE_OPTIONS: Array<{ value: TaskRateChartType; icon: "bar" | "line"; label: string }> = [
+const CHART_TYPE_OPTIONS: Array<{ value: TaskMetricsChartType; icon: "bar" | "line"; label: string }> = [
 	{ value: "bar", icon: "bar", label: "Bar" },
 	{ value: "line", icon: "line", label: "Line" },
 ]
 
 /** Show Task-local API rate history on demand. */
 export function TaskRateMetricsDialog({ taskId, open, onOpenChange }: TaskRateMetricsDialogProps) {
-	const [resolution, setResolution] = useState<TaskRateMetricsResolution>("round")
-	const [view, setView] = useState<TaskRateMetricsView>("usageCache")
-	const [chartType, setChartType] = useState<TaskRateChartType>("line")
+	const [resolution, setResolution] = useState<TaskRateMetricsResolution>("hour")
+	const [view, setView] = useState<TaskMetricsView>("tokenCache")
+	const [chartType, setChartType] = useState<TaskMetricsChartType>("line")
 	const { data, loading, error, refresh } = useTaskRateMetrics({ taskId, resolution, enabled: open })
 
 	return (
 		<Dialog onOpenChange={onOpenChange} open={open}>
-			<DialogContent className="max-w-3xl">
+			<DialogContent className="max-w-3xl gap-2 p-2">
 				<DialogHeader>
 					<DialogTitle>API rate history</DialogTitle>
-					<DialogDescription>
-						Provider rounds show Token usage and cache hit rate; TPM keeps the provider-active-second basis.
-					</DialogDescription>
+					<DialogDescription>Token, cache and complete-execution rate history for the active Task.</DialogDescription>
 				</DialogHeader>
 
-				<div className="flex flex-wrap items-center gap-3">
-					<div aria-label="History resolution" className="flex items-center gap-1" role="tablist">
+				<div
+					aria-label="Task metrics controls"
+					className="flex min-w-0 flex-nowrap items-center gap-px overflow-hidden whitespace-nowrap"
+					data-testid="task-metrics-toolbar"
+					role="toolbar">
+					<select
+						aria-label="History resolution"
+						className="h-5 w-[54px] shrink-0 rounded-sm border border-input-placeholder/30 bg-background px-0.5 text-[11px] leading-normal text-foreground"
+						onChange={(event) => setResolution(event.currentTarget.value as TaskRateMetricsResolution)}
+						value={resolution}>
 						{RESOLUTION_OPTIONS.map((option) => (
-							<button
-								aria-selected={resolution === option.value}
-								className={`rounded-sm px-2 py-1 text-xs ${
-									resolution === option.value
-										? "bg-button-background text-button-foreground"
-										: "bg-transparent text-description hover:bg-toolbar-hover"
-								}`}
-								key={option.value}
-								onClick={() => setResolution(option.value)}
-								role="tab"
-								type="button">
+							<option key={option.value} value={option.value}>
 								{option.label}
-							</button>
+							</option>
 						))}
-					</div>
+					</select>
 
-					<div aria-label="History view" className="flex items-center gap-1" role="radiogroup">
+					<div aria-label="History view" className="flex shrink-0 items-center gap-px" role="radiogroup">
 						{VIEW_OPTIONS.map((option) => {
 							const selected = view === option.value
 							return (
 								<button
 									aria-checked={selected}
-									className={`inline-flex items-center gap-1 rounded-sm px-2 py-1 text-xs ${
+									className={`inline-flex h-5 items-center rounded-sm px-0.5 text-[11px] leading-normal ${
 										selected
 											? "bg-button-background text-button-foreground"
 											: "bg-transparent text-description hover:bg-toolbar-hover"
@@ -85,40 +75,43 @@ export function TaskRateMetricsDialog({ taskId, open, onOpenChange }: TaskRateMe
 									onClick={() => setView(option.value)}
 									role="radio"
 									type="button">
-									<MetricIcon kind={option.icon} />
 									{option.label}
 								</button>
 							)
 						})}
 					</div>
 
-					{view !== "usageCache" && (
-						<div aria-label="Chart type" className="flex items-center gap-1" role="radiogroup">
-							{CHART_TYPE_OPTIONS.map((option) => {
-								const selected = chartType === option.value
-								return (
-									<button
-										aria-checked={selected}
-										className={`inline-flex items-center gap-1 rounded-sm px-2 py-1 text-xs ${
-											selected
-												? "bg-button-background text-button-foreground"
-												: "bg-transparent text-description hover:bg-toolbar-hover"
-										}`}
-										key={option.value}
-										onClick={() => setChartType(option.value)}
-										role="radio"
-										type="button">
-										<MetricIcon kind={option.icon} />
-										{option.label}
-									</button>
-								)
-							})}
-						</div>
-					)}
+					<div aria-label="Chart type" className="flex shrink-0 items-center gap-px" role="radiogroup">
+						{CHART_TYPE_OPTIONS.map((option) => {
+							const selected = chartType === option.value
+							return (
+								<button
+									aria-checked={selected}
+									aria-label={option.label}
+									className={`inline-flex size-4 items-center justify-center rounded-sm ${
+										selected
+											? "bg-button-background text-button-foreground"
+											: "bg-transparent text-description hover:bg-toolbar-hover"
+									}`}
+									key={option.value}
+									onClick={() => setChartType(option.value)}
+									role="radio"
+									title={option.label}
+									type="button">
+									<MetricIcon kind={option.icon} />
+								</button>
+							)
+						})}
+					</div>
 
-					<Button className="ml-auto" onClick={refresh} size="xs" variant="outline">
-						Refresh
-					</Button>
+					<button
+						aria-label="Refresh"
+						className="ml-auto inline-flex size-4 shrink-0 items-center justify-center rounded-sm border border-input-placeholder/30 text-[10px] text-description hover:bg-toolbar-hover hover:text-foreground"
+						onClick={refresh}
+						title="Refresh"
+						type="button">
+						↻
+					</button>
 				</div>
 
 				{loading && (
@@ -139,18 +132,13 @@ export function TaskRateMetricsDialog({ taskId, open, onOpenChange }: TaskRateMe
 				)}
 				{!loading && !error && data && data.points.length > 0 && (
 					<>
-						<div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-description">
-							{data.degraded && <span>History may be incomplete.</span>}
-							{data.truncated && <span>Showing the most recent available points.</span>}
-							{data.retentionStartMs !== undefined && (
-								<span>History retained from {new Date(data.retentionStartMs).toLocaleString()}.</span>
-							)}
-						</div>
-						{view === "usageCache" ? (
-							<TaskUsageCacheChart degraded={data.degraded} points={data.points} />
-						) : (
-							<TaskRateMetricsChart chartType={chartType} metric={view} points={data.points} />
+						{(data.degraded || data.truncated) && (
+							<div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-description">
+								{data.degraded && <span>History may be incomplete.</span>}
+								{data.truncated && <span>Showing the most recent active points.</span>}
+							</div>
 						)}
+						<TaskMetricsChart chartType={chartType} degraded={data.degraded} points={data.points} view={view} />
 					</>
 				)}
 			</DialogContent>

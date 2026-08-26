@@ -1,7 +1,7 @@
 import { ApiProfile } from "@shared/proto/dline/profile"
 import { expect } from "chai"
 import type { ChatCompletionTool } from "openai/resources/chat/completions"
-import { afterEach, describe, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, it, vi } from "vitest"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { ApiFormat, ServerTool } from "@/shared/proto/dline/models/metadata"
 import { OutputLimitExceededError } from "../../stream/OutputLimitExceededError"
@@ -38,6 +38,10 @@ async function collectChunks(stream: AsyncGenerator<any>) {
 }
 
 describe("OcaHandler.createMessage", () => {
+	beforeEach(() => {
+		vi.spyOn(OcaHandler.prototype, "getApiCosts").mockResolvedValue(0)
+	})
+
 	afterEach(() => {
 		vi.restoreAllMocks()
 	})
@@ -145,6 +149,38 @@ describe("OcaHandler.createMessage", () => {
 		expect(handler.supportsServerTool(ServerTool.SERVER_TOOL_UNSPECIFIED)).to.equal(false)
 	})
 
+	it.each([
+		[ApiFormat.OPENAI_CHAT, "chat"],
+		[ApiFormat.OPENAI_RESPONSES, "responses"],
+	] as const)("resolves OCA pricing before the %s model send", async (apiFormat, clientKind) => {
+		const handler = new OcaHandler({
+			profile: ApiProfile.create({
+				provider: "oca",
+				modelId: "oca-model",
+				modelInfo: { apiFormats: [apiFormat], capabilities: { maxTokens: 8_192 } } as any,
+			}),
+			mode: "act",
+		})
+		const order: string[] = []
+		const getApiCosts = vi.mocked(handler.getApiCosts).mockImplementation(async (inputTokens, outputTokens) => {
+			order.push(inputTokens > 0 ? "input-rate" : "output-rate")
+			return outputTokens > 0 ? 2 : 1
+		})
+		const create = vi.fn().mockImplementation(async () => {
+			order.push("model-send")
+			return emptyStream
+		})
+		vi.spyOn(handler as any, "ensureOpenAIClient").mockReturnValue(
+			clientKind === "chat" ? { chat: { completions: { create } } } : { responses: { create } },
+		)
+
+		await collectChunks(handler.createMessage("system", messages))
+		await handler.calculateCost({ id: "oca-model" }, 10, 20)
+
+		expect(order).to.deep.equal(["input-rate", "output-rate", "model-send"])
+		expect(getApiCosts.mock.calls).to.have.length(2)
+	})
+
 	it("projects one hosted Responses Web Search declaration and removes the local duplicate", async () => {
 		const handler = new OcaHandler({
 			profile: ApiProfile.create({
@@ -199,7 +235,6 @@ describe("OcaHandler.createMessage", () => {
 			)
 
 			expect(create.mock.calls[0]?.[0]?.[testCase.field]).to.equal(30_000)
-			vi.restoreAllMocks()
 		}
 	})
 

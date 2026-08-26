@@ -1,5 +1,6 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import { DeepSeekModelId, deepSeekDefaultModelId, deepSeekModels, ModelInfo } from "@shared/api"
+import { providerFetch } from "@shared/net"
 import { calculateApiCostOpenAI } from "@utils/cost"
 import OpenAI from "openai"
 import type { ChatCompletionTool as OpenAITool } from "openai/resources/chat/completions"
@@ -62,7 +63,7 @@ export class DeepSeekHandler implements ApiHandler {
 					baseURL: this.baseUrl || "https://api.deepseek.com",
 					apiKey: this.apiKey,
 					defaultHeaders: buildExternalBasicHeaders(),
-					fetch, // Use configured fetch with proxy support
+					fetch: providerFetch,
 					timeout: this.ctx.requestTimeoutMs,
 					// Retry is handled by @withRetry so one logical request has one retry policy.
 					maxRetries: 0,
@@ -88,7 +89,7 @@ export class DeepSeekHandler implements ApiHandler {
 				baseURL: this.getAnthropicBaseUrl(),
 				apiKey: this.apiKey,
 				defaultHeaders: buildExternalBasicHeaders(),
-				fetch,
+				fetch: providerFetch,
 				timeout: this.ctx.requestTimeoutMs,
 				maxRetries: 0,
 			})

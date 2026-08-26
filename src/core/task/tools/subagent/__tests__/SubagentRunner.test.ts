@@ -96,6 +96,7 @@ function createTaskConfig(nativeToolCallEnabled: boolean, options: any = {}): Ta
 		vscodeTerminalExecutionMode: "backgroundExec",
 		enableParallelToolCalling: false,
 		isSubagentExecution: false,
+		providerRequestRounds: options.providerRequestRounds,
 		context: {},
 		taskState: new TaskState(),
 		messageState: {},
@@ -815,8 +816,8 @@ describe("SubagentRunner", () => {
 		}
 		const api = createContextApi(1_000_000)
 
-		assert.equal(probe.shouldCompactBeforeNextRequest(497_999, api, "gpt-5.4-mini"), false)
-		assert.equal(probe.shouldCompactBeforeNextRequest(498_000, api, "gpt-5.4-mini"), true)
+		assert.equal(probe.shouldCompactBeforeNextRequest(494_499, api, "gpt-5.4-mini"), false)
+		assert.equal(probe.shouldCompactBeforeNextRequest(494_500, api, "gpt-5.4-mini"), true)
 	})
 
 	it("uses the reserve pair when the context window equals the absolute cap", () => {
@@ -839,8 +840,8 @@ describe("SubagentRunner", () => {
 		}
 		const api = createContextApi(272_000)
 
-		assert.equal(probe.shouldCompactBeforeNextRequest(247_499, api, "gpt-5.4-mini"), false)
-		assert.equal(probe.shouldCompactBeforeNextRequest(247_500, api, "gpt-5.4-mini"), true)
+		assert.equal(probe.shouldCompactBeforeNextRequest(246_499, api, "gpt-5.4-mini"), false)
+		assert.equal(probe.shouldCompactBeforeNextRequest(246_500, api, "gpt-5.4-mini"), true)
 	})
 
 	it("retains standard truncation pressure when auto-compaction is disabled", () => {
@@ -1165,6 +1166,88 @@ describe("SubagentRunner", () => {
 			setTimeoutSpy.mock.calls.map(([, timeout]) => timeout),
 			[5_000, 8_000, 11_000, 14_000, 17_000],
 		)
+	})
+
+	it("observes initial stream retries as attempts of one logical request and attaches final exact usage", async () => {
+		const createMessage = vi.fn()
+		createMessage.mockImplementationOnce(async function* () {
+			yield* []
+			throw Object.assign(new Error("408 Temporary provider failure"), { status: 408 })
+		})
+		createMessage.mockImplementationOnce(async function* () {
+			yield { type: "usage", inputTokens: 100, outputTokens: 20, cacheReadTokens: 0 }
+			yield {
+				type: "tool_calls",
+				function_id: "toolu_round_complete",
+				tool_index: 0,
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.ATTEMPT,
+						arguments: JSON.stringify({ result: "done" }),
+					},
+				},
+			}
+		})
+		const attempts: number[] = []
+		const exactUsages: unknown[] = []
+		const completeProviderOnly = vi.fn()
+		const completeTools = vi.fn()
+		const completeTurnEndAwaitingUser = vi.fn()
+		const admit = vi.fn(() => ({
+			bindAttempt: <T>(stream: AsyncIterable<T>, taskAttempt: number) => {
+				attempts.push(taskAttempt)
+				return stream
+			},
+			attachExactUsage: (usage: unknown) => exactUsages.push(usage),
+			completeProviderOnly,
+			completeTools,
+			completeTurnEndAwaitingUser,
+		}))
+		const setTimeoutSpy = vi.spyOn(global, "setTimeout").mockImplementation(((callback: (...args: unknown[]) => void) => {
+			queueMicrotask(callback)
+			return {} as NodeJS.Timeout
+		}) as typeof setTimeout)
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false, { providerRequestRounds: { admit } })).run(
+			"Retry the provider request",
+			() => {},
+		)
+
+		assert.equal(result.status, "completed")
+		assert.equal(admit.mock.calls.length, 1)
+		assert.deepEqual(attempts, [0, 1])
+		assert.deepEqual(exactUsages, [
+			{
+				inputTokens: 100,
+				outputTokens: 20,
+				cacheWriteTokens: 0,
+				cacheReadTokens: 0,
+				cacheUsageReported: true,
+				totalCost: 0,
+				currency: "USD",
+			},
+		])
+		assert.deepEqual(
+			setTimeoutSpy.mock.calls.map(([, timeout]) => timeout),
+			[5_000],
+		)
+		assert.equal(completeProviderOnly.mock.calls.length, 0)
+		assert.deepEqual(completeTools.mock.calls, [
+			[
+				{
+					toolCount: 1,
+					completedToolCount: 1,
+					failedToolCount: 0,
+					cancelledToolCount: 0,
+				},
+			],
+		])
+		assert.equal(completeTurnEndAwaitingUser.mock.calls.length, 0)
 	})
 
 	it.each([

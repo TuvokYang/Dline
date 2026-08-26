@@ -2,6 +2,7 @@ import { Tool as AnthropicTool } from "@anthropic-ai/sdk/resources/index"
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk"
 import { FunctionDeclaration as GoogleTool } from "@google/genai"
 import { CLAUDE_SONNET_1M_SUFFIX, ModelInfo, VertexModelId, vertexDefaultModelId, vertexModels } from "@shared/api"
+import { observeProviderStream } from "@shared/provider-attempt-observer"
 import { isClaudeOpusAdaptiveThinkingModel, resolveClaudeOpusAdaptiveThinking } from "@shared/utils/reasoning-support"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { ClineStorageMessage } from "@/shared/messages/content"
@@ -52,6 +53,16 @@ export class VertexHandler implements ApiHandler {
 		return this.geminiHandler
 	}
 
+	private createAnthropicClientOptions(externalHeaders: Record<string, string>) {
+		return {
+			projectId: this.config?.vertexProjectId,
+			maxRetries: 0,
+			// https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude#regions
+			region: this.config?.vertexRegion,
+			defaultHeaders: externalHeaders,
+		}
+	}
+
 	private ensureAnthropicClient(): AnthropicVertex {
 		if (!this.clientAnthropic) {
 			if (!this.config?.vertexProjectId) {
@@ -63,12 +74,7 @@ export class VertexHandler implements ApiHandler {
 			try {
 				const externalHeaders = buildExternalBasicHeaders()
 				// Initialize Anthropic client for Claude models
-				this.clientAnthropic = new AnthropicVertex({
-					projectId: this.config?.vertexProjectId,
-					// https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude#regions
-					region: this.config?.vertexRegion,
-					defaultHeaders: externalHeaders,
-				})
+				this.clientAnthropic = new AnthropicVertex(this.createAnthropicClientOptions(externalHeaders))
 			} catch (error: any) {
 				throw new Error(`Error creating Vertex AI Anthropic client: ${error.message}`)
 			}
@@ -145,16 +151,19 @@ export class VertexHandler implements ApiHandler {
 			requestBody.output_config = outputConfig
 		}
 
-		const stream = (await clientAnthropic.beta.messages.create(
-			requestBody as any,
-			enable1mContextWindow
-				? {
-						headers: {
-							"anthropic-beta": "context-1m-2025-08-07",
-						},
-					}
-				: undefined,
-		)) as unknown as AsyncIterable<any>
+		const stream = await observeProviderStream(
+			() =>
+				clientAnthropic.beta.messages.create(
+					requestBody as any,
+					enable1mContextWindow
+						? {
+								headers: {
+									"anthropic-beta": "context-1m-2025-08-07",
+								},
+							}
+						: undefined,
+				) as unknown as PromiseLike<AsyncIterable<any>>,
+		)
 
 		const lastStartedToolCall = { id: "", name: "", arguments: "" }
 

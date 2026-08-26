@@ -6,7 +6,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react"
 import { TaskServiceClient } from "@/services/grpc-client"
 
-export type TaskRateMetricsResolution = "round" | "minute" | "hour" | "day"
+export type TaskRateMetricsResolution = "minute" | "hour" | "day"
 
 export interface UseTaskRateMetricsOptions {
 	taskId?: string
@@ -28,15 +28,10 @@ interface QueryWindow {
 }
 
 const QUERY_WINDOWS: Record<TaskRateMetricsResolution, QueryWindow> = {
-	round: {
-		resolution: ProtoResolution.TASK_RATE_METRICS_RESOLUTION_ROUND,
-		getStartMs: () => 0,
-		maxPoints: 60,
-	},
 	minute: {
 		resolution: ProtoResolution.TASK_RATE_METRICS_RESOLUTION_MINUTE,
-		getStartMs: (endMs) => endMs - 60 * 60 * 1_000,
-		maxPoints: 60,
+		getStartMs: (endMs) => endMs - 30 * 60 * 1_000,
+		maxPoints: 30,
 	},
 	hour: {
 		resolution: ProtoResolution.TASK_RATE_METRICS_RESOLUTION_HOUR,
@@ -45,8 +40,8 @@ const QUERY_WINDOWS: Record<TaskRateMetricsResolution, QueryWindow> = {
 	},
 	day: {
 		resolution: ProtoResolution.TASK_RATE_METRICS_RESOLUTION_DAY,
-		getStartMs: (endMs) => endMs - 30 * 24 * 60 * 60 * 1_000,
-		maxPoints: 30,
+		getStartMs: (endMs) => endMs - 15 * 24 * 60 * 60 * 1_000,
+		maxPoints: 15,
 	},
 }
 
@@ -78,7 +73,9 @@ export function useTaskRateMetrics({ taskId, resolution, enabled }: UseTaskRateM
 			}),
 		)
 			.then((data) => {
-				if (requestGeneration.current === generation) setState({ data, loading: false })
+				if (requestGeneration.current === generation) {
+					setState({ data: { ...data, points: data.points.filter(isActiveMetricPoint) }, loading: false })
+				}
 			})
 			.catch((error: unknown) => {
 				if (requestGeneration.current !== generation) return
@@ -90,4 +87,18 @@ export function useTaskRateMetrics({ taskId, resolution, enabled }: UseTaskRateM
 	}, [enabled, refreshVersion, resolution, taskId])
 
 	return { ...state, refresh }
+}
+
+function isActiveMetricPoint(point: GetTaskRateMetricsResponse["points"][number]): boolean {
+	return (
+		(point.activeSeconds ?? 0) > 0 ||
+		(point.requestCount ?? 0) > 0 ||
+		point.providerRoundCount > 0 ||
+		point.executionCount > 0 ||
+		point.usageAvailable ||
+		point.cacheUsageAvailable ||
+		(point.tokenCount ?? 0) > 0 ||
+		(point.tokensPerMinute ?? 0) > 0 ||
+		(point.requestsPerMinute ?? 0) > 0
+	)
 }

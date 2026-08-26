@@ -4,10 +4,12 @@ import { recordProviderAdapterInput, recordProviderAdapterOutput } from "@core/a
 import type { WebSearchRoutingPlan } from "@core/api/server-tools"
 import { createIdentityFactory } from "@core/api/transform/block-identity"
 import { createStreamNormalizer, normalizeApiStream } from "@core/api/transform/stream-identity-normalizer"
+import { ApiUsageAccumulator } from "@core/api/transform/usage-accumulator"
 import { parseAssistantMessageV2, ToolUse } from "@core/assistant-message"
 import { discoverAvailableSkills } from "@core/context/instructions/user-instructions/skills"
 import { formatResponse } from "@core/prompts/responses"
 import { getSystemPrompt, type SystemPromptContext } from "@core/prompts/system-prompt"
+import type { ProviderRequestRoundAdmission } from "@core/task/performance/provider-request-round-port"
 import { resolveRequestWebSearchRoutingPlan } from "@core/task/RequestApiScope"
 import { StreamResponseHandler } from "@core/task/StreamResponseHandler"
 import { DEFAULT_API_PROVIDER } from "@shared/api"
@@ -55,6 +57,46 @@ const INITIAL_STREAM_RETRY_DELAYS_MS = [5_000, 8_000, 11_000, 14_000, 17_000] as
 const MAX_INITIAL_STREAM_ATTEMPTS = INITIAL_STREAM_RETRY_DELAYS_MS.length + 1
 const SUBAGENT_COMPLETION_CALL_EXAMPLE =
 	'Call attempt_completion with a non-empty result, for example: attempt_completion(result="...").'
+
+class ProviderExecutionCompletion {
+	private toolCount = 0
+	private completedToolCount = 0
+	private failedToolCount = 0
+	private toolsKnown = false
+	private finished = false
+
+	constructor(private readonly admission?: ProviderRequestRoundAdmission) {}
+
+	setToolCount(toolCount: number): void {
+		this.toolCount = toolCount
+		this.toolsKnown = true
+	}
+
+	completeTool(): void {
+		this.completedToolCount += 1
+	}
+
+	failTool(): void {
+		this.failedToolCount += 1
+	}
+
+	finish(): void {
+		if (this.finished) return
+		this.finished = true
+		if (!this.admission) return
+		if (!this.toolsKnown || this.toolCount === 0) {
+			this.admission.completeProviderOnly()
+			return
+		}
+		const cancelledToolCount = Math.max(0, this.toolCount - this.completedToolCount - this.failedToolCount)
+		this.admission.completeTools({
+			toolCount: this.toolCount,
+			completedToolCount: this.completedToolCount,
+			failedToolCount: this.failedToolCount,
+			cancelledToolCount,
+		})
+	}
+}
 
 function formatApiFormat(apiFormat: ApiFormat | undefined): string | undefined {
 	if (apiFormat === undefined) return undefined
@@ -399,6 +441,7 @@ export class SubagentRunner {
 			contextUsagePercentage: 0,
 		}
 		let activeHostedServerToolLifecycle: ServerToolLifecycle | undefined
+		let activeProviderExecution: ProviderExecutionCompletion | undefined
 
 		try {
 			const mode = this.baseConfig.services.stateManager.getGlobalSettingsKey("mode")
@@ -522,6 +565,10 @@ export class SubagentRunner {
 				return { status: "cancelled", error, stats }
 			}
 
+			const finishProviderExecution = () => {
+				activeProviderExecution?.finish()
+				activeProviderExecution = undefined
+			}
 			const conversation: ClineStorageMessage[] = [
 				{
 					role: "user",
@@ -545,6 +592,7 @@ export class SubagentRunner {
 			]
 
 			while (true) {
+				finishProviderExecution()
 				if (this.shouldAbort()) {
 					await this.abort()
 					const error = "Subagent run cancelled."
@@ -620,6 +668,15 @@ export class SubagentRunner {
 					})
 				})
 
+				const providerRequestRound = this.baseConfig.providerRequestRounds?.admit({ source: "subagent" })
+				const providerExecution = new ProviderExecutionCompletion(providerRequestRound)
+				activeProviderExecution = providerExecution
+				const roundUsageAccumulator = new ApiUsageAccumulator()
+				let roundUsageReported = false
+				let roundCacheUsageReported = false
+				let roundThoughtsTokens = 0
+				let roundThoughtsReported = false
+				let roundTotalCost: number | undefined
 				const providerStream = this.createMessageWithInitialChunkRetry(
 					api,
 					this.completionOnly ? completionSystemPrompt : systemPrompt,
@@ -630,76 +687,117 @@ export class SubagentRunner {
 					contextManager,
 					contextState,
 					requestWebSearchRoutingPlan,
+					providerRequestRound,
 					onProgress,
 				)
 				const stream = normalizeApiStream(providerStream, createStreamNormalizer(createIdentityFactory()))
 
-				for await (const chunk of stream) {
-					switch (chunk.type) {
-						case "usage":
-							requestId = requestId ?? chunk.provider_metadata?.response_id
-							stats.inputTokens += chunk.inputTokens || 0
-							stats.outputTokens += chunk.outputTokens || 0
-							stats.cacheWriteTokens += chunk.cacheWriteTokens || 0
-							stats.cacheReadTokens += chunk.cacheReadTokens || 0
-							requestUsage.inputTokens += chunk.inputTokens || 0
-							requestUsage.outputTokens += chunk.outputTokens || 0
-							requestUsage.cacheWriteTokens += chunk.cacheWriteTokens || 0
-							requestUsage.cacheReadTokens += chunk.cacheReadTokens || 0
-							requestUsage.totalTokens =
-								requestUsage.inputTokens +
-								requestUsage.outputTokens +
-								requestUsage.cacheWriteTokens +
-								requestUsage.cacheReadTokens
-							requestUsage.totalCost = chunk.totalCost ?? requestUsage.totalCost
-							stats.contextTokens = requestUsage.totalTokens
-							stats.contextUsagePercentage =
-								stats.contextWindow > 0 ? (stats.contextTokens / stats.contextWindow) * 100 : 0
-							onProgress({ stats: { ...stats } })
-							break
-						case "text":
-							requestId = requestId ?? chunk.provider_metadata?.response_id
-							assistantText += chunk.text || ""
-							assistantTextSignature = chunk.signature || assistantTextSignature
-							if (chunk.text) {
-								onProgress({ event: { kind: "assistant_message", phase: "delta", text: chunk.text } })
+				try {
+					for await (const chunk of stream) {
+						switch (chunk.type) {
+							case "usage":
+								requestId = requestId ?? chunk.provider_metadata?.response_id
+								roundUsageReported = true
+								roundCacheUsageReported ||=
+									chunk.cacheWriteTokens !== undefined || chunk.cacheReadTokens !== undefined
+								roundUsageAccumulator.apply(chunk)
+								if (chunk.thoughtsTokenCount !== undefined) {
+									roundThoughtsReported = true
+									const thoughtsTokens = Math.max(0, Math.floor(chunk.thoughtsTokenCount))
+									roundThoughtsTokens =
+										chunk.usageMode === "delta"
+											? roundThoughtsTokens + thoughtsTokens
+											: Math.max(roundThoughtsTokens, thoughtsTokens)
+								}
+								if (chunk.totalCost !== undefined && Number.isFinite(chunk.totalCost) && chunk.totalCost >= 0) {
+									roundTotalCost = Math.max(roundTotalCost ?? 0, chunk.totalCost)
+								}
+								stats.inputTokens += chunk.inputTokens || 0
+								stats.outputTokens += chunk.outputTokens || 0
+								stats.cacheWriteTokens += chunk.cacheWriteTokens || 0
+								stats.cacheReadTokens += chunk.cacheReadTokens || 0
+								requestUsage.inputTokens += chunk.inputTokens || 0
+								requestUsage.outputTokens += chunk.outputTokens || 0
+								requestUsage.cacheWriteTokens += chunk.cacheWriteTokens || 0
+								requestUsage.cacheReadTokens += chunk.cacheReadTokens || 0
+								requestUsage.totalTokens =
+									requestUsage.inputTokens +
+									requestUsage.outputTokens +
+									requestUsage.cacheWriteTokens +
+									requestUsage.cacheReadTokens
+								requestUsage.totalCost = chunk.totalCost ?? requestUsage.totalCost
+								stats.contextTokens = requestUsage.totalTokens
+								stats.contextUsagePercentage =
+									stats.contextWindow > 0 ? (stats.contextTokens / stats.contextWindow) * 100 : 0
+								onProgress({ stats: { ...stats } })
+								break
+							case "text":
+								requestId = requestId ?? chunk.provider_metadata?.response_id
+								assistantText += chunk.text || ""
+								assistantTextSignature = chunk.signature || assistantTextSignature
+								if (chunk.text) {
+									onProgress({ event: { kind: "assistant_message", phase: "delta", text: chunk.text } })
+								}
+								break
+							case "tool_calls":
+								requestId = requestId ?? chunk.provider_metadata?.response_id
+								toolUseHandler.processToolUseDelta(
+									{
+										type: "tool_use",
+										name: chunk.tool_call.function?.name,
+										input: normalizeToolCallArguments(chunk.tool_call.function?.arguments),
+										signature: chunk.signature,
+									},
+									{
+										function_id: chunk.function_id,
+										dline_tid: chunk.dline_tid,
+										provider_metadata: chunk.provider_metadata,
+									},
+								)
+								break
+							case "server_tool": {
+								requestId = requestId ?? chunk.provider_metadata?.response_id
+								await activeHostedServerToolLifecycle.consume(chunk)
+								break
 							}
-							break
-						case "tool_calls":
-							requestId = requestId ?? chunk.provider_metadata?.response_id
-							toolUseHandler.processToolUseDelta(
-								{
-									type: "tool_use",
-									name: chunk.tool_call.function?.name,
-									input: normalizeToolCallArguments(chunk.tool_call.function?.arguments),
-									signature: chunk.signature,
-								},
-								{
-									function_id: chunk.function_id,
-									dline_tid: chunk.dline_tid,
-									provider_metadata: chunk.provider_metadata,
-								},
-							)
-							break
-						case "server_tool": {
-							requestId = requestId ?? chunk.provider_metadata?.response_id
-							await activeHostedServerToolLifecycle.consume(chunk)
-							break
+							case "reasoning":
+								requestId = requestId ?? chunk.provider_metadata?.response_id
+								if (chunk.reasoning) {
+									onProgress({ event: { kind: "thinking", phase: "delta", text: chunk.reasoning } })
+								}
+								break
 						}
-						case "reasoning":
-							requestId = requestId ?? chunk.provider_metadata?.response_id
-							if (chunk.reasoning) {
-								onProgress({ event: { kind: "thinking", phase: "delta", text: chunk.reasoning } })
-							}
-							break
-					}
 
-					if (this.shouldAbort()) {
-						await activeHostedServerToolLifecycle.finalizeOpen("Subagent hosted web search cancelled.")
-						await this.abort()
-						const error = "Subagent run cancelled."
-						onProgress({ status: "cancelled", error, stats: { ...stats } })
-						return { status: "cancelled", error, stats }
+						if (this.shouldAbort()) {
+							await activeHostedServerToolLifecycle.finalizeOpen("Subagent hosted web search cancelled.")
+							await this.abort()
+							const error = "Subagent run cancelled."
+							onProgress({ status: "cancelled", error, stats: { ...stats } })
+							return { status: "cancelled", error, stats }
+						}
+					}
+				} finally {
+					if (roundUsageReported && providerRequestRound) {
+						const roundUsage = roundUsageAccumulator.getUsage()
+						const calculatedRoundCost =
+							roundTotalCost ??
+							calculateApiCostAnthropic(
+								providerInfo.model.info,
+								roundUsage.inputTokens,
+								roundUsage.outputTokens,
+								roundUsage.cacheWriteTokens,
+								roundUsage.cacheReadTokens,
+							)
+						providerRequestRound.attachExactUsage({
+							inputTokens: roundUsage.inputTokens,
+							outputTokens: roundUsage.outputTokens,
+							...(roundThoughtsReported ? { thoughtsTokens: roundThoughtsTokens } : {}),
+							cacheWriteTokens: roundUsage.cacheWriteTokens,
+							cacheReadTokens: roundUsage.cacheReadTokens,
+							cacheUsageReported: roundCacheUsageReported,
+							...(calculatedRoundCost === undefined ? {} : { totalCost: calculatedRoundCost }),
+							currency: stats.currency || "USD",
+						})
 					}
 				}
 				await activeHostedServerToolLifecycle.finalizeOpen(
@@ -756,6 +854,7 @@ export class SubagentRunner {
 					)
 					finalizedToolCalls = fallbackNonNativeToolCalls
 				}
+				providerExecution.setToolCount(finalizedToolCalls.length)
 				if (this.finishRequested && !this.completionOnly) {
 					const validCompletion = finalizedToolCalls.some((call) => {
 						if (call.name !== ClineDefaultTool.ATTEMPT) return false
@@ -848,6 +947,7 @@ export class SubagentRunner {
 					canonicalizeAttemptCompletionParams(toolCallBlock)
 
 					if (this.completionOnly && toolName !== ClineDefaultTool.ATTEMPT) {
+						providerExecution.failTool()
 						invalidCompletionRetries += 1
 						if (invalidCompletionRetries > MAX_INVALID_COMPLETION_RETRIES) {
 							const error = buildInvalidCompletionFailure()
@@ -866,6 +966,7 @@ export class SubagentRunner {
 					if (toolName === ClineDefaultTool.ATTEMPT) {
 						const completionResult = toolCallParams.result?.trim()
 						if (!completionResult) {
+							providerExecution.failTool()
 							invalidCompletionRetries += 1
 							if (invalidCompletionRetries > MAX_INVALID_COMPLETION_RETRIES) {
 								const error = buildInvalidCompletionFailure()
@@ -891,6 +992,7 @@ export class SubagentRunner {
 								summary: latestToolCall,
 							},
 						})
+						providerExecution.completeTool()
 						stats.toolCalls += 1
 						onProgress({ stats: { ...stats } })
 						onProgress({ status: "completed", result: boundedCompletionResult, stats: { ...stats } })
@@ -898,6 +1000,7 @@ export class SubagentRunner {
 					}
 
 					if (!this.allowedTools.includes(toolName)) {
+						providerExecution.failTool()
 						const deniedResult = formatResponse.toolError(`Tool '${toolName}' is not available inside subagent runs.`)
 						pushSubagentToolResultBlock(toolResultBlocks, call, toolName, deniedResult)
 						continue
@@ -936,6 +1039,8 @@ export class SubagentRunner {
 					stats.toolCalls += 1
 					onProgress({ stats: { ...stats } })
 
+					if (toolError) providerExecution.failTool()
+					else providerExecution.completeTool()
 					const serializedToolResult = serializeToolResult(toolResult)
 					onProgress({
 						event: {
@@ -974,6 +1079,7 @@ export class SubagentRunner {
 					content: toolResultBlocks,
 				})
 
+				finishProviderExecution()
 				await Promise.resolve()
 			}
 		} catch (error) {
@@ -998,6 +1104,7 @@ export class SubagentRunner {
 			onProgress({ status: "failed", error: errorText, stats: { ...stats } })
 			return { status: "failed", error: errorText, retryable, stats }
 		} finally {
+			activeProviderExecution?.finish()
 			await activeHostedServerToolLifecycle?.finalizeOpen("Subagent hosted web search ended without a result.")
 			this.activeApiAbort = undefined
 			this.activeRetryAbortController = undefined
@@ -1192,6 +1299,7 @@ export class SubagentRunner {
 		contextManager: ContextManager,
 		contextState: SubagentContextState,
 		webSearchRoutingPlan: WebSearchRoutingPlan,
+		providerRequestRound: ProviderRequestRoundAdmission | undefined,
 		onProgress: (update: SubagentProgressUpdate) => void,
 	) {
 		let cumulativeRetryDelayMs = 0
@@ -1211,12 +1319,13 @@ export class SubagentRunner {
 				messages: truncatedConversation,
 				tools: nativeTools,
 			})
-			const stream = recordProviderAdapterOutput(
+			const providerStream = recordProviderAdapterOutput(
 				roundContext,
 				api.createMessage(systemPrompt, truncatedConversation, nativeTools, {
 					serverTools: webSearchRoutingPlan.serverTools,
 				}),
 			)
+			const stream = providerRequestRound?.bindAttempt(providerStream, attempt - 1) ?? providerStream
 			const iterator = stream[Symbol.asyncIterator]()
 			let didYieldChunk = false
 
@@ -1227,7 +1336,7 @@ export class SubagentRunner {
 					yield firstChunk.value
 				}
 
-				yield* iterator
+				yield* { [Symbol.asyncIterator]: () => iterator }
 				return
 			} catch (error) {
 				if (this.finishRequested && !this.shouldAbort()) return

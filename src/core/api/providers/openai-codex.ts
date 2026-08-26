@@ -1,4 +1,6 @@
 import { ModelInfo, OpenAiCodexModelId, openAiCodexDefaultModelId, openAiCodexModels } from "@shared/api"
+import { providerFetch } from "@shared/net"
+import { observeProviderStream } from "@shared/provider-attempt-observer"
 import { normalizeOpenAiServiceTier, normalizeOpenaiReasoningEffort } from "@shared/storage/types"
 import OpenAI from "openai"
 import type { ChatCompletionTool } from "openai/resources/chat/completions"
@@ -413,7 +415,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 						apiKey: accessToken,
 						baseURL: CODEX_API_BASE_URL,
 						defaultHeaders: codexHeaders,
-						fetch, // Use shared fetch for proxy support
+						fetch: providerFetch,
 					})
 
 				const stream = (await (client as any).responses.create(requestBody, {
@@ -592,14 +594,25 @@ export class OpenAiCodexHandler implements ApiHandler {
 					return
 				}
 
-				eventQueue.push(parsed as OpenAI.Responses.ResponseStreamEvent)
-				if (
-					parsed?.type === "response.completed" ||
-					parsed?.type === "response.failed" ||
-					parsed?.type === "response.incomplete"
-				) {
+				if (parsed?.type === "response.failed") {
+					const responseError = parsed.response?.error
+					failure = new Error(responseError?.message || "Codex Responses websocket request failed")
 					completed = true
+					wake()
+					return
 				}
+				if (parsed?.type === "response.incomplete") {
+					failure =
+						parsed.response?.incomplete_details?.reason === "max_output_tokens"
+							? new OutputLimitExceededError("openai_responses", "max_output_tokens")
+							: new Error("Codex Responses websocket request was incomplete")
+					completed = true
+					wake()
+					return
+				}
+
+				eventQueue.push(parsed as OpenAI.Responses.ResponseStreamEvent)
+				if (parsed?.type === "response.completed") completed = true
 				wake()
 			} catch (error) {
 				const parseError: Error & { code?: string } = new Error(
@@ -635,32 +648,35 @@ export class OpenAiCodexHandler implements ApiHandler {
 		ws.addEventListener("close", handleClose)
 
 		try {
-			const websocketParams = { ...params } as Record<string, unknown>
-			delete websocketParams.stream
-			ws.send(
-				JSON.stringify({
-					type: "response.create",
-					...websocketParams,
-				}),
+			const responseEvents = await observeProviderStream(
+				() =>
+					(async function* () {
+						const websocketParams = { ...params } as Record<string, unknown>
+						delete websocketParams.stream
+						ws.send(
+							JSON.stringify({
+								type: "response.create",
+								...websocketParams,
+							}),
+						)
+
+						while (!completed || eventQueue.length > 0) {
+							if (eventQueue.length === 0) {
+								await new Promise<void>((resolve) => {
+									resolver = resolve
+								})
+								continue
+							}
+
+							const event = eventQueue.shift()
+							if (event) yield event
+						}
+
+						if (failure) throw failure
+					})(),
+				this.abortController?.signal ? { signal: this.abortController.signal } : {},
 			)
-
-			while (!completed || eventQueue.length > 0) {
-				if (eventQueue.length === 0) {
-					await new Promise<void>((resolve) => {
-						resolver = resolve
-					})
-					continue
-				}
-
-				const event = eventQueue.shift()
-				if (event) {
-					yield event
-				}
-			}
-
-			if (failure) {
-				throw failure
-			}
+			yield* responseEvents
 		} finally {
 			ws.removeEventListener("message", handleMessage)
 			ws.removeEventListener("error", handleError)
@@ -690,7 +706,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 		}
 
 		try {
-			const response = await fetch(url, {
+			const response = await providerFetch(url, {
 				method: "POST",
 				headers,
 				body: JSON.stringify(requestBody),
@@ -737,15 +753,19 @@ export class OpenAiCodexHandler implements ApiHandler {
 		const reader = body.getReader()
 		const decoder = new TextDecoder()
 		let buffer = ""
+		let reachedEof = false
+		let terminalReason: unknown
 
 		try {
 			while (true) {
 				if (this.abortController?.signal.aborted) {
-					break
+					terminalReason = new DOMException("Codex request aborted", "AbortError")
+					return
 				}
 
 				const { done, value } = await reader.read()
 				if (done) {
+					reachedEof = true
 					break
 				}
 
@@ -774,8 +794,15 @@ export class OpenAiCodexHandler implements ApiHandler {
 					}
 				}
 			}
+		} catch (error) {
+			terminalReason = error
+			throw error
 		} finally {
-			reader.releaseLock()
+			try {
+				if (!reachedEof) await reader.cancel(terminalReason)
+			} finally {
+				reader.releaseLock()
+			}
 		}
 	}
 

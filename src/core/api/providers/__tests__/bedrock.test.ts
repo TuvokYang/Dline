@@ -282,6 +282,13 @@ describe("AwsBedrockHandler", () => {
 
 	const mockContext = createMockContext()
 
+	it("disables AWS SDK internal retries so each send is observed independently", async () => {
+		const handler = new AwsBedrockHandler(mockContext)
+		const client = await handler.getBedrockClient()
+
+		;(await client.config.maxAttempts()).should.equal(1)
+	})
+
 	describe("executeConverseStream", () => {
 		let handler: AwsBedrockHandler
 

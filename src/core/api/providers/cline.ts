@@ -1,4 +1,5 @@
 import { type ModelInfo, openRouterDefaultModelId, openRouterDefaultModelInfo } from "@shared/api"
+import { providerFetch } from "@shared/net"
 import { shouldSkipReasoningForModel } from "@utils/model-utils"
 import axios from "axios"
 import OpenAI from "openai"
@@ -106,7 +107,7 @@ export class ClineHandler implements ApiHandler {
 					// Capture real HTTP request ID from initial streaming response headers
 					fetch: async (...args: Parameters<typeof fetch>): Promise<Awaited<ReturnType<typeof fetch>>> => {
 						const [input, init] = args
-						const resp = await fetch(input, init)
+						const resp = await providerFetch(input, init)
 						try {
 							let urlStr = ""
 							if (typeof input === "string") {

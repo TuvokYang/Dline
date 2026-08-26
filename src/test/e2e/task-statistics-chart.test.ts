@@ -127,40 +127,74 @@ async function expectTooltipWithinDialog(dialog: Locator, tooltip: Locator): Pro
 		.toBe(true)
 }
 
-async function assertDefaultUsageCacheChart(dialog: Locator): Promise<void> {
-	await expect(dialog.getByRole("tab", { name: "Round", exact: true })).toHaveAttribute("aria-selected", "true")
-	await expect(dialog.getByRole("radio", { name: "Usage & Cache", exact: true })).toHaveAttribute("aria-checked", "true")
-	await expect(dialog.getByRole("radiogroup", { name: "Chart type" })).toHaveCount(0)
+async function expectToolbarControlsWithinDialog(dialog: Locator): Promise<void> {
+	const toolbar = dialog.getByRole("toolbar", { name: "Task metrics controls" })
+	await expect.poll(() => toolbar.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true)
+	for (const control of [
+		dialog.getByRole("combobox", { name: "History resolution", exact: true }),
+		dialog.getByRole("radio", { name: "Token/Cache Hit", exact: true }),
+		dialog.getByRole("radio", { name: "TPM/RPM", exact: true }),
+		dialog.getByRole("radio", { name: "Bar", exact: true }),
+		dialog.getByRole("radio", { name: "Line", exact: true }),
+		dialog.getByRole("button", { name: "Refresh", exact: true }),
+	]) {
+		await expect(control).toBeVisible()
+		await expect
+			.poll(async () => {
+				const [dialogBox, controlBox] = await Promise.all([dialog.boundingBox(), control.boundingBox()])
+				if (!dialogBox || !controlBox) return false
+				return controlBox.x >= dialogBox.x && controlBox.x + controlBox.width <= dialogBox.x + dialogBox.width
+			})
+			.toBe(true)
+	}
+}
 
-	const chart = dialog.getByRole("img", { name: "Task usage and cache hit history chart", exact: true })
+async function assertDefaultTokenCacheChart(dialog: Locator): Promise<void> {
+	const toolbar = dialog.getByRole("toolbar", { name: "Task metrics controls" })
+	await expect(toolbar).toBeVisible()
+	const resolution = dialog.getByRole("combobox", { name: "History resolution", exact: true })
+	await expect(resolution).toHaveValue("hour")
+	await expect(dialog.getByRole("option", { name: "Round", exact: true })).toHaveCount(0)
+	await expect(dialog.getByRole("radio", { name: "Token/Cache Hit", exact: true })).toHaveAttribute("aria-checked", "true")
+	await expect(dialog.getByRole("radio", { name: "Line", exact: true })).toHaveAttribute("aria-checked", "true")
+	await expectToolbarControlsWithinDialog(dialog)
+
+	const chart = dialog.getByRole("img", { name: "Task metrics history chart", exact: true })
 	await expect(chart).toBeVisible({ timeout: 30_000 })
-	await expect(chart).toHaveAttribute("data-left-axis", "tokens")
-	await expect(chart).toHaveAttribute("data-right-axis", "cache-hit-rate")
-	const legendItems = dialog.getByTestId("task-usage-cache-legend-item")
-	await expect(legendItems).toHaveCount(5)
-	await expect(legendItems).toHaveText(["Input", "Output", "Cache Creation", "Cache Read", "Cache Hit Rate"])
-	await expect(dialog.getByTestId("task-usage-cache-percentage-tick")).toHaveText(["0%", "20%", "40%", "60%", "80%", "100%"])
+	await expect(chart).toHaveAttribute("data-view", "tokenCache")
+	await expect(chart).toHaveAttribute("data-chart-type", "line")
+	for (const [label, enabled] of [
+		["Input", true],
+		["Output", true],
+		["Cache Read", true],
+		["Cache Hit Rate", true],
+		["Total Tokens", false],
+	] as const) {
+		await expect(dialog.getByRole("button", { name: label, exact: true })).toHaveAttribute("aria-pressed", String(enabled))
+	}
+	await expect(dialog.getByTestId("task-metrics-percentage-tick")).toHaveText(["0%", "20%", "40%", "60%", "80%", "100%"])
 
 	for (const [key, color] of [
 		["input", "--vscode-charts-blue"],
 		["output", "--vscode-charts-green"],
-		["cacheWrite", "--vscode-charts-orange"],
 		["cacheRead", "--vscode-charts-cyan"],
 	] as const) {
-		const line = dialog.locator(`[data-testid^="task-usage-cache-line-${key}-"]`).first()
+		const line = dialog.locator(`[data-testid^="task-metrics-line-${key}-"]`).first()
 		await expect(line).toBeVisible()
 		await expect(line).toHaveAttribute("stroke", new RegExp(color))
 		await expect(line).not.toHaveAttribute("stroke-dasharray")
 	}
-	const cacheHitLine = dialog.locator('[data-testid^="task-usage-cache-line-cacheHit-"]').first()
+	await expect(dialog.getByRole("button", { name: "Cache Write", exact: true })).toHaveCount(0)
+	await expect(dialog.locator('[data-testid^="task-metrics-line-cacheWrite-"]')).toHaveCount(0)
+	const cacheHitLine = dialog.locator('[data-testid^="task-metrics-line-cacheHit-"]').first()
 	await expect(cacheHitLine).toBeVisible()
 	await expect(cacheHitLine).toHaveAttribute("stroke", /--vscode-charts-purple/)
 	await expect(cacheHitLine).toHaveAttribute("stroke-dasharray", "6 4")
-	await expect(dialog.getByTestId("task-usage-cache-point-cacheHit-0")).toHaveAttribute("data-value", "0")
+	await expect(dialog.getByTestId("task-metrics-point-cacheHit-0")).toHaveAttribute("data-value", "0")
 }
 
 e2e(
-	"Task statistics chart renders dual axes, accessible tooltips, and local view interactions",
+	"Task statistics chart renders compact dual views, accessible legends, smooth lines, and contained tooltips",
 	async ({ dlineDir, dlineDocsDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(240_000)
 		const testInfo = e2e.info()
@@ -201,86 +235,80 @@ e2e(
 
 			const rate = sidebar.getByTestId("task-rate-metrics")
 			await expect(rate).toBeVisible({ timeout: 30_000 })
-			await expect(rate).toHaveAttribute("aria-label", new RegExp(`Requests per minute: ${seeded.expectedHeaderRpm}`))
+			await expect(rate).toHaveAttribute("aria-label", new RegExp(`(?:^|; )RPM: ${seeded.expectedHeaderRpm}(?:;|$)`))
 			await expect(rate).toHaveAttribute("aria-label", new RegExp(`Hit: ${seeded.expectedCacheHitPercent.toFixed(1)}%`))
+			await expect(rate).not.toHaveAttribute("aria-label", /Request/)
 			expect(server.getMockConsumptions("openai-compatible-responses")).toHaveLength(1)
 			await waitForRateMetricsRpcCount(recorderPath, 0)
 
 			await rate.click()
 			const dialog = sidebar.getByRole("dialog")
 			await expect(dialog.getByRole("heading", { name: "API rate history", exact: true })).toBeVisible()
-			await assertDefaultUsageCacheChart(dialog)
+			await assertDefaultTokenCacheChart(dialog)
 			await waitForRateMetricsRpcCount(recorderPath, 1)
-			await captureDialog(dialog, testInfo, "task-statistics-round-usage-cache.png")
+			await captureDialog(dialog, testInfo, "task-statistics-hour-token-cache-line.png")
 
-			const secondHitArea = dialog.getByTestId("task-usage-cache-hit-area-1")
+			const secondHitArea = dialog.getByTestId("task-metrics-hit-area-1")
 			await secondHitArea.hover({ force: true })
 			let tooltip = dialog.getByRole("tooltip")
-			await expect(tooltip).toContainText(`Round: ${taskId}:e2e-statistics:provider:1`)
-			await expect(tooltip).toContainText("Logical request: e2e-statistics-2")
-			await expect(tooltip).toContainText("API index: 1")
-			await expect(tooltip).toContainText("Task attempt: 0")
-			await expect(tooltip).toContainText("Provider attempt: 1")
-			await expect(tooltip).toContainText("Status: Completed")
 			await expect(tooltip).toContainText("Input: 800")
 			await expect(tooltip).toContainText("Output: 300")
-			await expect(tooltip).toContainText("Cache Creation: 200")
+			await expect(tooltip).not.toContainText("Cache Write")
 			await expect(tooltip).toContainText("Cache Read: 400")
-			await expect(tooltip).toContainText("Cache Hit Rate: 28.6%")
-			await expect(tooltip).toContainText("Provider duration: 2,000 ms")
-			await expect(tooltip).toContainText("RPM: 30")
-			await expect(tooltip).toContainText("Total Tokens: 1,700")
-			await expect(tooltip).toContainText("Quality: Exact")
-			await expect(tooltip).toContainText("Provisional: No")
-			await expect(tooltip).toContainText("History: Complete")
-			await expectTooltipWithinDialog(dialog, tooltip)
-			await captureDialog(dialog, testInfo, "task-statistics-round-usage-cache-hover-tooltip.png")
-
-			await dialog.getByTestId("task-usage-cache-hit-area-2").focus()
-			tooltip = dialog.getByRole("tooltip")
-			await expect(tooltip).toContainText("Logical request: e2e-statistics-3")
-			await expect(tooltip).toContainText("Provider attempt: 2")
 			await expect(tooltip).toContainText("Cache Hit Rate: 33.3%")
-			await expect(tooltip).toContainText("Provider duration: 3,000 ms")
-			await expect(tooltip).toContainText("RPM: 20")
+			await expect(tooltip).toContainText("History: Complete")
+			await expect(tooltip).not.toContainText(/Round|Request|API index|Provider attempt/i)
 			await expectTooltipWithinDialog(dialog, tooltip)
-			await captureDialog(dialog, testInfo, "task-statistics-round-usage-cache-focus-tooltip.png")
+			await captureDialog(dialog, testInfo, "task-statistics-hour-token-cache-hover-tooltip.png")
 
-			await dialog.getByRole("radio", { name: "TPM", exact: true }).click()
-			await expect(dialog.getByRole("radio", { name: "Line", exact: true })).toHaveAttribute("aria-checked", "true")
+			await dialog.getByTestId("task-metrics-hit-area-2").focus()
+			tooltip = dialog.getByRole("tooltip")
+			await expect(tooltip).toContainText("Input: 1,600")
+			await expect(tooltip).toContainText("Cache Hit Rate: 33.3%")
+			await expectTooltipWithinDialog(dialog, tooltip)
+			await captureDialog(dialog, testInfo, "task-statistics-hour-token-cache-focus-tooltip.png")
+
+			const totalTokensLegend = dialog.getByRole("button", { name: "Total Tokens", exact: true })
+			await totalTokensLegend.focus()
+			await totalTokensLegend.press("Space")
+			await expect(totalTokensLegend).toHaveAttribute("aria-pressed", "true")
+			await expect(dialog.locator('[data-testid^="task-metrics-line-totalTokens-"]').first()).toBeVisible()
 			await waitForRateMetricsRpcCount(recorderPath, 1)
+			await captureDialog(dialog, testInfo, "task-statistics-hour-token-cache-total-enabled.png")
 
-			await dialog.getByRole("tab", { name: "Minute", exact: true }).click()
-			await waitForRateMetricsRpcCount(recorderPath, 2)
-			let singleChart = dialog.getByRole("img", { name: "API rate history chart", exact: true })
-			await expect(singleChart).toHaveAttribute("data-metric", "tpm")
-			await expect(singleChart).toHaveAttribute("data-chart-type", "line")
-			await expect(dialog.getByTestId("task-rate-series-line")).toBeVisible()
-			await captureDialog(dialog, testInfo, "task-statistics-minute-tpm-line.png")
+			const inputLegend = dialog.getByRole("button", { name: "Input", exact: true })
+			await inputLegend.click()
+			await expect(inputLegend).toHaveAttribute("aria-pressed", "false")
+			await expect(dialog.locator('[data-testid^="task-metrics-line-input-"]')).toHaveCount(0)
+			await waitForRateMetricsRpcCount(recorderPath, 1)
+			await inputLegend.click()
+			await expect(inputLegend).toHaveAttribute("aria-pressed", "true")
+
+			await dialog.getByRole("radio", { name: "TPM/RPM", exact: true }).click()
+			const chart = dialog.getByRole("img", { name: "Task metrics history chart", exact: true })
+			await expect(chart).toHaveAttribute("data-view", "rates")
+			await expect(chart).toHaveAttribute("data-chart-type", "line")
+			await expect(dialog.locator('[data-testid^="task-metrics-line-tpm-"]').first()).toBeVisible()
+			await expect(dialog.locator('[data-testid^="task-metrics-line-rpm-"]').first()).toBeVisible()
+			await waitForRateMetricsRpcCount(recorderPath, 1)
+			await captureDialog(dialog, testInfo, "task-statistics-hour-tpm-rpm-line.png")
 
 			await dialog.getByRole("radio", { name: "Bar", exact: true }).click()
-			await expect(singleChart).toHaveAttribute("data-chart-type", "bar")
-			await expect(dialog.locator('[data-testid^="task-rate-bar-"]').first()).toBeVisible()
-			await captureDialog(dialog, testInfo, "task-statistics-minute-tpm-bar.png")
+			await expect(chart).toHaveAttribute("data-chart-type", "bar")
+			await expect(dialog.locator('[data-testid^="task-metrics-bar-tpm-"]').first()).toBeVisible()
+			await expect(dialog.locator('[data-testid^="task-metrics-bar-rpm-"]').first()).toBeVisible()
+			await waitForRateMetricsRpcCount(recorderPath, 1)
+			await captureDialog(dialog, testInfo, "task-statistics-hour-tpm-rpm-bar.png")
 
-			await dialog.getByRole("radio", { name: "RPM", exact: true }).click()
-			await dialog.getByRole("radio", { name: "Line", exact: true }).click()
-			singleChart = dialog.getByRole("img", { name: "API rate history chart", exact: true })
-			await expect(singleChart).toHaveAttribute("data-metric", "rpm")
-			await expect(singleChart).toHaveAttribute("data-chart-type", "line")
-			await captureDialog(dialog, testInfo, "task-statistics-minute-rpm-line.png")
-
-			await dialog.getByRole("radio", { name: "Total Tokens", exact: true }).click()
-			await dialog.getByRole("radio", { name: "Bar", exact: true }).click()
-			singleChart = dialog.getByRole("img", { name: "API rate history chart", exact: true })
-			await expect(singleChart).toHaveAttribute("data-metric", "tokens")
-			await expect(singleChart).toHaveAttribute("data-chart-type", "bar")
-			await captureDialog(dialog, testInfo, "task-statistics-minute-total-tokens-bar.png")
+			const resolution = dialog.getByRole("combobox", { name: "History resolution", exact: true })
+			await resolution.selectOption("minute")
 			await waitForRateMetricsRpcCount(recorderPath, 2)
+			await resolution.selectOption("day")
+			await waitForRateMetricsRpcCount(recorderPath, 3)
 			expect(server.getMockConsumptions("openai-compatible-responses")).toHaveLength(1)
 
 			await dialog.getByRole("button", { name: "Refresh", exact: true }).click()
-			await waitForRateMetricsRpcCount(recorderPath, 3)
+			await waitForRateMetricsRpcCount(recorderPath, 4)
 			expect(server.getMockConsumptions("openai-compatible-responses")).toHaveLength(1)
 
 			const recorderEvidence = await readFile(recorderPath)

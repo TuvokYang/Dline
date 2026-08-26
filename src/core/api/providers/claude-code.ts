@@ -1,3 +1,4 @@
+import { observeProviderStream } from "@shared/provider-attempt-observer"
 import { filterMessagesForClaudeCode } from "@/integrations/claude-code/message-filter"
 import { runClaudeCode } from "@/integrations/claude-code/run"
 import { ClaudeCodeModelId, claudeCodeDefaultModelId, claudeCodeModels, type ModelInfo } from "@/shared/api"
@@ -42,13 +43,15 @@ export class ClaudeCodeHandler implements ApiHandler {
 		// Filter out image blocks since Claude Code doesn't support them
 		const filteredMessages = sanitizeAnthropicMessages(filterMessagesForClaudeCode(messages), false)
 
-		const claudeProcess = runClaudeCode({
-			systemPrompt,
-			messages: filteredMessages,
-			path: this.config?.claudeCodePath,
-			modelId: this.getModel().id,
-			thinkingBudgetTokens: this.thinkingBudgetTokens,
-		})
+		const claudeProcess = await observeProviderStream(() =>
+			runClaudeCode({
+				systemPrompt,
+				messages: filteredMessages,
+				path: this.config?.claudeCodePath,
+				modelId: this.getModel().id,
+				thinkingBudgetTokens: this.thinkingBudgetTokens,
+			}),
+		)
 
 		// Usage is included with assistant messages,
 		// but cost is included in the result chunk

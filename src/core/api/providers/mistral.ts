@@ -5,7 +5,7 @@ import { MistralModelId, ModelInfo, mistralDefaultModelId, mistralModels } from 
 import type { ChatCompletionTool as OpenAITool } from "openai/resources/chat/completions"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { ClineStorageMessage } from "@/shared/messages/content"
-import { fetch } from "@/shared/net"
+import { providerFetch } from "@/shared/net"
 import { ApiHandler, ApiHandlerContext } from "../"
 import { withRetry } from "../retry"
 import { convertToMistralMessages } from "../transform/mistral-format"
@@ -52,7 +52,7 @@ export class MistralHandler implements ApiHandler {
 									input.headers.set(key, externalHeaders[key])
 								}
 							})
-							return fetch(input.url, {
+							return providerFetch(input.url, {
 								method: input.method,
 								headers: input.headers,
 								body: input.body,
@@ -72,7 +72,7 @@ export class MistralHandler implements ApiHandler {
 								...(init?.headers || {}),
 							},
 						}
-						return fetch(input, mergedInit)
+						return providerFetch(input, mergedInit)
 					},
 				})
 

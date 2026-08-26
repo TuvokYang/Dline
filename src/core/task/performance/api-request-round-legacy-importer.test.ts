@@ -13,14 +13,14 @@ function message(ts: number, say: ClineMessage["say"], usage: object): ClineMess
 	return { ts, type: "say", say, text: JSON.stringify(usage) }
 }
 
-function exactRound(startedAtMs: number): ApiRequestRoundEntity {
+function exactRound(startedAtMs: number, apiIndex = 0): ApiRequestRoundEntity {
 	return new ApiRequestRoundEntity({
 		roundId: "exact-round",
 		revision: 0,
 		schemaVersion: 1,
 		taskId: "task-a",
 		logicalRequestId: "exact-request",
-		apiIndex: 0,
+		apiIndex,
 		taskAttempt: 0,
 		providerAttempt: 0,
 		startedAtMs,
@@ -117,7 +117,7 @@ describe("importApiRequestRoundLegacyUsage", () => {
 
 	it("imports only messages before the earliest exact send and marks excluded overlap degraded", async () => {
 		const stores = await openStores("cutoff")
-		await stores.exactStore.insert([exactRound(2_000)])
+		await stores.exactStore.insert([exactRound(2_000, 1)])
 		const source = {
 			getAll: () => [
 				message(1_000, "api_req_started", { tokensIn: 100, tokensOut: 20 }),
@@ -132,6 +132,22 @@ describe("importApiRequestRoundLegacyUsage", () => {
 			where: eq(ApiRequestRoundLegacyImportEntity.storage.fields.kind, "legacy_round"),
 		})
 		expect(legacyRounds.records.map(({ messageTs }) => messageTs)).toEqual([1_000])
+	})
+
+	it("does not reimport the current exact send when its UI message precedes transport start", async () => {
+		const stores = await openStores("same-api-index")
+		await stores.exactStore.insert([exactRound(2_000, 0)])
+		const source = {
+			getAll: () => [message(1_900, "api_req_started", { tokensIn: 100, tokensOut: 20 })],
+		}
+
+		await expect(
+			importApiRequestRoundLegacyUsage({ taskId: "task-a", ...stores, source, clock: () => 5_000 }),
+		).resolves.toEqual({ degraded: true, importedRoundCount: 0, importedAggregateCount: 0 })
+		const legacyRounds = await stores.legacyStore.query({
+			where: eq(ApiRequestRoundLegacyImportEntity.storage.fields.kind, "legacy_round"),
+		})
+		expect(legacyRounds.records).toHaveLength(0)
 	})
 
 	it("rolls back rows and marker together so a later import can retry", async () => {

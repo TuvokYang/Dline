@@ -1,5 +1,5 @@
 import { TaskRateTokenQuality } from "@shared/proto/dline/task"
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { TaskRateMetricsDialog } from "./TaskRateMetricsDialog"
 
@@ -26,23 +26,41 @@ beforeEach(() => {
 })
 
 describe("TaskRateMetricsDialog", () => {
-	it("defaults to Minute and exposes only the two compact views", () => {
+	it("defaults to Hour and exposes only the two compact views", () => {
 		renderDialog()
-		expect(mocks.useTaskRateMetrics).toHaveBeenLastCalledWith({ enabled: true, resolution: "minute", taskId: "task-1" })
-		expect(screen.getByRole("tab", { name: "Minute" })).toHaveAttribute("aria-selected", "true")
-		expect(screen.queryByRole("tab", { name: "Round" })).not.toBeInTheDocument()
-		expect(screen.getByRole("radio", { name: "Token / Cache Hit" })).toHaveAttribute("aria-checked", "true")
-		expect(screen.getByRole("radio", { name: "TPM / RPM" })).toHaveAttribute("aria-checked", "false")
+		expect(mocks.useTaskRateMetrics).toHaveBeenLastCalledWith({ enabled: true, resolution: "hour", taskId: "task-1" })
+		const resolution = screen.getByRole("combobox", { name: "History resolution" })
+		expect(resolution).toHaveValue("hour")
+		expect(screen.queryByRole("option", { name: "Round" })).not.toBeInTheDocument()
+		expect(screen.getByRole("radio", { name: "Token/Cache Hit" })).toHaveAttribute("aria-checked", "true")
+		expect(screen.getByRole("radio", { name: "TPM/RPM" })).toHaveAttribute("aria-checked", "false")
 		expect(screen.queryByRole("radio", { name: "Usage & Cache" })).not.toBeInTheDocument()
 		expect(screen.queryByRole("radio", { name: "Total Tokens" })).not.toBeInTheDocument()
 		expect(screen.getByRole("radiogroup", { name: "Chart type" })).toBeInTheDocument()
 		expect(screen.getByRole("radio", { name: "Line" })).toHaveAttribute("aria-checked", "true")
 
-		fireEvent.click(screen.getByRole("tab", { name: "Hour" }))
-		expect(mocks.useTaskRateMetrics).toHaveBeenLastCalledWith({ enabled: true, resolution: "hour", taskId: "task-1" })
+		fireEvent.change(resolution, { target: { value: "minute" } })
+		expect(mocks.useTaskRateMetrics).toHaveBeenLastCalledWith({ enabled: true, resolution: "minute", taskId: "task-1" })
 
-		fireEvent.click(screen.getByRole("tab", { name: "Day" }))
+		fireEvent.change(resolution, { target: { value: "day" } })
 		expect(mocks.useTaskRateMetrics).toHaveBeenLastCalledWith({ enabled: true, resolution: "day", taskId: "task-1" })
+	})
+
+	it("keeps resolution, view, chart type and Refresh in one compact toolbar", () => {
+		renderDialog()
+		const toolbar = screen.getByRole("toolbar", { name: "Task metrics controls" })
+		expect(toolbar).toHaveClass("flex-nowrap", "overflow-hidden", "whitespace-nowrap")
+		const controls = within(toolbar)
+		const resolution = controls.getByRole("combobox", { name: "History resolution" })
+		expect(resolution).toHaveValue("hour")
+		expect(resolution).toHaveClass("h-5", "text-[11px]", "leading-normal")
+		expect(controls.getAllByRole("option").map((option) => option.textContent)).toEqual(["Minute", "Hour", "Day"])
+		expect(controls.getAllByRole("radio")).toHaveLength(4)
+		for (const name of ["Token/Cache Hit", "TPM/RPM", "Bar", "Line"] as const) {
+			expect(controls.getByRole("radio", { name })).toBeInTheDocument()
+		}
+		fireEvent.click(controls.getByRole("button", { name: "Refresh" }))
+		expect(mocks.refresh).toHaveBeenCalledOnce()
 	})
 
 	it("renders loading, empty and retryable error states", () => {
@@ -65,7 +83,7 @@ describe("TaskRateMetricsDialog", () => {
 		expect(mocks.refresh).toHaveBeenCalledOnce()
 	})
 
-	it("shows degraded, truncation and retention notices alongside the chart", () => {
+	it("shows only actionable degraded and active-point truncation notices alongside the chart", () => {
 		mocks.useTaskRateMetrics.mockReturnValue({
 			data: {
 				points: [
@@ -91,37 +109,25 @@ describe("TaskRateMetricsDialog", () => {
 		renderDialog()
 
 		expect(screen.getByText("History may be incomplete.")).toBeInTheDocument()
-		expect(screen.getByText("Showing the most recent available points.")).toBeInTheDocument()
-		expect(screen.getByText(/History retained from/)).toBeInTheDocument()
-		expect(screen.getByTestId("task-usage-cache-chart")).toBeInTheDocument()
-		expect(screen.getByRole("img", { name: "Task usage and cache hit history chart" })).toBeInTheDocument()
-		expect(screen.queryByRole("radiogroup", { name: "Chart type" })).not.toBeInTheDocument()
-
-		fireEvent.click(screen.getByRole("radio", { name: "TPM" }))
+		expect(screen.getByText("Showing the most recent active points.")).toBeInTheDocument()
+		expect(screen.queryByText(/History retained from/)).not.toBeInTheDocument()
+		expect(screen.getByTestId("task-metrics-chart")).toBeInTheDocument()
+		const chart = screen.getByRole("img", { name: "Task metrics history chart" })
+		expect(chart).toHaveAttribute("data-view", "tokenCache")
+		expect(chart).toHaveAttribute("data-chart-type", "line")
 		expect(screen.getByRole("radiogroup", { name: "Chart type" })).toBeInTheDocument()
-		expect(screen.getByRole("radio", { name: "TPM" })).toHaveAttribute("aria-checked", "true")
-		expect(screen.getByRole("radio", { name: "Line" })).toHaveAttribute("aria-checked", "true")
-		expect(screen.getByRole("img", { name: "API rate history chart" })).toHaveAttribute("data-metric", "tpm")
-		expect(screen.getByRole("img", { name: "API rate history chart" })).toHaveAttribute("data-chart-type", "line")
+
+		fireEvent.click(screen.getByRole("radio", { name: "TPM/RPM" }))
+		expect(screen.getByRole("radio", { name: "TPM/RPM" })).toHaveAttribute("aria-checked", "true")
+		expect(chart).toHaveAttribute("data-view", "rates")
+		expect(chart).toHaveAttribute("data-chart-type", "line")
 
 		fireEvent.click(screen.getByRole("radio", { name: "Bar" }))
 		expect(screen.getByRole("radio", { name: "Bar" })).toHaveAttribute("aria-checked", "true")
-		expect(screen.getByRole("img", { name: "API rate history chart" })).toHaveAttribute("data-chart-type", "bar")
+		expect(chart).toHaveAttribute("data-chart-type", "bar")
 
-		fireEvent.click(screen.getByRole("radio", { name: "RPM" }))
-		expect(screen.getByRole("radio", { name: "RPM" })).toHaveAttribute("aria-checked", "true")
-		expect(screen.getByRole("img", { name: "API rate history chart" })).toHaveAttribute("data-metric", "rpm")
-
-		fireEvent.click(screen.getByRole("radio", { name: "Total Tokens" }))
-		expect(screen.getByRole("radio", { name: "Total Tokens" })).toHaveAttribute("aria-checked", "true")
-		expect(screen.getByRole("img", { name: "API rate history chart" })).toHaveAttribute("data-metric", "tokens")
-
-		fireEvent.click(screen.getByRole("radio", { name: "Line" }))
-		expect(screen.getByRole("radio", { name: "Line" })).toHaveAttribute("aria-checked", "true")
-		expect(screen.getByRole("img", { name: "API rate history chart" })).toHaveAttribute("data-chart-type", "line")
-
-		fireEvent.click(screen.getByRole("radio", { name: "Usage & Cache" }))
-		expect(screen.queryByRole("radiogroup", { name: "Chart type" })).not.toBeInTheDocument()
-		expect(screen.getByTestId("task-usage-cache-chart")).toBeInTheDocument()
+		fireEvent.click(screen.getByRole("radio", { name: "Token/Cache Hit" }))
+		expect(screen.getByRole("radio", { name: "Token/Cache Hit" })).toHaveAttribute("aria-checked", "true")
+		expect(chart).toHaveAttribute("data-view", "tokenCache")
 	})
 })

@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, it, vi } from "vitest"
 import "should"
 import { ApiProfile } from "@shared/proto/dline/profile"
+import { bindProviderAttemptScope, type ProviderAttemptTerminalStatus } from "@shared/provider-attempt-observer"
 import axios from "axios"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { OllamaHandler } from "../ollama"
@@ -79,58 +80,47 @@ describe("OllamaHandler", () => {
 			;(chatStub.mock.calls.length === 1).should.be.true()
 		})
 
-		it("should handle timeout errors", async () => {
-			if (!ollamaAvailable) {
-				return
-			}
-			// mocha this.timeout removed — vitest uses testTimeout config: (10000)
-			// Restore real timers for this test
-			vi.useRealTimers()
-
-			// Create a handler with a very short timeout for testing
+		it("aborts the underlying request and finishes the observed round when the request times out", async () => {
 			const testHandler = new OllamaHandler({
 				profile: ApiProfile.create({ provider: "ollama", modelId: "llama2", baseUrl: "http://localhost:11434" }),
 				mode: "act",
+				requestTimeoutMs: 100,
 			})
-
-			// Replace the createMessage method with one that has a shorter timeout
-			testHandler.createMessage = async function* (_systemPrompt, _messages) {
-				try {
-					// Create a promise that rejects after a short timeout
-					const timeoutPromise = new Promise<never>((_, reject) => {
-						setTimeout(() => reject(new Error("Ollama request timed out after 120 seconds")), 100)
-					})
-
-					// Create a promise that never resolves
-					const neverPromise = new Promise(() => {})
-
-					// Race them
-					await Promise.race([timeoutPromise, neverPromise])
-				} catch (error: any) {
-					// Enhance error reporting
-					console.error(`Ollama API error: ${error.message}`)
-					throw error
-				}
+			let rejectChat: ((error: unknown) => void) | undefined
+			const client = {
+				chat: vi.fn(
+					() =>
+						new Promise<never>((_resolve, reject) => {
+							rejectChat = reject
+						}),
+				),
+				abort: vi.fn(() => rejectChat?.(new DOMException("aborted", "AbortError"))),
 			}
-
-			const systemPrompt = "You are a helpful assistant."
-			const messages: ClineStorageMessage[] = [{ role: "user", content: "Hello" }]
-
-			// Start the request and catch the error
-			let errorMessage = ""
-			try {
-				for await (const _ of testHandler.createMessage(systemPrompt, messages)) {
-					// This should not be reached
-				}
-			} catch (error: any) {
-				errorMessage = error.message
+			;(testHandler as any).client = client
+			const statuses: ProviderAttemptTerminalStatus[] = []
+			const observer = {
+				beginAttempt: () => 1,
+				finishAttempt: (_handle: number, status: ProviderAttemptTerminalStatus) => {
+					statuses.push(status)
+				},
 			}
+			const stream = bindProviderAttemptScope(
+				(testHandler.createMessage as any)("system", [{ role: "user", content: "Hello" }], undefined, {
+					generation: { purpose: "compaction" },
+				}),
+				observer,
+			)
+			const request = (async () => {
+				for await (const _chunk of stream) {
+					// The request times out before producing chunks.
+				}
+			})()
 
-			// Check the result
-			errorMessage.should.equal("Ollama request timed out after 120 seconds")
-
-			// Restore the fake timers for other tests
-			_clock = vi.useFakeTimers()
+			const rejection = request.should.be.rejectedWith("Ollama request timed out after 0.1 seconds")
+			await vi.advanceTimersByTimeAsync(100)
+			await rejection
+			client.abort.mock.calls.length.should.equal(1)
+			statuses.should.deepEqual(["failed"])
 		})
 
 		it("should retry on errors when using the withRetry decorator", async () => {

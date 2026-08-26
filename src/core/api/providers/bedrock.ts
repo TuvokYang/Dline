@@ -11,6 +11,7 @@ import {
 } from "@aws-sdk/client-bedrock-runtime"
 import { fromNodeProviderChain } from "@aws-sdk/credential-providers"
 import { type BedrockModelId, bedrockDefaultModelId, bedrockModels, CLAUDE_SONNET_1M_SUFFIX, type ModelInfo } from "@shared/api"
+import { observeProviderCall, observeProviderStreamResponse } from "@shared/provider-attempt-observer"
 import { isClaudeOpusAdaptiveThinkingModel, resolveClaudeOpusAdaptiveThinking } from "@shared/utils/reasoning-support"
 import { calculateApiCostOpenAI, calculateApiCostQwen } from "@utils/cost"
 import { ExtensionRegistryInfo } from "@/registry"
@@ -312,6 +313,7 @@ export class AwsBedrockHandler implements ApiHandler {
 		// To add proxy support, we need to provide a custom requestHandler.
 		return new BedrockRuntimeClient({
 			userAgentAppId: `cline#${ExtensionRegistryInfo.version}`,
+			maxAttempts: 1,
 			region: this.getRegion(),
 			...auth,
 			...(this.config?.awsBedrockEndpoint && { endpoint: this.config?.awsBedrockEndpoint }),
@@ -411,10 +413,13 @@ export class AwsBedrockHandler implements ApiHandler {
 		const TOKEN_REPORT_THRESHOLD = 100 // Report usage after accumulating this many tokens
 
 		// Execute the streaming request
-		const response = await client.send(command)
+		const { stream } = await observeProviderStreamResponse(
+			() => client.send(command),
+			(response) => response.body,
+		)
 
-		if (response.body) {
-			for await (const chunk of response.body) {
+		if (stream) {
+			for await (const chunk of stream) {
 				if (chunk.chunk?.bytes) {
 					try {
 						// Parse the response chunk
@@ -612,15 +617,18 @@ export class AwsBedrockHandler implements ApiHandler {
 	 */
 	private async *executeConverseStream(command: ConverseStreamCommand, modelInfo: ModelInfo): ApiStream {
 		const client = await this.getBedrockClient()
-		const response = await client.send(command)
+		const { stream } = await observeProviderStreamResponse(
+			() => client.send(command),
+			(response) => response.stream,
+		)
 
-		if (response.stream) {
+		if (stream) {
 			// Buffer content by contentBlockIndex to handle multi-block responses correctly
 			const contentBuffers: Record<number, string> = {}
 			const blockTypes = new Map<number, "reasoning" | "text">()
 			const activeToolCalls: Map<number, { toolUseId: string; name: string }> = new Map()
 
-			for await (const chunk of response.stream) {
+			for await (const chunk of stream) {
 				// Debug logging to see actual response structure
 				// Logger.log("Bedrock chunk:", JSON.stringify(chunk, null, 2))
 
@@ -1222,7 +1230,7 @@ export class AwsBedrockHandler implements ApiHandler {
 			let outputTokens = 0
 
 			// Execute the non-streaming request
-			const response = await client.send(command)
+			const response = await observeProviderCall(() => client.send(command))
 
 			// Extract the complete response text and reasoning content
 			let fullText = ""
@@ -1360,7 +1368,7 @@ export class AwsBedrockHandler implements ApiHandler {
 			let outputTokens = 0
 
 			// Execute the non-streaming request
-			const response = await client.send(command)
+			const response = await observeProviderCall(() => client.send(command))
 
 			// Extract the complete response text and reasoning content
 			let fullText = ""

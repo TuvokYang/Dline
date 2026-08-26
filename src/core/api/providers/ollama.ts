@@ -1,4 +1,5 @@
 import { type ModelInfo, openAiModelInfoSaneDefaults } from "@shared/api"
+import { observeProviderStream } from "@shared/provider-attempt-observer"
 import { type Config, type Message, Ollama } from "ollama"
 import type { ChatCompletionTool } from "openai/resources/chat/completions"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
@@ -69,27 +70,54 @@ export class OllamaHandler implements ApiHandler {
 		const ollamaMessages: Message[] = [{ role: "system", content: systemPrompt }, ...convertToOllamaMessages(messages)]
 
 		try {
-			// Create a promise that rejects after timeout
 			const timeoutMs = this.ctx.requestTimeoutMs || 30000
-			const timeoutPromise = new Promise<never>((_, reject) => {
-				setTimeout(() => reject(new Error(`Ollama request timed out after ${timeoutMs / 1000} seconds`)), timeoutMs)
-			})
+			const timeoutError = new Error(`Ollama request timed out after ${timeoutMs / 1000} seconds`)
+			let timedOut = false
 
-			// Create the actual API request promise
-			const apiPromise = client.chat({
-				model: this.getModel().id,
-				messages: ollamaMessages,
-				stream: true,
-				options: {
-					num_ctx: Number(this.ollamaApiOptionsCtxNum),
-				},
-				tools: tools as any,
+			const apiPromise = observeProviderStream(
+				() =>
+					client.chat({
+						model: this.getModel().id,
+						messages: ollamaMessages,
+						stream: true,
+						options: {
+							num_ctx: Number(this.ollamaApiOptionsCtxNum),
+						},
+						tools: tools as any,
+					}),
+				{ classifyError: () => (timedOut ? "failed" : undefined) },
+			)
+			void apiPromise
+				.then(async (lateStream) => {
+					if (!timedOut) return
+					try {
+						await lateStream[Symbol.asyncIterator]().throw?.(timeoutError)
+					} catch {}
+				})
+				.catch(() => undefined)
+
+			let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+			const timeoutPromise = new Promise<never>((_, reject) => {
+				timeoutHandle = setTimeout(() => {
+					timedOut = true
+					reject(timeoutError)
+					try {
+						client.abort()
+					} catch (abortError) {
+						Logger.error("Failed to abort timed-out Ollama request:", abortError)
+					}
+				}, timeoutMs)
 			})
 
 			const toolCallProcessor = new ToolCallProcessor()
 
 			// Race the API request against the timeout
-			const stream = (await Promise.race([apiPromise, timeoutPromise])) as Awaited<typeof apiPromise>
+			let stream: Awaited<typeof apiPromise>
+			try {
+				stream = (await Promise.race([apiPromise, timeoutPromise])) as Awaited<typeof apiPromise>
+			} finally {
+				if (timeoutHandle) clearTimeout(timeoutHandle)
+			}
 
 			try {
 				for await (const chunk of stream) {

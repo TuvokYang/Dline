@@ -1,6 +1,8 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import { GenerateContentConfig, GoogleGenAI } from "@google/genai"
 import { ModelInfo } from "@shared/api"
+import { providerFetch } from "@shared/net"
+import { observeProviderStream } from "@shared/provider-attempt-observer"
 import OpenAI from "openai"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { ApiHandler, ApiHandlerContext } from "../index"
@@ -56,6 +58,7 @@ export class AIhubmixHandler implements ApiHandler {
 						"APP-Code": this.appCode,
 						...buildExternalBasicHeaders(),
 					},
+					fetch: providerFetch,
 				})
 			} catch (error) {
 				throw new Error(`Error creating Anthropic client: ${error.message}`)
@@ -77,6 +80,7 @@ export class AIhubmixHandler implements ApiHandler {
 						"APP-Code": this.appCode,
 						...buildExternalBasicHeaders(),
 					},
+					fetch: providerFetch,
 				})
 			} catch (error) {
 				throw new Error(`Error creating OpenAI client: ${error.message}`)
@@ -307,11 +311,13 @@ export class AIhubmixHandler implements ApiHandler {
 			}
 		}
 
-		const stream = await client.models.generateContentStream({
-			model: modelId,
-			contents,
-			config: requestConfig,
-		})
+		const stream = await observeProviderStream(() =>
+			client.models.generateContentStream({
+				model: modelId,
+				contents,
+				config: requestConfig,
+			}),
+		)
 
 		for await (const chunk of stream as any) {
 			if (chunk?.text) {

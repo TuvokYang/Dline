@@ -1,4 +1,5 @@
 import { ModelInfo, openAiModelInfoSaneDefaults } from "@shared/api"
+import { observeProviderStreamResponse } from "@shared/provider-attempt-observer"
 import { SELECTOR_SEPARATOR, stringifyVsCodeLmModelSelector } from "@shared/vsCodeSelectorUtils"
 import { calculateApiCostAnthropic } from "@utils/cost"
 import * as vscode from "vscode"
@@ -384,7 +385,8 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 		]
 
 		// Initialize cancellation token for the request
-		this.currentRequestCancellation = new vscode.CancellationTokenSource()
+		const requestCancellation = new vscode.CancellationTokenSource()
+		this.currentRequestCancellation = requestCancellation
 
 		// Calculate input tokens before starting the stream
 		const totalInputTokens: number = await this.calculateTotalInputTokens(vsCodeLmMessages)
@@ -401,14 +403,14 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 			// Note: Tool support is currently provided by the VSCode Language Model API directly
 			// Extensions can register tools using vscode.lm.registerTool()
 
-			const response: vscode.LanguageModelChatResponse = await client.sendRequest(
-				vsCodeLmMessages,
-				requestOptions,
-				this.currentRequestCancellation.token,
+			const { stream } = await observeProviderStreamResponse(
+				() => client.sendRequest(vsCodeLmMessages, requestOptions, requestCancellation.token),
+				(response) => response.stream,
 			)
+			if (!stream) throw new Error("Cline <Language Model API>: Response stream is unavailable")
 
 			// Consume the stream and handle both text and tool call chunks
-			for await (const chunk of response.stream) {
+			for await (const chunk of stream) {
 				if (chunk instanceof vscode.LanguageModelTextPart) {
 					// Validate text part value
 					if (typeof chunk.value !== "string") {
@@ -575,13 +577,14 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	async completePrompt(prompt: string): Promise<string> {
 		try {
 			const client = await this.getClient()
-			const response = await client.sendRequest(
-				[vscode.LanguageModelChatMessage.User(prompt)],
-				{},
-				new vscode.CancellationTokenSource().token,
+			const requestCancellation = new vscode.CancellationTokenSource()
+			const { stream } = await observeProviderStreamResponse(
+				() => client.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], {}, requestCancellation.token),
+				(response) => response.stream,
 			)
+			if (!stream) throw new Error("Cline <Language Model API>: Response stream is unavailable")
 			let result = ""
-			for await (const chunk of response.stream) {
+			for await (const chunk of stream) {
 				if (chunk instanceof vscode.LanguageModelTextPart) {
 					result += chunk.value
 				}

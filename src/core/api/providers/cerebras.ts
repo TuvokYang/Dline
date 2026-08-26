@@ -2,7 +2,7 @@ import Cerebras from "@cerebras/cerebras_cloud_sdk"
 import { CerebrasModelId, cerebrasDefaultModelId, cerebrasModels, ModelInfo } from "@shared/api"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { ClineStorageMessage } from "@/shared/messages/content"
-import { fetch } from "@/shared/net"
+import { providerFetch } from "@/shared/net"
 import { ApiHandler, ApiHandlerContext } from "../index"
 import { withRetry } from "../retry"
 import { ApiStream } from "../transform/stream"
@@ -54,7 +54,7 @@ export class CerebrasHandler implements ApiHandler {
 				this.client = new Cerebras({
 					apiKey: cleanApiKey,
 					timeout: 30000, // 30 second timeout
-					fetch, // Use configured fetch with proxy support
+					fetch: providerFetch,
 					defaultHeaders: {
 						...externalHeaders,
 						"X-Cerebras-3rd-Party-Integration": "cline",

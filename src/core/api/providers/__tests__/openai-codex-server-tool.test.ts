@@ -231,6 +231,22 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 		])
 	})
 
+	it("cancels the HTTP response body when the consumer stops early", async () => {
+		const handler = createHandler()
+		const cancelBody = vi.fn()
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode('data: {"type":"response.output_text.delta","delta":"hello"}\n\n'))
+			},
+			cancel: cancelBody,
+		})
+
+		for await (const _chunk of (handler as any).handleStreamResponse(body, handler.getModel())) break
+
+		expect(cancelBody.mock.calls).to.have.length(1)
+		expect(cancelBody.mock.calls[0]?.[0]).to.equal(undefined)
+	})
+
 	it("sends hosted Web Search over WebSocket without the HTTP-only stream field", async () => {
 		const handler = createHandler()
 		const listeners = new Map<string, Set<(event: any) => void>>()

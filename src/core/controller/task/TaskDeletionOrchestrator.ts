@@ -118,12 +118,17 @@ export class TaskDeletionOrchestrator {
 			const updatedTaskHistory = await this.controller.deleteTaskFromState(taskId)
 
 			// Phase 5: Delete files
+			const taskDatabasePath = path.join(taskPaths.taskDirPath, GlobalFileNames.taskDatabase(taskId))
 			const filePaths = [
 				taskPaths.apiConversationHistoryFilePath,
 				taskPaths.uiMessagesFilePath,
 				taskPaths.contextHistoryFilePath,
 				taskPaths.taskMetadataFilePath,
 				path.join(taskPaths.taskDirPath, GlobalFileNames.taskActivities),
+				path.join(taskPaths.taskDirPath, GlobalFileNames.taskApiRateMetrics),
+				taskDatabasePath,
+				`${taskDatabasePath}-wal`,
+				`${taskDatabasePath}-shm`,
 			]
 			for (const fp of filePaths) {
 				try {

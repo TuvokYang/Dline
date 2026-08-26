@@ -1,8 +1,9 @@
+import { ModelInfo } from "@shared/api"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { ClineStorageMessage } from "@/shared/messages/content"
-import { fetch } from "@/shared/net"
+import { fetch, providerFetch } from "@/shared/net"
 import { Logger } from "@/shared/services/Logger"
-import { ModelInfo } from "../../../shared/api"
+
 import { ApiHandler, ApiHandlerContext } from "../index"
 import { ApiStream } from "../transform/stream"
 
@@ -119,7 +120,7 @@ export class DifyHandler implements ApiHandler {
 
 		let response: Response
 		try {
-			response = await fetch(fullUrl, {
+			response = await providerFetch(fullUrl, {
 				method: "POST",
 				headers: this.jsonHeaders(),
 				body: JSON.stringify(requestBody),
@@ -152,6 +153,9 @@ export class DifyHandler implements ApiHandler {
 		let buffer = ""
 		let fullText = ""
 		let hasYieldedContent = false
+		let messageEnded = false
+		let reachedEof = false
+		let terminalError: unknown
 		const processedEvents: string[] = []
 		let lastEventTime = Date.now()
 
@@ -161,6 +165,7 @@ export class DifyHandler implements ApiHandler {
 			while (true) {
 				const { done, value } = await reader.read()
 				if (done) {
+					reachedEof = true
 					Logger.log("[DIFY DEBUG] Stream ended naturally")
 					Logger.log(
 						"[DIFY DEBUG] Final state - hasYieldedContent:",
@@ -183,6 +188,7 @@ export class DifyHandler implements ApiHandler {
 				buffer = lines.pop() || ""
 
 				for (const line of lines) {
+					if (messageEnded) continue
 					Logger.log("[DIFY DEBUG] Processing line:", JSON.stringify(line))
 
 					if (line.startsWith("data: ")) {
@@ -254,7 +260,7 @@ export class DifyHandler implements ApiHandler {
 										totalCost: parsed.usage.total_price || 0,
 									}
 								}
-								return // End of stream
+								messageEnded = true
 							} else if (parsed.event === "error") {
 								Logger.error("[DIFY DEBUG] Error event:", parsed)
 								throw new Error(`Dify API error: ${parsed.message || "Unknown error"}`)
@@ -294,8 +300,9 @@ export class DifyHandler implements ApiHandler {
 									hasYieldedContent = true
 								}
 							}
-						} catch (e) {
-							Logger.warn("[DIFY DEBUG] Failed to parse JSON:", data, "Error:", e)
+						} catch (error) {
+							if (!(error instanceof SyntaxError)) throw error
+							Logger.warn("[DIFY DEBUG] Failed to parse JSON:", data, "Error:", error)
 						}
 					} else if (line.trim() !== "") {
 						Logger.log(
@@ -324,7 +331,7 @@ export class DifyHandler implements ApiHandler {
 									}
 									hasYieldedContent = true
 								}
-								return
+								messageEnded = true
 							} else if (parsed.event === "error") {
 								Logger.error("[DIFY DEBUG] Direct JSON Error event:", parsed)
 								throw new Error(`Dify API error: ${parsed.message || "Unknown error"}`)
@@ -338,7 +345,8 @@ export class DifyHandler implements ApiHandler {
 								}
 								hasYieldedContent = true
 							}
-						} catch (_e) {
+						} catch (error) {
+							if (!(error instanceof SyntaxError)) throw error
 							// Not JSON, continue
 							Logger.log("[DIFY DEBUG] Line is not direct JSON, continuing")
 						}
@@ -374,9 +382,16 @@ export class DifyHandler implements ApiHandler {
 					)
 				}
 			}
+		} catch (error) {
+			terminalError = error
+			throw error
 		} finally {
-			reader.releaseLock()
-			Logger.log("[DIFY DEBUG] Stream reader released")
+			try {
+				if (!reachedEof) await reader.cancel(terminalError)
+			} finally {
+				reader.releaseLock()
+				Logger.log("[DIFY DEBUG] Stream reader released")
+			}
 		}
 	}
 

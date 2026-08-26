@@ -1,3 +1,5 @@
+import fs from "node:fs/promises"
+import path from "node:path"
 import { expect } from "chai"
 import { afterEach, beforeEach, describe, it } from "vitest"
 import type { TaskLockService } from "../../../locks/TaskLockService"
@@ -88,6 +90,44 @@ describe("TaskDeletionOrchestrator", () => {
 		await (orchestrator as any).deleteSingle("other-task")
 
 		expect(clearCalled).to.be.false
+	})
+
+	it("deletes the Task database, SQLite sidecars, and legacy metrics file", async () => {
+		const parent = path.join(process.cwd(), "tmp")
+		await fs.mkdir(parent, { recursive: true })
+		const taskDirPath = await fs.mkdtemp(path.join(parent, "task-delete-metrics-"))
+		const taskId = "task-with-sqlite"
+		const paths = {
+			apiConversationHistoryFilePath: path.join(taskDirPath, "api.jsonl"),
+			uiMessagesFilePath: path.join(taskDirPath, "ui.jsonl"),
+			contextHistoryFilePath: path.join(taskDirPath, "context.jsonl"),
+			taskMetadataFilePath: path.join(taskDirPath, "metadata.json"),
+			taskDirPath,
+		}
+		const databasePath = path.join(taskDirPath, `${taskId}.db`)
+		const metricsPaths = [
+			path.join(taskDirPath, "api_rate_metrics.jsonl"),
+			databasePath,
+			`${databasePath}-wal`,
+			`${databasePath}-shm`,
+		]
+		await Promise.all([...Object.values(paths).slice(0, 4), ...metricsPaths].map((filePath) => fs.writeFile(filePath, "x")))
+		mockController.getTaskWithId = async () => paths
+		mockController.deleteTaskFromState = async () => [taskId]
+
+		try {
+			const result = await orchestrator.deleteSingle(taskId)
+			expect(result.success).to.be.true
+			for (const filePath of metricsPaths) {
+				const exists = await fs.access(filePath).then(
+					() => true,
+					() => false,
+				)
+				expect(exists).to.be.false
+			}
+		} finally {
+			await fs.rm(taskDirPath, { recursive: true, force: true })
+		}
 	})
 
 	it("deleteBatch should process multiple tasks independently", async () => {

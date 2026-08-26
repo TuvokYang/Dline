@@ -7,6 +7,7 @@ import {
 import { ChatMessage, OrchestrationClient, OrchestrationModuleConfig } from "@sap-ai-sdk/orchestration"
 import { HttpDestination, transformServiceBindingToDestination } from "@sap-cloud-sdk/connectivity"
 import { ModelInfo, SapAiCoreModelId, sapAiCoreDefaultModelId, sapAiCoreModels } from "@shared/api"
+import { observeProviderCall, observeProviderStreamResponse } from "@shared/provider-attempt-observer"
 import axios from "axios"
 import JSON5 from "json5"
 import OpenAI from "openai"
@@ -31,6 +32,12 @@ interface Token {
 	jti: string
 	token_type: string
 	expires_at: number
+}
+
+interface SapDeploymentStreamResponse {
+	readonly status: number
+	readonly headers: unknown
+	readonly data: unknown
 }
 
 // Bedrock namespace containing caching-related functions
@@ -570,11 +577,13 @@ export class SapAiCoreHandler implements ApiHandler {
 			// Unlike the `messages` field that validates input, this does not validate
 			// template placeholders such as {{?userResponse}}, allowing content to be
 			// sent directly to the LLM with the Cline system prompt without validation errors.
-			const response = await orchestrationClient.stream({
-				messagesHistory: sapMessages,
-			})
+			const { response, stream } = await observeProviderStreamResponse(
+				() => orchestrationClient.stream({ messagesHistory: sapMessages }),
+				(response) => response.stream.toContentStream(),
+			)
+			if (!stream) throw new Error("SAP orchestration response stream is unavailable")
 
-			for await (const chunk of response.stream.toContentStream()) {
+			for await (const chunk of stream) {
 				yield { type: "text", text: chunk }
 			}
 
@@ -776,14 +785,10 @@ export class SapAiCoreHandler implements ApiHandler {
 		}
 
 		try {
-			const response = await axios.post(url, JSON.stringify(payload, null, 2), {
-				headers,
-				responseType: "stream",
-				...getAxiosSettings(),
-			})
-
 			if (model.id === "o3-mini") {
-				const response = await axios.post(url, JSON.stringify(payload, null, 2), { headers, ...getAxiosSettings() })
+				const response = await observeProviderCall(() =>
+					axios.post(url, JSON.stringify(payload, null, 2), { headers, ...getAxiosSettings() }),
+				)
 
 				// Yield the usage information
 				if (response.data.usage) {
@@ -810,8 +815,23 @@ export class SapAiCoreHandler implements ApiHandler {
 						outputTokens: response.data.usage.completion_tokens,
 					}
 				}
-			} else if (openAIModels.includes(model.id) || perplexityModels.includes(model.id)) {
-				yield* this.streamCompletionGPT(response.data, model)
+				return
+			}
+
+			const { stream } = await observeProviderStreamResponse(
+				() =>
+					axios.post(url, JSON.stringify(payload, null, 2), {
+						headers,
+						responseType: "stream",
+						validateStatus: () => true,
+						...getAxiosSettings(),
+					}),
+				(response) => this.selectDeploymentStream(response),
+			)
+			if (!stream) throw new Error("SAP AI Core deployment response stream is unavailable")
+
+			if (openAIModels.includes(model.id) || perplexityModels.includes(model.id)) {
+				yield* this.streamCompletionGPT(stream, model)
 			} else if (
 				model.id === "anthropic--claude-4.5-opus" ||
 				model.id === "anthropic--claude-4.6-sonnet" ||
@@ -821,11 +841,11 @@ export class SapAiCoreHandler implements ApiHandler {
 				model.id === "anthropic--claude-4-opus" ||
 				model.id === "anthropic--claude-3.7-sonnet"
 			) {
-				yield* this.streamCompletionSonnet37(response.data, model)
+				yield* this.streamCompletionSonnet37(stream, model)
 			} else if (geminiModels.includes(model.id)) {
-				yield* this.streamCompletionGemini(response.data, model)
+				yield* this.streamCompletionGemini(stream, model)
 			} else {
-				yield* this.streamCompletion(response.data, model)
+				yield* this.streamCompletion(stream, model)
 			}
 		} catch (error: any) {
 			if (error.response) {
@@ -1015,6 +1035,11 @@ export class SapAiCoreHandler implements ApiHandler {
 		}
 	}
 
+	private selectDeploymentStream(response: SapDeploymentStreamResponse): AsyncIterable<unknown> | undefined {
+		if (response.status >= 200 && response.status < 300) return asAsyncIterable(response.data)
+		return createFailedDeploymentStream(response)
+	}
+
 	private async *streamCompletionGPT(
 		stream: any,
 		_model: { id: SapAiCoreModelId; info: ModelInfo },
@@ -1022,12 +1047,15 @@ export class SapAiCoreHandler implements ApiHandler {
 		let _currentContent = ""
 		let inputTokens = 0
 		let outputTokens = 0
+		let protocolCompleted = false
 
 		try {
 			for await (const chunk of stream) {
+				if (protocolCompleted) continue
 				const chunkStr = this.chunkToString(chunk)
 				const lines = chunkStr.split("\n").filter(Boolean)
 				for (const line of lines) {
+					if (protocolCompleted) continue
 					if (line.trim() === "data: [DONE]") {
 						// End of stream, yield final usage
 						yield {
@@ -1035,7 +1063,8 @@ export class SapAiCoreHandler implements ApiHandler {
 							inputTokens,
 							outputTokens,
 						}
-						return
+						protocolCompleted = true
+						continue
 					}
 
 					if (line.startsWith("data: ")) {
@@ -1179,4 +1208,36 @@ export class SapAiCoreHandler implements ApiHandler {
 		// Use the existing OpenAI converter since the logic is identical
 		return convertToOpenAiMessages(messages) as ChatMessage[]
 	}
+}
+
+function asAsyncIterable(value: unknown): AsyncIterable<unknown> | undefined {
+	if (typeof value !== "object" || value === null) return undefined
+	return typeof (value as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator] === "function"
+		? (value as AsyncIterable<unknown>)
+		: undefined
+}
+
+async function* createFailedDeploymentStream(response: SapDeploymentStreamResponse): AsyncGenerator<never> {
+	const source = asAsyncIterable(response.data)
+	let errorData = response.data
+	if (source) {
+		const chunks: Buffer[] = []
+		for await (const chunk of source) {
+			chunks.push(
+				Buffer.isBuffer(chunk)
+					? chunk
+					: typeof chunk === "string"
+						? Buffer.from(chunk)
+						: chunk instanceof Uint8Array
+							? Buffer.from(chunk)
+							: Buffer.from(String(chunk)),
+			)
+		}
+		errorData = Buffer.concat(chunks).toString("utf-8")
+	}
+	const error = new Error(`SAP AI Core deployment request failed with HTTP ${response.status}`) as Error & {
+		response: SapDeploymentStreamResponse
+	}
+	error.response = { status: response.status, headers: response.headers, data: errorData }
+	throw error
 }

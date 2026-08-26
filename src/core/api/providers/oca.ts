@@ -12,7 +12,7 @@ import { createOcaHeaders } from "@/services/auth/oca/utils/utils"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { OcaModelInfo } from "@/shared/api"
 import { ClineStorageMessage } from "@/shared/messages/content"
-import { fetch } from "@/shared/net"
+import { fetch, providerFetch } from "@/shared/net"
 import { ApiFormat, ServerTool } from "@/shared/proto/dline/models/metadata"
 import { Logger } from "@/shared/services/Logger"
 import { ApiHandler, type ApiHandlerContext, type ApiRequestOptions } from ".."
@@ -30,6 +30,7 @@ export class OcaHandler implements ApiHandler {
 	protected openAIClient: OpenAI | undefined
 	protected anthropicClient: Anthropic | undefined
 	protected externalHeaders: Record<string, string> = {}
+	private costRatesPromise: Promise<{ inputCostPerMillion: number; outputCostPerMillion: number }> | undefined
 
 	constructor(protected ctx: ApiHandlerContext) {}
 
@@ -104,7 +105,7 @@ export class OcaHandler implements ApiHandler {
 				this.baseUrl ||
 				(this.config?.ocaMode === "internal" ? DEFAULT_INTERNAL_OCA_BASE_URL : DEFAULT_EXTERNAL_OCA_BASE_URL),
 			apiKey: "noop",
-			fetch, // Use configured fetch with proxy support
+			fetch: providerFetch,
 		})
 	}
 
@@ -157,7 +158,7 @@ export class OcaHandler implements ApiHandler {
 				this.baseUrl ||
 				(this.config?.ocaMode === "internal" ? DEFAULT_INTERNAL_OCA_BASE_URL : DEFAULT_EXTERNAL_OCA_BASE_URL),
 			apiKey: "noop",
-			fetch, // Use configured fetch with proxy support
+			fetch: providerFetch,
 		})
 	}
 
@@ -234,10 +235,18 @@ export class OcaHandler implements ApiHandler {
 		_cacheWriteTokens?: number,
 		_cacheReadTokens?: number,
 	) {
-		const inputCost = (await this.getApiCosts(1e6, 0)) || 0
-		const outputCost = (await this.getApiCosts(0, 1e6)) || 0
-		const totalCost = (inputCost * inputTokens) / 1e6 + (outputCost * outputTokens) / 1e6
-		return totalCost
+		const { inputCostPerMillion, outputCostPerMillion } = await this.getCostRates()
+		return (inputCostPerMillion * inputTokens) / 1e6 + (outputCostPerMillion * outputTokens) / 1e6
+	}
+
+	private getCostRates(): Promise<{ inputCostPerMillion: number; outputCostPerMillion: number }> {
+		this.costRatesPromise ??= Promise.all([this.getApiCosts(1e6, 0), this.getApiCosts(0, 1e6)]).then(
+			([inputCost, outputCost]) => ({
+				inputCostPerMillion: inputCost ?? 0,
+				outputCostPerMillion: outputCost ?? 0,
+			}),
+		)
+		return this.costRatesPromise
 	}
 
 	supportsServerTool(tool: ServerTool): boolean {
@@ -347,6 +356,7 @@ export class OcaHandler implements ApiHandler {
 			chatCompletionsParams.reasoning_effort = this.reasoningEffort || ("medium" as any)
 		}
 
+		await this.getCostRates()
 		const stream = await client.chat.completions.create(chatCompletionsParams)
 
 		for await (const chunk of stream) {
@@ -475,7 +485,8 @@ export class OcaHandler implements ApiHandler {
 			responsesParams.reasoning = { effort: this.reasoningEffort as any, summary: "auto" }
 		}
 
-		// Create the response using Responses API
+		// Resolve management-plane pricing before the observed model send begins.
+		await this.getCostRates()
 		const stream = await client.responses.create(responsesParams)
 
 		yield* handleResponsesApiStreamResponse(stream, ocaModelInfo, this.calculateCost.bind(this))

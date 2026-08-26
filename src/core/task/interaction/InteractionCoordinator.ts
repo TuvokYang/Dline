@@ -48,6 +48,16 @@ export interface InteractionOutcome {
 	selection?: InteractionSelection
 }
 
+export interface AwaitingUserDurableBoundary {
+	readonly turnId: string
+	readonly interactionId: string
+	readonly kind: InteractionKind
+}
+
+export interface InteractionCoordinatorOptions {
+	readonly onAwaitingUserDurable?: (boundary: AwaitingUserDurableBoundary) => void
+}
+
 /** Context passed to the Task-owned continuation for a restored handler interaction. */
 export interface DetachedInteractionContinuationContext {
 	interaction: Readonly<ActiveInteraction>
@@ -69,6 +79,20 @@ function isRuntimeOwnedInteraction(kind: InteractionKind): kind is RuntimeOwnedI
 
 function outcomeFrom(response: InteractionResponse): InteractionOutcome {
 	return { actionId: response.actionId, draft: response.draft, selection: response.selection }
+}
+
+function isCompleteExecutionTurnEnd(kind: InteractionKind): boolean {
+	switch (kind) {
+		case "followup":
+		case "make_plan":
+		case "qna_response":
+		case "generate_report":
+		case "new_task":
+		case "completion":
+			return true
+		default:
+			return false
+	}
 }
 
 /** Select conversational interactions that can continue after a committed mode switch. */
@@ -97,7 +121,10 @@ export class InteractionCoordinator {
 	private continuationGeneration = 0
 	private readonly activeCancellationGenerations = new Set<number>()
 
-	constructor(private readonly runtime: TaskRuntime) {}
+	constructor(
+		private readonly runtime: TaskRuntime,
+		private readonly options: InteractionCoordinatorOptions = {},
+	) {}
 
 	/** Register the sole Task-owned continuation for restored handler interactions. */
 	registerDetachedContinuation(continuation: DetachedInteractionContinuation): () => void {
@@ -547,7 +574,7 @@ export class InteractionCoordinator {
 				throw new Error("Interaction open rejected: hydrated_interaction_mismatch", { cause: error })
 			}
 		}
-		return this.waitForResponse(request.interactionId, openingEvent)
+		return this.waitForResponse(request.interactionId, openingEvent, request)
 	}
 
 	/** Wait for a causal response to one already hydrated interaction. */
@@ -606,7 +633,11 @@ export class InteractionCoordinator {
 	}
 
 	/** Dispatch an opening event and wait for its causally matching accepted response. */
-	private async waitForResponse(interactionId: string, openingEvent: TaskEvent): Promise<InteractionResponse> {
+	private async waitForResponse(
+		interactionId: string,
+		openingEvent: TaskEvent,
+		awaitingBoundary?: Pick<OpenInteractionRequest, "turnId" | "interactionId" | "kind">,
+	): Promise<InteractionResponse> {
 		const generation = this.continuationGeneration
 		if (!this.isCurrentGeneration(generation)) throw new InteractionCancellationError("task_cancelled")
 		this.waitingInteractionIds.add(interactionId)
@@ -627,6 +658,13 @@ export class InteractionCoordinator {
 			const opened = await this.runtime.dispatch(openingEvent)
 			if (!opened.accepted) {
 				throw new Error(`Interaction open rejected: ${opened.error?.code ?? "invalid_runtime_event"}`)
+			}
+			if (awaitingBoundary && isCompleteExecutionTurnEnd(awaitingBoundary.kind)) {
+				this.options.onAwaitingUserDurable?.({
+					turnId: awaitingBoundary.turnId,
+					interactionId: awaitingBoundary.interactionId,
+					kind: awaitingBoundary.kind,
+				})
 			}
 			const response = await responsePromise
 			if (!this.isCurrentGeneration(generation)) throw new InteractionCancellationError("task_cancelled")

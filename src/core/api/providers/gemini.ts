@@ -9,6 +9,7 @@ import {
 	ThinkingLevel,
 } from "@google/genai"
 import { GeminiModelId, geminiDefaultModelId, geminiModels, ModelInfo } from "@shared/api"
+import { observeProviderStream } from "@shared/provider-attempt-observer"
 import { GEMINI_FLASH_MAX_OUTPUT_TOKENS, isGeminiFlashModel } from "@utils/model-utils"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { telemetryService } from "@/services/telemetry"
@@ -173,11 +174,13 @@ export class GeminiHandler implements ApiHandler {
 		}
 
 		try {
-			const result = await client.models.generateContentStream({
-				model: modelId,
-				contents: contents,
-				config: { ...requestConfig },
-			})
+			const result = await observeProviderStream(() =>
+				client.models.generateContentStream({
+					model: modelId,
+					contents: contents,
+					config: { ...requestConfig },
+				}),
+			)
 
 			let isFirstSdkChunk = true
 			for await (const chunk of result) {
@@ -235,12 +238,13 @@ export class GeminiHandler implements ApiHandler {
 				}
 
 				if (chunk.usageMetadata) {
+					const usageMetadata = chunk.usageMetadata
 					responseId = chunk.responseId
-					lastUsageMetadata = chunk.usageMetadata
-					promptTokens = lastUsageMetadata.promptTokenCount ?? promptTokens
-					outputTokens = lastUsageMetadata.candidatesTokenCount ?? outputTokens
-					thoughtsTokenCount = lastUsageMetadata.thoughtsTokenCount ?? thoughtsTokenCount
-					cacheReadTokens = lastUsageMetadata.cachedContentTokenCount ?? cacheReadTokens
+					lastUsageMetadata = usageMetadata
+					promptTokens = usageMetadata.promptTokenCount ?? promptTokens
+					outputTokens = usageMetadata.candidatesTokenCount ?? outputTokens
+					thoughtsTokenCount = usageMetadata.thoughtsTokenCount ?? thoughtsTokenCount
+					cacheReadTokens = usageMetadata.cachedContentTokenCount ?? cacheReadTokens
 				}
 			}
 			apiSuccess = true

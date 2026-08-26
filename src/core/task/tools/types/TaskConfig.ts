@@ -31,6 +31,7 @@ import type {
 	OpenInteractionRequest,
 } from "../../interaction/InteractionCoordinator"
 import type { MessageStateHandler } from "../../message-state"
+import type { ProviderRequestRoundPort } from "../../performance/provider-request-round-port"
 import type { TaskController } from "../../TaskController"
 import type { TaskState } from "../../TaskState"
 import type { AutoApprove } from "../../tools/autoApprove"
@@ -117,6 +118,8 @@ export interface TaskConfig {
 	identityFactory: IdentityFactory
 	/** Task-local real-time activity state shared by chat and the Activity view. */
 	activityStore?: TaskActivityStore
+	/** Task-owned Provider round admission for nested compaction and subagent requests. */
+	providerRequestRounds?: ProviderRequestRoundPort
 
 	/** VSCode extension context, required by spawn_task to create new webview panels. */
 	controllerContext?: any

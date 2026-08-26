@@ -40,9 +40,14 @@ export async function importApiRequestRoundLegacyUsage(
 		orderBy: [asc(exactFields.startedAtMs), asc(exactFields.roundId)],
 		limit: 1,
 	})
-	const cutoffMs = earliestExact.records[0]?.startedAtMs
+	const earliestExactRound = earliestExact.records[0]
+	const cutoffMs = earliestExactRound?.startedAtMs
+	const cutoffApiIndex = earliestExactRound?.apiIndex
 	const parsed = parseLegacyUsageMessages(options.taskId, options.source.getAll())
-	const rounds = cutoffMs === undefined ? parsed.rounds : parsed.rounds.filter(({ messageTs }) => messageTs < cutoffMs)
+	const rounds =
+		cutoffMs === undefined || cutoffApiIndex === undefined
+			? parsed.rounds
+			: parsed.rounds.filter(({ messageTs, apiIndex }) => messageTs < cutoffMs && apiIndex < cutoffApiIndex)
 	const aggregates =
 		cutoffMs === undefined ? parsed.aggregates : parsed.aggregates.filter(({ messageTs }) => messageTs < cutoffMs)
 	const overlapExcluded = rounds.length !== parsed.rounds.length || aggregates.length !== parsed.aggregates.length

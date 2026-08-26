@@ -60,35 +60,36 @@ describe("useTaskRateMetrics", () => {
 		expect(mocks.getTaskRateMetrics).not.toHaveBeenCalled()
 	})
 
-	it("queries the default Round view as the most recent 60 canonical rounds", async () => {
-		mocks.getTaskRateMetrics.mockResolvedValueOnce(response(4))
-		const { result } = renderHook(() => useTaskRateMetrics({ enabled: true, resolution: "round", taskId: "task-1" }))
-
-		await waitFor(() => expect(result.current.data?.points[0]?.activeSeconds).toBe(4))
-		expect(mocks.getTaskRateMetrics).toHaveBeenCalledWith(
-			expect.objectContaining({
-				taskId: "task-1",
-				resolution: ProtoResolution.TASK_RATE_METRICS_RESOLUTION_ROUND,
-				startMs: 0,
-				endMs: NOW_MS,
-				maxPoints: 60,
-			}),
-		)
-	})
-
-	it("queries the minute window as the last 60 minutes", async () => {
-		mocks.getTaskRateMetrics.mockResolvedValueOnce(response(4))
+	it("queries at most 30 active minutes and omits inactive buckets", async () => {
+		const activeResponse = response(4)
+		const activePoint = activeResponse.points[0]
+		if (!activePoint) throw new Error("Expected active response point")
+		mocks.getTaskRateMetrics.mockResolvedValueOnce({
+			...activeResponse,
+			points: [
+				{
+					...activePoint,
+					activeSeconds: 0,
+					requestCount: 0,
+					tokenCount: 0,
+					requestsPerMinute: 0,
+					tokensPerMinute: 0,
+				},
+				activePoint,
+			],
+		})
 		const { result } = renderHook(() => useTaskRateMetrics({ enabled: true, resolution: "minute", taskId: "task-1" }))
 
 		expect(result.current.loading).toBe(true)
-		await waitFor(() => expect(result.current.data?.points[0]?.activeSeconds).toBe(4))
+		await waitFor(() => expect(result.current.data?.points).toHaveLength(1))
+		expect(result.current.data?.points[0]?.activeSeconds).toBe(4)
 		expect(mocks.getTaskRateMetrics).toHaveBeenCalledWith(
 			expect.objectContaining({
 				taskId: "task-1",
 				resolution: ProtoResolution.TASK_RATE_METRICS_RESOLUTION_MINUTE,
-				startMs: NOW_MS - 60 * 60 * 1_000,
+				startMs: NOW_MS - 30 * 60 * 1_000,
 				endMs: NOW_MS,
-				maxPoints: 60,
+				maxPoints: 30,
 			}),
 		)
 	})
@@ -98,14 +99,14 @@ describe("useTaskRateMetrics", () => {
 		const { rerender } = renderHook(
 			({ localSelection }: { localSelection: string }) => {
 				void localSelection
-				return useTaskRateMetrics({ enabled: true, resolution: "round", taskId: "task-1" })
+				return useTaskRateMetrics({ enabled: true, resolution: "minute", taskId: "task-1" })
 			},
-			{ initialProps: { localSelection: "usage-cache-line" } },
+			{ initialProps: { localSelection: "token-cache-line" } },
 		)
 		await waitFor(() => expect(mocks.getTaskRateMetrics).toHaveBeenCalledTimes(1))
 
-		rerender({ localSelection: "rpm-bar" })
-		rerender({ localSelection: "tokens-line" })
+		rerender({ localSelection: "rates-bar" })
+		rerender({ localSelection: "token-cache-line" })
 		expect(mocks.getTaskRateMetrics).toHaveBeenCalledTimes(1)
 	})
 
@@ -144,8 +145,8 @@ describe("useTaskRateMetrics", () => {
 		expect(mocks.getTaskRateMetrics).toHaveBeenLastCalledWith(
 			expect.objectContaining({
 				resolution: ProtoResolution.TASK_RATE_METRICS_RESOLUTION_DAY,
-				startMs: NOW_MS - 30 * 24 * 60 * 60 * 1_000,
-				maxPoints: 30,
+				startMs: NOW_MS - 15 * 24 * 60 * 60 * 1_000,
+				maxPoints: 15,
 			}),
 		)
 	})

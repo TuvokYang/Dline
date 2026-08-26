@@ -275,53 +275,37 @@ async function expectRateMetricsDialog(frame: Frame, summary: RateSummary, exerc
 	const rate = frame.getByTestId("task-rate-metrics")
 	const ariaLabel = await rate.getAttribute("aria-label")
 	expect(ariaLabel).toContain("View API rate history")
-	expect(ariaLabel).toContain(`Requests per minute: ${summary.requestsPerMinute}`)
-	expect(ariaLabel).toContain(`Tokens per minute: ${summary.tokensPerMinute}`)
+	expect(ariaLabel).toMatch(/(?:^|; )RPM: [1-9]\d*(?:;|$)/)
+	expect(ariaLabel).toContain(`TPM: ${summary.tokensPerMinute}`)
+	expect(ariaLabel).not.toContain("Request")
 	await rate.click()
 	const dialog = frame.getByRole("dialog")
 	await expect(dialog.getByRole("heading", { name: "API rate history", exact: true })).toBeVisible()
-	await expect(dialog.getByRole("tab", { name: "Round", exact: true })).toHaveAttribute("aria-selected", "true")
-	await expect(dialog.getByRole("radio", { name: "Usage & Cache", exact: true })).toHaveAttribute("aria-checked", "true")
-	await expect(dialog.getByRole("img", { name: "Task usage and cache hit history chart", exact: true })).toBeVisible({
-		timeout: 30_000,
-	})
-
-	await dialog.getByRole("tab", { name: "Minute", exact: true }).click()
-	await dialog.getByRole("radio", { name: "TPM", exact: true }).click()
-	await dialog.getByRole("radio", { name: "Bar", exact: true }).click()
-	const chart = dialog.getByRole("img", { name: "API rate history chart", exact: true })
+	const resolutionSelect = dialog.getByRole("combobox", { name: "History resolution", exact: true })
+	await expect(resolutionSelect).toHaveValue("hour")
+	await expect(dialog.getByRole("radio", { name: "Token/Cache Hit", exact: true })).toHaveAttribute("aria-checked", "true")
+	const chart = dialog.getByRole("img", { name: "Task metrics history chart", exact: true })
 	await expect(chart).toBeVisible({ timeout: 30_000 })
-	await expect(chart).toHaveAttribute("data-chart-type", "bar")
-	await expect(chart).toHaveAttribute("data-metric", "tpm")
-	const bars = dialog.locator('[data-testid^="task-rate-bar-"]')
-	const activeBar = bars.last()
-	await expect(activeBar).toBeVisible()
-	const activeBarLabel = await activeBar.getAttribute("aria-label")
-	const selectedTpm = activeBarLabel?.match(/^TPM (.+) at /)?.[1]
-	if (!selectedTpm) throw new Error(`Missing compact TPM value in chart bar label: ${activeBarLabel}`)
-	await activeBar.focus()
-	const tooltip = dialog.getByRole("tooltip")
-	await expect(tooltip).toContainText(`Selected TPM: ${selectedTpm}`)
-	await expect(tooltip).toContainText(`TPM: ${summary.lastMinute.tokensPerMinute.toLocaleString()}`)
-	await expect(tooltip).toContainText(`RPM: ${summary.lastMinute.requestsPerMinute.toLocaleString()}`)
-	await expect(tooltip).toContainText(`Tokens: ${summary.lastMinute.tokenCount.toLocaleString()}`)
-	await expect(tooltip).toContainText(`Active seconds: ${summary.lastMinute.activeSeconds}`)
-	await expect(tooltip).toContainText(`Quality: ${summary.lastMinute.quality}`)
+	await expect(chart).toHaveAttribute("data-view", "tokenCache")
+	await expect(chart).toHaveAttribute("data-chart-type", "line")
 
-	for (const metric of ["RPM", "Total Tokens"] as const) {
-		await dialog.getByRole("radio", { name: metric, exact: true }).click()
-		await expect(chart).toHaveAttribute("data-metric", metric === "RPM" ? "rpm" : "tokens")
-	}
+	await dialog.getByRole("radio", { name: "TPM/RPM", exact: true }).click()
+	await expect(chart).toHaveAttribute("data-view", "rates")
+	await dialog.getByRole("radio", { name: "Bar", exact: true }).click()
+	await expect(chart).toHaveAttribute("data-chart-type", "bar")
+	await expect(dialog.locator('[data-testid^="task-metrics-bar-tpm-"]').last()).toBeVisible()
+	await expect(dialog.getByRole("button", { name: "TPM", exact: true })).toHaveAttribute("aria-pressed", "true")
+	await expect(dialog.getByRole("button", { name: "RPM", exact: true })).toHaveAttribute("aria-pressed", "true")
+
 	await dialog.getByRole("radio", { name: "Line", exact: true }).click()
 	await expect(chart).toHaveAttribute("data-chart-type", "line")
-	await expect(dialog.locator('[data-testid^="task-rate-point-"]').last()).toBeVisible()
+	await expect(dialog.locator('[data-testid^="task-metrics-point-tpm-"]').last()).toBeVisible()
 
 	if (exerciseResolutions) {
-		for (const resolution of ["Hour", "Day", "Minute"] as const) {
-			const tab = dialog.getByRole("tab", { name: resolution, exact: true })
-			await tab.click()
-			await expect(tab).toHaveAttribute("aria-selected", "true")
-			await expect(dialog.getByRole("img", { name: "API rate history chart", exact: true })).toBeVisible({
+		for (const resolution of ["hour", "day", "minute"] as const) {
+			await resolutionSelect.selectOption(resolution)
+			await expect(resolutionSelect).toHaveValue(resolution)
+			await expect(dialog.getByRole("img", { name: "Task metrics history chart", exact: true })).toBeVisible({
 				timeout: 30_000,
 			})
 		}
