@@ -20,6 +20,11 @@ import { getCwd } from "@/utils/path"
 import { FileContextTracker } from "../context/context-tracking/FileContextTracker"
 import type { WorkspaceRootManager } from "../workspace"
 
+export interface MentionPathAccessPolicy {
+	validateFileAccess(filePath: string, baseDir: string): boolean
+	validateDirectoryAccess(directoryPath: string, baseDir: string): boolean
+}
+
 export async function openMention(mention?: string): Promise<void> {
 	if (!mention) {
 		return
@@ -62,6 +67,7 @@ export async function parseMentions(
 	urlContentFetcher: UrlContentFetcher,
 	fileContextTracker?: FileContextTracker,
 	workspaceManager?: WorkspaceRootManager,
+	pathAccessPolicy?: MentionPathAccessPolicy,
 ): Promise<string> {
 	const mentions: Set<string> = new Set()
 	let parsedText = text.replace(mentionRegexGlobal, (match, mention) => {
@@ -157,7 +163,7 @@ export async function parseMentions(
 				const workspaceRoots = workspaceManager.getRoots()
 				const searchPromises = workspaceRoots.map(async (root: WorkspaceRoot) => {
 					try {
-						const content = await getFileOrFolderContent(mentionPath, root.path)
+						const content = await getFileOrFolderContent(mentionPath, root.path, pathAccessPolicy)
 						return {
 							workspaceName: root.name || path.basename(root.path),
 							content,
@@ -221,7 +227,7 @@ export async function parseMentions(
 					telemetryService.captureMentionFailed(mentionType, "not_found", errorMsg)
 				} else {
 					try {
-						const content = await getFileOrFolderContent(mentionPath, targetRoot.path)
+						const content = await getFileOrFolderContent(mentionPath, targetRoot.path, pathAccessPolicy)
 						if (mention.endsWith("/")) {
 							parsedText += `\n\n<folder_content path="${mentionPath}" workspace="${workspaceHint}">\n${content}\n</folder_content>`
 						} else {
@@ -249,7 +255,7 @@ export async function parseMentions(
 			} else {
 				// Legacy single workspace mode
 				try {
-					const content = await getFileOrFolderContent(mentionPath, cwd)
+					const content = await getFileOrFolderContent(mentionPath, cwd, pathAccessPolicy)
 					if (mention.endsWith("/")) {
 						parsedText += `\n\n<folder_content path="${mentionPath}">\n${content}\n</folder_content>`
 					} else {
@@ -332,11 +338,25 @@ export async function parseMentions(
 	return parsedText
 }
 
-async function getFileOrFolderContent(mentionPath: string, cwd: string): Promise<string> {
-	const absPath = path.resolve(cwd, mentionPath)
+async function getFileOrFolderContent(
+	mentionPath: string,
+	cwd: string,
+	pathAccessPolicy?: MentionPathAccessPolicy,
+): Promise<string> {
+	const workspaceRoot = path.resolve(cwd)
+	const absPath = path.resolve(workspaceRoot, mentionPath)
 
 	try {
+		assertPathWithinWorkspace(mentionPath, workspaceRoot, absPath)
+		if (pathAccessPolicy) {
+			const allowed = mentionPath.endsWith("/")
+				? pathAccessPolicy.validateDirectoryAccess(mentionPath, cwd)
+				: pathAccessPolicy.validateFileAccess(mentionPath, cwd)
+			if (!allowed) throw new Error(`Access denied by workspace policy: "${mentionPath}"`)
+		}
 		const stats = await fs.stat(absPath)
+		const [canonicalRoot, canonicalPath] = await Promise.all([fs.realpath(workspaceRoot), fs.realpath(absPath)])
+		assertPathWithinWorkspace(mentionPath, canonicalRoot, canonicalPath)
 
 		if (stats.isFile()) {
 			const isBinary = await isBinaryFile(absPath).catch(() => false)
@@ -361,6 +381,9 @@ async function getFileOrFolderContent(mentionPath: string, cwd: string): Promise
 					fileContentPromises.push(
 						(async () => {
 							try {
+								if (pathAccessPolicy && !pathAccessPolicy.validateFileAccess(filePath, cwd)) return undefined
+								const canonicalFilePath = await fs.realpath(absoluteFilePath)
+								assertPathWithinWorkspace(filePath, canonicalRoot, canonicalFilePath)
 								const isBinary = await isBinaryFile(absoluteFilePath).catch(() => false)
 								if (isBinary) {
 									return undefined
@@ -384,7 +407,16 @@ async function getFileOrFolderContent(mentionPath: string, cwd: string): Promise
 		}
 		return `(Failed to read contents of ${mentionPath})`
 	} catch (error) {
+		if (error instanceof Error && error.message.startsWith("Access denied")) throw error
 		throw new Error(`Failed to access path "${mentionPath}": ${error.message}`)
+	}
+}
+
+function assertPathWithinWorkspace(mentionPath: string, workspaceRoot: string, candidatePath: string): void {
+	const relativePath = path.relative(workspaceRoot, candidatePath)
+	const outsideWorkspace = relativePath === ".." || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)
+	if (outsideWorkspace) {
+		throw new Error(`Access denied: path "${mentionPath}" is outside the workspace`)
 	}
 }
 

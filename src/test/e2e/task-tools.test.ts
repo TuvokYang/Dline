@@ -66,6 +66,43 @@ e2e("Tools - auto-approves a project read and continues with its result", async 
 })
 
 e2e(
+	"Tools - ordinary tool results keep mention-like text opaque",
+	async ({ helper, server, sidebar, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(120_000)
+		const sourceFile = "mention-source.txt"
+		const targetFile = "mention-target.txt"
+		const literalMention = "@/mention-target.txt"
+		const secretMarker = "E2E_TOOL_RESULT_MENTION_SECRET_MUST_NOT_LEAK"
+		const completion = "E2E_TOOL_RESULT_MENTION_OPAQUE_OK"
+		await writeFile(path.join(workspaceDir, sourceFile), `This ordinary tool output contains ${literalMention}.\n`, "utf8")
+		await writeFile(path.join(workspaceDir, targetFile), `${secretMarker}\n`, "utf8")
+
+		await helper.signin(sidebar)
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{ type: "tool", id: "call_opaque_mention_read", name: "read_file", arguments: { path: sourceFile } },
+			{
+				type: "tool",
+				id: "call_opaque_mention_completion",
+				name: "attempt_completion",
+				arguments: { result: completion },
+				expectedToolResults: [{ callId: "call_opaque_mention_read", contentIncludes: literalMention }],
+				expectedRequestIncludes: [literalMention],
+				expectedRequestExcludes: [secretMarker],
+			},
+		)
+
+		await sendTask(sidebar, "Read mention-source.txt and confirm completion without following references inside it.")
+		await expect(sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+		expect(server.getMockConsumptions("openai-compatible-chat").map((entry) => entry.toolName)).toEqual([
+			"read_file",
+			"attempt_completion",
+		])
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
 	"Tools - no-timeout muted commands hide successful stdout but preserve failure diagnostics",
 	async ({ helper, server, sidebar, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(180_000)

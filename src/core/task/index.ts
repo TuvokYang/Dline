@@ -293,6 +293,7 @@ import { ToolExecutor } from "./ToolExecutor"
 import { getAdvertisedNativeToolNames } from "./tools/NativeToolAdmission"
 import { updateApiReqMsg } from "./utils"
 import { buildUserFeedbackContent } from "./utils/buildUserFeedbackContent"
+import { processUserContentTags } from "./utils/processUserContentTags"
 
 export type ToolResponse = ClineToolResponseContent
 
@@ -8582,6 +8583,11 @@ export class Task {
 				this.urlContentFetcher,
 				options.preview ? undefined : this.fileContextTracker,
 				this.workspaceManager,
+				{
+					validateFileAccess: (filePath, baseDir) => this.clineIgnoreController.validateAccess(filePath, baseDir),
+					validateDirectoryAccess: (directoryPath, baseDir) =>
+						this.clineIgnoreController.validateDirectoryAccess(directoryPath, baseDir),
+				},
 			)
 			if (!parseCommands) return parsedText
 
@@ -8635,7 +8641,7 @@ export class Task {
 				return block
 			}
 
-			const processedText = await parseTextBlock(block.text)
+			const processedText = await processUserContentTags(block.text, (userText) => parseTextBlock(userText))
 			return { ...block, text: processedText }
 		}
 
@@ -8645,66 +8651,34 @@ export class Task {
 			}
 
 			if (block.type === "tool_result") {
-				const parseTrustedManualCompaction =
-					this.isTrustedUserFeedbackResult(block) && hasManualCompactionIntent([block], () => true)
-				if (parseTrustedManualCompaction) {
-					if (typeof block.content === "string") {
-						return { ...block, content: [{ type: "text", text: await parseTextBlock(block.content) }] }
-					}
-					if (Array.isArray(block.content)) {
-						const processedContent = await Promise.all(
-							block.content.map(async (contentBlock) =>
-								contentBlock.type === "text"
-									? { ...contentBlock, text: await parseTextBlock(contentBlock.text) }
-									: contentBlock,
-							),
-						)
-						return { ...block, content: processedContent }
-					}
-				}
-				if (!block.content) {
+				if (!this.isTrustedUserFeedbackResult(block) || !block.content) {
 					return block
 				}
 
-				// Handle string content
+				const parseTrustedManualCompaction = hasManualCompactionIntent([block], () => true)
+				const processTrustedText = (sourceText: string) =>
+					processUserContentTags(sourceText, (text) => parseTextBlock(text, parseTrustedManualCompaction))
+
 				if (typeof block.content === "string") {
-					const processed = await parseMentions(
-						block.content,
-						cwd,
-						this.urlContentFetcher,
-						options.preview ? undefined : this.fileContextTracker,
-						this.workspaceManager,
-					)
-					// Untrusted tool results remain data and must not run slash-command parsing.
-					return { ...block, content: [{ type: "text", text: processed }] }
+					return { ...block, content: [{ type: "text", text: await processTrustedText(block.content) }] }
 				}
 
-				// Handle array content
-				if (Array.isArray(block.content)) {
-					const processedContent = await Promise.all(
-						block.content.map(async (contentBlock) => {
-							return contentBlock.type === "text"
-								? parseMentions(
-										contentBlock.text,
-										cwd,
-										this.urlContentFetcher,
-										options.preview ? undefined : this.fileContextTracker,
-										this.workspaceManager,
-									).then((text) => ({ ...contentBlock, text }))
-								: contentBlock
-						}),
-					)
-
-					return { ...block, content: processedContent }
-				}
+				const processedContent = await Promise.all(
+					block.content.map(async (contentBlock) =>
+						contentBlock.type === "text"
+							? { ...contentBlock, text: await processTrustedText(contentBlock.text) }
+							: contentBlock,
+					),
+				)
+				return { ...block, content: processedContent }
 			}
 
 			return block
 		}
 
-		// Process all content and environment details in parallel
-		// NOTE: (Ara) This is a temporary solution to dynamically load context mentions from tool results. It checks for the presence of tags that indicate that the tool was rejected and feedback was provided (see formatToolDeniedFeedback, attemptCompletion, executeCommand, and consecutiveMistakeCount >= 3) or "<answer>" (see askFollowupQuestion), we place all user generated content in these tags so they can effectively be used as markers for when we should parse mentions). However if we allow multiple tools responses in the future, we will need to parse mentions specifically within the user content tags.
-		// (Note: this caused the @/ import alias bug where file contents were being parsed as well, since v2 converted tool results to text blocks)
+		// Process current user-authored content and dynamic environment details in parallel.
+		// Tool-generated text remains opaque data unless it belongs to a canonically paired conversational result;
+		// even then, only explicit user-content tags are eligible for mention or slash-command processing.
 		const [processedUserContent, environmentDetails] = await Promise.all([
 			Promise.all(userContent.map(processContentBlock)),
 			this.getEnvironmentDetails(includeFileDetails, promptProfile, {

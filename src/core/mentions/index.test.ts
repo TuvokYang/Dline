@@ -41,6 +41,7 @@ describe("parseMentions", () => {
 		// Stub file system operations using fs.promises
 		fsStatStub = vi.spyOn(fs.promises, "stat")
 		fsReaddirStub = vi.spyOn(fs.promises, "readdir")
+		vi.spyOn(fs.promises, "realpath").mockImplementation(async (filePath) => String(filePath))
 
 		// Stub other modules
 		extractTextStub = vi.spyOn(extractTextModule, "extractTextFromFile")
@@ -124,6 +125,38 @@ Error fetching content: Failed to access path "missing.txt": ENOENT: no such fil
 </file_content>`
 
 			expect(result).to.equal(expectedOutput)
+		})
+
+		it("rejects file mentions that escape every workspace root", async () => {
+			const text = "Check @/../outside-secret.txt"
+
+			const result = await parseMentions(text, cwd, urlContentFetcherStub)
+
+			expect(result).to.contain('Access denied: path "../outside-secret.txt" is outside the workspace')
+			expect(fsStatStub.mock.calls).to.have.length(0)
+			expect(extractTextStub.mock.calls).to.have.length(0)
+		})
+
+		it("honors the caller path access policy before reading a file", async () => {
+			const text = "Check @/ignored.txt"
+			const pathAccessPolicy = {
+				validateFileAccess: vi.fn(() => false),
+				validateDirectoryAccess: vi.fn(() => true),
+			}
+
+			const result = await parseMentions(
+				text,
+				cwd,
+				urlContentFetcherStub,
+				fileContextTrackerStub,
+				undefined,
+				pathAccessPolicy,
+			)
+
+			expect(result).to.contain('Access denied by workspace policy: "ignored.txt"')
+			expect(pathAccessPolicy.validateFileAccess.mock.calls).to.deep.equal([["ignored.txt", cwd]])
+			expect(fsStatStub.mock.calls).to.have.length(0)
+			expect(extractTextStub.mock.calls).to.have.length(0)
 		})
 	})
 

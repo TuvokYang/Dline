@@ -55,21 +55,18 @@ describe("Task request API boundary", () => {
 		expect(method.slice(compactionCapability, manualSession)).not.toContain("deferCurrentTurn(")
 	})
 
-	it("parses manual compaction only from canonically paired conversational tool feedback", async () => {
+	it("parses mentions and manual compaction only from canonically paired user feedback", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const method = extractMethod(source, "async loadContext(", "async getEnvironmentDetails(")
 		const toolResultBranchStart = method.indexOf('if (block.type === "tool_result")')
 		const toolResultBranch = method.slice(toolResultBranchStart)
-		const trustedBranchEnd = toolResultBranch.indexOf("// Handle string content")
-		const trustedBranch = toolResultBranch.slice(0, trustedBranchEnd)
-		const untrustedBranch = toolResultBranch.slice(trustedBranchEnd)
 
 		expect(toolResultBranchStart).toBeGreaterThanOrEqual(0)
-		expect(trustedBranch).toContain("this.isTrustedUserFeedbackResult(block)")
-		expect(trustedBranch).toContain("hasManualCompactionIntent([block], () => true)")
-		expect(trustedBranch).toContain("parseTextBlock(block.content)")
-		expect(untrustedBranch).toContain("parseMentions(")
-		expect(untrustedBranch).not.toContain("parseTextBlock(")
+		expect(toolResultBranch).toContain("this.isTrustedUserFeedbackResult(block)")
+		expect(toolResultBranch).toContain("hasManualCompactionIntent([block], () => true)")
+		expect(toolResultBranch).toContain("processUserContentTags(")
+		expect(toolResultBranch).toContain("parseTextBlock(text, parseTrustedManualCompaction)")
+		expect(toolResultBranch).not.toContain("parseMentions(")
 	})
 
 	it("pairs trusted feedback by canonical identities and conversational tool admission", async () => {
@@ -159,21 +156,23 @@ describe("Task request API boundary", () => {
 		expect(requestBody).not.toMatch(/\bthis\.api\b/)
 	})
 
-	it("resolves the compaction output budget while building the complete candidate before sending", async () => {
+	it("resolves the compaction output budget only inside the explicit Pass builder", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
-		const builder = extractMethod(source, "private async buildProviderInput(", "/** Build the exact ordinary candidate")
-		const request = extractMethod(source, "async *attemptApiRequest(", "// Block identity is now assigned")
-		const resolveIndex = builder.indexOf("resolveCompactionWindowBudget({")
-		const returnIndex = builder.indexOf("return { systemPrompt, messages, tools, serverTools, providerOutputCap }")
-		const recordIndex = request.indexOf("recordProviderAdapterInput(")
-		const sendIndex = request.indexOf("api.createMessage(")
+		const passBuilder = extractMethod(
+			source,
+			"private async buildContextCompactionPassRequest(",
+			"/** Rebuild the complete target candidate",
+		)
+		const ordinaryBuilder = extractMethod(
+			source,
+			"private async buildProviderInput(",
+			"/** Build the exact ordinary candidate",
+		)
 
-		expect(resolveIndex).toBeGreaterThanOrEqual(0)
-		expect(returnIndex).toBeGreaterThan(resolveIndex)
-		expect(recordIndex).toBeGreaterThanOrEqual(0)
-		expect(sendIndex).toBeGreaterThan(recordIndex)
-		expect(builder).toContain("serverTools")
-		expect(builder).toContain("providerInfo.model.info.capabilities?.maxTokens")
+		expect(passBuilder).toContain("resolveCompactionWindowBudget({")
+		expect(passBuilder).toContain("providerOutputCap: resolvedBudget.budget.providerOutputCap")
+		expect(ordinaryBuilder).not.toContain("resolveCompactionWindowBudget({")
+		expect(ordinaryBuilder).toContain("providerOutputCap: undefined")
 	})
 
 	it("registers every Session Pass internally without ordinary request replay", async () => {
@@ -184,12 +183,12 @@ describe("Task request API boundary", () => {
 			"/** Rebuild the complete target candidate",
 		)
 		const registrationStart = method.indexOf("requestScope.explicitInstructions.register({")
-		const promptStart = method.indexOf("const summaryPrompt = summarizeTask(", registrationStart)
-		const providerStart = method.indexOf("await this.buildProviderInput(", promptStart)
+		const candidateStart = method.indexOf("const buildCandidateHistory =", registrationStart)
+		const providerStart = method.indexOf("await this.buildProviderInput(", candidateStart)
 
 		expect(registrationStart).toBeGreaterThanOrEqual(0)
-		expect(promptStart).toBeGreaterThan(registrationStart)
-		expect(providerStart).toBeGreaterThan(promptStart)
+		expect(candidateStart).toBeGreaterThan(registrationStart)
+		expect(providerStart).toBeGreaterThan(candidateStart)
 		expect(method).toContain('type: "summarize_task"')
 		expect(method).toContain("targetTool: ClineDefaultTool.SUMMARIZE_TASK")
 		expect(method).not.toContain("compactionRequestReplay")
