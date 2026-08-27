@@ -172,20 +172,29 @@ export class AnthropicHandler implements ApiHandler {
 		const nativeToolsOn = requestTools !== undefined && requestTools.length > 0
 		const reasoningOn = enableThinking && (model.info.capabilities?.supportsReasoning ?? false) && budget_tokens !== 0
 
-		// Claude Opus 4.5+ uses adaptive thinking instead of budgeted extended thinking.
+		// Effective model metadata is authoritative for built-in adaptive-thinking support.
+		const modelThinking = model.info.capabilities?.thinking ?? anthropicModels[modelId]?.capabilities?.thinking
 		const isCustomModel = !anthropicModels[modelId]
 		const hasReasoningEffort = enableThinking && this.reasoningEffort && this.reasoningEffort !== "none"
-		const isAdaptiveThinkingModel = isClaudeOpusAdaptiveThinkingModel(modelId) || (isCustomModel && hasReasoningEffort)
+		const supportsAdaptiveThinking =
+			modelThinking?.supported === true && modelThinking.mode === "effort" && (modelThinking.effortLevels?.length ?? 0) > 0
+		const isAdaptiveThinkingModel = isCustomModel
+			? isClaudeOpusAdaptiveThinkingModel(modelId) || Boolean(hasReasoningEffort)
+			: supportsAdaptiveThinking
 		const adaptiveThinking = isAdaptiveThinkingModel
 			? resolveClaudeOpusAdaptiveThinking(this.reasoningEffort, budget_tokens)
 			: undefined
 		const adaptiveThinkingEnabled = adaptiveThinking?.enabled === true
-		const adaptiveThinkingEffort = adaptiveThinking?.effort
+		const supportedEfforts = modelThinking?.effortLevels ?? []
+		const adaptiveThinkingEffort =
+			adaptiveThinking?.effort === "xhigh" && !supportedEfforts.includes("xhigh") && supportedEfforts.includes("max")
+				? "max"
+				: adaptiveThinking?.effort
 		const thinkingEnabled = enableThinking && (isAdaptiveThinkingModel ? adaptiveThinkingEnabled : reasoningOn)
 		const thinkingConfig = thinkingEnabled
 			? isAdaptiveThinkingModel
-				? ({ type: "adaptive" } as any)
-				: { type: "enabled", budget_tokens: budget_tokens }
+				? { type: "adaptive" as const }
+				: { type: "enabled" as const, budget_tokens: budget_tokens }
 			: undefined
 		const outputConfig = isAdaptiveThinkingModel && adaptiveThinkingEffort ? { effort: adaptiveThinkingEffort } : undefined
 		const maxOutputTokens =
@@ -201,7 +210,7 @@ export class AnthropicHandler implements ApiHandler {
 				max_tokens: maxOutputTokens,
 				// "Thinking isn't compatible with temperature, top_p, or top_k modifications as well as forced tool use."
 				// (https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking#important-considerations-when-using-extended-thinking)
-				// Adaptive Claude Opus models do not support temperature.
+				// Adaptive Claude models do not support temperature.
 				temperature: isAdaptiveThinkingModel ? undefined : reasoningOn ? undefined : 0,
 				system: [
 					{

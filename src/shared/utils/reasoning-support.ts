@@ -1,5 +1,8 @@
 import { normalizeOpenaiReasoningEffort, type OpenaiReasoningEffort } from "../storage/types"
 
+export const ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS = ["none", "low", "medium", "high", "xhigh", "max"] as const
+export const ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS_WITHOUT_XHIGH = ["none", "low", "medium", "high", "max"] as const
+
 export type ClaudeAdaptiveThinkingEffort = "low" | "medium" | "high" | "xhigh" | "max"
 
 export interface ClaudeOpusAdaptiveThinkingSettings {

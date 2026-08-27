@@ -3,12 +3,11 @@ import { DebouncedTextField } from "../common/DebouncedTextField"
 import { ModelInfoView } from "../common/ModelInfoView"
 import { ModelSelector } from "../common/ModelSelector"
 import ThinkingBudgetSlider from "../ThinkingBudgetSlider"
-import { SUPPORTED_ANTHROPIC_THINKING_MODELS } from "./AnthropicProvider"
 import type { ApiProfile } from "./ProviderProfile"
 import { useProviderModels } from "./useProviderModels"
 
 const SUPPORTED_CLAUDE_CODE_THINKING_MODELS = [
-	...SUPPORTED_ANTHROPIC_THINKING_MODELS,
+	"claude-sonnet-4-6",
 	"sonnet",
 	"sonnet[1m]",
 	"claude-opus-4-7[1m]",

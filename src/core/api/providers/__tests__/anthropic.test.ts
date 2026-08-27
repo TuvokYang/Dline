@@ -4,6 +4,7 @@ import { ApiProfile } from "@shared/proto/dline/profile"
 import { expect } from "chai"
 import should from "should"
 import { afterEach, describe, it, vi } from "vitest"
+import type { ApiRequestOptions } from "../../index"
 import { ANTHROPIC_FAST_MODE_BETA, AnthropicHandler } from "../anthropic"
 
 describe("AnthropicHandler", () => {
@@ -432,8 +433,8 @@ describe("AnthropicHandler", () => {
 			}
 
 			expect(standardCreate)
-			const requestBody = standardCreate.mock.calls[0][0] as Record<string, any>
-			const requestOptions = standardCreate.mock.calls[0][1] as Record<string, any>
+			const requestBody = standardCreate.mock.calls[0][0] as { model: string; thinking: { type: string } }
+			const requestOptions = standardCreate.mock.calls[0][1] as { headers: Record<string, string> }
 			requestBody.model.should.equal("claude-opus-4-7:1m")
 			expect(handler.getModel().info.capabilities?.contextWindow).to.equal(1_500_000)
 			requestBody.thinking.should.deepEqual({ type: "adaptive" })
@@ -473,12 +474,64 @@ describe("AnthropicHandler", () => {
 			}
 
 			expect(standardCreate)
-			const requestBody = standardCreate.mock.calls[0][0] as Record<string, any>
+			const requestBody = standardCreate.mock.calls[0][0] as {
+				thinking: { type: string }
+				output_config: { effort: string }
+				temperature?: unknown
+			}
 			requestBody.should.have.property("thinking")
 			requestBody.thinking.should.deepEqual({ type: "adaptive" })
 			requestBody.should.have.property("output_config")
 			requestBody.output_config.should.deepEqual({ effort: "xhigh" })
 			should(requestBody.temperature).equal(undefined)
+		})
+
+		it("should use adaptive thinking and max effort for Claude Sonnet 4.6", async () => {
+			const handler = new AnthropicHandler({
+				profile: ApiProfile.create({
+					provider: "anthropic",
+					apiKey: "test-api-key",
+					modelId: "claude-sonnet-4-6",
+					modelInfo: { id: "claude-sonnet-4-6", capabilities: { supportsReasoning: true } },
+					anthropic: { reasoning: { effort: "max" } },
+				}),
+				mode: "act",
+			})
+			const standardCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				messages: { create: standardCreate },
+				beta: { messages: { _client: {}, create: vi.fn().mockResolvedValue(createAsyncIterable()) } },
+			})
+
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+			}
+
+			const requestBody = standardCreate.mock.calls[0]?.[0] as Record<string, unknown> | undefined
+			expect(requestBody?.thinking).to.deep.equal({ type: "adaptive" })
+			expect(requestBody?.output_config).to.deep.equal({ effort: "max" })
+		})
+
+		it("should migrate legacy xhigh to max when the selected Anthropic model does not support xhigh", async () => {
+			const handler = new AnthropicHandler({
+				profile: ApiProfile.create({
+					provider: "anthropic",
+					apiKey: "test-api-key",
+					modelId: "claude-sonnet-4-6",
+					anthropic: { reasoning: { effort: "xhigh" } },
+				}),
+				mode: "act",
+			})
+			const standardCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				messages: { create: standardCreate },
+				beta: { messages: { _client: {}, create: vi.fn().mockResolvedValue(createAsyncIterable()) } },
+			})
+
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+			}
+
+			const requestBody = standardCreate.mock.calls[0]?.[0] as Record<string, unknown> | undefined
+			expect(requestBody?.output_config).to.deep.equal({ effort: "max" })
 		})
 
 		it("should use provider overrides for registry model request max tokens", async () => {
@@ -533,9 +586,15 @@ describe("AnthropicHandler", () => {
 				beta: { messages: { _client: {}, create: vi.fn().mockResolvedValue(createAsyncIterable()) } },
 			})
 
-			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }], undefined, {
+			const requestOptions: ApiRequestOptions = {
 				generation: { purpose: "compaction", maxOutputTokens: 30_000 },
-			} as any)) {
+			}
+			for await (const _chunk of handler.createMessage(
+				"system prompt",
+				[{ role: "user", content: "Hello" }],
+				undefined,
+				requestOptions,
+			)) {
 			}
 
 			const requestBody = standardCreate.mock.calls[0]?.[0] as { max_tokens?: unknown } | undefined

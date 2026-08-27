@@ -3,7 +3,11 @@
  * Extracted from api.ts anthropicModels (lines 184-423).
  */
 import type { ModelInfo } from "@shared/api"
-import { ServerTool } from "@shared/proto/dline/models/metadata"
+import { ServerTool, type ThinkingConfig } from "@shared/proto/dline/models/metadata"
+import {
+	ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS,
+	ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS_WITHOUT_XHIGH,
+} from "@shared/utils/reasoning-support"
 
 // Tiers used for building 1M variant model pricing (also used by refresh scripts)
 export const CLAUDE_SONNET_1M_TIERS = [
@@ -41,6 +45,10 @@ export const CLAUDE_OPUS_1M_TIERS = [
 	},
 ]
 
+function adaptiveThinking(effortLevels: readonly string[]): ThinkingConfig {
+	return { supported: true, mode: "effort", effortLevels: [...effortLevels] }
+}
+
 // Fable 5 1M context tiers
 const CLAUDE_FABLE_1M_TIERS = [
 	{
@@ -71,6 +79,7 @@ export const anthropicModels: Record<string, ModelInfo> = {
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,
+			thinking: adaptiveThinking(ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS),
 		},
 		pricing: {
 			inputPrice: 5.0,
@@ -94,6 +103,7 @@ export const anthropicModels: Record<string, ModelInfo> = {
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,
+			thinking: adaptiveThinking(ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS),
 		},
 		pricing: {
 			inputPrice: 10.0,
@@ -118,6 +128,7 @@ export const anthropicModels: Record<string, ModelInfo> = {
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,
+			thinking: adaptiveThinking(ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS),
 		},
 		pricing: {
 			inputPrice: 5.0,
@@ -142,6 +153,7 @@ export const anthropicModels: Record<string, ModelInfo> = {
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,
+			thinking: adaptiveThinking(ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS),
 		},
 		pricing: {
 			inputPrice: 3.0,
@@ -166,6 +178,7 @@ export const anthropicModels: Record<string, ModelInfo> = {
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,
+			thinking: adaptiveThinking(ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS_WITHOUT_XHIGH),
 		},
 		pricing: {
 			inputPrice: 3.0,
@@ -190,6 +203,7 @@ export const anthropicModels: Record<string, ModelInfo> = {
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,
+			thinking: adaptiveThinking(ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS_WITHOUT_XHIGH),
 		},
 		pricing: {
 			inputPrice: 5.0,
@@ -216,6 +230,7 @@ export const anthropicModels: Record<string, ModelInfo> = {
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,
+			thinking: adaptiveThinking(ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS_WITHOUT_XHIGH),
 		},
 		pricing: {
 			inputPrice: 30.0,
@@ -239,6 +254,7 @@ export const anthropicModels: Record<string, ModelInfo> = {
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,
+			thinking: adaptiveThinking(ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS),
 		},
 		pricing: {
 			inputPrice: 5.0,

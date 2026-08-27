@@ -38,6 +38,24 @@ describe("provider reasoning and service-tier options", () => {
 		})
 	})
 
+	it("projects Anthropic adaptive-thinking metadata with max into Task-local overrides", () => {
+		const thinking = resolveTaskThinkingConfig("anthropic", {
+			supportsReasoning: true,
+			thinking: {
+				supported: true,
+				mode: "effort",
+				effortLevels: ["none", "low", "medium", "high", "max"],
+			},
+		})
+
+		expect(thinking).to.deep.include({ supported: true, mode: "effort" })
+		expect(thinking?.effortLevels).to.deep.equal(["none", "low", "medium", "high", "max"])
+		expect(validateTaskReasoningOverride({ kind: "effort", effort: "max" }, thinking)).to.deep.equal({
+			valid: true,
+			override: { kind: "effort", effort: "max" },
+		})
+	})
+
 	it("uses an enabled Provider reasoning config when model capability hydration is unavailable", () => {
 		const deepSeekThinking = resolveTaskThinkingConfig("deepseek", undefined, {
 			enableThinking: true,

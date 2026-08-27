@@ -9,7 +9,7 @@ import {
 	selectContextTier,
 	updateSelectedContextWindow,
 } from "@shared/providers/effective-model-info"
-import { isClaudeOpusAdaptiveThinkingModel } from "@shared/utils/reasoning-support"
+import { ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS } from "@shared/utils/reasoning-support"
 import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
 import { useState } from "react"
 import styled from "styled-components"
@@ -23,9 +23,6 @@ import { ModelSelector } from "../common/ModelSelector"
 import { RemotelyConfiguredInputWrapper } from "../common/RemotelyConfiguredInputWrapper"
 import ThinkingControl from "../ThinkingControl"
 import { useProviderModels } from "./useProviderModels"
-
-// Anthropic models that support thinking/reasoning mode (extended thinking with budget)
-export const SUPPORTED_ANTHROPIC_THINKING_MODELS = ["claude-sonnet-4-6"]
 
 const StyledCheckbox = styled(VSCodeCheckbox)`
 	margin-bottom: 4px;
@@ -76,7 +73,11 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 
 	const [useCustomModel, setUseCustomModel] = useState(customModelEnabled)
 
-	const isAdaptiveThinkingModel = isClaudeOpusAdaptiveThinkingModel(modelId)
+	const adaptiveEffortOptions = modelInfo.capabilities?.thinking?.effortLevels ?? []
+	const isAdaptiveThinkingModel =
+		modelInfo.capabilities?.thinking?.supported === true &&
+		modelInfo.capabilities.thinking.mode === "effort" &&
+		adaptiveEffortOptions.length > 0
 
 	// --- Handlers ---
 	const handleModelChange = (newModelId: string) => {
@@ -230,28 +231,18 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 					)}
 
 					{/* ThinkingControl - for predefined models only (custom model has it in CustomModelConfig) */}
-					{!useCustomModel && isAdaptiveThinkingModel ? (
+					{!useCustomModel && isAdaptiveThinkingModel && (
 						<ThinkingControl
 							effortDescription="Use None to disable adaptive thinking. Higher effort increases response detail and token usage."
 							effortLabel="Adaptive Thinking"
-							effortOptions={["none", "low", "medium", "high", "xhigh"]}
+							effortOptions={adaptiveEffortOptions}
 							mode="effort-only"
 							onReasoningConfigUpdate={(reasoning) => {
 								onUpdate({ anthropic: { ...pc, reasoning } })
 							}}
 							reasoningConfig={pc.reasoning}
 						/>
-					) : SUPPORTED_ANTHROPIC_THINKING_MODELS.includes(modelId) ? (
-						<ThinkingControl
-							budgetLabel="Thinking Budget"
-							maxBudget={modelInfo.capabilities?.thinking?.maxBudget}
-							mode="budget-only"
-							onReasoningConfigUpdate={(reasoning) => {
-								onUpdate({ anthropic: { ...pc, reasoning } })
-							}}
-							reasoningConfig={pc.reasoning}
-						/>
-					) : null}
+					)}
 
 					<ModelInfoView isPopup={isPopup} modelInfo={modelInfo} selectedModelId={modelId} />
 				</>
@@ -302,7 +293,11 @@ const CustomModelConfig = ({
 				<ThinkingControl
 					effortDescription="Use None to disable adaptive thinking. Higher effort increases response detail and token usage."
 					effortLabel="Adaptive Thinking"
-					effortOptions={["none", "low", "medium", "high", "xhigh"]}
+					effortOptions={
+						(modelInfo.capabilities?.thinking?.effortLevels?.length ?? 0) > 0
+							? modelInfo.capabilities.thinking?.effortLevels
+							: ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS
+					}
 					maxBudget={modelInfo?.capabilities?.thinking?.maxBudget}
 					mode="both"
 					modeSelectorLabel="Thinking Mode"

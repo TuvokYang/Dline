@@ -38,13 +38,26 @@ const nativeContextModel: ModelInfo = {
 	} as ModelCapabilities,
 }
 
+const adaptiveModel: ModelInfo = {
+	id: "claude-sonnet-4-6",
+	name: "Claude Sonnet 4.6",
+	capabilities: {
+		supportsReasoning: true,
+		thinking: {
+			supported: true,
+			mode: "effort",
+			effortLevels: ["none", "low", "medium", "high", "max"],
+		},
+	} as ModelCapabilities,
+}
+
 vi.mock("@/context/ExtensionStateContext", () => ({
 	useExtensionState: () => ({ remoteConfigSettings: {} }),
 }))
 
 vi.mock("./useProviderModels", () => ({
 	useProviderModels: () => ({
-		models: { "claude-custom": registryModel, "claude-native": nativeContextModel },
+		models: { "claude-custom": registryModel, "claude-native": nativeContextModel, "claude-sonnet-4-6": adaptiveModel },
 		defaultModelId: "claude-custom",
 		modelInfoSaneDefaults: registryModel,
 		loading: false,
@@ -103,7 +116,11 @@ vi.mock("../common/ModelSelector", () => ({ ModelSelector: () => <div /> }))
 vi.mock("../common/RemotelyConfiguredInputWrapper", () => ({
 	RemotelyConfiguredInputWrapper: ({ children }: { children: ReactNode }) => <>{children}</>,
 }))
-vi.mock("../ThinkingControl", () => ({ default: () => <div /> }))
+vi.mock("../ThinkingControl", () => ({
+	default: ({ effortOptions }: { effortOptions?: readonly string[] }) => (
+		<div data-testid="thinking-efforts">{effortOptions?.join(",")}</div>
+	),
+}))
 vi.mock("@vscode/webview-ui-toolkit/react", () => ({
 	VSCodeCheckbox: ({
 		checked,
@@ -249,7 +266,7 @@ describe("AnthropicProvider", () => {
 		rerender(
 			<AnthropicProvider
 				onUpdate={onUpdate}
-				profile={{ ...profile, anthropic: { ...profile.anthropic!, enableLongContext: false } }}
+				profile={{ ...profile, anthropic: { ...profile.anthropic, enableLongContext: false } }}
 				showModelOptions={true}
 			/>,
 		)
@@ -286,6 +303,19 @@ describe("AnthropicProvider", () => {
 				capabilities: { contextWindow: 1_500_000 },
 			},
 		})
+	})
+
+	it("reads adaptive-thinking efforts from the selected model metadata", () => {
+		const profile = {
+			id: "profile-adaptive",
+			provider: "anthropic",
+			modelId: "claude-sonnet-4-6",
+			anthropic: AnthropicProviderConfig.create({ reasoning: { enableThinking: true, effort: "high" } }),
+		} as unknown as ApiProfile
+
+		render(<AnthropicProvider onUpdate={vi.fn()} profile={profile} showModelOptions={true} />)
+
+		expect(screen.getByTestId("thinking-efforts")).toHaveTextContent("none,low,medium,high,max")
 	})
 
 	it("enables the 1M long context by default for official models with tiers", () => {

@@ -3,10 +3,13 @@ import type { ApiProfile } from "@shared/proto/dline/profile"
 import type { ReasoningConfig } from "@shared/proto/dline/provider/common"
 import { PROFILE_PROVIDER_KEYS } from "@shared/providers/profile-model-info"
 import { OPENAI_REASONING_EFFORT_OPTIONS } from "@shared/storage/types"
-import { DEEPSEEK_REASONING_EFFORT_OPTIONS, isDeepSeekReasoningModel } from "@shared/utils/reasoning-support"
+import {
+	ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS,
+	DEEPSEEK_REASONING_EFFORT_OPTIONS,
+	isDeepSeekReasoningModel,
+} from "@shared/utils/reasoning-support"
 
 const DEFAULT_TASK_THINKING_BUDGET = 6_000
-const ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS = ["none", "low", "medium", "high", "xhigh"] as const
 
 /** Task-local reasoning policy layered over a Profile's reasoning configuration. */
 export interface TaskReasoningOverride {
@@ -60,7 +63,8 @@ export function resolveTaskThinkingConfig(
 		}
 	}
 	if (provider === "anthropic") {
-		if (configuredEffort) {
+		const supportsEffort = thinking?.mode === "effort" || (thinking?.effortLevels?.length ?? 0) > 0
+		if (supportsEffort || configuredEffort) {
 			return {
 				...thinking,
 				supported: true,
