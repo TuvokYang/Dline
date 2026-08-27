@@ -472,6 +472,93 @@ e2e(
 )
 
 e2e(
+	"Tools - Process Anyway preserves successful parallel tool results at the mistake limit",
+	async ({ helper, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		await setAutoApproveAction(sidebar, "Read project files", true)
+
+		const callIds = [
+			"call_mistake_limit_read_1",
+			"call_mistake_limit_read_2",
+			"call_mistake_limit_read_3",
+			"call_mistake_limit_parallel_read_4",
+			"call_mistake_limit_parallel_read_5",
+		] as const
+		const readCall = (id: (typeof callIds)[number]) => ({ id, name: "read_file", arguments: { path: "README.md" } })
+		const expectedResults = (ids: readonly (typeof callIds)[number][]) =>
+			ids.map((callId) => ({ callId, contentIncludes: "# Test Workspace" }))
+		const guidance = "E2E_PROCESS_ANYWAY_PRESERVE_RESULTS_GUIDANCE"
+
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{ type: "tool", ...readCall(callIds[0]) },
+			{
+				type: "tool",
+				...readCall(callIds[1]),
+				expectedToolResultCount: 1,
+				expectedToolResults: expectedResults(callIds.slice(0, 1)),
+			},
+			{
+				type: "tool",
+				...readCall(callIds[2]),
+				expectedToolResultCount: 2,
+				expectedToolResults: expectedResults(callIds.slice(0, 2)),
+			},
+			{
+				type: "tools",
+				tools: [readCall(callIds[3]), readCall(callIds[4])],
+				expectedToolResultCount: 3,
+				expectedToolResults: expectedResults(callIds.slice(0, 3)),
+			},
+			{
+				type: "tool",
+				id: "call_mistake_limit_preserved_results_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_PROCESS_ANYWAY_PRESERVED_RESULTS_OK" },
+				expectedToolResultCount: 5,
+				expectedToolResults: expectedResults(callIds),
+				expectedRequestIncludes: [guidance],
+			},
+			{
+				type: "error",
+				status: 500,
+				code: "unexpected_additional_request",
+				message: "Unexpected request after Process Anyway preserved the parallel tool results",
+			},
+		)
+
+		await sendTask(sidebar, "Repeat the same project read until the mistake-limit recovery is required.")
+		await expect.poll(() => server.openAiRequestCount, { timeout: 60_000 }).toBe(4)
+
+		const attention = sidebar.getByTestId("error-message-box")
+		await expect(attention.getByText("Task Needs Attention", { exact: true })).toBeVisible({ timeout: 60_000 })
+		const processAnyway = sidebar.getByRole("contentinfo").locator('vscode-button[aria-label="Process Anyway"]')
+		await expect(processAnyway).toBeVisible()
+
+		const input = sidebar.getByTestId("chat-input")
+		await input.fill(guidance)
+		await processAnyway.click()
+		await expect(input).toHaveValue("")
+		await expectSingleUserFeedback(sidebar, guidance)
+		await expect(sidebar.getByText("E2E_PROCESS_ANYWAY_PRESERVED_RESULTS_OK", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await expect.poll(() => server.openAiRequestCount).toBe(5)
+
+		const consumptions = server.getMockConsumptions("openai-compatible-chat")
+		expect(consumptions.map((entry) => entry.responseType)).toEqual(["tool", "tool", "tool", "tools", "tool"])
+		const continuation = consumptions[4]
+		expect(continuation.contractError).toBeUndefined()
+		expect(continuation.requestToolResults).toHaveLength(5)
+		for (const callId of callIds) {
+			expect(continuation.requestToolResults.filter((result) => result.callId === callId)).toHaveLength(1)
+		}
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
 	"Tools - project read approval carries the input draft into the continuation",
 	async ({ helper, server, sidebar, userDataDir }) => {
 		e2e.setTimeout(120_000)
@@ -1750,7 +1837,13 @@ Remain active until cancelled.`,
 				name: "qna_respond",
 				arguments: { response: "E2E_BACKGROUND_SUBAGENT_READY_TO_CANCEL" },
 				expectedToolResults: [
-					{ callId: "call_background_subagent", contentIncludes: "Started background subagent job: subagent_1" },
+					{
+						callId: "call_background_subagent",
+						contentIncludes: [
+							"Started background subagent job: subagent_1",
+							"Its final result will be available only in a later model request.",
+						],
+					},
 				],
 			},
 			{

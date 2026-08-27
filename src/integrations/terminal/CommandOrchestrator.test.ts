@@ -20,6 +20,8 @@ class FakeTerminalProcess extends EventEmitter<TerminalProcessEvents> implements
 	isHot = false
 	waitForShellIntegration = false
 	readonly terminate = vi.fn(async () => undefined)
+	readonly pauseOutput = vi.fn()
+	readonly resumeOutput = vi.fn()
 	readonly started: Promise<number>
 	private readonly promise: Promise<void>
 	private resolvePromise!: () => void
@@ -195,6 +197,7 @@ describe("CommandOrchestrator background transitions", () => {
 		assert.equal(result.backgroundCommandId, "background-timeout")
 		assert.equal(result.logFilePath, "C:\\Temp\\background-timeout.log")
 		assert.match(result.result as string, /still running after 10 seconds/i)
+		assert.match(result.result as string, /available only in a later model request/i)
 		assert.doesNotMatch(result.result as string, /timed out/i)
 		assert.equal(handedOffAtTenSeconds, 1)
 		assert.equal(vi.getTimerCount(), 0)
@@ -203,6 +206,32 @@ describe("CommandOrchestrator background transitions", () => {
 		await Promise.resolve()
 		await Promise.resolve()
 		assert.equal(onOutputLine.mock.calls.length, 0)
+	})
+
+	it("terminates the process when background tracking cannot be established", async () => {
+		vi.useFakeTimers()
+		const process = new FakeTerminalProcess()
+		const onProceedWhileRunning = vi.fn(() => {
+			throw new Error("background log unavailable")
+		})
+		const execution = orchestrateCommandExecution(process.asResultPromise(), createTerminalManager(), createCallbacks(), {
+			command: "untrackable-command",
+			onProceedWhileRunning,
+			timeoutSeconds: 60,
+		})
+		const rejected = assert.rejects(
+			execution,
+			/Background handoff failed\. Termination was requested to prevent an untracked process/,
+		)
+
+		await vi.advanceTimersByTimeAsync(10_000)
+		await rejected
+
+		assert.equal(onProceedWhileRunning.mock.calls.length, 1)
+		assert.equal(process.pauseOutput.mock.calls.length, 1)
+		assert.equal(process.resumeOutput.mock.calls.length, 0)
+		assert.equal(process.terminate.mock.calls.length, 1)
+		assert.equal(vi.getTimerCount(), 0)
 	})
 
 	it("uses the configured handoff seconds for automatic background handoff", async () => {
@@ -231,6 +260,7 @@ describe("CommandOrchestrator background transitions", () => {
 		assert.equal(result.completed, false)
 		assert.equal(result.backgroundCommandId, "background-configured")
 		assert.match(result.result as string, /still running after 3 seconds/i)
+		assert.match(result.result as string, /available only in a later model request/i)
 	})
 
 	it("notifies the UI and moves a synchronous command to background on external request", async () => {
@@ -267,6 +297,7 @@ describe("CommandOrchestrator background transitions", () => {
 		assert.equal(result.completed, false)
 		assert.equal(result.backgroundCommandId, "background-manual")
 		assert.match(result.result as string, /Command is running in the background/i)
+		assert.match(result.result as string, /available only in a later model request/i)
 	})
 
 	it("kills a synchronous command at its absolute timeout and returns its existing log path", async () => {

@@ -277,19 +277,41 @@ export async function orchestrateCommandExecution(
 			clearTimeout(completionTimer)
 			completionTimer = null
 		}
-		if (drainQueuedOutput) await outputScheduler.close()
-		await finishFileBased()
-		const timing = commandTiming ?? { startedAt: Date.now(), deadlineAt: configuredDeadlineAt }
-		const trackingResult = await onProceedWhileRunning(isWritingToFile ? [] : output, {
-			...timing,
-			existingLogFilePath: largeOutputLogPath ?? undefined,
-			existingLineCount: totalLineCount,
-		})
+		let trackingResult: Awaited<ReturnType<NonNullable<typeof onProceedWhileRunning>>>
+		try {
+			if (drainQueuedOutput) await outputScheduler.close()
+			await finishFileBased()
+			const timing = commandTiming ?? { startedAt: Date.now(), deadlineAt: configuredDeadlineAt }
+			trackingResult = await onProceedWhileRunning(isWritingToFile ? [] : output, {
+				...timing,
+				existingLogFilePath: largeOutputLogPath ?? undefined,
+				existingLineCount: totalLineCount,
+			})
+			if (!trackingResult?.backgroundCommandId) throw new Error("Background tracker did not return a command identity")
+		} catch (error) {
+			let terminationError: unknown
+			const terminationRequested = Boolean(process.terminate)
+			if (process.terminate) {
+				try {
+					await Promise.resolve(process.terminate())
+				} catch (caughtTerminationError) {
+					terminationError = caughtTerminationError
+				}
+			}
+			await clearCommandState(undefined, true)
+			const cause = error instanceof Error ? error : new Error(String(error))
+			const terminationDetail = terminationError
+				? ` Process termination also failed: ${terminationError instanceof Error ? terminationError.message : String(terminationError)}.`
+				: terminationRequested
+					? " Termination was requested to prevent an untracked process."
+					: " The process cannot be terminated automatically and may still be running."
+			throw new Error(`Background handoff failed.${terminationDetail}`, { cause })
+		}
 		const logMessage = trackingResult?.logFilePath ? `Log file: ${trackingResult.logFilePath}\n` : ""
 		const resultPrefix =
 			reason === "automatic"
-				? `Command is still running after ${handoffSeconds} seconds and is now tracked in the background.`
-				: "Command is running in the background. You can proceed with other tasks."
+				? `Command is still running after ${handoffSeconds} seconds and is now tracked in the background. Its final status will be available only in a later model request.`
+				: "Command is running in the background. You can proceed with other tasks. Its final status will be available only in a later model request."
 
 		backgroundTrackingResult = {
 			userRejected: false,
@@ -587,7 +609,7 @@ export async function orchestrateCommandExecution(
 		userRejected: false,
 		result: `Command is still running in the user's terminal.${
 			result.length > 0 ? `\nHere's the output so far:\n${result}` : ""
-		}${logFileMsg}\n\nYou will be updated on the terminal status and new output in the future.`,
+		}${logFileMsg}\n\nIf a later model request is sent, it can include the terminal status and new output.`,
 		completed: false,
 		...resultLines,
 		logFilePath: largeOutputLogPath || undefined,

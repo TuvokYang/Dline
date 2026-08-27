@@ -765,6 +765,7 @@ e2e(
 						callId: "call_terminal_automatic_background",
 						contentIncludes: [
 							"Command is still running after 10 seconds and is now tracked in the background.",
+							"Its final status will be available only in a later model request.",
 							"Log file:",
 						],
 					},
@@ -958,7 +959,10 @@ e2e(
 				expectedToolResults: [
 					{
 						callId: "call_manual_handoff_command",
-						contentIncludes: ["Command is running in the background"],
+						contentIncludes: [
+							"Command is running in the background",
+							"Its final status will be available only in a later model request.",
+						],
 					},
 				],
 			},
@@ -984,6 +988,9 @@ e2e(
 		})
 		const handoffConsumption = server.getMockConsumptions("openai-compatible-chat")[1]
 		expect(handoffConsumption.requestToolResults[0]?.content).toContain("Command is running in the background")
+		expect(handoffConsumption.requestToolResults[0]?.content).toContain(
+			"Its final status will be available only in a later model request.",
+		)
 		expect(handoffConsumption.contractError).toBeUndefined()
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},

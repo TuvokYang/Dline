@@ -840,6 +840,7 @@ describe("SubagentToolHandler", () => {
 		assert.equal(await activityInput.continueInBackground(), true)
 		const result = await execution
 		assert.match(String(result), /Continued background subagent job: subagent_/)
+		assert.match(String(result), /final result will be available only in a later model request/i)
 
 		resolveRun({
 			status: "completed",
@@ -979,6 +980,7 @@ describe("SubagentToolHandler", () => {
 		})
 
 		assert.match(String(result), /Started background subagent job: subagent_/)
+		assert.match(String(result), /final result will be available only in a later model request/i)
 		assert.ok(config.subagentJobManager, "should attach a task-local subagent job manager")
 		await delay(0)
 		const subagentCalls = callbacks.say.mock.calls.filter((call) => call[0] === "subagent")
@@ -1049,7 +1051,7 @@ describe("SubagentToolHandler", () => {
 		} as unknown as TaskConfig["subagentJobManager"]
 		const handler = new UseSubagentsToolHandler()
 
-		await handler.execute(config, {
+		const result = await handler.execute(config, {
 			type: "tool_use",
 			name: ClineDefaultTool.USE_SUBAGENTS,
 			params: { prompt_1: "<task>fast</task><context>ctx</context>", background: "true" },
@@ -1057,6 +1059,8 @@ describe("SubagentToolHandler", () => {
 			ts: Date.now(),
 		})
 
+		assert.match(String(result), /Started background subagent batch job: subagent_batch_1/)
+		assert.match(String(result), /final result will be available only in a later model request/i)
 		const subagentCalls = callbacks.say.mock.calls.filter((call) => call[0] === "subagent")
 		const completedPayload = subagentCalls
 			.map((call) => JSON.parse(call[1]))

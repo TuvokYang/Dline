@@ -234,9 +234,14 @@ import {
 	projectAuthoritativeContextWindowIndicatorSegments,
 } from "./ContextWindowIndicatorProjection"
 import { detectAvailableCliTools } from "./cli-tool-detector"
+import { buildMistakeLimitContinuationContent } from "./continuation/MistakeLimitContinuation"
 import { FocusChainManager } from "./focus-chain"
 import { formatFocusChainTaskProgressSection } from "./focus-chain/file-utils"
 import { HistoryResumeMaintenance } from "./history/HistoryResumeMaintenance"
+import { TaskCompletionProjector } from "./history/TaskCompletionProjector"
+import { InputQueue, type QueuedInputEntry } from "./input-queue/InputQueue"
+import { QUEUED_INPUT_GUIDANCE, type QueueDelivery, takeQueueDelivery } from "./input-queue/InputQueueDelivery"
+import { applyInputQueueMutation, type InputQueueMutation, type InputQueueMutationResult } from "./input-queue/InputQueueMutation"
 import { hostedWebApprovalApiIndex, requestHostedWebApproval } from "./interaction/HostedWebApproval"
 import type { InteractionKind } from "./interaction/Interaction"
 import { isInteractionCancellationError } from "./interaction/InteractionCancellationError"
@@ -283,6 +288,7 @@ import { StreamChunkCoordinator } from "./StreamChunkCoordinator"
 import { StreamResponseHandler } from "./StreamResponseHandler"
 import { shouldRunTaskCancelHook } from "./TaskCancelPolicy"
 import { TaskController } from "./TaskController"
+import { formatTaskPanelTitle } from "./TaskPanelTitle"
 import { TaskPhase } from "./TaskPhase"
 import { type PresentationFlushContext, TaskPresentationScheduler } from "./TaskPresentationScheduler"
 import { createSnapshot, hydrateSnapshot, normalizeLegacyTaskSnapshot, type TaskSnapshot } from "./TaskSnapshot"
@@ -302,6 +308,7 @@ type TaskParams = {
 	controller: Controller
 	mcpHub: McpHub
 	updateTaskHistory: (historyItem: HistoryItem) => Promise<HistoryItem[]>
+	persistTaskCompletionState: (taskId: string, isCompleted: boolean, revision: number) => Promise<boolean>
 	postStateToWebview: (options?: { immediate?: boolean }) => Promise<void>
 	reinitExistingTaskFromId: (taskId: string) => Promise<void>
 	cancelTask: () => Promise<void>
@@ -350,17 +357,6 @@ type ApiRequestTransactionOptions = {
 	forceCompaction?: boolean
 }
 
-/** Preserve the existing provider-facing contract for user guidance after the mistake limit. */
-async function buildMistakeLimitFeedbackContent(text?: string, images?: string[], files?: string[]): Promise<ClineUserContent[]> {
-	const content: ClineUserContent[] = [{ type: "text", text: formatResponse.tooManyMistakes(text) }]
-	if (images?.length) content.push(...formatResponse.imageBlocks(images))
-	if (files?.length) {
-		const fileContent = await processFilesIntoText(files)
-		if (fileContent) content.push({ type: "text", text: fileContent })
-	}
-	return content
-}
-
 /** Fail fast if dormant runtime effects are dispatched before flow migration. */
 function unavailableRuntimePort(port: keyof TaskEffectPorts): never {
 	throw new Error(`Task runtime effect port is not active before flow migration: ${port}`)
@@ -404,6 +400,7 @@ export class Task {
 	taskState: TaskState
 	taskController: TaskController
 	private taskRuntime: TaskRuntime
+	private readonly completionProjector: TaskCompletionProjector
 	private interactionCoordinator: InteractionCoordinator
 	private resumeCoordinator: ResumeCoordinator
 	private readonly historyResumeMaintenance: HistoryResumeMaintenance
@@ -530,6 +527,8 @@ export class Task {
 	private readonly snapshotPersistence: TaskSnapshotPersistence
 	private readonly systemPromptCacheService: SystemPromptCacheService
 	private latestTaskSnapshot?: TaskSnapshot
+	/** Retained user input awaiting delivery; owned by the user, not the runtime. */
+	private inputQueue = new InputQueue()
 	private pendingSystemPromptRefreshReason?: SystemPromptRefreshReason
 	private readonly promptCacheHealth: PromptCacheHealthTracker
 	private readonly apiRateMetricsService: TaskApiRateMetricsService
@@ -569,6 +568,7 @@ export class Task {
 			controller,
 			mcpHub,
 			updateTaskHistory,
+			persistTaskCompletionState,
 			postStateToWebview,
 			reinitExistingTaskFromId,
 			cancelTask,
@@ -690,6 +690,19 @@ export class Task {
 		this.diffViewProvider = backgroundEditEnabled ? new FileEditProvider() : HostProvider.get().createDiffViewProvider()
 
 		this.taskId = taskId
+		this.completionProjector = new TaskCompletionProjector({
+			taskId,
+			...(historyItem?.completionStateRevision !== undefined
+				? {
+						initial: {
+							isCompleted: historyItem.isCompleted === true,
+							revision: historyItem.completionStateRevision,
+						},
+					}
+				: {}),
+			persist: ({ taskId: projectionTaskId, isCompleted, revision }) =>
+				persistTaskCompletionState(projectionTaskId, isCompleted, revision),
+		})
 		this.promptCacheHealth = new PromptCacheHealthTracker(taskId, Logger)
 		this.activityStore = new TaskActivityStore(taskId, new TaskActivityPersistence(taskId))
 		this.taskRuntime = new TaskRuntime(
@@ -732,13 +745,20 @@ export class Task {
 					if (effect.contentTransform === "mistake_limit") {
 						this.resetMistakeLimitState()
 					}
+					const runtimeState = this.taskRuntime.getState()
 					const content =
 						effect.contentTransform === "mistake_limit"
-							? await buildMistakeLimitFeedbackContent(
-									effect.draft?.text,
-									effect.draft?.images,
-									effect.draft?.files,
-								)
+							? await buildMistakeLimitContinuationContent({
+									turn: runtimeState.turn,
+									apiHistory: this.messageStateHandler.apiConversationHistory,
+									uiHistory: this.messageStateHandler.clineMessages,
+									pendingContent: this.taskState.userMessageContent,
+									feedback: {
+										text: effect.draft?.text,
+										images: effect.draft?.images,
+										files: effect.draft?.files,
+									},
+								})
 							: await this.buildResumeApiContent(effect.draft)
 					await this.recursivelyMakeClineRequests(content, false, {
 						reuseRequestAccounting: effect.contentTransform === "mistake_limit",
@@ -814,13 +834,19 @@ export class Task {
 		this.interactionCoordinator = new InteractionCoordinator(this.taskRuntime, {
 			onAwaitingUserDurable: ({ turnId, interactionId }) => {
 				this.completeProviderExecutionAtAwaitingUser(turnId, interactionId)
+				// The interaction is durable and its waiter is installed, so retained
+				// input can now answer it as an ordinary user response.
+				void this.deliverQueuedInputAtTurnEnd(turnId, interactionId)
 			},
 		})
 		this.interactionCoordinator.registerDetachedContinuation((context) => this.continueRestoredInteraction(context))
 		this.resumeCoordinator = new ResumeCoordinator({
 			load: async () => this.loadResumeInput(),
 			presentInteraction: async (result) => this.presentSynthesizedHistoryInteraction(result.snapshot),
-			persist: async (result) => this.writeTaskSnapshot(result.snapshot),
+			persist: async (result) => {
+				await this.writeTaskSnapshot(result.snapshot)
+				await this.syncTaskCompletionProjection(result.snapshot)
+			},
 			hydrate: async (result) => {
 				this.taskRuntime.restore(hydrateSnapshot(result.snapshot))
 				this.syncRetainedMachines()
@@ -1088,9 +1114,11 @@ export class Task {
 
 		// Set up focus chain file watcher + load history (async, runs in background) only if focus chain is enabled
 		if (this.FocusChainManager) {
-			this.FocusChainManager.setupFocusChainFileWatcher().catch((error) => {
-				Logger.error(`[Task ${this.taskId}] Failed to setup focus chain file watcher:`, error)
-			})
+			this.FocusChainManager.setupFocusChainFileWatcher()
+				.then(() => this.syncPanelTitleFromState())
+				.catch((error) => {
+					Logger.error(`[Task ${this.taskId}] Failed to setup focus chain file watcher:`, error)
+				})
 			this.FocusChainManager.readFocusChainHistory()
 				.then(async (history) => {
 					if (history) {
@@ -3489,6 +3517,19 @@ export class Task {
 		this.latestTaskSnapshot = snapshot
 		this.snapshotPersistence.schedule(snapshot)
 		await this.snapshotPersistence.flushNow()
+		if (await this.syncTaskCompletionProjection(snapshot)) {
+			await this.postStateToWebview({ immediate: true })
+		}
+	}
+
+	/** Synchronize the durable history projection from one already persisted canonical snapshot. */
+	private async syncTaskCompletionProjection(snapshot: TaskSnapshot): Promise<boolean> {
+		if (snapshot.revision === undefined) return false
+		return await this.completionProjector.sync({
+			phase: snapshot.phase,
+			revision: snapshot.revision,
+			completion: snapshot.completion,
+		})
 	}
 
 	/**
@@ -3500,7 +3541,11 @@ export class Task {
 		const taskDir = await ensureTaskDirectoryExists(this.taskId)
 		const snapshotPath = path.join(taskDir, GlobalFileNames.taskSnapshot)
 		const tmpPath = `${snapshotPath}.tmp.${Date.now()}`
-		await fs.writeFile(tmpPath, JSON.stringify(snapshot, null, 2), "utf8")
+		// The queue is user-owned input, not runtime state: it is attached here
+		// rather than in createSnapshot so the runtime round-trip contract
+		// (hydrate(create(state)) === state) stays exact.
+		const persisted: TaskSnapshot = { ...snapshot, inputQueue: this.inputQueue.serialize() }
+		await fs.writeFile(tmpPath, JSON.stringify(persisted, null, 2), "utf8")
 		await renameTaskSnapshotWithRetry(tmpPath, snapshotPath)
 	}
 
@@ -3515,6 +3560,9 @@ export class Task {
 			const raw = await fs.readFile(snapshotPath, "utf8")
 			const snapshot = normalizeLegacyTaskSnapshot(JSON.parse(raw))
 			this.latestTaskSnapshot = snapshot
+			// Restore retained input so a resumed task keeps everything the user
+			// queued before the task was paused, cancelled or reloaded.
+			this.inputQueue = InputQueue.fromSerialized(snapshot.inputQueue)
 			return snapshot
 		} catch (error) {
 			const code = (error as NodeJS.ErrnoException | undefined)?.code
@@ -3522,6 +3570,151 @@ export class Task {
 				Logger.error("[loadTaskSnapshot] Failed to read task snapshot:", error)
 			}
 			return undefined
+		}
+	}
+
+	/** Project the retained input queue for the Webview. */
+	public getInputQueueSnapshot(): QueuedInputEntry[] {
+		return this.inputQueue.serialize()
+	}
+
+	/**
+	 * Apply one user-driven queue change, then persist and publish it.
+	 *
+	 * The queue is the authoritative copy of everything the user typed while the
+	 * task was busy, so a change is written to disk before it is announced. When
+	 * the write fails the caller is told so rather than being shown an entry
+	 * that a reload would drop.
+	 */
+	public async mutateInputQueue(mutation: InputQueueMutation): Promise<InputQueueMutationResult> {
+		const result = applyInputQueueMutation(this.inputQueue, mutation)
+		if (!result.accepted) {
+			return result
+		}
+		const persisted = await this.persistInputQueue()
+		await this.postStateToWebview()
+		// A failed write is reported rather than announced as success: the user
+		// must not be told an entry is retained when a reload would drop it.
+		return persisted ? result : { accepted: false, result: "persist_failed" }
+	}
+
+	/**
+	 * Answer a durable turn-end interaction with retained input, if any is due.
+	 *
+	 * Delivering through the interaction response path rather than say() is what
+	 * makes the text reach the model: the waiting tool handler turns the response
+	 * into that tool call's result, so the queued text arrives paired with the
+	 * call it answers instead of as an orphaned block.
+	 */
+	private async deliverQueuedInputAtTurnEnd(turnId: string, interactionId: string): Promise<void> {
+		const delivery = takeQueueDelivery(this.inputQueue, "turn-end")
+		if (!delivery) {
+			return
+		}
+		try {
+			const result = await this.dispatchRuntime({
+				type: "INTERACTION_RESPONDED",
+				response: {
+					taskId: this.taskId,
+					turnId,
+					interactionId,
+					actionId: "reply",
+					stateRevision: this.taskRuntime.getState().revision,
+					draft: {
+						text: delivery.text,
+						images: [...delivery.images],
+						files: [...delivery.files],
+					},
+				},
+			})
+			if (!result.accepted) {
+				// The user answered first, so the entry was never delivered. Put it
+				// back and republish, otherwise the composer would keep showing the
+				// projection taken while the entry was momentarily claimed.
+				await this.restoreUndeliveredQueueInput(delivery)
+				Logger.warn(`[inputQueue] Turn-end delivery rejected: ${result.error?.code ?? "unknown"}`)
+				return
+			}
+		} catch (error) {
+			await this.restoreUndeliveredQueueInput(delivery)
+			Logger.error("[inputQueue] Turn-end delivery failed:", error)
+			return
+		}
+		await this.persistInputQueue()
+	}
+
+	/** Return a claimed batch to the queue and republish the corrected projection. */
+	private async restoreUndeliveredQueueInput(delivery: QueueDelivery): Promise<void> {
+		delivery.restore()
+		await this.persistInputQueue()
+		await this.postStateToWebview()
+	}
+
+	/**
+	 * Append any steering input owed to the round that is about to start.
+	 *
+	 * The task is not waiting for the user here, so the text is added to the next
+	 * request as its own user message rather than as a tool result.
+	 */
+	private async deliverQueuedInputAtToolRound(): Promise<void> {
+		const delivery = takeQueueDelivery(this.inputQueue, "tool-round")
+		if (!delivery) {
+			return
+		}
+		try {
+			// Each entry becomes its own block, preceded once by the shared
+			// guidance. Passing the batch through buildUserFeedbackContent would
+			// merge it into a single message and lose the per-entry boundaries.
+			this.taskState.userMessageContent.push({ type: "text", text: QUEUED_INPUT_GUIDANCE })
+			for (const block of delivery.blocks) {
+				this.taskState.userMessageContent.push({ type: "text", text: block })
+			}
+			if (delivery.images.length > 0) {
+				this.taskState.userMessageContent.push(...formatResponse.imageBlocks([...delivery.images]))
+			}
+			if (delivery.files.length > 0) {
+				const fileContent = await processFilesIntoText([...delivery.files])
+				if (fileContent) {
+					this.taskState.userMessageContent.push({ type: "text", text: fileContent })
+				}
+			}
+		} catch (error) {
+			await this.restoreUndeliveredQueueInput(delivery)
+			Logger.error("[inputQueue] Tool-round delivery failed:", error)
+			return
+		}
+		await this.persistInputQueue()
+		await this.postStateToWebview()
+	}
+
+	/**
+	 * Rewrite snapshot.json so the queue on disk matches memory.
+	 *
+	 * A queue change produces no runtime event, so nothing else would schedule a
+	 * snapshot. The latest runtime snapshot is reused unchanged; writeTaskSnapshot
+	 * attaches the current queue to whatever it is given.
+	 *
+	 * Before the first runtime snapshot exists there is nothing cached, but the
+	 * composer already routes a blocked send to the queue. A baseline is derived
+	 * from current runtime state instead of skipping the write, so input queued
+	 * in that early window is not lost if the task never reaches its first
+	 * runtime persist.
+	 *
+	 * The write goes through the same persistence chain as runtime snapshots.
+	 * Writing directly would let a queue change carrying an older cached runtime
+	 * snapshot land after a newer runtime write and roll the file back.
+	 *
+	 * @returns whether the queue is now on disk.
+	 */
+	private async persistInputQueue(): Promise<boolean> {
+		const snapshot = this.latestTaskSnapshot ?? createSnapshot(this.taskRuntime.getState())
+		try {
+			this.snapshotPersistence.schedule(snapshot)
+			await this.snapshotPersistence.flushNow()
+			return true
+		} catch (error) {
+			Logger.error("[persistInputQueue] Failed to persist the input queue:", error)
+			return false
 		}
 	}
 
@@ -3864,20 +4057,12 @@ export class Task {
 	 */
 	private syncPanelTitleFromState(): void {
 		try {
-			// Get the first task message text as the base title
-			const msgs = this.messageStateHandler.clineMessages
-			const taskMsg = msgs.find((m) => m.say === "task")
-			let title = taskMsg?.text || "Dline"
-
-			// Append focus chain progress if available (e.g. "Task (3/5)")
-			const checklist = this.taskState.currentFocusChainChecklist
-			if (checklist) {
-				const { parseFocusChainListCounts } = require("./focus-chain/utils")
-				const { totalItems, completedItems } = parseFocusChainListCounts(checklist)
-				if (totalItems > 0) {
-					title = `${title} (${completedItems}/${totalItems})`
-				}
-			}
+			const taskMessage = this.messageStateHandler.clineMessages.find((message) => message.say === "task")
+			const title = formatTaskPanelTitle({
+				taskTitle: taskMessage?.text,
+				checklist: this.taskState.currentFocusChainChecklist,
+				currentItemIndex: this.taskState.currentInProgressItemIndex,
+			})
 
 			void this.controller.syncPanelTitle(title)
 		} catch {
@@ -4009,10 +4194,19 @@ export class Task {
 				return requested
 			}
 			const cutoffRevision = requested.next.supersededEffectRevision ?? requested.next.revision - 1
-			await Promise.all([
-				this.taskRuntime.waitForDeferredEffectsThrough(cutoffRevision),
-				this.interactionCoordinator.waitForClaimedContinuations(),
-			])
+			// Bound this wait exactly like interrupt() and terminate() do. A
+			// provider stream or tool that ignores the abort signal must not keep
+			// the user's cancel pending forever: the task is already CANCELLING
+			// with abort set, and anything still running past the deadline is
+			// fenced by the terminal cleanup path.
+			await withTerminateTimeout(
+				Promise.all([
+					this.taskRuntime.waitForDeferredEffectsThrough(cutoffRevision),
+					this.interactionCoordinator.waitForClaimedContinuations(),
+				]).then(() => undefined),
+				5_000,
+				"taskCancel.waitForSupersededOperations",
+			)
 			const resumeInteractionId = `resume:${this.taskId}:${requested.next.revision}`
 			return await this.dispatchRuntime({
 				type: "TASK_CANCELLED",
@@ -4619,52 +4813,76 @@ export class Task {
 			this.presentationScheduler.reset()
 			this.pendingReasoningText = undefined
 
-			// PHASE 3: Cancel any running hook execution
+			// PHASE 3: Cancel the hook, task-owned commands and task activities in
+			// parallel. Each branch carries its own deadline, so the worst-case
+			// cancel latency is one timeout instead of the sum of three sequential
+			// waits. Only Task-owned work is swept here: commands and activities
+			// the user moved to the background keep running, and terminate() stays
+			// the single place that performs the unfiltered sweep.
 			const activeHook = await this.getActiveHookExecution()
-			if (activeHook) {
-				try {
-					await this.cancelHookExecution()
-					await this.clearActiveHookExecution()
-				} catch (error) {
-					Logger.error("Failed to cancel hook during task pause", error)
-					await this.clearActiveHookExecution()
-				}
-			}
-
-			try {
-				await this.commandExecutor.cancelTaskOwnedCommands()
-			} catch (error) {
-				Logger.error("Failed to cancel Task-owned command during task pause", error)
-			}
 			const activeActivityIds = this.activityStore.listRunning("task").map((activity) => activity.activityId)
-			if (activeActivityIds.length > 0) {
-				await withTerminateTimeout(this.activityStore.cancel(activeActivityIds), 5_000, "cancelTaskActivities").catch(
-					(error) => Logger.error("Failed to cancel task activities during terminate", error),
-				)
-			}
+			await Promise.allSettled([
+				(async () => {
+					if (!activeHook) {
+						return
+					}
+					try {
+						await withTerminateTimeout(this.cancelHookExecution(), 3_000, "cancelHookExecution")
+					} catch (error) {
+						Logger.error("Failed to cancel hook during task pause", error)
+					} finally {
+						await this.clearActiveHookExecution()
+					}
+				})(),
+				(async () => {
+					try {
+						await withTerminateTimeout(
+							this.commandExecutor.cancelTaskOwnedCommands(),
+							3_000,
+							"cancelTaskOwnedCommands",
+						)
+					} catch (error) {
+						Logger.error("Failed to cancel Task-owned command during task pause", error)
+					}
+				})(),
+				(async () => {
+					if (activeActivityIds.length === 0) {
+						return
+					}
+					await withTerminateTimeout(this.activityStore.cancel(activeActivityIds), 3_000, "cancelTaskActivities").catch(
+						(error) => Logger.error("Failed to cancel task activities during task pause", error),
+					)
+				})(),
+			])
 
 			// PHASE 4: Run TaskCancel hook (conditional)
 			const hooksEnabled = getHooksEnabledSafe(this.stateManager.getGlobalSettingsKey("hooksEnabled"))
 			if (hooksEnabled && shouldRunTaskCancelHook) {
 				try {
-					await executeHook({
-						hookName: "TaskCancel",
-						hookInput: {
-							taskCancel: {
-								taskMetadata: {
-									taskId: this.taskId,
-									ulid: this.ulid,
-									completionStatus: this.taskState.abandoned ? "abandoned" : "cancelled",
+					// The hook may call a model, so it needs its own deadline:
+					// without one it alone can hold the user in the cancel wait.
+					await withTerminateTimeout(
+						executeHook({
+							hookName: "TaskCancel",
+							hookInput: {
+								taskCancel: {
+									taskMetadata: {
+										taskId: this.taskId,
+										ulid: this.ulid,
+										completionStatus: this.taskState.abandoned ? "abandoned" : "cancelled",
+									},
 								},
 							},
-						},
-						isCancellable: false,
-						say: this.say.bind(this),
-						messageStateHandler: this.messageStateHandler,
-						taskId: this.taskId,
-						hooksEnabled,
-						model: getHookModelContext(this.api, this.stateManager),
-					})
+							isCancellable: false,
+							say: this.say.bind(this),
+							messageStateHandler: this.messageStateHandler,
+							taskId: this.taskId,
+							hooksEnabled,
+							model: getHookModelContext(this.api, this.stateManager),
+						}),
+						5_000,
+						"taskCancelHook",
+					)
 				} catch (error) {
 					Logger.error("[TaskCancel Hook] Failed (non-fatal):", error)
 				}
@@ -8443,6 +8661,9 @@ export class Task {
 
 				const phaseBeforeContinuation = this.taskRuntime.getState().phase
 				if (phaseBeforeContinuation === TaskPhase.COMPLETED) return true
+				// Added before the staged estimate so the indicator accounts for the
+				// queued text that is about to be sent with this round.
+				await this.deliverQueuedInputAtToolRound()
 				await this.refreshOrdinaryIndicatorStaged()
 
 				const recDidEndLoop = await this.recursivelyMakeClineRequests(this.taskState.userMessageContent)

@@ -29,6 +29,12 @@ import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 import { ToolResultUtils } from "../utils/ToolResultUtils"
 
 const PROMPT_KEYS = ["prompt_1", "prompt_2", "prompt_3", "prompt_4", "prompt_5"] as const
+const LATER_REQUEST_RESULT_NOTICE = "Its final result will be available only in a later model request."
+
+function backgroundSubagentResult(kind: "started" | "continued", target: "job" | "batch job", id: string): string {
+	const verb = kind === "started" ? "Started" : "Continued"
+	return `${verb} background subagent ${target}: ${id}. ${LATER_REQUEST_RESULT_NOTICE}`
+}
 
 /**
  * Get or create the task-local background subagent job manager.
@@ -550,7 +556,7 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 				false,
 				block.ts,
 			)
-			return formatResponse.toolResult(`Started background subagent job: ${job.jobId}`)
+			return formatResponse.toolResult(backgroundSubagentResult("started", "job", job.jobId))
 		}
 
 		config.taskState.consecutiveMistakeCount = 0
@@ -692,7 +698,7 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 				handoffPromise.then(() => ({ kind: "background" as const })),
 			])
 			if (outcome.kind === "background") {
-				return formatResponse.toolResult(`Continued background subagent job: ${foregroundJob.jobId}`)
+				return formatResponse.toolResult(backgroundSubagentResult("continued", "job", foregroundJob.jobId))
 			}
 			result = outcome.result
 			if (!result.retryable) {
@@ -916,7 +922,7 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 				false,
 				block.ts,
 			)
-			return formatResponse.toolResult(`Started background subagent batch job: ${batch.batchJobId}`)
+			return formatResponse.toolResult(backgroundSubagentResult("started", "batch job", batch.batchJobId))
 		}
 		config.taskState.isExecutingSubagent = true
 		const foregroundRunners = request.items.map(
