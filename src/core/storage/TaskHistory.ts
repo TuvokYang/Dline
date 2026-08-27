@@ -1,7 +1,26 @@
 import chokidar, { FSWatcher } from "chokidar"
+import Mutex from "p-mutex"
 import { HistoryItem } from "@/shared/HistoryItem"
 import { Logger } from "@/shared/services/Logger"
 import type { BufferedUnifyStore } from "./backend/api/UnifyStore"
+
+export interface TaskCompletionStateUpdate {
+	taskId: string
+	isCompleted: boolean
+	revision: number
+}
+
+/** Preserve the canonical completion projection while merging ordinary metadata. */
+function mergeCompletionProjection(existing: HistoryItem | undefined, incoming: HistoryItem): HistoryItem {
+	const merged = { ...incoming }
+	delete merged.isCompleted
+	delete merged.completionStateRevision
+	if (existing?.completionStateRevision !== undefined) {
+		merged.isCompleted = existing.isCompleted
+		merged.completionStateRevision = existing.completionStateRevision
+	}
+	return merged
+}
 
 /**
  * Task history store backed by taskHistory.jsonl.
@@ -14,6 +33,7 @@ import type { BufferedUnifyStore } from "./backend/api/UnifyStore"
  */
 export class TaskHistory {
 	private store: BufferedUnifyStore<HistoryItem>
+	private readonly completionWriteMutex = new Mutex()
 	private _watcher: FSWatcher | null = null
 	private _onChangeCallbacks: Array<() => void | Promise<void>> = []
 
@@ -89,14 +109,16 @@ export class TaskHistory {
 	 * @param item The history item to upsert
 	 */
 	async upsert(item: HistoryItem): Promise<void> {
-		await this.store.mutate((items) => {
-			const existingIdx = items.findIndex((d) => (d as HistoryItem).id === item.id)
-			if (existingIdx >= 0) {
-				items[existingIdx] = item as unknown as (typeof items)[0]
-			} else {
-				items.push(item as unknown as (typeof items)[0])
-			}
-			return items
+		await this.completionWriteMutex.withLock(async () => {
+			await this.store.mutate((items) => {
+				const existingIdx = items.findIndex((d) => (d as HistoryItem).id === item.id)
+				if (existingIdx >= 0) {
+					items[existingIdx] = mergeCompletionProjection(items[existingIdx], item) as unknown as (typeof items)[0]
+				} else {
+					items.push(mergeCompletionProjection(undefined, item) as unknown as (typeof items)[0])
+				}
+				return items
+			})
 		})
 	}
 
@@ -156,6 +178,36 @@ export class TaskHistory {
 		await this.upsert(item)
 	}
 
+	/** Durably patch one Task completion projection without replacing unrelated metadata. */
+	async setCompletionState(update: TaskCompletionStateUpdate): Promise<HistoryItem | undefined> {
+		return await this.completionWriteMutex.withLock(async () => {
+			let updated: HistoryItem | undefined
+			await this.store.mutate((items) => {
+				const existingIndex = items.findIndex((item) => item.id === update.taskId)
+				if (existingIndex < 0) return items
+
+				const existing = items[existingIndex]
+				if (!existing) return items
+				const existingRevision = existing.completionStateRevision
+				if (
+					(existingRevision !== undefined && existingRevision >= update.revision) ||
+					(existingRevision !== undefined && existing.isCompleted === update.isCompleted)
+				) {
+					return items
+				}
+
+				updated = {
+					...existing,
+					isCompleted: update.isCompleted,
+					completionStateRevision: update.revision,
+				}
+				items[existingIndex] = updated
+				return items
+			})
+			return updated
+		})
+	}
+
 	/**
 	 * Reload the L1 index from disk (called by chokidar watcher).
 	 */
@@ -179,25 +231,27 @@ export class TaskHistory {
 	 * @param item The history item to upsert
 	 */
 	async upsertTaskHistory(item: HistoryItem): Promise<void> {
-		await this.store.reload()
-		const all = this.store.getAll() as HistoryItem[]
-		const existingIndex = all.findIndex((m) => m.id === item.id)
+		await this.completionWriteMutex.withLock(async () => {
+			await this.store.reload()
+			const all = this.store.getAll() as HistoryItem[]
+			const existingIndex = all.findIndex((m) => m.id === item.id)
 
-		if (existingIndex >= 0) {
-			// Replace in-place (memory-level + markDirty)
-			await this.store.stageUpdateAt(existingIndex, item)
-		} else {
-			// Find insertion position by ts (ascending order)
-			let insertIndex = all.length
-			for (let i = 0; i < all.length; i++) {
-				if (all[i].ts > item.ts) {
-					insertIndex = i
-					break
+			if (existingIndex >= 0) {
+				// Replace in-place (memory-level + markDirty) without overwriting the canonical completion projection.
+				await this.store.stageUpdateAt(existingIndex, mergeCompletionProjection(all[existingIndex], item))
+			} else {
+				// Find insertion position by ts (ascending order)
+				let insertIndex = all.length
+				for (let i = 0; i < all.length; i++) {
+					if (all[i].ts > item.ts) {
+						insertIndex = i
+						break
+					}
 				}
+				// Insert at correct position (memory-level + markDirty)
+				await this.store.stageInsertAt(insertIndex, mergeCompletionProjection(undefined, item))
 			}
-			// Insert at correct position (memory-level + markDirty)
-			await this.store.stageInsertAt(insertIndex, item)
-		}
+		})
 	}
 
 	/**

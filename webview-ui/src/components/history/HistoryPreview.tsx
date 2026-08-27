@@ -62,6 +62,10 @@ export function filterHistoryPreview(
 		})
 		.sort((a, b) => b.ts - a.ts)
 		.slice(0, HISTORY_PREVIEW_LIMIT)
+		.map((item) => ({
+			...item,
+			isCompleted: item.completionStateRevision !== undefined && item.isCompleted === true,
+		}))
 }
 
 const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {

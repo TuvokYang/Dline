@@ -108,6 +108,8 @@ describe("Task.handleWebviewAskResponse", () => {
 		const say = vi.fn(async () => 123)
 		const fakeTask = {
 			say,
+			syncTaskCompletionProjection: vi.fn(async () => false),
+			postStateToWebview: vi.fn(async () => {}),
 			snapshotPersistence: {
 				schedule: (snapshot: TaskSnapshot) => {
 					persistenceOrder.push("schedule")
@@ -128,6 +130,81 @@ describe("Task.handleWebviewAskResponse", () => {
 		assert.equal(say.mock.calls.length, 0)
 	})
 
+	it("projects completion only after the canonical snapshot flush succeeds", async () => {
+		const order: string[] = []
+		const sync = vi.fn(async (_state: { phase: TaskPhase; revision: number; completion?: { completionId: string } }) => {
+			order.push("project")
+			return true
+		})
+		const postStateToWebview = vi.fn(async (_options?: { immediate?: boolean }) => {
+			order.push("push")
+		})
+		const fakeTask = {
+			syncTaskCompletionProjection: vi.fn(async (snapshot: TaskSnapshot) =>
+				sync({ phase: snapshot.phase, revision: snapshot.revision ?? -1, completion: snapshot.completion }),
+			),
+			snapshotPersistence: {
+				schedule: () => order.push("schedule"),
+				flushNow: vi.fn(async () => {
+					order.push("flush")
+				}),
+			},
+			completionProjector: { sync },
+			postStateToWebview,
+		}
+		const snapshot: TaskSnapshot = {
+			version: 2,
+			taskId: "task-1",
+			phase: TaskPhase.COMPLETED,
+			apiIndex: 2,
+			timestamp: 300,
+			revision: 7,
+			anchor: { apiIndex: 2 },
+			completion: { completionId: "completion-1" },
+		}
+
+		await (Task.prototype as unknown as TaskSnapshotEmitter).emitStateSnapshot.call(fakeTask, snapshot)
+
+		assert.deepEqual(order, ["schedule", "flush", "project", "push"])
+		assert.deepEqual(sync.mock.calls[0]?.[0], {
+			phase: TaskPhase.COMPLETED,
+			revision: 7,
+			completion: { completionId: "completion-1" },
+		})
+		assert.deepEqual(postStateToWebview.mock.calls[0]?.[0], { immediate: true })
+	})
+
+	it("does not project completion when canonical snapshot persistence fails", async () => {
+		const sync = vi.fn(async () => true)
+		const fakeTask = {
+			syncTaskCompletionProjection: vi.fn(async () => sync()),
+			snapshotPersistence: {
+				schedule: vi.fn(),
+				flushNow: vi.fn(async () => {
+					throw new Error("snapshot write failed")
+				}),
+			},
+			completionProjector: { sync },
+			postStateToWebview: vi.fn(async () => {}),
+		}
+		const snapshot: TaskSnapshot = {
+			version: 2,
+			taskId: "task-1",
+			phase: TaskPhase.COMPLETED,
+			apiIndex: 2,
+			timestamp: 300,
+			revision: 7,
+			anchor: { apiIndex: 2 },
+			completion: { completionId: "completion-1" },
+		}
+
+		await assert.rejects(
+			(Task.prototype as unknown as TaskSnapshotEmitter).emitStateSnapshot.call(fakeTask, snapshot),
+			/snapshot write failed/,
+		)
+		assert.equal(sync.mock.calls.length, 0)
+	})
+
 	it("emitStateSnapshot exposes its in-memory state while durable snapshot persistence is pending", async () => {
 		const scheduledSnapshots: TaskSnapshot[] = []
 		let releaseFlush: (() => void) | undefined
@@ -136,6 +213,8 @@ describe("Task.handleWebviewAskResponse", () => {
 		})
 		let flushStarted = false
 		const fakeTask = {
+			syncTaskCompletionProjection: vi.fn(async () => false),
+			postStateToWebview: vi.fn(async () => {}),
 			snapshotPersistence: {
 				schedule: (snapshot: TaskSnapshot) => {
 					scheduledSnapshots.push(snapshot)

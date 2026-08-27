@@ -212,9 +212,19 @@ describe("HistoryPreview", () => {
 		expect(screen.queryByText("Task 2")).not.toBeInTheDocument()
 	})
 
+	it("does not show an unrevisioned legacy completion while the filtered request is pending", () => {
+		const legacy = historyItem("legacy", 1, { isCompleted: true })
+		extensionState.taskHistory = [legacy]
+		vi.mocked(TaskServiceClient.getTaskHistory).mockReturnValue(new Promise(() => {}))
+
+		render(<HistoryPreview showHistoryView={vi.fn()} />)
+
+		expect(screen.queryByLabelText("Completed")).not.toBeInTheDocument()
+	})
+
 	it("shows a completion check with a completion tooltip", async () => {
 		const user = userEvent.setup()
-		const completed = historyItem("completed", 1, { isCompleted: true })
+		const completed = historyItem("completed", 1, { isCompleted: true, completionStateRevision: 1 })
 		extensionState.taskHistory = [completed]
 		vi.mocked(TaskServiceClient.getTaskHistory).mockResolvedValue({ tasks: [completed], totalCount: 1 })
 

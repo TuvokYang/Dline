@@ -807,7 +807,7 @@ export class Task {
 					// The footer "Start New Task" action must close the current task and return to
 					// the RECENT welcome screen instead of immediately launching a replacement task,
 					// so the user can review history and explicitly start a new task from there.
-					await this.controller.clearTask({ clearPanelState: true })
+					await this.controller.clearTask({ clearPanelState: true, preserveCompletedState: true })
 				},
 				async (effect) => {
 					const committed = await this.taskRuntime.dispatch({
@@ -4951,10 +4951,14 @@ export class Task {
 		}
 	}
 
-	async terminate() {
+	async terminate(options?: { preserveCompletedState?: boolean }) {
 		this.stopContextWindowEnvironmentRefresh()
 		const cancellationGeneration = this.interactionCoordinator.cancelPending("task_terminated")
 		const initialRuntimeState = this.taskRuntime.getState()
+		const preserveCompletedState =
+			options?.preserveCompletedState === true &&
+			initialRuntimeState.phase === TaskPhase.COMPLETED &&
+			initialRuntimeState.completion !== undefined
 		let cutoffRevision = initialRuntimeState.supersededEffectRevision ?? initialRuntimeState.revision
 		try {
 			this.invalidatePreparedProviderInputs()
@@ -4965,7 +4969,7 @@ export class Task {
 
 			// PHASE 2: Commit the canonical terminal cleanup boundary before setting abort.
 			const runtimePhase = this.taskRuntime.getState().phase
-			if (runtimePhase !== TaskPhase.CANCELLING && runtimePhase !== TaskPhase.ABORTED) {
+			if (!preserveCompletedState && runtimePhase !== TaskPhase.CANCELLING && runtimePhase !== TaskPhase.ABORTED) {
 				const terminating = await this.dispatchRuntime({ type: "TASK_TERMINATE_REQUESTED" })
 				if (terminating.accepted) {
 					cutoffRevision = terminating.next.supersededEffectRevision ?? terminating.next.revision - 1

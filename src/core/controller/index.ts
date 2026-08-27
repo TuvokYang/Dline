@@ -116,7 +116,11 @@ type PostStateOptions = {
 
 export type TaskLifecycleScope = {
 	/** Clear the active task while already holding the controller lifecycle lock. */
-	clearTask(options?: { clearPanelState?: boolean; suppressPostState?: boolean }): Promise<void>
+	clearTask(options?: {
+		clearPanelState?: boolean
+		preserveCompletedState?: boolean
+		suppressPostState?: boolean
+	}): Promise<void>
 }
 
 /*
@@ -145,6 +149,7 @@ export class Controller {
 	// Flag to prevent duplicate cancellations from spam clicking
 	private cancelInProgress = false
 	private readonly taskLifecycleMutex = new Mutex()
+	private readonly taskHistoryProjectionMutex = new Mutex()
 
 	private readonly contextTransitionEngine: ContextTransitionEngine
 	private readonly modeSwitchCoordinator: ModeSwitchCoordinator
@@ -577,6 +582,8 @@ export class Controller {
 			controller: this,
 			mcpHub: this.mcpHub,
 			updateTaskHistory: (historyItem) => this.updateTaskHistory(historyItem),
+			persistTaskCompletionState: (projectionTaskId, isCompleted, revision) =>
+				this.persistTaskCompletionState(projectionTaskId, isCompleted, revision),
 			postStateToWebview: (options) => this.postStateToWebview(options),
 			reinitExistingTaskFromId: (taskId) => this.reinitExistingTaskFromId(taskId),
 			cancelTask: () => this.cancelTask(),
@@ -1662,6 +1669,12 @@ export class Controller {
 			/** Task lock status — computed on each state push so the frontend
 			 *  can show a lock banner when the task is in read-only mode. */
 			taskLockStatus: this.getTaskLockStatus(),
+			/**
+			 * Input the user queued while the task was busy; the task owns it.
+			 * The projection is optional so a task stub without a queue still
+			 * builds state instead of throwing.
+			 */
+			inputQueue: this.task?.getInputQueueSnapshot?.() ?? [],
 			/** Complete interaction view projected only from canonical runtime state. */
 			taskViewState: this.task
 				? (() => {
@@ -1928,11 +1941,15 @@ export class Controller {
 		})
 	}
 
-	async clearTask(options?: { clearPanelState?: boolean }) {
+	async clearTask(options?: { clearPanelState?: boolean; preserveCompletedState?: boolean }) {
 		return this.runTaskLifecycleOperation((scope) => scope.clearTask(options))
 	}
 
-	private async clearTaskWithinLifecycle(options?: { clearPanelState?: boolean; suppressPostState?: boolean }) {
+	private async clearTaskWithinLifecycle(options?: {
+		clearPanelState?: boolean
+		preserveCompletedState?: boolean
+		suppressPostState?: boolean
+	}) {
 		const taskId = this.task?.taskId
 		if (taskId && options?.clearPanelState) {
 			await this.clearPanelStateIfNeeded()
@@ -1944,7 +1961,7 @@ export class Controller {
 			// Clear task settings cache when task ends
 			await this.stateManager.clearTaskSettings(taskId)
 		}
-		await this.task?.terminate()
+		await this.task?.terminate({ preserveCompletedState: options?.preserveCompletedState })
 		// Stop lock heartbeat and polling only after terminate() completes:
 		// terminate() pushes intermediate state to the webview while the task
 		// instance still exists, so flipping taskLockAcquired early would make
@@ -1992,18 +2009,45 @@ export class Controller {
 	*/
 
 	async updateTaskHistory(item: HistoryItem): Promise<HistoryItem[]> {
-		// Persist to disk via TaskHistory instance (memory-level + 10s flush timer).
-		await this.stateManager.taskHistory.upsertTaskHistory(item)
+		return await this.taskHistoryProjectionMutex.withLock(async () => {
+			const history = [...(this.stateManager.getGlobalStateKey("taskHistory") ?? [])]
+			const existingItemIndex = history.findIndex((historyItem) => historyItem.id === item.id)
+			const existingItem = existingItemIndex >= 0 ? history[existingItemIndex] : undefined
+			const mergedItem = { ...item }
+			delete mergedItem.isCompleted
+			delete mergedItem.completionStateRevision
+			if (existingItem?.completionStateRevision !== undefined) {
+				mergedItem.isCompleted = existingItem.isCompleted
+				mergedItem.completionStateRevision = existingItem.completionStateRevision
+			}
 
-		// Update in-memory cache for immediate UI rendering
-		const history = [...(this.stateManager.getGlobalStateKey("taskHistory") ?? [])]
-		const existingItemIndex = history.findIndex((h) => h.id === item.id)
-		if (existingItemIndex !== -1) {
-			history[existingItemIndex] = item
-		} else {
-			history.push(item)
-		}
-		this.stateManager.setGlobalState("taskHistory", history)
-		return history
+			// Persist ordinary metadata through the buffered task-history path.
+			await this.stateManager.taskHistory.upsertTaskHistory(mergedItem)
+			if (existingItemIndex !== -1) {
+				history[existingItemIndex] = mergedItem
+			} else {
+				history.push(mergedItem)
+			}
+			this.stateManager.setGlobalState("taskHistory", history)
+			return history
+		})
+	}
+
+	/** Durably persist one canonical completion projection and synchronize the controller cache. */
+	async persistTaskCompletionState(taskId: string, isCompleted: boolean, revision: number): Promise<boolean> {
+		return await this.taskHistoryProjectionMutex.withLock(async () => {
+			const updated = await this.stateManager.taskHistory.setCompletionState({ taskId, isCompleted, revision })
+			if (!updated) return false
+
+			const history = [...(this.stateManager.getGlobalStateKey("taskHistory") ?? [])]
+			const existingItemIndex = history.findIndex((item) => item.id === taskId)
+			if (existingItemIndex >= 0) {
+				history[existingItemIndex] = updated
+			} else {
+				history.push(updated)
+			}
+			this.stateManager.setGlobalState("taskHistory", history)
+			return true
+		})
 	}
 }

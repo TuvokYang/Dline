@@ -33,6 +33,7 @@ describe("Task termination persistence", () => {
 		const updateTaskHistory = vi.fn(async () => {})
 		const terminationRuntime = createTerminationRuntime(TaskPhase.CANCELLING)
 		const fakeTask = {
+			invalidatePreparedProviderInputs: vi.fn(),
 			cancelPendingAutoRetry: vi.fn(),
 			modeSwitchCompaction: { abort: vi.fn() },
 			shouldRunTaskCancelHook: vi.fn(async () => false),
@@ -94,6 +95,80 @@ describe("Task termination persistence", () => {
 		expect(updateTaskHistory).toHaveBeenCalled()
 	})
 
+	it("preserves a canonical completed snapshot while Start New Task disposes resources", async () => {
+		const dispatchRuntime = vi.fn(async () => ({ accepted: true }))
+		const flushTaskSnapshot = vi.fn(async () => {})
+		const terminationRuntime = {
+			interactionCoordinator: {
+				cancelPending: vi.fn(() => 1),
+				waitForClaimedContinuations: vi.fn(async () => {}),
+				completeCancellation: vi.fn(),
+			},
+			taskRuntime: {
+				getState: vi.fn(() => ({
+					phase: TaskPhase.COMPLETED,
+					revision: 7,
+					completion: { completionId: "completion-1" },
+				})),
+				waitForDeferredEffectsThrough: vi.fn(async () => {}),
+			},
+		}
+		const fakeTask = {
+			invalidatePreparedProviderInputs: vi.fn(),
+			cancelPendingAutoRetry: vi.fn(),
+			modeSwitchCompaction: { abort: vi.fn() },
+			shouldRunTaskCancelHook: vi.fn(async () => false),
+			...terminationRuntime,
+			dispatchRuntime,
+			taskState: { abort: false, abandoned: false, isStreaming: false, cancelOperations: vi.fn() },
+			getActiveHookExecution: vi.fn(async () => undefined),
+			commandExecutor: { cancelBackgroundCommand: vi.fn(async () => true) },
+			stateManager: { getGlobalSettingsKey: vi.fn(() => false) },
+			flushTaskSnapshot,
+			messageStateHandler: {
+				flushApiConversationHistory: vi.fn(async () => {}),
+				flushUiMessages: vi.fn(async () => {}),
+				updateTaskHistory: vi.fn(async () => {}),
+				close: vi.fn(async () => {}),
+			},
+			postStateToWebview: vi.fn(async () => {}),
+			getCurrentProviderInfo: () => ({
+				providerId: "openai",
+				mode: "act",
+				model: { id: "test-model", info: { capabilities: { contextWindow: 128_000 } } },
+			}),
+			FocusChainManager: undefined,
+			terminalManager: { disposeAll: vi.fn() },
+			urlContentFetcher: { closeBrowser: vi.fn() },
+			clineIgnoreController: { dispose: vi.fn() },
+			taskFileTracker: { dispose: vi.fn() },
+			fileContextTracker: { dispose: vi.fn() },
+			mcpHub: { removeNotificationCallback: vi.fn() },
+			_mcpNotificationCb: undefined,
+			activityStore: {
+				listRunning: vi.fn(() => []),
+				cancel: vi.fn(async () => []),
+				dispose: vi.fn(),
+				waitForPersistence: vi.fn(async () => {}),
+			},
+			apiRateMetricsService: { dispose: vi.fn(async () => {}) },
+			apiRequestRoundLifecycle: { close: vi.fn(async () => {}) },
+			browserSession: { dispose: vi.fn(async () => {}) },
+			diffViewProvider: { revertChanges: vi.fn(async () => {}) },
+			presentationScheduler: { dispose: vi.fn(async () => {}) },
+			stopContextWindowEnvironmentRefresh: vi.fn(),
+		} as unknown as Task
+
+		await expect(Task.prototype.terminate.call(fakeTask, { preserveCompletedState: true })).resolves.toBeUndefined()
+
+		expect(dispatchRuntime).not.toHaveBeenCalled()
+		expect(flushTaskSnapshot).toHaveBeenCalled()
+		expect(terminationRuntime.taskRuntime.getState()).toMatchObject({
+			phase: TaskPhase.COMPLETED,
+			completion: { completionId: "completion-1" },
+		})
+	})
+
 	it("does not restore a retained approval machine while terminating an executing turn", async () => {
 		const dispatchRuntime = vi.fn(async () => ({
 			accepted: true,
@@ -107,6 +182,7 @@ describe("Task termination persistence", () => {
 		const syncRetainedMachines = vi.fn()
 		const terminationRuntime = createTerminationRuntime(TaskPhase.EXECUTING)
 		const fakeTask = {
+			invalidatePreparedProviderInputs: vi.fn(),
 			cancelPendingAutoRetry: vi.fn(),
 			modeSwitchCompaction: { abort: vi.fn() },
 			shouldRunTaskCancelHook: vi.fn(async () => false),
