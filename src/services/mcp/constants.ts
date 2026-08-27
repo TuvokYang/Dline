@@ -4,6 +4,9 @@
  */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 5000
 
+/** Maximum time allowed for an optional MCP server's initial protocol handshake. */
+export const MCP_CONNECT_TIMEOUT_MS = 120_000
+
 /**
  * Custom error message for better user feedback when server type validation fails.
  */

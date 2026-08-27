@@ -70,6 +70,9 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 			type: ShowMessageType.ERROR,
 			message: "Failed to initialize storage. Please check logs for details or try restarting the client.",
 		})
+		const webview = HostProvider.get().createWebviewProvider()
+		webview.setStartupFailure(error)
+		return webview
 	}
 
 	// =============== Model Registry ===============

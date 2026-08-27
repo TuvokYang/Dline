@@ -80,6 +80,7 @@ export type StateSyncEvent =
  */
 export class StateManager {
 	private static instance: StateManager | null = null
+	private static initializationPromise: Promise<StateManager> | null = null
 
 	private globalStateCache: GlobalStateAndSettings = {} as GlobalStateAndSettings
 	/** Settings cache — non-deprecated SETTINGS_FIELDS, persisted to settings/settings.json */
@@ -173,14 +174,27 @@ export class StateManager {
 	 * Initialize the cache by loading data from the file-backed StorageContext.
 	 */
 	public static async initialize(storage: StorageContext): Promise<StateManager> {
-		if (!StateManager.instance) {
-			StateManager.instance = new StateManager(storage)
-		}
-
-		if (StateManager.instance.isInitialized) {
+		if (StateManager.instance) {
 			throw new Error("StateManager has already been initialized.")
 		}
+		if (StateManager.initializationPromise) {
+			return StateManager.initializationPromise
+		}
 
+		const initialization = StateManager.initializeCandidate(storage)
+		StateManager.initializationPromise = initialization
+		try {
+			return await initialization
+		} finally {
+			if (StateManager.initializationPromise === initialization) {
+				StateManager.initializationPromise = null
+			}
+		}
+	}
+
+	private static async initializeCandidate(storage: StorageContext): Promise<StateManager> {
+		const candidate = new StateManager(storage)
+		let taskHistory: TaskHistory | null = null
 		try {
 			await initializeDistinctId(storage)
 
@@ -190,12 +204,12 @@ export class StateManager {
 			const workspaceState = readWorkspaceStateFromStorage(storage.workspaceState)
 
 			// Populate non-Settings caches without triggering persistence during initialization.
-			StateManager.instance.populateCache(globalState, secrets, workspaceState)
-			StateManager.instance.captureSettingsFallbackCache()
+			candidate.populateCache(globalState, secrets, workspaceState)
+			candidate.captureSettingsFallbackCache()
 
 			// Load Settings from the canonical repository after global state so the
 			// committed Settings snapshot remains authoritative for overlapping keys.
-			await StateManager.loadAndMigrateSettings(storage, globalState)
+			await StateManager.loadAndMigrateSettings(candidate, storage, globalState)
 
 			// Create TaskHistory inside the injected storage boundary.
 			const filePath = storage.taskHistoryPath
@@ -223,11 +237,11 @@ export class StateManager {
 				flushIntervalMs: 10_000,
 				acceptInitialItem: (item) => item.ts > 0,
 			})
-			const taskHistory = new TaskHistory(store)
+			taskHistory = new TaskHistory(store)
 			await taskHistory.startWatcher(filePath)
 			taskHistory.onChange(async () => {
 				// Notify controllers of external task history changes
-				const callbacks = StateManager.instance?.onSyncExternalChangeCallbacks
+				const callbacks = candidate.onSyncExternalChangeCallbacks
 				if (!callbacks) return
 				for (const cb of callbacks) {
 					try {
@@ -237,22 +251,24 @@ export class StateManager {
 					}
 				}
 			})
-			StateManager.instance._taskHistory = taskHistory
+			candidate._taskHistory = taskHistory
 
 			// Populate initial taskHistory cache
 			const initialHistory = await taskHistory.getDeduplicated()
-			StateManager.instance.globalStateCache.taskHistory = initialHistory
-
-			StateManager.instance.isInitialized = true
+			candidate.globalStateCache.taskHistory = initialHistory
+			candidate.isInitialized = true
+			StateManager.instance = candidate
 
 			// Start agent config loading in background — does NOT block initialization
 			AgentConfigLoader.getInstance()
+			return candidate
 		} catch (error) {
 			Logger.error("[StateManager] Failed to initialize:", error)
+			candidate._taskHistory = null
+			await Promise.all([candidate.dispose(), taskHistory?.dispose()])
+			if (StateManager.instance === candidate) StateManager.instance = null
 			throw error
 		}
-
-		return StateManager.instance
 	}
 
 	/**
@@ -260,8 +276,11 @@ export class StateManager {
 	 * If settings.json doesn't exist or hasn't been migrated, extract non-deprecated
 	 * SettingsKeys from globalState and write to settings.json.
 	 */
-	private static async loadAndMigrateSettings(storage: StorageContext, _globalState: GlobalStateAndSettings): Promise<void> {
-		const instance = StateManager.instance!
+	private static async loadAndMigrateSettings(
+		instance: StateManager,
+		storage: StorageContext,
+		_globalState: GlobalStateAndSettings,
+	): Promise<void> {
 		const SETTINGS_MIGRATION_VERSION_KEY = "__settingsMigrationVersion"
 		const SETTINGS_MIGRATION_VERSION = 2
 		const repository = new SettingsRepository({ filePath: storage.settingsFilePath })
@@ -1209,11 +1228,12 @@ export class StateManager {
 		await Promise.all([this.dispose(), taskHistory?.dispose()])
 
 		// Reinitialize from the same storage context
-		await StateManager.initialize(this.storage)
+		if (StateManager.instance === this) StateManager.instance = null
+		const reinitialized = await StateManager.initialize(this.storage)
 
-		// If there's an active task, reload its settings
+		// If there's an active task, reload its settings on the newly published instance.
 		if (currentTaskId) {
-			await this.loadTaskSettings(currentTaskId)
+			await reinitialized.loadTaskSettings(currentTaskId)
 		}
 	}
 

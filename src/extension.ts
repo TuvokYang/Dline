@@ -104,6 +104,10 @@ export async function activate(context: vscode.ExtensionContext) {
 	Logger.debug(`[Dline] extension activate: before initialize +${Math.round(performance.now() - activationStartTime)}ms`)
 	await initialize(storageContext)
 	Logger.debug(`[Dline] extension activate: after initialize +${Math.round(performance.now() - activationStartTime)}ms`)
+	if (!webview.hasController()) {
+		Logger.error("[Dline] Activation stopped because core storage initialization failed")
+		return
+	}
 	void showReloadWindowPromptIfNeeded(context)
 
 	// 5. Register WebviewPanelSerializer for Editor Tab panel restoration

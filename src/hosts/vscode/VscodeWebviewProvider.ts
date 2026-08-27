@@ -59,14 +59,20 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 		// Restore global instance reference that may have been cleared by a previous dispose
 		this.restoreInstance()
 		this.webview = webviewView
-		const controller = await this.controllerReady
-		controller.setAccountUsagePollingEnabled(webviewView.visible)
 
 		webviewView.webview.options = {
 			// Allow scripts in the webview
 			enableScripts: true,
 			localResourceRoots: [vscode.Uri.file(HostProvider.get().extensionFsPath)],
 		}
+
+		const controller = await this.startupReady
+		if (!controller) {
+			webviewView.webview.html = this.getStartupFailureHtml()
+			Logger.error("[VscodeWebviewProvider] Rendering storage initialization failure view", this.getStartupFailure())
+			return
+		}
+		controller.setAccountUsagePollingEnabled(webviewView.visible)
 
 		// Register before assigning HTML because cached/HMR webviews can post
 		// webviewReady and initial gRPC subscriptions during navigation.
@@ -136,6 +142,29 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 		Logger.log("[VscodeWebviewProvider] Webview view resolved")
 
 		// Title setting logic removed to allow VSCode to use the container title primarily.
+	}
+
+	private getStartupFailureHtml(): string {
+		return `<!DOCTYPE html>
+		<html lang="en">
+		<head>
+			<meta charset="utf-8">
+			<meta name="viewport" content="width=device-width,initial-scale=1">
+			<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
+			<title>Dline startup error</title>
+			<style>
+				body { padding: 24px; color: var(--vscode-foreground); background: var(--vscode-sideBar-background); font-family: var(--vscode-font-family); }
+				h1 { font-size: 18px; }
+				p { line-height: 1.5; }
+				code { color: var(--vscode-errorForeground); }
+			</style>
+		</head>
+		<body>
+			<h1>Dline storage initialization failed</h1>
+			<p>Dline stopped before starting tasks or background services because its storage could not be loaded safely.</p>
+			<p>Reload VS Code after resolving the storage error. Open <code>Output → Dline</code> for the original diagnostic.</p>
+		</body>
+		</html>`
 	}
 
 	/**

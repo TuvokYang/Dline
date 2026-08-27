@@ -32,7 +32,10 @@ export abstract class WebviewProvider {
 	private _registryId?: string
 	private _controller?: Controller
 	private controllerReadyResolve!: (controller: Controller) => void
+	private startupReadyResolve!: (controller: Controller | undefined) => void
 	readonly controllerReady: Promise<Controller>
+	readonly startupReady: Promise<Controller | undefined>
+	private startupFailure?: Error
 
 	constructor(
 		readonly context: ClineExtensionContext,
@@ -41,6 +44,9 @@ export abstract class WebviewProvider {
 		this._registryId = WebviewProviderRegistry.register(this, options?.isSidebar)
 		this.controllerReady = new Promise((resolve) => {
 			this.controllerReadyResolve = resolve
+		})
+		this.startupReady = new Promise((resolve) => {
+			this.startupReadyResolve = resolve
 		})
 
 		if (!options?.deferController) {
@@ -57,6 +63,16 @@ export abstract class WebviewProvider {
 
 	hasController(): boolean {
 		return this._controller !== undefined
+	}
+
+	setStartupFailure(error: unknown): void {
+		if (this._controller || this.startupFailure) return
+		this.startupFailure = error instanceof Error ? error : new Error(String(error))
+		this.startupReadyResolve(undefined)
+	}
+
+	getStartupFailure(): Error | undefined {
+		return this.startupFailure
 	}
 
 	ensureController(): Controller {
@@ -76,6 +92,7 @@ export abstract class WebviewProvider {
 		}
 		this._controller = controller
 		this.controllerReadyResolve(controller)
+		this.startupReadyResolve(controller)
 		return controller
 	}
 

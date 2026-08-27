@@ -42,7 +42,7 @@ import { Logger } from "@/shared/services/Logger"
 import { expandEnvironmentVariables } from "@/utils/envExpansion"
 import { getServerAuthHash } from "@/utils/mcpAuth"
 import { TelemetryService } from "../telemetry/TelemetryService"
-import { DEFAULT_REQUEST_TIMEOUT_MS } from "./constants"
+import { DEFAULT_REQUEST_TIMEOUT_MS, MCP_CONNECT_TIMEOUT_MS } from "./constants"
 import { McpOAuthManager } from "./McpOAuthManager"
 import { resolveMcpToolAutoApprove, updateMcpToolAutoApproveConfig } from "./mcp-auto-approval"
 import { StreamableHttpReconnectHandler } from "./StreamableHttpReconnectHandler"
@@ -152,8 +152,8 @@ export class McpHub {
 		this.telemetryService = telemetryService
 		this.mcpOAuthManager = new McpOAuthManager()
 		this.workspaceMcpRegistry = new WorkspaceMcpRegistry(() => this.refreshWorkspaceConnections())
-		this.watchMcpSettingsFile()
-		this.initializeMcpServers()
+		void this.watchMcpSettingsFile().catch((error) => Logger.error("[McpHub] Failed to watch MCP settings:", error))
+		void this.initializeMcpServers().catch((error) => Logger.error("[McpHub] Failed to initialize MCP servers:", error))
 	}
 
 	getServers(): McpServer[] {
@@ -675,7 +675,20 @@ export class McpHub {
 
 			// Connect - wrap in try-catch to detect OAuth requirement
 			try {
-				await client.connect(transport)
+				let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+				try {
+					await Promise.race([
+						client.connect(transport),
+						new Promise<never>((_, reject) => {
+							timeoutHandle = setTimeout(
+								() => reject(new Error(`MCP connection timed out after ${MCP_CONNECT_TIMEOUT_MS}ms: ${name}`)),
+								MCP_CONNECT_TIMEOUT_MS,
+							)
+						}),
+					])
+				} finally {
+					if (timeoutHandle) clearTimeout(timeoutHandle)
+				}
 			} catch (error) {
 				if (error instanceof UnauthorizedError) {
 					// Server requires OAuth authentication
@@ -702,6 +715,9 @@ export class McpHub {
 					await this.notifyWebviewOfServerChanges()
 					return // Don't throw, just mark as needs auth
 				}
+				// Stop a transport whose handshake failed or exceeded the optional dependency budget.
+				await transport.close().catch(() => undefined)
+				await client.close().catch(() => undefined)
 				// Re-throw other errors
 				throw error
 			}

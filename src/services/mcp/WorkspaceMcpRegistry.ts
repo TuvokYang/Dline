@@ -348,6 +348,10 @@ export class WorkspaceMcpRegistry {
 	}
 
 	private async notifyChange(): Promise<void> {
-		await this.onDidChange?.(this.getAllDescriptors())
+		void Promise.resolve()
+			.then(() => this.onDidChange?.(this.getAllDescriptors()))
+			.catch((error) => {
+				Logger.error("[WorkspaceMcpRegistry] Failed to apply descriptor changes:", error)
+			})
 	}
 }
