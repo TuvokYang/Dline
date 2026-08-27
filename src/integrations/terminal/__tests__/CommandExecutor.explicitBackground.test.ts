@@ -32,11 +32,13 @@ class FakeTerminalProcess extends EventEmitter<TerminalProcessEvents> {
 	readonly terminate = vi.fn()
 	private readonly resultPromise: Promise<void>
 	private resolveResult!: () => void
+	private rejectResult!: (error: Error) => void
 
 	constructor() {
 		super()
-		this.resultPromise = new Promise<void>((resolve) => {
+		this.resultPromise = new Promise<void>((resolve, reject) => {
 			this.resolveResult = resolve
+			this.rejectResult = reject
 		})
 	}
 
@@ -55,6 +57,11 @@ class FakeTerminalProcess extends EventEmitter<TerminalProcessEvents> {
 
 	complete(details: TerminalCompletionDetails): void {
 		this.emit("completed", details)
+	}
+
+	fail(error: Error): void {
+		this.emit("error", error)
+		this.rejectResult(error)
 	}
 
 	asResultPromise(): TerminalProcessResultPromise {
@@ -603,6 +610,175 @@ describe("CommandExecutor explicit background execution", () => {
 		} finally {
 			await rm(expectedLogPath, { force: true })
 		}
+	})
+
+	it("clears a ready handoff and preserves cancelled state when a synchronous command rejects during termination", async () => {
+		vi.useFakeTimers()
+		const process = new FakeTerminalProcess()
+		const processPromise = process.asResultPromise()
+		const terminalInfo: TerminalInfo = {
+			id: 1,
+			terminal: {
+				dispose: vi.fn(),
+				hide: vi.fn(),
+				name: "Standalone terminal",
+				processId: Promise.resolve(1),
+				sendText: vi.fn(),
+				show: vi.fn(),
+			},
+			busy: false,
+			lastActive: Date.now(),
+			lastCommand: "",
+		}
+		const messages: Array<Record<string, unknown>> = [{ ask: "command", text: "watch", ts: 88 }]
+		const updateCommandActivity = vi.fn()
+		const onHandoffAvailabilityChanged = vi.fn()
+		const callbacks: CommandExecutorCallbacks = {
+			addToUserMessageContent: vi.fn(),
+			ask: vi.fn(async () => ({ response: "messageResponse" })),
+			getClineMessages: () => messages,
+			say: vi.fn(async () => undefined),
+			updateBackgroundCommandState: vi.fn(),
+			updateClineMessage: vi.fn(async (index, patch) => {
+				Object.assign(messages[index], patch)
+			}),
+			updateCommandActivity,
+			onHandoffAvailabilityChanged,
+		}
+		const executor = new CommandExecutor(
+			{
+				cwd: "C:\\workspace",
+				taskId: "task-cancel-resume",
+				terminalExecutionMode: "backgroundExec",
+				terminalManager: createTerminalManager(),
+				terminalConfiguration,
+				ulid: "task-cancel-resume-ulid",
+			},
+			callbacks,
+		)
+		const standaloneManager = (executor as unknown as { standaloneManager: StandaloneTerminalManager }).standaloneManager
+		vi.spyOn(standaloneManager, "getOrCreateTerminal").mockResolvedValue(terminalInfo)
+		vi.spyOn(standaloneManager, "runCommand").mockReturnValue(processPromise)
+
+		const executionOutcome = executor.execute("watch", undefined, { commandTs: 88, synchronous: true }).then(
+			(result) => ({ result }),
+			(error: unknown) => ({ error }),
+		)
+		await vi.waitFor(() => assert.equal(vi.mocked(standaloneManager.runCommand).mock.calls.length, 1))
+		await vi.advanceTimersByTimeAsync(10_000)
+		assert.equal(executor.getReadyBackgroundHandoffActivityId(), "command_88_1")
+
+		const cancellation = executor.cancelTaskOwnedCommands()
+		assert.equal(executor.getReadyBackgroundHandoffActivityId(), undefined)
+		assert.equal(messages[0].commandStatus, "cancelled")
+		process.fail(new Error("terminated"))
+		await vi.advanceTimersByTimeAsync(300)
+		assert.equal(await cancellation, true)
+		const outcome = await executionOutcome
+		if (!("result" in outcome)) throw outcome.error
+		const { result } = outcome
+
+		assert.equal(result.userRejected, true)
+		assert.match(result.result as string, /Command was cancelled by the user/)
+		assert.equal(executor.isBackgroundHandoffRequested("command_88_1"), false)
+		assert.equal(onHandoffAvailabilityChanged.mock.calls.length, 2)
+		assert.ok(
+			updateCommandActivity.mock.calls.some(
+				([activityId, patch]) =>
+					activityId === "command_88_1" &&
+					typeof patch === "object" &&
+					patch !== null &&
+					"status" in patch &&
+					patch.status === "cancelled",
+			),
+		)
+		assert.equal(
+			updateCommandActivity.mock.calls.some(
+				([activityId, patch]) =>
+					activityId === "command_88_1" &&
+					typeof patch === "object" &&
+					patch !== null &&
+					"status" in patch &&
+					patch.status === "failed",
+			),
+			false,
+		)
+	})
+
+	it("cleans command identity and activity state when automatic background tracking fails", async () => {
+		vi.useFakeTimers()
+		const process = new FakeTerminalProcess()
+		const processPromise = process.asResultPromise()
+		const terminalInfo: TerminalInfo = {
+			id: 1,
+			terminal: {
+				dispose: vi.fn(),
+				hide: vi.fn(),
+				name: "Foreground terminal",
+				processId: Promise.resolve(1),
+				sendText: vi.fn(),
+				show: vi.fn(),
+			},
+			busy: false,
+			lastActive: Date.now(),
+			lastCommand: "",
+		}
+		const messages: Array<Record<string, unknown>> = [{ ask: "command", text: "watch", ts: 606 }]
+		const updateCommandActivity = vi.fn()
+		const callbacks: CommandExecutorCallbacks = {
+			addToUserMessageContent: vi.fn(),
+			ask: vi.fn(async () => ({ response: "messageResponse" })),
+			getClineMessages: () => messages,
+			say: vi.fn(async () => undefined),
+			updateBackgroundCommandState: vi.fn(),
+			updateClineMessage: vi.fn(async (index, patch) => {
+				Object.assign(messages[index], patch)
+			}),
+			updateCommandActivity,
+		}
+		const terminalManager = createTerminalManager()
+		vi.mocked(terminalManager.getOrCreateTerminal).mockResolvedValue(terminalInfo)
+		vi.mocked(terminalManager.runCommand).mockReturnValue(processPromise)
+		const executor = new CommandExecutor(
+			{
+				cwd: "C:\\workspace",
+				taskId: "task-handoff-failure",
+				terminalExecutionMode: "vscodeTerminal",
+				terminalManager,
+				terminalConfiguration,
+				ulid: "task-handoff-failure-ulid",
+			},
+			callbacks,
+		)
+		const standaloneManager = (executor as unknown as { standaloneManager: StandaloneTerminalManager }).standaloneManager
+		vi.spyOn(standaloneManager, "trackBackgroundCommand").mockImplementation(() => {
+			throw new Error("background log unavailable")
+		})
+
+		const execution = executor.execute("watch", 60, { commandTs: 606, functionId: "call-handoff-failure" })
+		const rejected = assert.rejects(
+			execution,
+			/Background handoff failed\. Termination was requested to prevent an untracked process/,
+		)
+		await vi.waitFor(() => assert.equal(vi.mocked(terminalManager.runCommand).mock.calls.length, 1))
+		await vi.advanceTimersByTimeAsync(10_000)
+		await rejected
+		assert.equal(process.terminate.mock.calls.length, 1)
+		assert.equal(executor.hasTaskOwnedCommand(), false)
+		assert.deepEqual(await executor.cancelCommandByFunctionId("call-handoff-failure"), { cancelled: false })
+		assert.equal(executor.getReadyBackgroundHandoffActivityId(), undefined)
+		assert.equal(standaloneManager.getAllBackgroundCommands().length, 0)
+		assert.equal(messages[0].commandStatus, "failed")
+		assert.ok(
+			updateCommandActivity.mock.calls.some(
+				([activityId, patch]) =>
+					activityId === "command_606_1" &&
+					typeof patch === "object" &&
+					patch !== null &&
+					"status" in patch &&
+					patch.status === "failed",
+			),
+		)
 	})
 
 	it("publishes footer handoff readiness after the wait and moves the synchronous command on request", async () => {

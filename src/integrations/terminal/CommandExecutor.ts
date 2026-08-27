@@ -69,6 +69,7 @@ export class CommandExecutor {
 	private readonly activityIdsByFunctionId = new Map<string, string>()
 	private readonly functionIdsByActivityId = new Map<string, string>()
 	private readonly commandsByActivityId = new Map<string, string>()
+	private readonly commandMessageTimestamps = new Map<string, number>()
 	private readonly cancellationOwners = new Map<string, CommandCancellationOwner>()
 	private readonly cancelledActivityIds = new Set<string>()
 	private readonly pendingHandoffs = new Map<string, { promise: Promise<void>; resolve: () => void }>()
@@ -274,6 +275,7 @@ export class CommandExecutor {
 		}
 		this.cancellationOwners.set(activityId, cancellationOwner)
 		if (options?.commandTs) {
+			this.commandMessageTimestamps.set(activityId, options.commandTs)
 			const messages = this.callbacks.getClineMessages() as Array<{ ts?: number }>
 			const commandIndex = messages.findIndex((message) => message.ts === options.commandTs)
 			if (commandIndex !== -1) {
@@ -294,15 +296,6 @@ export class CommandExecutor {
 			},
 		})
 
-		const markCommandMessageCancelled = (): void => {
-			if (!options?.commandTs) return
-			const messages = this.callbacks.getClineMessages() as Array<{ ts?: number }>
-			const commandIndex = messages.findIndex((message) => message.ts === options.commandTs)
-			if (commandIndex !== -1) {
-				void this.callbacks.updateClineMessage(commandIndex, { commandStatus: "cancelled" })
-			}
-		}
-
 		// Track the current foreground process until completion or background handoff.
 		this.currentProcess = process
 		const clearCurrentProcess = () => {
@@ -317,6 +310,7 @@ export class CommandExecutor {
 			}
 			this.cancellationOwners.delete(activityId)
 			this.commandsByActivityId.delete(activityId)
+			this.commandMessageTimestamps.delete(activityId)
 		}
 		process.once("completed", clearCurrentProcess)
 		process.once("error", clearCurrentProcess)
@@ -341,7 +335,7 @@ export class CommandExecutor {
 							: undefined,
 				lineCount: activityLineCount,
 			})
-			if (cancelled) markCommandMessageCancelled()
+			if (cancelled) void this.markCommandMessageCancelled(activityId)
 		})
 		process.once("error", (error: Error) => {
 			const cancelled = this.cancelledActivityIds.has(activityId)
@@ -351,7 +345,7 @@ export class CommandExecutor {
 				error: cancelled ? undefined : error.message,
 				lineCount: activityLineCount,
 			})
-			if (cancelled) markCommandMessageCancelled()
+			if (cancelled) void this.markCommandMessageCancelled(activityId)
 		})
 
 		// Use shared orchestration logic
@@ -365,7 +359,7 @@ export class CommandExecutor {
 				lineCount: activityLineCount,
 			})
 		}
-		const result = await orchestrateCommandExecution(process, manager, this.callbacks, {
+		const execution = orchestrateCommandExecution(process, manager, this.callbacks, {
 			activityId,
 			isCancellationRequested: () => this.cancelledActivityIds.has(activityId),
 			command,
@@ -479,6 +473,35 @@ export class CommandExecutor {
 			showShellIntegrationSuggestion: this.shouldShowBackgroundTerminalSuggestion(),
 			terminalType: useStandalone ? "standalone" : "vscode",
 		})
+		let result: Awaited<typeof execution>
+		try {
+			result = await execution
+		} catch (error) {
+			if (this.cancelledActivityIds.delete(activityId)) {
+				await this.markCommandMessageCancelled(activityId)
+				this.callbacks.updateCommandActivity?.(activityId, {
+					status: "cancelled",
+					latestEvent: "Cancelled by user",
+					error: undefined,
+					lineCount: activityLineCount,
+				})
+				clearCurrentProcess()
+				return {
+					userRejected: true,
+					result: "Command was cancelled by the user.",
+					completed: false,
+				}
+			}
+			clearCurrentProcess()
+			const message = error instanceof Error ? error.message : String(error)
+			this.callbacks.updateCommandActivity?.(activityId, {
+				status: "failed",
+				latestEvent: "Command failed",
+				error: message,
+				lineCount: activityLineCount,
+			})
+			throw error
+		}
 
 		if (result.logFilePath && options?.commandTs) {
 			const messages = this.callbacks.getClineMessages() as Array<{ ts?: number }>
@@ -548,13 +571,17 @@ export class CommandExecutor {
 	async cancelCommand(activityId: string): Promise<boolean> {
 		const process = this.processes.get(activityId)
 		if (!process?.terminate || !this.markCancellationRequested(activityId)) return false
+		const commandTs = this.commandMessageTimestamps.get(activityId)
 		const background = this.standaloneManager.getBackgroundCommand(activityId)
 		if (background?.status === "running") {
-			if (this.standaloneManager.cancelBackgroundCommand(activityId)) return true
+			if (this.standaloneManager.cancelBackgroundCommand(activityId)) {
+				await this.markCommandMessageCancelled(activityId, commandTs)
+				return true
+			}
 			this.cancelledActivityIds.delete(activityId)
 			return false
 		}
-		await Promise.resolve(process.terminate())
+		await Promise.all([this.markCommandMessageCancelled(activityId), Promise.resolve(process.terminate())])
 		return true
 	}
 
@@ -570,10 +597,28 @@ export class CommandExecutor {
 		}
 	}
 
+	/** Persist the canonical command cancellation terminal state before process teardown can race it. */
+	private async markCommandMessageCancelled(
+		activityId: string,
+		commandTs = this.commandMessageTimestamps.get(activityId),
+	): Promise<void> {
+		if (commandTs === undefined) return
+		const messages = this.callbacks.getClineMessages() as Array<{ ts?: number }>
+		const commandIndex = messages.findIndex((message) => message.ts === commandTs)
+		if (commandIndex === -1) return
+		try {
+			await this.callbacks.updateClineMessage(commandIndex, { commandStatus: "cancelled" })
+		} catch (error) {
+			Logger.warn(`[CommandExecutor] Failed to persist cancelled command state for ${activityId}`, error)
+		}
+	}
+
 	/** Mark one cancellation request exactly once across every command control surface. */
 	private markCancellationRequested(activityId: string): boolean {
 		if (this.cancelledActivityIds.has(activityId)) return false
 		this.cancelledActivityIds.add(activityId)
+		this.pendingHandoffs.delete(activityId)
+		this.clearBackgroundHandoffState(activityId)
 		this.callbacks.updateCommandActivity?.(activityId, {
 			status: "cancelling",
 			latestEvent: "Cancellation requested",
@@ -608,7 +653,9 @@ export class CommandExecutor {
 		const detachedActivityIds = new Set<string>()
 		for (const cmd of runningCommands) {
 			if (!this.markCancellationRequested(cmd.id)) continue
+			const commandTs = this.commandMessageTimestamps.get(cmd.id)
 			if (this.standaloneManager.cancelBackgroundCommand(cmd.id)) {
+				await this.markCommandMessageCancelled(cmd.id, commandTs)
 				detachedActivityIds.add(cmd.id)
 				cancelled = true
 				Logger.info(`Cancelled background command: ${cmd.command}`)
