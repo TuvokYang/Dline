@@ -6,6 +6,7 @@ import type { ClineStorageMessage } from "@shared/messages"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { ErrorService } from "@/services/error"
 import { Task } from "../index"
+import { OrdinaryRequestInputReplay } from "../OrdinaryRequestInputReplay"
 
 vi.mock("@core/storage/disk", async (importOriginal) => {
 	const original = await importOriginal<typeof import("@core/storage/disk")>()
@@ -92,9 +93,10 @@ describe("Task.attemptApiRequest first chunk state", () => {
 		}))
 		const receiveIndicator = vi.fn(async () => undefined)
 		const rollbackIndicator = vi.fn(async () => undefined)
+		const ordinaryRequestInputReplay = { get: vi.fn(() => undefined), acknowledge: vi.fn() }
 		const fakeTask = Object.assign(Object.create(Task.prototype), {
 			taskId: "task-first-chunk-failure",
-			takePreparedOrdinaryProviderInput: vi.fn(() => undefined),
+			ordinaryRequestInputReplay,
 			taskState,
 			pendingSystemPromptRefreshReason: undefined,
 			buildPromptContext,
@@ -148,6 +150,7 @@ describe("Task.attemptApiRequest first chunk state", () => {
 		expect(beginIndicator.mock.invocationCallOrder[0]).toBeLessThan(api.createMessage.mock.invocationCallOrder[0])
 		expect(receiveIndicator).not.toHaveBeenCalled()
 		expect(rollbackIndicator).toHaveBeenCalledOnce()
+		expect(ordinaryRequestInputReplay.acknowledge).not.toHaveBeenCalled()
 		expect(buildPromptContext).toHaveBeenCalledWith(
 			requestScope.providerInfo,
 			requestScope.webToolsEnabled,
@@ -160,6 +163,129 @@ describe("Task.attemptApiRequest first chunk state", () => {
 			requestScope.webSearchRoutingPlan,
 			requestScope.webToolsEnabled,
 		)
+	})
+
+	it("replays the same frozen Provider input after a first-chunk failure and releases it only on success", async () => {
+		const connectionError = new Error("connection dropped before first chunk")
+		const frozenInput = {
+			systemPrompt: "frozen system prompt",
+			messages: [{ role: "user" as const, content: "frozen user message" }],
+			tools: [
+				{
+					name: "frozen_tool",
+					description: "Frozen tool definition",
+					input_schema: { type: "object" as const, properties: {} },
+				},
+			],
+			serverTools: [],
+		}
+		const ordinaryRequestInputReplay = new OrdinaryRequestInputReplay()
+		ordinaryRequestInputReplay.freeze(0, frozenInput)
+		const api = {
+			createMessage: vi
+				.fn()
+				.mockImplementationOnce(() => ({
+					[Symbol.asyncIterator]() {
+						return this
+					},
+					next: vi.fn(async () => {
+						throw connectionError
+					}),
+				}))
+				.mockImplementationOnce(() =>
+					(async function* () {
+						yield { type: "text" as const, text: "retry succeeded" }
+					})(),
+				),
+		}
+		const requestScope = {
+			api,
+			providerInfo: {
+				providerId: "deepseek",
+				model: { id: "deepseek-v4-pro", info: {} },
+				mode: "act",
+			},
+			webToolsEnabled: false,
+			webSearchRoutingPlan: resolveWebSearchRoutingPlan({
+				enabled: false,
+				modelInfo: undefined,
+				selectedApiFormat: undefined,
+				localAvailable: true,
+				remoteAdapterAvailable: false,
+			}),
+			explicitInstructions: {
+				beginProviderAttempt: vi.fn(),
+				createConsumePort: vi.fn(() => ({})),
+			},
+		} as unknown as RequestApiScope
+		const taskState = {
+			abort: false,
+			apiRequestCount: 1,
+			autoRetryAttempts: 3,
+			conversationHistoryDeletedRange: undefined,
+			didAutomaticallyRetryFailedApiRequest: false,
+			isWaitingForFirstChunk: false,
+			isInternalContextCompactionRequest: false,
+			isManualContextCompactionRequest: false,
+		}
+		const clineError = {
+			message: "Connection error.",
+			isErrorType: vi.fn(() => false),
+			serialize: vi.fn(() => '{"message":"Connection error."}'),
+		}
+		vi.spyOn(ErrorService, "get").mockReturnValue({
+			logMessage: vi.fn(),
+			toClineError: vi.fn(() => clineError),
+		} as unknown as ErrorService)
+		const buildProviderInput = vi.fn()
+		const fakeTask = Object.assign(Object.create(Task.prototype), {
+			taskId: "task-frozen-ordinary-retry",
+			ordinaryRequestInputReplay,
+			taskState,
+			buildProviderInput,
+			beginOrdinaryContextWindowIndicator: vi.fn(async () => ({
+				kind: "ordinary" as const,
+				requestId: "ordinary:task-frozen-ordinary-retry:0",
+				requestSequence: 1,
+				attemptId: "attempt-0",
+			})),
+			receiveOrdinaryContextWindowIndicator: vi.fn(async () => undefined),
+			rollbackOrdinaryContextWindowIndicator: vi.fn(async () => undefined),
+			apiRateMetricsService: {
+				recordRequestStarted: vi.fn(),
+				trackProviderStream: <T>(stream: T) => stream,
+			},
+			admitOrdinaryProviderRequestRound: vi.fn(() => ({
+				bindAttempt: <T>(stream: T) => stream,
+				attachExactUsage: vi.fn(),
+			})),
+			buildThinkingSummary: vi.fn(() => undefined),
+			compactionRequestReplay: { getProviderInput: vi.fn(() => undefined), getHistoryIndex: vi.fn(() => undefined) },
+			messageStateHandler: { apiConversationHistory: frozenInput.messages, clineMessages: [] },
+			stateManager: {
+				getApiConfiguration: vi.fn(() => ({ actModeProfile: "deepseek:deepseek-v4-pro" })),
+				getGlobalSettingsKey: vi.fn(() => false),
+			},
+			toolExecutor: {
+				setAllowedNativeToolNames: vi.fn(),
+				setExplicitInstructionConsumePort: vi.fn(),
+				setWebSearchRoutingPlan: vi.fn(),
+			},
+			writePromptMetadataArtifacts: vi.fn(async () => undefined),
+			endAutoRetrySequence: vi.fn(),
+			clearAutoRetryMessages: vi.fn(async () => undefined),
+			postStateToWebview: vi.fn(async () => undefined),
+		}) as Task
+
+		await expect(fakeTask.attemptApiRequest(-1, requestScope, 0, 0).next()).rejects.toBe(connectionError)
+		expect(ordinaryRequestInputReplay.get(0)).toEqual(frozenInput)
+
+		const retry = await fakeTask.attemptApiRequest(-1, requestScope, 0, 1).next()
+		expect(retry).toMatchObject({ done: false, value: { type: "text", text: "retry succeeded" } })
+		expect(buildProviderInput).not.toHaveBeenCalled()
+		expect(api.createMessage).toHaveBeenCalledTimes(2)
+		expect(api.createMessage.mock.calls[1]).toEqual(api.createMessage.mock.calls[0])
+		expect(ordinaryRequestInputReplay.get(0)).toBeUndefined()
 	})
 
 	it("fails explicitly when the provider stream ends without yielding any chunk", async () => {
@@ -219,9 +345,10 @@ describe("Task.attemptApiRequest first chunk state", () => {
 		}))
 		const receiveIndicator = vi.fn(async () => undefined)
 		const rollbackIndicator = vi.fn(async () => undefined)
+		const ordinaryRequestInputReplay = { get: vi.fn(() => undefined), acknowledge: vi.fn() }
 		const fakeTask = Object.assign(Object.create(Task.prototype), {
 			taskId: "task-first-chunk-empty-stream",
-			takePreparedOrdinaryProviderInput: vi.fn(() => undefined),
+			ordinaryRequestInputReplay,
 			taskState,
 			beginOrdinaryContextWindowIndicator: beginIndicator,
 			receiveOrdinaryContextWindowIndicator: receiveIndicator,
@@ -281,5 +408,6 @@ describe("Task.attemptApiRequest first chunk state", () => {
 		expect(beginIndicator).toHaveBeenCalledOnce()
 		expect(receiveIndicator).not.toHaveBeenCalled()
 		expect(rollbackIndicator).toHaveBeenCalledOnce()
+		expect(ordinaryRequestInputReplay.acknowledge).not.toHaveBeenCalled()
 	})
 })

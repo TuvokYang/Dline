@@ -86,10 +86,21 @@ function normalizeCards(
 	cards: readonly CompletedCompactionCardProjection[],
 	canonicalLength: number,
 ): CompletedCompactionCardProjection[] {
-	return cards
-		.filter(({ range }) => isValidConversationRange(range, canonicalLength))
-		.slice()
-		.sort((left, right) => left.range.apiConversationRange[0] - right.range.apiConversationRange[0])
+	const survivingCards: CompletedCompactionCardProjection[] = []
+	for (const card of cards) {
+		if (!card.summary.trim() || !isValidConversationRange(card.range, canonicalLength)) continue
+		for (let index = survivingCards.length - 1; index >= 0; index--) {
+			if (rangesOverlap(survivingCards[index].range.apiConversationRange, card.range.apiConversationRange)) {
+				survivingCards.splice(index, 1)
+			}
+		}
+		survivingCards.push(card)
+	}
+	return survivingCards.sort((left, right) => left.range.apiConversationRange[0] - right.range.apiConversationRange[0])
+}
+
+function rangesOverlap(left: CanonicalMessageRange, right: CanonicalMessageRange): boolean {
+	return left[0] <= right[1] && right[0] <= left[1]
 }
 
 function isValidConversationRange(range: CompactionConversationRange, canonicalLength: number): boolean {

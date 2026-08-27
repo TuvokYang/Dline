@@ -734,6 +734,12 @@ for (const status of [403, 429, 502] as const) {
 			const failures = server.getMockConsumptions("openai-compatible-chat")
 			expect(failures).toHaveLength(expectedFailureRequestCount)
 			expect(failures.every((entry) => entry.status === status)).toBe(true)
+			if (status !== 403) {
+				const frozenRequestBody = failures[0].requestBody
+				for (const retry of failures.slice(1)) {
+					expect(retry.requestBody).toEqual(frozenRequestBody)
+				}
+			}
 
 			server.clearPendingResponses("openai-compatible-chat")
 			server.enqueueResponses(

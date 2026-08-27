@@ -39,7 +39,7 @@ describe("Task context-window final admission guard", () => {
 		const warning = method.indexOf("getHighContextPressureWarning({", firstProjection)
 		const rebuild = method.indexOf("candidateInput = await buildCandidate()", warning)
 		const finalProjection = method.indexOf("resolveContextWindowProjection({", rebuild)
-		const cache = method.indexOf("this.preparedOrdinaryProviderInputs.set(apiIndex", finalProjection)
+		const cache = method.indexOf("this.ordinaryRequestInputReplay.freeze(apiIndex, candidateInput)", finalProjection)
 
 		expect(firstProjection).toBeGreaterThanOrEqual(0)
 		expect(warning).toBeGreaterThan(firstProjection)
@@ -112,26 +112,6 @@ describe("Task context-window final admission guard", () => {
 		)
 	})
 
-	it("freezes every admitted ordinary candidate and takes it before provider-input reconstruction", async () => {
-		const source = await readFile(taskSourcePath, "utf8")
-		const guardMethod = extractMethod(
-			source,
-			"private async evaluateFinalContextWindowGuard(",
-			"private async persistApiRequestUserMessage(",
-		)
-		const requestMethod = extractMethod(source, "async *attemptApiRequest(", "// Block identity is now assigned")
-		const cacheIndex = guardMethod.indexOf("this.preparedOrdinaryProviderInputs.set(apiIndex, candidateInput)")
-		const preparedIndex = requestMethod.indexOf("this.takePreparedOrdinaryProviderInput(apiIndex)")
-		const rebuildIndex = requestMethod.indexOf("this.buildProviderInput(", preparedIndex)
-		const sendIndex = requestMethod.indexOf("api.createMessage(", rebuildIndex)
-
-		expect(cacheIndex).toBeGreaterThanOrEqual(0)
-		expect(guardMethod).not.toContain('getGlobalSettingsKey("useAutoCondense") && !projection.shouldCompact')
-		expect(preparedIndex).toBeGreaterThanOrEqual(0)
-		expect(rebuildIndex).toBeGreaterThan(preparedIndex)
-		expect(sendIndex).toBeGreaterThan(rebuildIndex)
-	})
-
 	it("invalidates prepared and replay inputs before every compaction Session without cloning canonical history", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const invalidator = extractMethod(
@@ -144,7 +124,7 @@ describe("Task context-window final admission guard", () => {
 		const transition = extractMethod(source, "async compactForTransition(", "/** Request one user-triggered compaction")
 		const taskHeader = extractMethod(source, "public async compactTask(", "/** Apply one explicit legacy history truncation")
 
-		expect(invalidator).toContain("this.preparedOrdinaryProviderInputs.clear()")
+		expect(invalidator).toContain("this.ordinaryRequestInputReplay.clear()")
 		expect(invalidator).toContain("this.compactionRequestReplay.clear()")
 		for (const method of [ordinary, manual, transition, taskHeader]) {
 			expect(method).toContain("this.invalidatePreparedProviderInputs()")

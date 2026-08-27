@@ -106,6 +106,7 @@ import { getHighContextPressureWarning, showContextUsage } from "@core/task/envi
 import { ExplicitInstructionRegistry } from "@core/task/explicit-instructions/ExplicitInstructionRegistry"
 import { ModeSwitchCompaction } from "@core/task/ModeSwitchCompaction"
 import { projectModeSwitchContinuation } from "@core/task/mode-switch-continuation"
+import { OrdinaryRequestInputReplay } from "@core/task/OrdinaryRequestInputReplay"
 import { calculateApiRequestTiming } from "@core/task/performance/api-request-timing"
 import { createRequestApiScope, type RequestApiScope, resolveRequestWebSearchRoutingPlan } from "@core/task/RequestApiScope"
 import { TaskRequestUsageTracker } from "@core/task/TaskRequestUsageTracker"
@@ -548,7 +549,7 @@ export class Task {
 	private pendingBackgroundResultIds?: { subagentIds: string[]; commandIds: string[] }
 	private pendingBackgroundCommandLineCounts?: Array<{ id: string; lineCount: number }>
 	private pendingRecentlyModifiedFilesSnapshot?: RecentlyModifiedFilesSnapshot
-	private readonly preparedOrdinaryProviderInputs = new Map<number, CompactionProviderInput>()
+	private readonly ordinaryRequestInputReplay = new OrdinaryRequestInputReplay()
 	private readonly ordinaryContextIndicatorLineageByApiIndex = new Map<number, ContextWindowIndicatorLineage>()
 	private readonly ordinaryContextIndicatorReceivingByApiIndex = new Map<number, ContextWindowReceivingTracker>()
 	private readonly contextCompactionIndicatorReceivingByAttemptId = new Map<string, ContextWindowReceivingTracker>()
@@ -705,6 +706,10 @@ export class Task {
 				async (effect) => {
 					this.taskState.resetOperationCancellation()
 					this.taskState.abort = false
+					const hasRetryDraft = Boolean(
+						effect.draft?.text?.trim() || effect.draft?.images?.length || effect.draft?.files?.length,
+					)
+					if (hasRetryDraft) this.ordinaryRequestInputReplay.clear()
 					const replayHistoryIndex = this.compactionRequestReplay.getHistoryIndex(effect.apiIndex)
 					if (effect.persistedRequest || replayHistoryIndex !== undefined) {
 						const persistedRequestApiIndex = replayHistoryIndex ?? effect.apiIndex
@@ -2727,7 +2732,7 @@ export class Task {
 
 	/** Clear request inputs that were frozen against a canonical state which is about to change. */
 	private invalidatePreparedProviderInputs(): void {
-		this.preparedOrdinaryProviderInputs.clear()
+		this.ordinaryRequestInputReplay.clear()
 		this.compactionRequestReplay.clear()
 	}
 
@@ -4600,6 +4605,7 @@ export class Task {
 	 */
 	async abortExecution() {
 		try {
+			this.invalidatePreparedProviderInputs()
 			this.cancelPendingAutoRetry()
 			this.modeSwitchCompaction.abort()
 			this.taskState.pendingManualCompactionContinuation = undefined
@@ -4733,6 +4739,7 @@ export class Task {
 		const initialRuntimeState = this.taskRuntime.getState()
 		let cutoffRevision = initialRuntimeState.supersededEffectRevision ?? initialRuntimeState.revision
 		try {
+			this.invalidatePreparedProviderInputs()
 			this.cancelPendingAutoRetry()
 			this.modeSwitchCompaction.abort()
 			// PHASE 1: Check if TaskCancel should run BEFORE any cleanup
@@ -5477,6 +5484,7 @@ export class Task {
 		markAutomaticRetry = true,
 		keepOverride?: "none" | "lastTwo" | "half" | "quarter",
 	): Promise<void> {
+		this.ordinaryRequestInputReplay.clear()
 		const apiConversationHistory = this.messageStateHandler.apiConversationHistory
 		const keep = keepOverride ?? (this.modeSwitchCompaction.shouldForce() ? "lastTwo" : "quarter")
 
@@ -5884,13 +5892,6 @@ export class Task {
 		})
 	}
 
-	/** Take a prepared ordinary candidate exactly once; retries may then rebuild from durable history. */
-	private takePreparedOrdinaryProviderInput(apiIndex: number): CompactionProviderInput | undefined {
-		const providerInput = this.preparedOrdinaryProviderInputs.get(apiIndex)
-		this.preparedOrdinaryProviderInputs.delete(apiIndex)
-		return providerInput
-	}
-
 	async *attemptApiRequest(
 		previousApiReqIndex: number,
 		requestScope: RequestApiScope,
@@ -5908,7 +5909,7 @@ export class Task {
 			providerInput = replayProviderInput
 			providerInputSource = "compaction_replay"
 		} else {
-			const preparedProviderInput = this.takePreparedOrdinaryProviderInput(apiIndex)
+			const preparedProviderInput = this.ordinaryRequestInputReplay.get(apiIndex)
 			if (preparedProviderInput) {
 				providerInput = preparedProviderInput
 				providerInputSource = "prepared"
@@ -6073,6 +6074,7 @@ export class Task {
 			// reached the provider. Keep Cancel for the live stream, but release
 			// the retry-sequence-owned Retry action.
 			if (!firstChunk.done) {
+				if (isOrdinaryIndicatorRequest) this.ordinaryRequestInputReplay.acknowledge(apiIndex)
 				this.endAutoRetrySequence(false)
 				await this.clearAutoRetryMessages()
 				await this.postStateToWebview()
@@ -6998,7 +7000,7 @@ export class Task {
 				triggerTokens,
 			})
 		}
-		this.preparedOrdinaryProviderInputs.set(apiIndex, candidateInput)
+		this.ordinaryRequestInputReplay.freeze(apiIndex, candidateInput)
 		Logger.debug(`[Task ${this.taskId}] final context-window projection`, {
 			apiIndex,
 			candidateEstimatedTokens,
@@ -7254,7 +7256,7 @@ export class Task {
 		}
 
 		if (!persistedRequest && shouldCompact && !manualCompactionRequested) {
-			this.preparedOrdinaryProviderInputs.delete(apiIndex)
+			this.ordinaryRequestInputReplay.clear()
 			requestScope.explicitInstructions.cancel()
 			const operationId = `auto-compaction:${this.taskId}:${apiIndex}:${this.genMessageTs()}`
 			const result = await this.runOrdinaryContextCompaction(
@@ -7440,7 +7442,7 @@ export class Task {
 				!manualCompactionCommitted &&
 				!manualHistoryTruncationCommitted
 			) {
-				this.preparedOrdinaryProviderInputs.delete(apiIndex)
+				this.ordinaryRequestInputReplay.clear()
 				requestScope.explicitInstructions.cancel()
 				const operationId = `auto-compaction:${this.taskId}:${apiIndex}:${this.genMessageTs()}`
 				const result = await this.runOrdinaryContextCompaction(
@@ -7492,6 +7494,7 @@ export class Task {
 		}
 		if (!requestApproved) {
 			requestScope.explicitInstructions.cancel()
+			this.ordinaryRequestInputReplay.acknowledge(apiIndex)
 			this.compactionRequestReplay.clear(apiIndex)
 			return true
 		}

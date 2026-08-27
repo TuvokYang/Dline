@@ -54,6 +54,56 @@ describe("projectCompactionContext", () => {
 		])
 		expect(result.canonicalMessageIndexes).toEqual([1, undefined, undefined, 6, 7])
 	})
+
+	it("keeps only the latest cumulative card when it contains an earlier card", () => {
+		const result = projectCompactionContext({
+			canonicalHistory: canonical,
+			completedCards: [card("old summary", [2, 3], 7), card("cumulative summary", [2, 5], 7)],
+		})
+
+		expect(result.messages).toEqual([
+			canonical[0],
+			canonical[1],
+			{ role: "user", content: [{ type: "text", text: "cumulative summary" }] },
+			canonical[6],
+			canonical[7],
+		])
+		expect(result.sourceCanonicalRanges).toEqual([
+			[0, 0],
+			[1, 1],
+			[2, 5],
+			[6, 6],
+			[7, 7],
+		])
+	})
+
+	it("lets the latest partially overlapping card win without hiding its uncovered predecessor range", () => {
+		const result = projectCompactionContext({
+			canonicalHistory: canonical,
+			completedCards: [card("old summary", [2, 4], 7), card("latest summary", [4, 5], 7)],
+		})
+
+		expect(result.messages).toEqual([
+			canonical[0],
+			canonical[1],
+			canonical[2],
+			canonical[3],
+			{ role: "user", content: [{ type: "text", text: "latest summary" }] },
+			canonical[6],
+			canonical[7],
+		])
+		expect(result.canonicalMessageIndexes).toEqual([0, 1, 2, 3, undefined, 6, 7])
+	})
+
+	it("ignores an empty completed card instead of hiding canonical history", () => {
+		const result = projectCompactionContext({
+			canonicalHistory: canonical,
+			completedCards: [card("   ", [2, 3], 7)],
+		})
+
+		expect(result.messages).toEqual(canonical)
+		expect(result.canonicalMessageIndexes).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
+	})
 })
 
 describe("readCompletedCompactionCards", () => {
