@@ -88,6 +88,7 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 
 	/** The spawned child process */
 	private childProcess: ChildProcess | null = null
+	private outputPaused = false
 
 	/** Exit code from the process */
 	private exitCode: number | null = null
@@ -435,6 +436,20 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 	 * because background command tracking needs to continue receiving output lines
 	 * after the user clicks "Proceed While Running".
 	 */
+	pauseOutput(): void {
+		if (this.outputPaused) return
+		this.outputPaused = true
+		this.childProcess?.stdout?.pause()
+		this.childProcess?.stderr?.pause()
+	}
+
+	resumeOutput(): void {
+		if (!this.outputPaused) return
+		this.outputPaused = false
+		this.childProcess?.stdout?.resume()
+		this.childProcess?.stderr?.resume()
+	}
+
 	continue(): void {
 		this.emitRemainingBuffers()
 		// Keep isListening = true so we continue emitting "line" events

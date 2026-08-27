@@ -382,11 +382,12 @@ export class CommandExecutor {
 			onTimeout: markTimedOut,
 			suppressUserInteraction: options?.suppressUserInteraction,
 			commandTs: options?.commandTs,
-			onOutputLine: (line) => {
-				activityLineCount++
-				this.callbacks.appendCommandActivityOutput?.(activityId, `${line}\n`)
+			onOutputFrame: async (frame) => {
+				activityLineCount += frame.length
+				this.callbacks.appendCommandActivityOutput?.(activityId, `${frame.map((entry) => entry.line).join("\n")}\n`)
+				const latestLine = [...frame].reverse().find((entry) => entry.line.trim())?.line
 				this.callbacks.updateCommandActivity?.(activityId, {
-					latestEvent: line.trim() || "Command produced output",
+					latestEvent: latestLine?.trim() || "Command produced output",
 					lineCount: activityLineCount,
 				})
 			},
@@ -413,11 +414,23 @@ export class CommandExecutor {
 							...timing,
 						},
 						{
-							onOutputLine: (line) => {
-								activityLineCount++
-								this.callbacks.appendCommandActivityOutput?.(activityId, `${line}\n`)
+							onOutputFrame: async (frame) => {
+								activityLineCount += frame.length
+								this.callbacks.appendCommandActivityOutput?.(
+									activityId,
+									`${frame.map((entry) => entry.line).join("\n")}\n`,
+								)
+								const latestLine = [...frame].reverse().find((entry) => entry.line.trim())?.line
 								this.callbacks.updateCommandActivity?.(activityId, {
-									latestEvent: line.trim() || "Command produced output",
+									latestEvent: latestLine?.trim() || "Command produced output",
+									lineCount: activityLineCount,
+								})
+							},
+							onError: (error) => {
+								this.callbacks.updateCommandActivity?.(activityId, {
+									status: "failed",
+									latestEvent: "Failed to persist command output",
+									error: error.message,
 									lineCount: activityLineCount,
 								})
 							},

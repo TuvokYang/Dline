@@ -50,6 +50,8 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 	private completionDetailsWaiter: (() => void) | null = null
 	private terminationPromise: Promise<void> | null = null
 	private cancelledBeforeRun = false
+	private outputCapacityGate: Promise<void> | undefined
+	private releaseOutputCapacityGate: (() => void) | undefined
 
 	constructor() {
 		super()
@@ -95,6 +97,7 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 			let didEmitEmptyLine = false
 
 			for await (let data of stream) {
+				await this.waitForOutputCapacity()
 				// Parse shell integration completion markers when present.
 				// Sequence format: ]633;D;<exitCode>
 				const completionMatches = [...data.matchAll(/\]633;D(?:;(-?\d+))?/g)]
@@ -375,9 +378,26 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 		this.emit("continue")
 	}
 
+	pauseOutput(): void {
+		if (this.outputCapacityGate) return
+		this.outputCapacityGate = new Promise<void>((resolve) => {
+			this.releaseOutputCapacityGate = resolve
+		})
+	}
+
+	resumeOutput(): void {
+		this.releaseOutputCapacityGate?.()
+		this.outputCapacityGate = undefined
+		this.releaseOutputCapacityGate = undefined
+	}
+
 	continue() {
 		this.emitRemainingBufferIfListening()
 		this.emit("continue")
+	}
+
+	private async waitForOutputCapacity(): Promise<void> {
+		await this.outputCapacityGate
 	}
 
 	/** Interrupt the active command, then dispose its terminal if it does not stop promptly. */
@@ -386,6 +406,7 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 		if (this.terminationPromise) return this.terminationPromise
 
 		this.signal = "SIGINT"
+		this.resumeOutput()
 		if (!this.terminal) {
 			this.cancelledBeforeRun = true
 			this.waitForShellIntegration = false

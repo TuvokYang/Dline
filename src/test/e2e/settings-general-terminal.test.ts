@@ -22,6 +22,16 @@ async function readGlobalState(dlineDir: string): Promise<StoredSettings> {
 	return JSON.parse(await readFile(path.join(dlineDir, "data", "globalState.json"), "utf8"))
 }
 
+async function setShellIntegrationTimeout(sidebar: Frame, seconds: string): Promise<void> {
+	const input = sidebar
+		.getByText("Shell integration timeout (seconds)", { exact: true })
+		.locator("..")
+		.locator("vscode-text-field input")
+	await input.fill(seconds)
+	await expect(input).toHaveValue(seconds)
+	await input.blur()
+}
+
 interface ShellEnvironmentFixture {
 	postMarkerPath: string
 	startupScripts: string[]
@@ -393,15 +403,7 @@ e2e(
 		await setDropdownValue(sidebar, sidebar.locator("#terminal-execution-mode"), "backgroundExec", "Background Exec")
 		await setDropdownValue(sidebar, sidebar.locator("#terminal-execution-mode"), "vscodeTerminal", "VS Code Terminal")
 		await setDropdownValue(sidebar, sidebar.locator("#default-terminal-profile"), "powershell-legacy", "Windows PowerShell")
-		const shellIntegrationTimeout = sidebar
-			.getByText("Shell integration timeout (seconds)", { exact: true })
-			.locator("..")
-			.locator("vscode-text-field")
-		const shellIntegrationTimeoutInput = shellIntegrationTimeout.locator("input")
-		await shellIntegrationTimeoutInput.click()
-		await shellIntegrationTimeoutInput.press("Control+A")
-		await shellIntegrationTimeoutInput.pressSequentially("15")
-		await shellIntegrationTimeoutInput.press("Tab")
+		await setShellIntegrationTimeout(sidebar, "15")
 		await expect
 			.poll(async () => await readGlobalState(dlineDir))
 			.toMatchObject({
@@ -574,30 +576,7 @@ e2e(
 		// This case runs through a real VS Code terminal; give shell integration a
 		// generous window so a slow startup does not degrade the command to
 		// method:none and break the "Command executed successfully" contract.
-		await sidebar
-			.getByText("Shell integration timeout (seconds)", { exact: true })
-			.locator("..")
-			.locator("vscode-text-field")
-			.locator("input")
-			.click()
-		await sidebar
-			.getByText("Shell integration timeout (seconds)", { exact: true })
-			.locator("..")
-			.locator("vscode-text-field")
-			.locator("input")
-			.press("Control+A")
-		await sidebar
-			.getByText("Shell integration timeout (seconds)", { exact: true })
-			.locator("..")
-			.locator("vscode-text-field")
-			.locator("input")
-			.pressSequentially("15")
-		await sidebar
-			.getByText("Shell integration timeout (seconds)", { exact: true })
-			.locator("..")
-			.locator("vscode-text-field")
-			.locator("input")
-			.press("Tab")
+		await setShellIntegrationTimeout(sidebar, "15")
 		await expect.poll(async () => (await readGlobalState(dlineDir)).shellIntegrationTimeout).toBe(15_000)
 		await returnToChat(sidebar)
 		await setAutoApproveAction(sidebar, "Execute safe commands", false)
@@ -725,7 +704,7 @@ e2e(
 		await sidebar.getByTestId("send-button").click()
 		await expect(sidebar.getByText("Approve", { exact: true })).toBeVisible({ timeout: 60_000 })
 		await sidebar.getByText("Approve", { exact: true }).click()
-		await expect(sidebar.getByText("E2E_TIMEOUT_LOG_CONTRACT_OK", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+		await expect.poll(() => server.openAiRequestCount, { timeout: 60_000 }).toBe(2)
 
 		const continuation = server.getMockConsumptions("openai-compatible-chat")[1]
 		expect(continuation.contractError).toBeUndefined()
@@ -737,6 +716,10 @@ e2e(
 		const timeoutLog = await readFile(timeoutLogPath, "utf8")
 		expect(timeoutLog).toContain(`${outputPrefix}0`)
 		expect(timeoutLog).toContain(`${outputPrefix}119`)
+		await sidebar.getByRole("tab", { name: /^Activities(?: \d+)?$/ }).click()
+		await sidebar.getByRole("button", { name: "All", exact: true }).first().click()
+		const activity = sidebar.getByTestId("activity-item").filter({ hasText: command })
+		await expect(activity).toContainText("timeout", { timeout: 30_000 })
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )

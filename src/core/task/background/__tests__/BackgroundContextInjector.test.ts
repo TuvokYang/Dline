@@ -222,7 +222,7 @@ describe("BackgroundContextInjector", () => {
 			assert.match(result.text, /1 output line/)
 			assert.notEqual(command.logFilePath, undefined)
 		} finally {
-			manager.disposeBackgroundCommands()
+			await manager.disposeBackgroundCommands()
 		}
 	})
 

@@ -425,6 +425,36 @@ describe("CommandOrchestrator exit status messaging", () => {
 		}
 	})
 
+	it("frames a 401-line unreachable-object burst without a durable switch message", async () => {
+		vi.useFakeTimers()
+		const process = new FakeTerminalProcess()
+		const callbacks = createCallbacks()
+		const say = vi.spyOn(callbacks, "say").mockResolvedValue(321)
+		const orchestrationPromise = orchestrateCommandExecution(
+			process.asResultPromise(),
+			createTerminalManager(400),
+			callbacks,
+			{ command: "synthetic-unreachable-fixture", activityId: "command_401_fixture" },
+		)
+
+		for (let index = 0; index < 401; index++) {
+			process.emitOutput(`unreachable commit ${index.toString(16).padStart(40, "0")}`, "stdout")
+		}
+		await vi.advanceTimersByTimeAsync(20)
+		expect(say.mock.calls.length).toBeGreaterThan(0)
+		expect(say.mock.calls.every((call) => call[4] === true)).toBe(true)
+
+		process.complete({ exitCode: 0, signal: null })
+		const result = await orchestrationPromise
+		try {
+			expect(result.logFilePath).toBeTruthy()
+			expect((await fs.readFile(result.logFilePath as string, "utf8")).trim().split("\n")).toHaveLength(401)
+			expect(say.mock.calls.at(-1)?.[4]).toBe(false)
+		} finally {
+			if (result.logFilePath) await fs.rm(result.logFilePath, { force: true })
+		}
+	})
+
 	it("collects stdout and stderr separately in the final tool result", async () => {
 		const process = new FakeTerminalProcess()
 		const orchestrationPromise = orchestrateCommandExecution(

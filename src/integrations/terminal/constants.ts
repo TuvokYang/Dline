@@ -22,17 +22,20 @@ export const PROCESS_HOT_TIMEOUT_COMPILING = 15_000
 // =============================================================================
 // Controls how output is chunked and sent to the UI
 
-/** Lines to buffer before flushing to UI */
-export const CHUNK_LINE_COUNT = 20
+/** Visual frame interval for coalescing terminal output (approximately 50 FPS). */
+export const TERMINAL_OUTPUT_FRAME_INTERVAL_MS = 20
 
-/** Bytes to buffer before flushing to UI */
-export const CHUNK_BYTE_SIZE = 2048 // 2KB
+/** Maximum entries admitted to one terminal output frame before an early flush. */
+export const TERMINAL_OUTPUT_FRAME_MAX_LINES = 256
 
-/** Debounce time for buffer flush */
-export const CHUNK_DEBOUNCE_MS = 100
+/** Maximum UTF-8 payload admitted to one terminal output frame before an early flush. */
+export const TERMINAL_OUTPUT_FRAME_MAX_BYTES = 32 * 1024
 
-/** Timeout to detect stuck buffer */
-export const BUFFER_STUCK_TIMEOUT_MS = 6000 // 6 seconds
+/** Pause or gate terminal producers when the pending frame buffer reaches this size. */
+export const TERMINAL_OUTPUT_PENDING_HIGH_WATER_BYTES = 128 * 1024
+
+/** Resume terminal producers after the pending frame buffer drains below this size. */
+export const TERMINAL_OUTPUT_PENDING_LOW_WATER_BYTES = 32 * 1024
 
 /** Timeout to detect stuck completion */
 export const COMPLETION_TIMEOUT_MS = 6000 // 6 seconds

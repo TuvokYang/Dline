@@ -15,9 +15,11 @@
 import { DlineTempManager } from "@services/temp"
 import { getShellForProfile } from "@utils/shell"
 import * as fs from "fs"
+import { Logger } from "@/shared/services/Logger"
 import { isCommandCompletionSuccessful } from "../command-completion"
 import { DEFAULT_TERMINAL_OUTPUT_LINE_LIMIT } from "../constants"
-import { formatTerminalOutputLogLine } from "../output-stream"
+import { flushTerminalOutputStream, writeTerminalOutputFrame, writeTerminalOutputText } from "../output-stream"
+import { TerminalOutputFrameScheduler } from "../TerminalOutputFrameScheduler"
 import type {
 	BackgroundCommand,
 	CommandCancellationOwner,
@@ -107,6 +109,18 @@ export class StandaloneTerminalManager implements ITerminalManager {
 
 	/** Completion signal for asynchronously flushed log streams. */
 	private logStreamCompletions: Map<string, Promise<void>> = new Map()
+
+	/** Time-based output framing for detached commands. */
+	private outputSchedulers: Map<string, TerminalOutputFrameScheduler> = new Map()
+
+	/** Shared lifecycle close operation for each detached command. */
+	private outputDrainCompletions: Map<string, Promise<void>> = new Map()
+
+	/** First log stream error observed for each detached command. */
+	private logStreamErrors: Map<string, Error> = new Map()
+
+	/** Project asynchronous output failures to the owning command activity. */
+	private outputErrorHandlers: Map<string, (error: Error) => void> = new Map()
 
 	/** Map of background command ID to timeout handle */
 	private backgroundTimeouts: Map<string, NodeJS.Timeout> = new Map()
@@ -266,8 +280,8 @@ export class StandaloneTerminalManager implements ITerminalManager {
 	 * Dispose of all terminals and clean up resources.
 	 */
 	disposeAll(): void {
-		// Dispose background commands first
-		this.disposeBackgroundCommands()
+		// Dispose background commands first without changing the synchronous manager contract.
+		void this.disposeBackgroundCommands()
 
 		// Terminate all processes
 		for (const [_terminalId, process] of this.processes) {
@@ -454,7 +468,9 @@ export class StandaloneTerminalManager implements ITerminalManager {
 			cancellationOwner: "task",
 		},
 		callbacks?: {
+			onOutputFrame?: (frame: readonly TerminalOutputLine[]) => void | Promise<void>
 			onOutputLine?: (line: string, stream: TerminalOutputStream) => void
+			onError?: (error: Error) => void
 			onTimeout?: () => void
 			onLogFileCreated?: (logFilePath: string) => void
 		},
@@ -469,7 +485,10 @@ export class StandaloneTerminalManager implements ITerminalManager {
 		const logStream = fs.createWriteStream(logFilePath, { fd: logFd, flags: logFlags, autoClose: true })
 		const logCompletion = new Promise<void>((resolve) => {
 			logStream.once("finish", resolve)
-			logStream.once("error", () => resolve())
+			logStream.once("error", (error) => {
+				this.logStreamErrors.set(activityId, error)
+				resolve()
+			})
 		})
 		this.logStreams.set(activityId, logStream)
 		this.logStreamCompletions.set(activityId, logCompletion)
@@ -490,16 +509,42 @@ export class StandaloneTerminalManager implements ITerminalManager {
 			process,
 		}
 
-		if (existingOutput.length > 0) {
-			logStream.write(`${existingOutput.map(formatTerminalOutputLogLine).join("\n")}\n`)
-		}
 		callbacks?.onLogFileCreated?.(logFilePath)
-
-		// Pipe future process output to log file
+		let outputErrorHandled = false
+		const handleOutputError = (error: Error) => {
+			if (outputErrorHandled) return
+			outputErrorHandled = true
+			backgroundCommand.status = "error"
+			callbacks?.onError?.(error)
+			Logger.error(`[StandaloneTerminalManager] Failed to persist background output for ${activityId}:`, error)
+			process.pauseOutput?.()
+			void this.drainBackgroundOutput(activityId)
+			if (process.terminate) void Promise.resolve(process.terminate())
+		}
+		this.outputErrorHandlers.set(activityId, handleOutputError)
+		let retainedPrefixEntries = existingOutput.length
+		const outputScheduler = new TerminalOutputFrameScheduler({
+			sink: async (frame) => {
+				await writeTerminalOutputFrame(logStream, frame)
+				const retainedCount = Math.min(retainedPrefixEntries, frame.length)
+				retainedPrefixEntries -= retainedCount
+				const currentFrame = retainedCount === 0 ? frame : frame.slice(retainedCount)
+				if (currentFrame.length === 0) return
+				await callbacks?.onOutputFrame?.(currentFrame)
+				if (!callbacks?.onOutputFrame && callbacks?.onOutputLine) {
+					for (const output of currentFrame) callbacks.onOutputLine(output.line, output.stream)
+				}
+			},
+			onHighWater: () => process.pauseOutput?.(),
+			onLowWater: () => process.resumeOutput?.(),
+			onError: (error) => handleOutputError(error instanceof Error ? error : new Error(String(error))),
+		})
+		this.outputSchedulers.set(activityId, outputScheduler)
+		for (const output of existingOutput) outputScheduler.enqueue(output)
 		process.on("line", (line: string, stream: TerminalOutputStream = "combined") => {
-			backgroundCommand.lineCount++
-			this.appendBackgroundOutput(backgroundCommand, { line, stream })
-			callbacks?.onOutputLine?.(line, stream)
+			if (backgroundCommand.status !== "running") return
+			backgroundCommand.lineCount += 1
+			outputScheduler.enqueue({ line, stream })
 		})
 
 		if (ownership.deadlineAt !== undefined) {
@@ -508,8 +553,7 @@ export class StandaloneTerminalManager implements ITerminalManager {
 				if (backgroundCommand.status === "running") {
 					backgroundCommand.status = "timed_out"
 					callbacks?.onTimeout?.()
-					this.appendBackgroundNote(backgroundCommand, "[TIMEOUT] Process reached its command deadline")
-					this.finishBackgroundLog(activityId)
+					void this.drainBackgroundOutput(activityId, ["[TIMEOUT] Process reached its command deadline"])
 
 					if (process.terminate) {
 						void Promise.resolve(process.terminate())
@@ -536,21 +580,22 @@ export class StandaloneTerminalManager implements ITerminalManager {
 				backgroundCommand.exitCode = exitCode
 			}
 
+			const notes: string[] = []
 			if (isCommandCompletionSuccessful(details)) {
 				backgroundCommand.status = "completed"
 			} else {
 				backgroundCommand.status = "error"
 				if (typeof exitCode === "number" && exitCode !== 0) {
-					this.appendBackgroundNote(backgroundCommand, `[EXIT_CODE] Process exited with code ${exitCode}`)
+					notes.push(`[EXIT_CODE] Process exited with code ${exitCode}`)
 				}
 				if (signal) {
-					this.appendBackgroundNote(backgroundCommand, `[SIGNAL] Process terminated by signal ${signal}`)
+					notes.push(`[SIGNAL] Process terminated by signal ${signal}`)
 				}
 				if (typeof exitCode !== "number" && !signal) {
-					this.appendBackgroundNote(backgroundCommand, "[UNKNOWN_EXIT] Process completion did not include an exit code")
+					notes.push("[UNKNOWN_EXIT] Process completion did not include an exit code")
 				}
 			}
-			this.finishBackgroundLog(activityId)
+			void this.drainBackgroundOutput(activityId, notes)
 		})
 
 		// Listen for errors - clear timeout
@@ -570,7 +615,7 @@ export class StandaloneTerminalManager implements ITerminalManager {
 			if (exitCodeMatch) {
 				backgroundCommand.exitCode = Number.parseInt(exitCodeMatch[1], 10)
 			}
-			this.finishBackgroundLog(activityId)
+			void this.drainBackgroundOutput(activityId)
 		})
 
 		this.backgroundCommands.set(activityId, backgroundCommand)
@@ -586,29 +631,55 @@ export class StandaloneTerminalManager implements ITerminalManager {
 
 		const activeStream = this.logStreams.get(id)
 		if (command.status === "running" && activeStream) {
-			await new Promise<void>((resolve) => activeStream.write("", () => resolve()))
+			await this.outputSchedulers.get(id)?.drain()
+			await flushTerminalOutputStream(activeStream)
 		} else {
-			await this.logStreamCompletions.get(id)
+			await (this.outputDrainCompletions.get(id) ?? this.logStreamCompletions.get(id))
 		}
 		return command.logFilePath ? fs.promises.readFile(command.logFilePath, "utf8") : ""
 	}
 
-	private appendBackgroundOutput(command: BackgroundCommand, output: TerminalOutputLine): void {
-		const line = formatTerminalOutputLogLine(output)
-		this.logStreams.get(command.id)?.write(`${line}\n`)
+	private drainBackgroundOutput(id: string, notes: readonly string[] = []): Promise<void> {
+		const existing = this.outputDrainCompletions.get(id)
+		if (existing) return existing
+		const operation = this.performBackgroundOutputDrain(id, notes)
+		this.outputDrainCompletions.set(id, operation)
+		return operation
 	}
 
-	private appendBackgroundNote(command: BackgroundCommand, note: string): void {
-		this.logStreams.get(command.id)?.write(`\n${note}\n`)
-	}
-
-	private finishBackgroundLog(id: string): void {
+	private async performBackgroundOutputDrain(id: string, notes: readonly string[]): Promise<void> {
+		const scheduler = this.outputSchedulers.get(id)
 		const logStream = this.logStreams.get(id)
-		if (!logStream) {
-			return
+		try {
+			await scheduler?.close()
+			if (logStream && notes.length > 0) {
+				await writeTerminalOutputText(logStream, notes.map((note) => `\n${note}\n`).join(""))
+			}
+			await this.finishBackgroundLog(id)
+		} catch (error) {
+			const normalizedError = error instanceof Error ? error : new Error(String(error))
+			this.outputErrorHandlers.get(id)?.(normalizedError)
+			try {
+				await this.finishBackgroundLog(id)
+			} catch (finishError) {
+				const normalizedFinishError = finishError instanceof Error ? finishError : new Error(String(finishError))
+				this.outputErrorHandlers.get(id)?.(normalizedFinishError)
+			}
+		} finally {
+			this.outputSchedulers.delete(id)
+			this.outputErrorHandlers.delete(id)
 		}
-		logStream.end()
-		this.logStreams.delete(id)
+	}
+
+	private async finishBackgroundLog(id: string): Promise<void> {
+		const logStream = this.logStreams.get(id)
+		if (logStream) {
+			this.logStreams.delete(id)
+			if (!logStream.destroyed && !logStream.writableEnded) logStream.end()
+		}
+		await this.logStreamCompletions.get(id)
+		const error = this.logStreamErrors.get(id)
+		if (error) throw error
 	}
 
 	/**
@@ -714,8 +785,7 @@ export class StandaloneTerminalManager implements ITerminalManager {
 			this.backgroundTimeouts.delete(id)
 		}
 
-		this.appendBackgroundNote(command, "[CANCELLED] Command cancelled by user")
-		this.finishBackgroundLog(id)
+		void this.drainBackgroundOutput(id, ["[CANCELLED] Command cancelled by user"])
 
 		// Terminate process
 		if (command.process && typeof (command.process as any).terminate === "function") {
@@ -749,25 +819,20 @@ export class StandaloneTerminalManager implements ITerminalManager {
 	 * Clean up all background command resources.
 	 * Called when disposing the manager.
 	 */
-	disposeBackgroundCommands(): void {
-		// Clear all timeouts
-		for (const [_id, timeout] of this.backgroundTimeouts) {
-			clearTimeout(timeout)
-		}
+	async disposeBackgroundCommands(): Promise<void> {
+		for (const [_id, timeout] of this.backgroundTimeouts) clearTimeout(timeout)
 		this.backgroundTimeouts.clear()
-
-		// Close all log streams
-		for (const [_id, logStream] of this.logStreams) {
-			try {
-				logStream.end()
-			} catch (_error) {
-				// Ignore errors when closing log streams
-			}
+		for (const command of this.backgroundCommands.values()) {
+			if (command.status === "running") command.status = "cancelled"
 		}
+		const pendingIds = [...this.outputSchedulers.keys()].filter((id) => !this.outputDrainCompletions.has(id))
+		const drains = pendingIds.map((id) => this.drainBackgroundOutput(id))
+		await Promise.all([...this.outputDrainCompletions.values(), ...drains])
+		this.outputDrainCompletions.clear()
 		this.logStreams.clear()
 		this.logStreamCompletions.clear()
-
-		// Clear command tracking
+		this.logStreamErrors.clear()
+		this.outputErrorHandlers.clear()
 		this.backgroundCommands.clear()
 	}
 }

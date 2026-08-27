@@ -70,6 +70,12 @@ export interface ITerminalProcess extends EventEmitter<TerminalProcessEvents> {
 	 */
 	continue(): void
 
+	/** Pause terminal output production when the shared frame buffer reaches its high-water mark. */
+	pauseOutput?(): void
+
+	/** Resume terminal output production after the shared frame buffer drains below its low-water mark. */
+	resumeOutput?(): void
+
 	/**
 	 * Get output that hasn't been retrieved yet.
 	 * @returns The unretrieved output
@@ -518,7 +524,9 @@ export interface OrchestrationOptions {
 	handoffRequest?: { promise: Promise<void>; resolve: () => void }
 	/** Called once when the absolute command deadline is reached. */
 	onTimeout?: () => void
-	/** Callback to track output lines for background command tracking */
+	/** Callback to project one coalesced output frame. */
+	onOutputFrame?: (frame: readonly TerminalOutputLine[]) => void | Promise<void>
+	/** @deprecated Use onOutputFrame for bounded runtime work. */
 	onOutputLine?: (line: string, stream: TerminalOutputStream) => void
 	/** Whether to show shell integration warning with suggestion */
 	showShellIntegrationSuggestion?: boolean

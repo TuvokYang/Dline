@@ -511,6 +511,20 @@ describe("TerminalProcess (Integration Tests)", () => {
 		processAny.buffer.should.equal("")
 	})
 
+	it("should gate shell integration reads until output capacity resumes", async () => {
+		process.pauseOutput()
+		let released = false
+		const waiting = (process as unknown as { waitForOutputCapacity(): Promise<void> }).waitForOutputCapacity().then(() => {
+			released = true
+		})
+
+		await Promise.resolve()
+		expect(released).toBe(false)
+		process.resumeOutput()
+		await waiting
+		expect(released).toBe(true)
+	})
+
 	it("should keep emitting output after foreground waiting is released", () => {
 		const processAny = process as any
 		const lineListener = vi.fn()

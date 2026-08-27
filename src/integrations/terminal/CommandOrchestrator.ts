@@ -15,23 +15,15 @@
 
 import { formatResponse } from "@core/prompts/responses"
 import { processFilesIntoText } from "@integrations/misc/extract-text"
-import { TerminalHangStage, TerminalUserInterventionAction, telemetryService } from "@services/telemetry"
+import { TerminalHangStage, telemetryService } from "@services/telemetry"
 import { DlineTempManager } from "@services/temp"
-import { COMMAND_CANCEL_TOKEN } from "@shared/ExtensionMessage"
 import * as fs from "fs"
 import { Logger } from "@/shared/services/Logger"
 import { isCommandCompletionSuccessful } from "./command-completion"
 import { appendCommandLogPath } from "./command-result"
-import {
-	BUFFER_STUCK_TIMEOUT_MS,
-	CHUNK_BYTE_SIZE,
-	CHUNK_DEBOUNCE_MS,
-	CHUNK_LINE_COUNT,
-	COMPLETION_TIMEOUT_MS,
-	DEFAULT_TERMINAL_OUTPUT_LINE_LIMIT,
-	MAX_BYTES_BEFORE_FILE,
-} from "./constants"
-import { formatTerminalOutput, formatTerminalOutputLogLine, splitTerminalOutput } from "./output-stream"
+import { COMPLETION_TIMEOUT_MS, DEFAULT_TERMINAL_OUTPUT_LINE_LIMIT, MAX_BYTES_BEFORE_FILE } from "./constants"
+import { formatTerminalOutput, splitTerminalOutput, writeTerminalOutputFrame } from "./output-stream"
+import { TerminalOutputFrameScheduler } from "./TerminalOutputFrameScheduler"
 import type {
 	CommandExecutorCallbacks,
 	ITerminalManager,
@@ -67,6 +59,7 @@ export async function orchestrateCommandExecution(
 		onHandoffAvailable,
 		handoffRequest,
 		onTimeout,
+		onOutputFrame,
 		onOutputLine,
 		showShellIntegrationSuggestion,
 		onProceedWhileRunning,
@@ -184,198 +177,30 @@ export async function orchestrateCommandExecution(
 	// Command output is presentation state, not an interaction. Stream it from
 	// the first chunk; a blocking command_output ask has no canonical response
 	// and used to hold every later chunk until process completion.
-	let didContinue = true
-	let didCancelViaUi = false
+	const didCancelViaUi = false
 	let backgroundTrackingResult: OrchestrationResult | null = null // Set when background tracking returns early
-	// Track partial (incremental) say output for post-continue phase
+	// Track one bounded partial presentation, updated at most once per output frame.
 	let partialSayOutputTs: number | undefined
-	const partialSayLines: string[] = []
+	let partialSayText = ""
+	const MAX_PARTIAL_PRESENTATION_CHARS = 64 * 1024
 
-	// Chunked terminal output buffering
-	let outputBuffer: string[] = []
-	let outputBufferSize = 0
-	let chunkTimer: NodeJS.Timeout | null = null
-
-	// Track if buffer gets stuck
-	let bufferStuckTimer: NodeJS.Timeout | null = null
-	let commandOutputAskSequence = 0
-	let pendingCommandOutputAskId: number | null = null
-	let releasePendingCommandOutputAsk: (() => void) | null = null
 	let completed = false
 	let completionDetails: TerminalCompletionDetails | undefined
 	let completionTimer: NodeJS.Timeout | null = null
 	let completionWork: Promise<void> = Promise.resolve()
-	let outputWork: Promise<void> = Promise.resolve()
+	let outputScheduler!: TerminalOutputFrameScheduler
 
-	const enqueueOutputWork = (work: () => Promise<void>): void => {
-		outputWork = outputWork.then(work).catch((error) => {
-			Logger.error(`[CommandOrchestrator] Failed to process terminal output: ${error}`)
-		})
-	}
-
-	const drainOutputQueue = async (): Promise<void> => {
-		while (true) {
-			const pendingWork = outputWork
-			await pendingWork
-			if (pendingWork === outputWork) {
-				return
-			}
+	const presentPartialFrame = async (text: string): Promise<void> => {
+		if (!text || suppressUserInteraction) return
+		partialSayText = partialSayText ? `${partialSayText}\n${text}` : text
+		if (partialSayText.length > MAX_PARTIAL_PRESENTATION_CHARS) {
+			partialSayText = partialSayText.slice(-MAX_PARTIAL_PRESENTATION_CHARS)
 		}
-	}
-
-	const clearPendingCommandOutputAsk = () => {
-		pendingCommandOutputAskId = null
-		releasePendingCommandOutputAsk = null
-	}
-
-	const releaseAnyPendingCommandOutputAsk = () => {
-		const release = releasePendingCommandOutputAsk
-		if (!release) {
+		if (partialSayOutputTs === undefined) {
+			partialSayOutputTs = await say("command_output", partialSayText, undefined, undefined, true, undefined, cmdTs)
 			return
 		}
-		callbacks.resolvePendingAsk?.("messageResponse")
-		release()
-	}
-
-	/**
-	 * Flush buffered output to the UI using ask() which waits for user response.
-	 * This is the key mechanism for "Proceed While Running" - when user clicks the button,
-	 * the ask() returns with response "yesButtonClicked".
-	 */
-	const flushBuffer = async (_force = false) => {
-		if (outputBuffer.length === 0) {
-			return
-		}
-		const chunk = outputBuffer.join("\n")
-		outputBuffer = []
-		outputBufferSize = 0
-
-		if (!didContinue && completed) {
-			// Completion must never create a new blocking ask. Persist trailing
-			// output as a final message while the completion path awaits this work.
-			await say("command_output", chunk)
-		} else if (!didContinue) {
-			// Start timer to detect if buffer gets stuck
-			bufferStuckTimer = setTimeout(() => {
-				telemetryService.captureTerminalHang(TerminalHangStage.BUFFER_STUCK, terminalType)
-				bufferStuckTimer = null
-			}, BUFFER_STUCK_TIMEOUT_MS)
-
-			try {
-				// Use ask() to present output and wait for user response
-				// This enables "Proceed While Running" button functionality
-				const interaction = await new Promise<Awaited<ReturnType<CommandExecutorCallbacks["ask"]>> | undefined>(
-					(resolve, reject) => {
-						const currentAskId = ++commandOutputAskSequence
-						pendingCommandOutputAskId = currentAskId
-
-						releasePendingCommandOutputAsk = () => {
-							if (pendingCommandOutputAskId !== currentAskId) {
-								return
-							}
-							clearPendingCommandOutputAsk()
-							resolve(undefined)
-						}
-
-						ask("command_output", chunk)
-							.then((result) => {
-								if (pendingCommandOutputAskId !== currentAskId) {
-									return
-								}
-								clearPendingCommandOutputAsk()
-								resolve(result)
-							})
-							.catch((error) => {
-								if (pendingCommandOutputAskId !== currentAskId) {
-									return
-								}
-								clearPendingCommandOutputAsk()
-								reject(error)
-							})
-					},
-				)
-				if (!interaction) {
-					return
-				}
-				const { response, text, images, files } = interaction
-
-				if (response === "yesButtonClicked") {
-					// Track when user clicks "Proceed While Running"
-					telemetryService.captureTerminalUserIntervention(
-						TerminalUserInterventionAction.PROCESS_WHILE_RUNNING,
-						terminalType,
-					)
-					// Proceed while running - but still capture user feedback if provided
-					if (text || (images && images.length > 0) || (files && files.length > 0)) {
-						userFeedback = { text, images, files }
-					}
-					didContinue = true
-
-					if (onProceedWhileRunning) {
-						await transitionToBackground("user", false)
-						return
-					}
-
-					process.continue()
-				} else if (response === "noButtonClicked" && text === COMMAND_CANCEL_TOKEN) {
-					telemetryService.captureTerminalUserIntervention(TerminalUserInterventionAction.CANCELLED, terminalType)
-					// Set flags BEFORE resuming the process to prevent new lines from being processed
-					didCancelViaUi = true
-					// Mark command as skipped
-					if (cmdTs) {
-						const cancelMsgs = callbacks.getClineMessages() as Array<{ ts: number }>
-						const cancelCmdIndex = cancelMsgs.findIndex((m) => m.ts === cmdTs)
-						if (cancelCmdIndex !== -1) {
-							await callbacks.updateClineMessage(cancelCmdIndex, { commandStatus: "skipped" })
-						}
-					}
-					userFeedback = undefined
-					didContinue = true
-					outputBuffer = []
-					outputBufferSize = 0
-					// Send cancellation message BEFORE resuming the process
-					// This ensures the message appears before any new output lines
-					await say("command_output", "Command cancelled")
-					// Now resume the process
-					process.continue()
-				} else {
-					userFeedback = { text, images, files }
-					didContinue = true
-					process.continue()
-					// If more output accumulated, flush again
-					if (outputBuffer.length > 0) {
-						await flushBuffer()
-					}
-				}
-			} catch {
-				Logger.error("Error while asking for command output")
-			} finally {
-				// Clear the stuck timer
-				if (bufferStuckTimer) {
-					clearTimeout(bufferStuckTimer)
-					bufferStuckTimer = null
-				}
-			}
-		} else {
-			// After "Proceed While Running": stream output via partial updates to reduce frontend merge pressure
-			partialSayLines.push(chunk)
-			const combined = partialSayLines.join("\n")
-			if (partialSayOutputTs === undefined) {
-				partialSayOutputTs = await say("command_output", combined, undefined, undefined, true, undefined, cmdTs)
-			} else {
-				await say("command_output", combined, undefined, undefined, true, partialSayOutputTs)
-			}
-		}
-	}
-
-	const scheduleFlush = () => {
-		if (chunkTimer) {
-			clearTimeout(chunkTimer)
-		}
-		chunkTimer = setTimeout(() => {
-			chunkTimer = null
-			enqueueOutputWork(() => flushBuffer())
-		}, CHUNK_DEBOUNCE_MS)
+		await say("command_output", partialSayText, undefined, undefined, true, partialSayOutputTs)
 	}
 
 	// Large output file-based logging state
@@ -394,68 +219,43 @@ export async function orchestrateCommandExecution(
 	let firstLines: TerminalOutputLine[] = [] // Keep first N lines for summary
 	let lastLines: TerminalOutputLine[] = [] // Keep last N lines for summary (circular buffer)
 
-	/**
-	 * Switch to file-based logging when output is too large.
-	 * This protects against memory exhaustion from commands with huge output.
-	 */
-	const switchToFileBased = async () => {
+	let largeOutputLogError: Error | undefined
+
+	const writeLargeOutputBatch = async (entries: readonly TerminalOutputLine[]): Promise<void> => {
+		if (largeOutputLogStream) await writeTerminalOutputFrame(largeOutputLogStream, entries)
+	}
+
+	/** Switch complete-output retention to one backpressured activity-owned log. */
+	const switchToFileBased = async (): Promise<void> => {
 		if (isWritingToFile) return
-
 		isWritingToFile = true
-
-		// FIRST: Flush any pending buffer to UI so the "writing to file" message appears at the end
-		if (outputBuffer.length > 0) {
-			const chunk = outputBuffer.join("\n")
-			outputBuffer = []
-			outputBufferSize = 0
-			if (!didContinue) {
-				// Use say() instead of ask() since we're transitioning to file mode
-				await say("command_output", chunk)
-			}
-		}
-
-		// Clear any pending flush timer
-		if (chunkTimer) {
-			clearTimeout(chunkTimer)
-			chunkTimer = null
-		}
-
 		const largeOutputStem = activityId ?? `large-output-${cmdTs ?? Date.now()}`
 		largeOutputLogPath = DlineTempManager.createTempFilePath(largeOutputStem)
 		const logFd = fs.openSync(largeOutputLogPath, "w")
 		largeOutputLogStream = fs.createWriteStream(largeOutputLogPath, { fd: logFd, flags: "w", autoClose: true })
 		largeOutputLogCompletion = new Promise<void>((resolve) => {
 			largeOutputLogStream?.once("finish", resolve)
-			largeOutputLogStream?.once("error", () => resolve())
+			largeOutputLogStream?.once("error", (error) => {
+				largeOutputLogError = error
+				resolve()
+			})
 		})
-
-		// Write all existing lines to file in a single batch to reduce I/O overhead
-		if (output.length > 0) {
-			largeOutputLogStream.write(`${output.map(formatTerminalOutputLogLine).join("\n")}\n`)
-		}
-
-		// Keep first N lines for summary
 		firstLines = output.slice(0, firstLineLimit)
-
-		// Keep last N lines for summary (will be updated as more lines come in)
 		lastLines = lastLineLimit > 0 ? output.slice(-lastLineLimit) : []
-
-		// FINALLY: Notify user (now this will appear at the end after all buffered output)
-		await say(
-			"command_output",
-			`\n📋 Output is large (${totalLineCount} lines, ${Math.round(totalOutputBytes / 1024)}KB). Writing to: ${largeOutputLogPath}`,
+		await writeLargeOutputBatch(output)
+		await presentPartialFrame(
+			`📋 Output is large (${totalLineCount} lines, ${Math.round(totalOutputBytes / 1024)}KB). Writing to: ${largeOutputLogPath}`,
 		)
 	}
 
-	/**
-	 * Clean up file-based logging resources.
-	 */
+	/** Close the complete-output log after every admitted frame has drained. */
 	const finishFileBased = async (): Promise<void> => {
 		const stream = largeOutputLogStream
 		if (!stream) return
 		largeOutputLogStream = null
 		stream.end()
 		await largeOutputLogCompletion
+		if (largeOutputLogError) throw largeOutputLogError
 	}
 
 	const output: TerminalOutputLine[] = []
@@ -472,19 +272,12 @@ export async function orchestrateCommandExecution(
 			return undefined
 		}
 
-		didContinue = true
-		if (chunkTimer) {
-			clearTimeout(chunkTimer)
-			chunkTimer = null
-		}
+		process.pauseOutput?.()
 		if (completionTimer) {
 			clearTimeout(completionTimer)
 			completionTimer = null
 		}
-		if (drainQueuedOutput) {
-			await drainOutputQueue()
-		}
-
+		if (drainQueuedOutput) await outputScheduler.close()
 		await finishFileBased()
 		const timing = commandTiming ?? { startedAt: Date.now(), deadlineAt: configuredDeadlineAt }
 		const trackingResult = await onProceedWhileRunning(isWritingToFile ? [] : output, {
@@ -511,80 +304,43 @@ export async function orchestrateCommandExecution(
 			await say("command_output", `\n📋 Output is being logged to: ${trackingResult.logFilePath}`)
 		}
 
+		process.resumeOutput?.()
 		process.continue()
 		return backgroundTrackingResult
 	}
 
-	const handleOutputLine = async (line: string, stream: TerminalOutputStream): Promise<void> => {
-		if (didCancelViaUi) {
-			return
-		}
-
-		// If background tracking is active, don't process lines here
-		// The background tracker's listener will handle them
-		if (backgroundTrackingResult) {
-			return
-		}
-
-		const lineBytes = Buffer.byteLength(line, "utf8")
-		totalOutputBytes += lineBytes
-		totalLineCount++
-
-		// Check if we should switch to file-based logging
-		if (!isWritingToFile && (output.length >= outputLineLimit || totalOutputBytes >= MAX_BYTES_BEFORE_FILE)) {
+	const handleOutputFrame = async (frame: readonly TerminalOutputLine[]): Promise<void> => {
+		if (didCancelViaUi || backgroundTrackingResult || frame.length === 0) return
+		const frameBytes = frame.reduce((total, entry) => total + Buffer.byteLength(entry.line, "utf8"), 0)
+		totalOutputBytes += frameBytes
+		totalLineCount += frame.length
+		if (!isWritingToFile && (output.length + frame.length > outputLineLimit || totalOutputBytes >= MAX_BYTES_BEFORE_FILE)) {
 			await switchToFileBased()
 		}
-
 		if (isWritingToFile) {
-			// Write to file instead of keeping in memory
-			if (largeOutputLogStream) {
-				largeOutputLogStream.write(`${formatTerminalOutputLogLine({ line, stream })}\n`)
-			}
-
-			// Update last lines circular buffer for summary
-			lastLines.push({ line, stream })
-			if (lastLines.length > lastLineLimit) {
-				lastLines.shift()
+			await writeLargeOutputBatch(frame)
+			for (const entry of frame) {
+				if (firstLines.length < firstLineLimit) firstLines.push(entry)
+				lastLines.push(entry)
+				if (lastLines.length > lastLineLimit) lastLines.shift()
 			}
 		} else {
-			// Normal behavior - keep in memory
-			output.push({ line, stream })
+			output.push(...frame)
 		}
-
-		// Notify caller about output line (for background command tracking)
-		if (onOutputLine) {
-			onOutputLine(line, stream)
+		await onOutputFrame?.(frame)
+		if (!onOutputFrame && onOutputLine) {
+			for (const entry of frame) onOutputLine(entry.line, entry.stream)
 		}
-
-		// Apply buffered streaming (only if not in file mode or still showing initial output)
-		if (!didContinue) {
-			if (!isWritingToFile) {
-				outputBuffer.push(line)
-				outputBufferSize += lineBytes
-				// Flush if buffer is large enough
-				if (outputBuffer.length >= CHUNK_LINE_COUNT || outputBufferSize >= CHUNK_BYTE_SIZE) {
-					await flushBuffer()
-				} else if (!completed) {
-					scheduleFlush()
-				}
-			}
-			// When in file mode, we've already notified the user, so don't keep buffering
-		} else {
-			// Stream through the same bounded buffer so high-volume commands do not
-			// cause one webview update per terminal line.
-			if (!isWritingToFile) {
-				outputBuffer.push(line)
-				outputBufferSize += lineBytes
-				if (outputBuffer.length >= CHUNK_LINE_COUNT || outputBufferSize >= CHUNK_BYTE_SIZE) {
-					await flushBuffer()
-				} else if (!completed) {
-					scheduleFlush()
-				}
-			}
-		}
+		if (!isWritingToFile) await presentPartialFrame(frame.map((entry) => entry.line).join("\n"))
 	}
+
+	outputScheduler = new TerminalOutputFrameScheduler({
+		sink: handleOutputFrame,
+		onHighWater: () => process.pauseOutput?.(),
+		onLowWater: () => process.resumeOutput?.(),
+	})
 	process.on("line", (line: string, stream: TerminalOutputStream = "combined") => {
-		enqueueOutputWork(() => handleOutputLine(line, stream))
+		outputScheduler.enqueue({ line, stream })
 	})
 
 	// Start timer to detect if waiting for completion takes too long
@@ -598,32 +354,15 @@ export async function orchestrateCommandExecution(
 	process.once("completed", (details?: TerminalCompletionDetails) => {
 		completed = true
 		completionDetails = details
-		// If command completed while command_output ask was pending, release it.
-		releaseAnyPendingCommandOutputAsk()
 		// Clear the completion timer
 		if (completionTimer) {
 			clearTimeout(completionTimer)
 			completionTimer = null
 		}
-		if (chunkTimer) {
-			clearTimeout(chunkTimer)
-			chunkTimer = null
-		}
 		completionWork = (async () => {
-			// EventEmitter does not await async line listeners. Drain the explicit
-			// queue before flushing/finalizing so the result cannot lose tail output.
-			await outputWork
-			if (chunkTimer) {
-				clearTimeout(chunkTimer)
-				chunkTimer = null
-			}
-			if (outputBuffer.length > 0) {
-				await flushBuffer(true)
-			}
-			// Finalize any partial say output: persist the final accumulated output
+			await outputScheduler.close()
 			if (partialSayOutputTs !== undefined) {
-				const finalOutput = partialSayLines.join("\n")
-				await say("command_output", finalOutput, undefined, undefined, false, partialSayOutputTs)
+				await say("command_output", partialSayText, undefined, undefined, false, partialSayOutputTs)
 			}
 		})()
 		void completionWork.catch((error) => {
@@ -634,9 +373,7 @@ export async function orchestrateCommandExecution(
 			Logger.error(`[CommandOrchestrator] Failed to finalize terminal output: ${error}`)
 		})
 	})
-	process.once("error", () => {
-		releaseAnyPendingCommandOutputAsk()
-	})
+	process.once("error", () => undefined)
 
 	process.once("no_shell_integration", async () => {
 		if (showShellIntegrationSuggestion) {
@@ -704,12 +441,7 @@ export async function orchestrateCommandExecution(
 				}
 
 				if (boundary === "timeout") {
-					didContinue = true
-					releaseAnyPendingCommandOutputAsk()
-					if (chunkTimer) {
-						clearTimeout(chunkTimer)
-						chunkTimer = null
-					}
+					process.pauseOutput?.()
 					if (completionTimer) {
 						clearTimeout(completionTimer)
 						completionTimer = null
@@ -718,7 +450,7 @@ export async function orchestrateCommandExecution(
 					if (process.terminate) {
 						await Promise.resolve(process.terminate())
 					}
-					await drainOutputQueue()
+					await outputScheduler.close()
 					await clearCommandState(process.getCompletionDetails?.(), true)
 					await finishFileBased()
 					const currentOutput = formatOutput(output)
@@ -746,7 +478,7 @@ export async function orchestrateCommandExecution(
 		}
 	}
 
-	await outputWork
+	await outputScheduler.close()
 	if (completed) {
 		await completionWork
 	}

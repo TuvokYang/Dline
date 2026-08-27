@@ -55,7 +55,7 @@ describe("StandaloneTerminalManager background command injection state", () => {
 			assert.equal(command.status, "timed_out")
 			assert.equal(terminate.mock.calls.length, 1)
 		} finally {
-			manager.disposeBackgroundCommands()
+			await manager.disposeBackgroundCommands()
 		}
 	})
 
@@ -82,7 +82,108 @@ describe("StandaloneTerminalManager background command injection state", () => {
 
 			assert.equal(await manager.readBackgroundCommandOutput(command.id), "[O] one\n[E] two\n[O] three\n")
 		} finally {
-			manager.disposeBackgroundCommands()
+			await manager.disposeBackgroundCommands()
+			await fs.rm(expectedLogPath, { force: true })
+		}
+	})
+
+	it("publishes one output frame and drains it before completion closes the log", async () => {
+		const manager = new StandaloneTerminalManager()
+		const process = new EventEmitter() as BackgroundCommand["process"]
+		const onOutputFrame = vi.fn()
+		const expectedLogPath = path.join(DlineTempManager.getTempDir(), "command_frame_completion.log")
+		await fs.rm(expectedLogPath, { force: true })
+
+		try {
+			const command = manager.trackBackgroundCommand(process, "npm test", "command_frame_completion", [], undefined, {
+				onOutputFrame,
+			})
+			process.emit("line", "one", "stdout")
+			process.emit("line", "two", "stderr")
+			process.emit("line", "three", "stdout")
+			process.emit("completed", { exitCode: 0, signal: null })
+
+			await manager.readBackgroundCommandOutput(command.id)
+			assert.equal(onOutputFrame.mock.calls.length, 1)
+			assert.deepEqual(onOutputFrame.mock.calls[0][0], [
+				{ line: "one", stream: "stdout" },
+				{ line: "two", stream: "stderr" },
+				{ line: "three", stream: "stdout" },
+			])
+		} finally {
+			await manager.disposeBackgroundCommands()
+			await fs.rm(expectedLogPath, { force: true })
+		}
+	})
+
+	it("drains pending output before cancellation closes the log", async () => {
+		const manager = new StandaloneTerminalManager()
+		const terminate = vi.fn()
+		const process = Object.assign(new EventEmitter(), { terminate }) as unknown as BackgroundCommand["process"]
+		const expectedLogPath = path.join(DlineTempManager.getTempDir(), "command_frame_cancel.log")
+		await fs.rm(expectedLogPath, { force: true })
+
+		try {
+			const command = manager.trackBackgroundCommand(process, "npm test", "command_frame_cancel")
+			process.emit("line", "tail", "stdout")
+			assert.equal(manager.cancelBackgroundCommand(command.id), true)
+
+			assert.equal(
+				await manager.readBackgroundCommandOutput(command.id),
+				"[O] tail\n\n[CANCELLED] Command cancelled by user\n",
+			)
+			assert.equal(terminate.mock.calls.length, 1)
+		} finally {
+			await manager.disposeBackgroundCommands()
+			await fs.rm(expectedLogPath, { force: true })
+		}
+	})
+
+	it("drains pending output before timeout closes the log", async () => {
+		vi.useFakeTimers()
+		vi.setSystemTime(20_000)
+		const manager = new StandaloneTerminalManager()
+		const terminate = vi.fn()
+		const process = Object.assign(new EventEmitter(), { terminate }) as unknown as BackgroundCommand["process"]
+		const expectedLogPath = path.join(DlineTempManager.getTempDir(), "command_frame_timeout.log")
+		await fs.rm(expectedLogPath, { force: true })
+
+		try {
+			const command = manager.trackBackgroundCommand(process, "npm test", "command_frame_timeout", [], {
+				origin: "foreground",
+				cancellationOwner: "task",
+				deadlineAt: 20_020,
+			})
+			process.emit("line", "tail", "stderr")
+			await vi.advanceTimersByTimeAsync(20)
+
+			assert.equal(
+				await manager.readBackgroundCommandOutput(command.id),
+				"[E] tail\n\n[TIMEOUT] Process reached its command deadline\n",
+			)
+			assert.equal(terminate.mock.calls.length, 1)
+		} finally {
+			await manager.disposeBackgroundCommands()
+			await fs.rm(expectedLogPath, { force: true })
+		}
+	})
+
+	it("drains pending output when the background process emits an error", async () => {
+		const manager = new StandaloneTerminalManager()
+		const process = new EventEmitter() as BackgroundCommand["process"]
+		const expectedLogPath = path.join(DlineTempManager.getTempDir(), "command_frame_error.log")
+		await fs.rm(expectedLogPath, { force: true })
+
+		try {
+			const command = manager.trackBackgroundCommand(process, "npm test", "command_frame_error")
+			process.emit("line", "tail", "stderr")
+			process.emit("error", new Error("exit code 9"))
+
+			assert.equal(await manager.readBackgroundCommandOutput(command.id), "[E] tail\n")
+			assert.equal(command.status, "error")
+			assert.equal(command.exitCode, 9)
+		} finally {
+			await manager.disposeBackgroundCommands()
 			await fs.rm(expectedLogPath, { force: true })
 		}
 	})
@@ -101,12 +202,12 @@ describe("StandaloneTerminalManager background command injection state", () => {
 			assert.equal(command.logFilePath, expectedLogPath)
 			assert.equal(await manager.readBackgroundCommandOutput(command.id), "[O] small output\n")
 		} finally {
-			manager.disposeBackgroundCommands()
+			await manager.disposeBackgroundCommands()
 			await fs.rm(expectedLogPath, { force: true })
 		}
 	})
 
-	it("classifies a background completion without an exit code as an error", () => {
+	it("classifies a background completion without an exit code as an error", async () => {
 		const manager = new StandaloneTerminalManager()
 		const process = new EventEmitter() as BackgroundCommand["process"]
 
@@ -116,7 +217,7 @@ describe("StandaloneTerminalManager background command injection state", () => {
 
 			assert.equal(command.status, "error")
 		} finally {
-			manager.disposeBackgroundCommands()
+			await manager.disposeBackgroundCommands()
 		}
 	})
 
@@ -139,7 +240,7 @@ describe("StandaloneTerminalManager background command injection state", () => {
 		assert.equal(manager.getBackgroundCommand(command.id)?.injectionState, "consumed")
 	})
 
-	it("retains the function id and advances the API output baseline to the sent snapshot", () => {
+	it("retains the function id and advances the API output baseline to the sent snapshot", async () => {
 		const manager = new StandaloneTerminalManager()
 		const process = new EventEmitter() as BackgroundCommand["process"]
 
@@ -162,7 +263,7 @@ describe("StandaloneTerminalManager background command injection state", () => {
 			assert.equal(command.lastApiSentLineCount, 2)
 			assert.equal(command.lineCount - command.lastApiSentLineCount, 1)
 		} finally {
-			manager.disposeBackgroundCommands()
+			await manager.disposeBackgroundCommands()
 		}
 	})
 })

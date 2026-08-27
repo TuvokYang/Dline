@@ -67,6 +67,23 @@ describe("StandaloneTerminalProcess output streams", () => {
 		])
 	})
 
+	it("pauses and resumes both child output streams once", () => {
+		const terminalProcess = new StandaloneTerminalProcess()
+		const stdout = { pause: vi.fn(), resume: vi.fn() }
+		const stderr = { pause: vi.fn(), resume: vi.fn() }
+		;(terminalProcess as unknown as { childProcess: unknown }).childProcess = { stdout, stderr }
+
+		terminalProcess.pauseOutput()
+		terminalProcess.pauseOutput()
+		assert.equal(stdout.pause.mock.calls.length, 1)
+		assert.equal(stderr.pause.mock.calls.length, 1)
+
+		terminalProcess.resumeOutput()
+		terminalProcess.resumeOutput()
+		assert.equal(stdout.resume.mock.calls.length, 1)
+		assert.equal(stderr.resume.mock.calls.length, 1)
+	})
+
 	it("uses Windows PowerShell for the default background shell", () => {
 		const originalPlatform = process.platform
 		try {
