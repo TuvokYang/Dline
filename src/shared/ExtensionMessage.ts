@@ -12,6 +12,7 @@ import { ClineRulesToggles } from "./cline-rules"
 import type { ContextWindowIndicatorSnapshot } from "./context-window-indicator"
 import { FocusChainSettings } from "./FocusChainSettings"
 import { HistoryItem } from "./HistoryItem"
+import type { QueuedInputEntry } from "./InputQueue"
 import type { LoadCapabilityPayload } from "./load-capabilities"
 import { McpDisplayMode } from "./McpDisplayMode"
 import { ClineMessageModelInfo } from "./messages"
@@ -88,6 +89,8 @@ export interface ExtensionState {
 	telemetrySetting: TelemetrySetting
 	/** Complete task interaction projection derived only from runtime state. */
 	taskViewState?: TaskViewState
+	/** Input the user queued while the task was busy; the backend owns it. */
+	inputQueue?: QueuedInputEntry[]
 	shellIntegrationTimeout: number
 	terminalReuseEnabled?: boolean
 	terminalOutputLineLimit: number

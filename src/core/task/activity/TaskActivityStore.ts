@@ -385,24 +385,35 @@ export class TaskActivityStore {
 		return retried
 	}
 
+	/**
+	 * Cancel every eligible activity concurrently.
+	 *
+	 * Cancellation runs under a caller-owned timeout budget, so the batch must
+	 * not serialize on the slowest canceller: one unresponsive activity would
+	 * otherwise consume the whole budget and leave the rest untouched. Each
+	 * activity reaches its own terminal state independently, and a rejecting
+	 * canceller only fails its own activity.
+	 */
 	async cancel(activityIds: string[]): Promise<string[]> {
 		const cancelled: string[] = []
-		for (const activityId of activityIds) {
-			const activity = this.activities.get(activityId)
-			const cancel = this.cancellers.get(activityId)
-			if (!activity || !cancel || activity.status !== "running") continue
-			this.update(activityId, { status: "cancelling", latestEvent: "Cancellation requested" })
-			try {
-				await cancel()
-				this.update(activityId, { status: "cancelled", latestEvent: "Cancelled by user" })
-				cancelled.push(activityId)
-			} catch (error) {
-				this.update(activityId, {
-					status: "failed",
-					error: error instanceof Error ? error.message : String(error),
-				})
-			}
-		}
+		await Promise.all(
+			activityIds.map(async (activityId) => {
+				const activity = this.activities.get(activityId)
+				const cancel = this.cancellers.get(activityId)
+				if (!activity || !cancel || activity.status !== "running") return
+				this.update(activityId, { status: "cancelling", latestEvent: "Cancellation requested" })
+				try {
+					await cancel()
+					this.update(activityId, { status: "cancelled", latestEvent: "Cancelled by user" })
+					cancelled.push(activityId)
+				} catch (error) {
+					this.update(activityId, {
+						status: "failed",
+						error: error instanceof Error ? error.message : String(error),
+					})
+				}
+			}),
+		)
 		return cancelled
 	}
 

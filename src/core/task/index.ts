@@ -529,6 +529,14 @@ export class Task {
 	private latestTaskSnapshot?: TaskSnapshot
 	/** Retained user input awaiting delivery; owned by the user, not the runtime. */
 	private inputQueue = new InputQueue()
+	/**
+	 * Queue entries appended to the next request but not yet handed over.
+	 *
+	 * Held here rather than passed down the call chain because the point where
+	 * the input becomes durable sits several frames below the point where it is
+	 * staged.
+	 */
+	private stagedQueueDelivery?: QueueDelivery
 	private pendingSystemPromptRefreshReason?: SystemPromptRefreshReason
 	private readonly promptCacheHealth: PromptCacheHealthTracker
 	private readonly apiRateMetricsService: TaskApiRateMetricsService
@@ -3563,6 +3571,13 @@ export class Task {
 			// Restore retained input so a resumed task keeps everything the user
 			// queued before the task was paused, cancelled or reloaded.
 			this.inputQueue = InputQueue.fromSerialized(snapshot.inputQueue)
+			if (this.inputQueue.droppedInFlightCount > 0) {
+				// The user will not see this input again, so the reason has to be
+				// recoverable rather than silent.
+				Logger.warn(
+					`[inputQueue] Dropped ${this.inputQueue.droppedInFlightCount} queued input(s) that were mid-delivery when the task stopped; they may already have reached the model`,
+				)
+			}
 			return snapshot
 		} catch (error) {
 			const code = (error as NodeJS.ErrnoException | undefined)?.code
@@ -3573,9 +3588,14 @@ export class Task {
 		}
 	}
 
-	/** Project the retained input queue for the Webview. */
+	/**
+	 * Project the retained input queue for the Webview.
+	 *
+	 * Uses the user-visible list rather than the persisted projection: an entry
+	 * already claimed for delivery must not be offered for editing or removal.
+	 */
 	public getInputQueueSnapshot(): QueuedInputEntry[] {
-		return this.inputQueue.serialize()
+		return [...this.inputQueue.list()]
 	}
 
 	/**
@@ -3587,15 +3607,22 @@ export class Task {
 	 * that a reload would drop.
 	 */
 	public async mutateInputQueue(mutation: InputQueueMutation): Promise<InputQueueMutationResult> {
+		// Taken before the change so a failed write can put the queue back to
+		// what the file still says. Publishing a change that is not on disk
+		// would be a lie the next reload contradicts, and for a removal it would
+		// be worse than a lie: the entry would come back and could still be sent.
+		const checkpoint = this.inputQueue.checkpoint()
 		const result = applyInputQueueMutation(this.inputQueue, mutation)
 		if (!result.accepted) {
 			return result
 		}
-		const persisted = await this.persistInputQueue()
+		if (!(await this.persistInputQueue())) {
+			this.inputQueue.rollback(checkpoint)
+			await this.postStateToWebview()
+			return { accepted: false, result: "persist_failed" }
+		}
 		await this.postStateToWebview()
-		// A failed write is reported rather than announced as success: the user
-		// must not be told an entry is retained when a reload would drop it.
-		return persisted ? result : { accepted: false, result: "persist_failed" }
+		return result
 	}
 
 	/**
@@ -3607,8 +3634,24 @@ export class Task {
 	 * call it answers instead of as an orphaned block.
 	 */
 	private async deliverQueuedInputAtTurnEnd(turnId: string, interactionId: string): Promise<void> {
-		const delivery = takeQueueDelivery(this.inputQueue, "turn-end")
+		const claimed = takeQueueDelivery(this.inputQueue, "turn-end")
+		if (!claimed) {
+			return
+		}
+		// Record the in-flight mark before handing anything over. A crash after
+		// this point must not restore the entry as deliverable, because the
+		// model may already have received it. If that record cannot be written,
+		// delivering anyway would forfeit at-most-once: a later crash would
+		// resend the entry. Keeping it queued is the recoverable outcome.
+		if (!(await this.persistInputQueue())) {
+			Logger.error("[inputQueue] Turn-end delivery skipped: the in-flight mark could not be persisted")
+			await this.restoreUndeliveredQueueInput(claimed)
+			return
+		}
+		// A removal may have landed while the claim was being written.
+		const delivery = claimed.withoutCancelled()
 		if (!delivery) {
+			await this.postStateToWebview()
 			return
 		}
 		try {
@@ -3640,13 +3683,25 @@ export class Task {
 			Logger.error("[inputQueue] Turn-end delivery failed:", error)
 			return
 		}
-		await this.persistInputQueue()
+		// Only now is the input actually gone from the user's queue; discarding it
+		// before the dispatch was accepted would lose it on a rejection.
+		delivery.commit()
+		if (!(await this.persistInputQueue())) {
+			// The entry stays on disk marked as in flight. A reload drops it
+			// rather than sending it again, which is the safe direction.
+			Logger.error("[inputQueue] Delivered input could not be cleared from the queue file")
+		}
 	}
 
 	/** Return a claimed batch to the queue and republish the corrected projection. */
 	private async restoreUndeliveredQueueInput(delivery: QueueDelivery): Promise<void> {
 		delivery.restore()
-		await this.persistInputQueue()
+		if (!(await this.persistInputQueue())) {
+			// The entry is back in memory but the file write failed. Say so: the
+			// user is about to see it in the composer again, and a reload would
+			// then contradict that.
+			Logger.error("[inputQueue] Restored input could not be persisted; a reload may not show it")
+		}
 		await this.postStateToWebview()
 	}
 
@@ -3655,10 +3710,29 @@ export class Task {
 	 *
 	 * The task is not waiting for the user here, so the text is added to the next
 	 * request as its own user message rather than as a tool result.
+	 *
+	 * The claimed batch is retained in {@link stagedQueueDelivery} rather than
+	 * committed here: appending to `userMessageContent` only stages the input,
+	 * and the request that carries it has not been sent yet. It is settled by
+	 * {@link settleStagedQueueDelivery}, which runs once the input has actually
+	 * entered the durable conversation.
 	 */
 	private async deliverQueuedInputAtToolRound(): Promise<void> {
-		const delivery = takeQueueDelivery(this.inputQueue, "tool-round")
+		const claimed = takeQueueDelivery(this.inputQueue, "tool-round")
+		if (!claimed) {
+			return
+		}
+		if (!(await this.persistInputQueue())) {
+			Logger.error("[inputQueue] Tool-round delivery skipped: the in-flight mark could not be persisted")
+			await this.restoreUndeliveredQueueInput(claimed)
+			return
+		}
+		// A removal may have landed while the claim was being written. This is
+		// the last point at which it can still take effect: past here the text
+		// is part of the request being assembled and cannot be recalled.
+		const delivery = claimed.withoutCancelled()
 		if (!delivery) {
+			await this.postStateToWebview()
 			return
 		}
 		try {
@@ -3683,8 +3757,33 @@ export class Task {
 			Logger.error("[inputQueue] Tool-round delivery failed:", error)
 			return
 		}
-		await this.persistInputQueue()
+		this.stagedQueueDelivery = delivery
+		// Publish the projection now so the composer stops offering an entry that
+		// is already staged, but keep the claim open until the round settles.
 		await this.postStateToWebview()
+	}
+
+	/**
+	 * Discard or reclaim the staged tool-round batch once its fate is known.
+	 *
+	 * @param delivered whether the input reached the durable conversation. A
+	 * round that ended before sending never delivered it, so the input returns
+	 * to the queue instead of being silently consumed.
+	 */
+	private async settleStagedQueueDelivery(delivered: boolean): Promise<void> {
+		const delivery = this.stagedQueueDelivery
+		if (!delivery) {
+			return
+		}
+		this.stagedQueueDelivery = undefined
+		if (!delivered) {
+			await this.restoreUndeliveredQueueInput(delivery)
+			return
+		}
+		delivery.commit()
+		if (!(await this.persistInputQueue())) {
+			Logger.error("[inputQueue] Delivered input could not be cleared from the queue file")
+		}
 	}
 
 	/**
@@ -3707,7 +3806,11 @@ export class Task {
 	 * @returns whether the queue is now on disk.
 	 */
 	private async persistInputQueue(): Promise<boolean> {
-		const snapshot = this.latestTaskSnapshot ?? createSnapshot(this.taskRuntime.getState())
+		// A fresh object per call, never the cached instance. The persistence
+		// chain clears its pending slot by identity, so scheduling the same
+		// object twice would let the first write erase the second request and
+		// leave the newer queue unwritten.
+		const snapshot: TaskSnapshot = { ...(this.latestTaskSnapshot ?? createSnapshot(this.taskRuntime.getState())) }
 		try {
 			this.snapshotPersistence.schedule(snapshot)
 			await this.snapshotPersistence.flushNow()
@@ -5799,12 +5902,6 @@ export class Task {
 		webToolsEnabled: boolean,
 		webSearchRoutingPlan: WebSearchRoutingPlan,
 	): Promise<SystemPromptContext> {
-		await pWaitFor(() => this.mcpHub.isConnecting !== true, {
-			timeout: 10_000,
-		}).catch(() => {
-			Logger.error("MCP servers failed to connect in time")
-		})
-
 		const host = await HostProvider.env.getHostVersion({})
 		const ide = host?.platform || "Unknown"
 		const isCliEnvironment = host.clineType === ClineClient.Cli
@@ -7245,6 +7342,15 @@ export class Task {
 			ts: Date.now(),
 		})
 		await this.messageStateHandler.flushApiConversationHistory()
+		// The queued input is now part of the durable conversation, which is the
+		// point at which it has actually been handed over. Settling here rather
+		// than on the recursion's return value matters because that value only
+		// says whether the loop ended: several paths return normally without
+		// ever sending a request, and treating those as delivered would consume
+		// the input for nothing.
+		if (this.stagedQueueDelivery) {
+			await this.settleStagedQueueDelivery(true)
+		}
 		return this.completeApiRequestGate(requestScope, apiIndex, beforeApiRequestStarted)
 	}
 
@@ -8670,7 +8776,15 @@ export class Task {
 				await this.deliverQueuedInputAtToolRound()
 				await this.refreshOrdinaryIndicatorStaged()
 
-				const recDidEndLoop = await this.recursivelyMakeClineRequests(this.taskState.userMessageContent)
+				let recDidEndLoop: boolean
+				try {
+					recDidEndLoop = await this.recursivelyMakeClineRequests(this.taskState.userMessageContent)
+				} finally {
+					// Settled already if the input reached the conversation. Any
+					// other outcome means the round ended without sending it, so
+					// it returns to the queue instead of being consumed.
+					await this.settleStagedQueueDelivery(false)
+				}
 				didEndLoop = recDidEndLoop
 			} else {
 				await this.rollbackOrdinaryContextWindowIndicator(apiIndex)

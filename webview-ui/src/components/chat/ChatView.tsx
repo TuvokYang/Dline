@@ -49,6 +49,7 @@ import {
 	WelcomeSection,
 } from "./chat-view"
 import { resolveActiveProfile, resolveTaskCurrency } from "./chat-view/utils/profileUtils"
+import { useInputQueue } from "./input/useInputQueue"
 
 interface ChatViewProps {
 	isHidden: boolean
@@ -134,6 +135,9 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 
 	// Use custom hooks for state management
 	const chatState = useChatState(messages, taskId)
+	// Retained input the user typed while the task was busy. The backend owns it;
+	// this only projects it and forwards the user's changes.
+	const inputQueue = useInputQueue(taskId)
 	const {
 		inputValue,
 		setInputValue,
@@ -655,11 +659,19 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 					clineAsk={taskViewState?.activeInteraction?.taskAsk}
 					draft={interactionDraft}
 					enabled={task ? taskInputEnabled : undefined}
+					inputQueue={inputQueue.entries}
 					messageHandlers={messageHandlers}
+					onCancelQueuedInput={inputQueue.cancelEdit}
+					onCommitQueuedInput={inputQueue.commitEdit}
 					onDraftAccepted={clearOwnedDraft}
+					onEditQueuedInput={inputQueue.beginEdit}
+					onEnqueueInput={inputQueue.enqueue}
+					onRemoveQueuedInput={inputQueue.remove}
+					onReorderQueuedInput={inputQueue.reorder}
 					onSubmit={
 						task ? (taskViewState?.activeInteraction ? submitInteractionDraft : submitOrdinaryTaskDraft) : undefined
 					}
+					onToggleQueuedMode={inputQueue.toggleMode}
 					placeholderText={placeholderText}
 					scrollBehavior={scrollBehavior}
 					selectFilesAndImages={selectFilesAndImages}

@@ -64,31 +64,31 @@ A full Dline rerun normally takes about 7-8 minutes. Give Vitest UI CLI wait/rer
 
 Run focused root tests:
 
-```powershell
+```
 npm run test:run -- src/core/task/tools/handlers/__tests__/SpawnTaskHandler.test.ts
 ```
 
 Run several related files:
 
-```powershell
+```
 npm run test:run -- src/core/api/providers/__tests__/openai.test.ts src/core/api/providers/__tests__/deepseek.test.ts
 ```
 
 Run one test by name:
 
-```powershell
+```
 npm run test:run -- src/core/task/tools/handlers/__tests__/SpawnTaskHandler.test.ts -t "should return toolError"
 ```
 
 Select a root project when running a broad pattern or resolving ambiguous ownership:
 
-```powershell
+```
 npm run test:run -- --project backend-task src/core/task
 ```
 
 Run Webview tests from the Webview package so paths are relative to `webview-ui`:
 
-```powershell
+```
 npm --prefix webview-ui test -- src/components/settings/OpenAIServiceTierSelector.test.tsx
 ```
 
@@ -119,21 +119,7 @@ The CLI in `scripts/vitest-ui/cli.mjs` only connects to an existing server; it d
 
 Probe at most five consecutive ports. Start at the default port `51205`, then increment by one through `51209`; the default port counts as the first attempt. Stop at the first reachable Vitest UI and use that exact URL for all subsequent CLI commands:
 
-```powershell
-$vitestUiUrl = $null
-for ($vitestUiOffset = 0; $vitestUiOffset -lt 5; $vitestUiOffset++) {
-	$vitestUiCandidate = "http://localhost:$((51205 + $vitestUiOffset))/__vitest__/"
-	try {
-		$vitestUiResponse = Invoke-WebRequest -Uri $vitestUiCandidate -UseBasicParsing -TimeoutSec 3
-		if ($vitestUiResponse.StatusCode -ge 200 -and $vitestUiResponse.StatusCode -lt 400) {
-			$vitestUiUrl = $vitestUiCandidate
-			break
-		}
-	} catch {}
-}
-if ($null -eq $vitestUiUrl) { exit 1 }
-$vitestUiUrl
-```
+Each candidate URL has the form `http://localhost:<port>/__vitest__/`. Probe it with whatever HTTP client the current shell provides, treat any 2xx/3xx response as reachable, and use a short per-probe timeout of a few seconds so an unused port fails fast.
 
 Pass the discovered URL through `--url`; do not keep assuming port `51205` after a later port succeeds.
 
@@ -153,13 +139,13 @@ If no candidate can start, report the environment/startup failure and do not cla
 
 A newly started UI automatically begins its initial full run. Avoid the empty-collection race: query `status --json` until `summary.total` is greater than zero, retrying for up to 30 seconds. Then wait for the same run to become idle without `--allow-unknown`:
 
-```powershell
+```
 npm run vitest:ui -- status --url <vitest-ui-url> --wait-idle --timeout 900000 --rpc-timeout 900000
 ```
 
 For a reused UI server, first wait for any active run to become idle, then explicitly rerun all collected files so the result reflects the current workspace:
 
-```powershell
+```
 npm run vitest:ui -- rerun all --url <vitest-ui-url> --wait --timeout 900000 --rpc-timeout 900000
 ```
 
@@ -167,7 +153,7 @@ Persistent `unknown` files are not passing files. Diagnose collection failures o
 
 Read current failures:
 
-```powershell
+```
 npm run vitest:ui -- errors --json --timeout 10000 --rpc-timeout 15000
 ```
 
@@ -175,30 +161,42 @@ Add `--url <discovered-url>` to each Vitest UI CLI command when the reachable se
 
 Read status without waiting:
 
-```powershell
+```
 npm run vitest:ui -- status --filter fail --details --timeout 10000 --rpc-timeout 15000
 ```
 
 Wait for an existing focused rerun to become idle when waiting is part of the request:
 
-```powershell
+```
 npm run vitest:ui -- status --wait-idle --timeout 180000 --rpc-timeout 180000
 ```
 
 Rerun failures on the existing server:
 
-```powershell
+```
 npm run vitest:ui -- rerun failed --wait --timeout 180000 --rpc-timeout 180000
 ```
 
 Rerun one file or test:
 
-```powershell
+```
 npm run vitest:ui -- rerun file --file src/core/foo.test.ts --wait --timeout 180000 --rpc-timeout 180000
 npm run vitest:ui -- rerun test --file src/core/foo.test.ts --test "does the thing" --wait --timeout 180000 --rpc-timeout 180000
 ```
 
 Use `--all-matches` only after confirming that rerunning every match is intended. Use `--allow-unknown` only to tolerate uncollected placeholder files; never report unknown files as passing.
+
+## Waiting For The Full Suite
+
+A full run takes roughly 7-10 minutes on the background server. Collect the result with a single bounded wait rather than repeated short status probes:
+
+```
+npm run vitest:ui -- status --url <vitest-ui-url> --wait-idle --timeout 900000 --rpc-timeout 900000
+```
+
+If the remaining plan already contains work that does not touch the files being executed, that work may proceed during the wait; documentation, memory-bank updates, and separate E2E or fixture work are typical examples. This is an option, not an obligation: when nothing else is planned, simply wait for the run. Never invent extra work to fill the interval.
+
+Do not edit production source while the suite is executing it. A mid-run edit makes the reported result describe a tree that no longer exists, so the run has to be repeated.
 
 ## Handle Running Commands
 

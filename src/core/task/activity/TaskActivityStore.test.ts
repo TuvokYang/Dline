@@ -188,6 +188,69 @@ describe("TaskActivityStore", () => {
 		expect(store.isCancellable("subagent-1")).toBe(false)
 	})
 
+	// Cancelling a batch must not serialize on the slowest canceller. A single
+	// unresponsive activity would otherwise consume the caller's whole timeout
+	// budget and leave the remaining activities untouched.
+	it("cancels a batch concurrently instead of waiting for each canceller in turn", async () => {
+		const store = new TaskActivityStore("task-1")
+		let releaseSlow!: () => void
+		const slowCancelled = new Promise<void>((resolve) => {
+			releaseSlow = resolve
+		})
+		const started: string[] = []
+		for (const activityId of ["slow-1", "fast-2", "fast-3"]) {
+			store.create({
+				activityId,
+				kind: "command",
+				executionMode: "foreground",
+				title: activityId,
+				cancel: async () => {
+					started.push(activityId)
+					if (activityId === "slow-1") await slowCancelled
+				},
+			})
+		}
+
+		const cancelling = store.cancel(["slow-1", "fast-2", "fast-3"])
+		await vi.waitFor(() => expect(started).toEqual(["slow-1", "fast-2", "fast-3"]))
+		// The fast activities reach their terminal state while the slow one is
+		// still pending, proving they were not queued behind it.
+		await vi.waitFor(() => {
+			expect(store.get("fast-2")?.status).toBe("cancelled")
+			expect(store.get("fast-3")?.status).toBe("cancelled")
+		})
+		expect(store.get("slow-1")?.status).toBe("cancelling")
+
+		releaseSlow()
+		expect((await cancelling).sort()).toEqual(["fast-2", "fast-3", "slow-1"])
+	})
+
+	// One failing canceller must not abort the rest of the batch.
+	it("keeps cancelling the remaining activities when one canceller rejects", async () => {
+		const store = new TaskActivityStore("task-1")
+		store.create({
+			activityId: "failing-1",
+			kind: "command",
+			executionMode: "foreground",
+			title: "failing",
+			cancel: async () => {
+				throw new Error("terminate refused")
+			},
+		})
+		store.create({
+			activityId: "healthy-2",
+			kind: "command",
+			executionMode: "foreground",
+			title: "healthy",
+			cancel: async () => undefined,
+		})
+
+		expect(await store.cancel(["failing-1", "healthy-2"])).toEqual(["healthy-2"])
+		expect(store.get("failing-1")?.status).toBe("failed")
+		expect(store.get("failing-1")?.error).toBe("terminate refused")
+		expect(store.get("healthy-2")?.status).toBe("cancelled")
+	})
+
 	it("keeps ordered typed events and persists history for reopen", async () => {
 		const persisted: Array<ReturnType<TaskActivityStore["list"]>> = []
 		const persistence = {

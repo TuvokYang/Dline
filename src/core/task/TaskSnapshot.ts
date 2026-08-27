@@ -1,5 +1,6 @@
 import type { ClineAsk } from "@shared/ExtensionMessage"
 import type { BlockLifecycle } from "./BlockPhaseMachine"
+import type { QueuedInputEntry } from "./input-queue/InputQueue"
 import type { ActiveInteraction } from "./interaction/InteractionReducer"
 import type { NewTaskConsumedState } from "./new-task/new-task-handoff"
 import type {
@@ -168,6 +169,8 @@ export interface TaskSnapshot {
 	resume?: TaskSnapshotResume
 	cancel?: TaskSnapshotCancel
 	error?: TaskSnapshotErrorRecovery
+	/** Retained user input awaiting delivery; survives cancel, pause and reload. */
+	inputQueue?: QueuedInputEntry[]
 }
 
 /** Normalize pre-canonical snapshot identity names at the persistence ingress boundary. */

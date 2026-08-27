@@ -71,6 +71,8 @@ service TaskService {
   rpc retryTaskActivities(RetryTaskActivitiesRequest) returns (RetryTaskActivitiesResponse);
   // Moves a synchronous foreground command to background tracking
   rpc moveCommandToBackground(MoveCommandToBackgroundRequest) returns (MoveCommandToBackgroundResponse);
+  // Applies one user-driven change to the task input queue
+  rpc mutateInputQueue(MutateInputQueueRequest) returns (MutateInputQueueResponse);
 }
 
 // Request message for creating a new task
@@ -286,6 +288,71 @@ message CompactTaskRequest {
 
 // Expected result of requesting task-local context compaction
 message CompactTaskResponse {
+  bool accepted = 1;
+  string result = 2;
+}
+
+// Composer draft carried by an enqueue or edit-commit operation
+message InputQueueDraft {
+  string text = 1;
+  repeated string images = 2;
+  repeated string files = 3;
+  optional string active_quote = 4;
+}
+
+// Adds a draft to the back of the queue as a queued entry
+message EnqueueInput {
+  InputQueueDraft draft = 1;
+}
+
+// Flips one entry between queued and steering without delivering it
+message ToggleInputMode {
+  string entry_id = 1;
+}
+
+// Moves one entry to an explicit position, which is also its delivery order
+message ReorderInput {
+  string entry_id = 1;
+  int32 target_index = 2;
+}
+
+// Holds one entry back from delivery while the user edits it in the composer
+message BeginInputEdit {
+  string entry_id = 1;
+}
+
+// Replaces the content of an edited entry, keeping its position and mode
+message CommitInputEdit {
+  string entry_id = 1;
+  InputQueueDraft draft = 2;
+}
+
+// Releases the edit gate without changing the entry
+message CancelInputEdit {
+  string entry_id = 1;
+}
+
+// Drops one entry; this is the only way an entry leaves the queue unsent
+message RemoveInput {
+  string entry_id = 1;
+}
+
+// One user-driven change to the task input queue
+message MutateInputQueueRequest {
+  string task_id = 1;
+  oneof operation {
+    EnqueueInput enqueue = 2;
+    ToggleInputMode toggle_mode = 3;
+    ReorderInput reorder = 4;
+    BeginInputEdit begin_edit = 5;
+    CommitInputEdit commit_edit = 6;
+    CancelInputEdit cancel_edit = 7;
+    RemoveInput remove = 8;
+  }
+}
+
+// Outcome of an input queue mutation
+message MutateInputQueueResponse {
   bool accepted = 1;
   string result = 2;
 }

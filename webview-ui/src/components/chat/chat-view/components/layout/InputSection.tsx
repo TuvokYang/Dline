@@ -1,7 +1,8 @@
 import { flushPendingTaskSettingsRequests } from "@components/settings/utils/settingsHandlers"
 import type { ClineAsk } from "@shared/ExtensionMessage"
-import React, { useEffect, useRef } from "react"
+import React, { useEffect, useState } from "react"
 import ChatTextArea from "@/components/chat/ChatTextArea"
+import { InputQueuePanel, type InputQueuePanelEntry } from "@/components/chat/input/InputQueuePanel"
 import type { ModeSwitchDraft } from "@/components/chat/mode-switch/useModeSwitch"
 import QuotedMessagePreview from "@/components/chat/QuotedMessagePreview"
 import type { AcceptedInteractionSettlement, InteractionDraft } from "@/task-interaction/types"
@@ -20,6 +21,19 @@ interface InputSectionProps {
 	onDraftAccepted: (settlement: AcceptedInteractionSettlement) => void
 	submissionScope?: string
 	clineAsk?: ClineAsk
+	/** Queue entries owned by the backend; the composer only renders them. */
+	inputQueue?: readonly InputQueuePanelEntry[]
+	/** Receives a send that was blocked because the task is still busy. */
+	onEnqueueInput?: (draft: { text: string; images: string[]; files: string[]; activeQuote?: string }) => void
+	/** Marks an entry as being edited so it is held back from delivery. */
+	onEditQueuedInput?: (id: string) => void
+	/** Replaces an edited entry's content, keeping its position and mode. */
+	onCommitQueuedInput?: (id: string, draft: { text: string; images: string[]; files: string[]; activeQuote?: string }) => void
+	/** Releases an edit without changing the entry, making it deliverable again. */
+	onCancelQueuedInput?: (id: string) => void
+	onToggleQueuedMode?: (id: string) => void
+	onRemoveQueuedInput?: (id: string) => void
+	onReorderQueuedInput?: (id: string, targetIndex: number) => void
 }
 
 /**
@@ -38,6 +52,14 @@ export const InputSection: React.FC<InputSectionProps> = ({
 	onDraftAccepted,
 	submissionScope,
 	clineAsk,
+	inputQueue,
+	onEnqueueInput,
+	onEditQueuedInput,
+	onCommitQueuedInput,
+	onCancelQueuedInput,
+	onToggleQueuedMode,
+	onRemoveQueuedInput,
+	onReorderQueuedInput,
 }) => {
 	const {
 		activeQuote,
@@ -57,7 +79,6 @@ export const InputSection: React.FC<InputSectionProps> = ({
 	} = chatState
 
 	const { isAtBottom, scrollToBottomAuto } = scrollBehavior
-	const deferredSubmitRef = useRef<{ scope: string | undefined; draft: ModeSwitchDraft }>()
 	const submitDraft = async (capturedDraft?: ModeSwitchDraft) => {
 		if (submissionScope) await flushPendingTaskSettingsRequests(submissionScope)
 		const draft: InteractionDraft = capturedDraft
@@ -78,33 +99,91 @@ export const InputSection: React.FC<InputSectionProps> = ({
 			onDraftAccepted(settlement)
 		}
 	}
-	const submitDraftRef = useRef(submitDraft)
-	submitDraftRef.current = submitDraft
-	const deferDraft = (capturedDraft: ModeSwitchDraft) => {
-		deferredSubmitRef.current = { scope: submissionScope, draft: capturedDraft }
+	// A blocked send is never retained for replay. Re-enabling the composer only
+	// means the next explicit send may proceed; it must never resurrect a draft
+	// captured while the task was busy. Instead the draft is handed to the queue,
+	// which is the only place a blocked send can survive and the only path that
+	// can later deliver it.
+	// Identifies the entry currently held in the composer. A blocked send while
+	// this is set completes that edit rather than adding a second copy of it.
+	const [editingEntryId, setEditingEntryId] = useState<string>()
+
+	// The edited entry can disappear underneath the composer: the user may
+	// remove it, or the whole task may be switched out. Keeping the id would
+	// send the next blocked draft to an entry that no longer exists, silently
+	// discarding what the user just typed.
+	const editedEntryExists = editingEntryId ? inputQueue?.some((entry) => entry.id === editingEntryId) === true : false
+	useEffect(() => {
+		if (editingEntryId && !editedEntryExists) {
+			setEditingEntryId(undefined)
+		}
+	}, [editingEntryId, editedEntryExists])
+
+	const enqueueBlockedDraft = (capturedDraft: ModeSwitchDraft) => {
+		const draft = {
+			text: capturedDraft.text,
+			images: [...capturedDraft.images],
+			files: [...capturedDraft.files],
+			...(activeQuote ? { activeQuote } : {}),
+		}
+		// Only commit when the entry is still there; otherwise this is ordinary
+		// new input and must be queued rather than dropped.
+		if (editingEntryId && editedEntryExists && onCommitQueuedInput) {
+			onCommitQueuedInput(editingEntryId, draft)
+			setEditingEntryId(undefined)
+			return
+		}
+		onEnqueueInput?.(draft)
 	}
+
 	const handleSend = (capturedDraft?: ModeSwitchDraft) => {
 		if (capturedDraft && onSubmit && enabled === false) {
-			deferDraft(capturedDraft)
+			enqueueBlockedDraft(capturedDraft)
 			return
 		}
 		void submitDraft(capturedDraft)
 	}
 
-	useEffect(() => {
-		const deferred = deferredSubmitRef.current
-		if (!deferred) return
-		if (deferred.scope !== submissionScope) {
-			deferredSubmitRef.current = undefined
+	// Editing happens in the composer because attaching images or file
+	// references is only possible there. The entry keeps its queue position and
+	// stays gated until the edit is committed.
+	const handleEditQueuedInput = (id: string) => {
+		const entry = inputQueue?.find((candidate) => candidate.id === id)
+		if (!entry) {
 			return
 		}
-		if (!enabled) return
-		deferredSubmitRef.current = undefined
-		void submitDraftRef.current(deferred.draft)
-	}, [enabled, submissionScope])
+		setInputValue(entry.text)
+		setSelectedImages([...entry.images])
+		setSelectedFiles([...entry.files])
+		// The composer now represents this entry, so an unrelated quote left in
+		// it must go: keeping it would attach a quote the entry never had.
+		setActiveQuote(entry.activeQuote ?? null)
+		setEditingEntryId(id)
+		onEditQueuedInput?.(id)
+	}
+
+	// Cancelling returns the entry to the queue untouched. The composer keeps
+	// whatever the user typed, which is now treated as new input.
+	const handleCancelQueuedEdit = (id: string) => {
+		if (editingEntryId === id) {
+			setEditingEntryId(undefined)
+		}
+		onCancelQueuedInput?.(id)
+	}
 
 	return (
 		<>
+			{inputQueue && inputQueue.length > 0 && (
+				<InputQueuePanel
+					entries={inputQueue}
+					onCancelEdit={handleCancelQueuedEdit}
+					onEdit={handleEditQueuedInput}
+					onRemove={(id) => onRemoveQueuedInput?.(id)}
+					onReorder={(id, targetIndex) => onReorderQueuedInput?.(id, targetIndex)}
+					onToggleMode={(id) => onToggleQueuedMode?.(id)}
+				/>
+			)}
+
 			{activeQuote && (
 				<div style={{ marginBottom: "-12px", marginTop: "10px" }}>
 					<QuotedMessagePreview
@@ -127,7 +206,7 @@ export const InputSection: React.FC<InputSectionProps> = ({
 				}}
 				onSelectFilesAndImages={selectFilesAndImages}
 				onSend={handleSend}
-				onSendBlocked={onSubmit ? deferDraft : undefined}
+				onSendBlocked={onEnqueueInput ? enqueueBlockedDraft : undefined}
 				placeholderText={placeholderText}
 				redoInputValue={redoInputValue}
 				ref={textAreaRef}

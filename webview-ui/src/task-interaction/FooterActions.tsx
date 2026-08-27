@@ -39,8 +39,19 @@ export function FooterActions({
 	onSuccessorAccepted,
 	successorContext,
 }: FooterActionsProps) {
-	const [pending, setPending] = useState(false)
-	const errorScope = `${view.taskId}:${view.stateRevision}:${view.activeInteraction?.interactionId ?? ""}`
+	// A dispatch is pending only for the exact projection that issued it. Task
+	// clean-up (cancel in particular) can outlive its own RPC, so scoping the
+	// pending state keeps the footer following the backend projection: once a
+	// newer state arrives, its actions are live even while the old call is still
+	// in flight.
+	const dispatchScope = `${view.taskId}:${view.stateRevision}:${view.activeInteraction?.interactionId ?? ""}`
+	const [pendingState, setPendingState] = useState<string>()
+	const pending = pendingState === dispatchScope
+	const beginPending = () => setPendingState(dispatchScope)
+	// Clear only the scope this call owns; a late settle must not release the
+	// pending state of a newer projection that has already started its own work.
+	const endPending = (scope: string) => setPendingState((current) => (current === scope ? undefined : current))
+	const errorScope = dispatchScope
 	const [errorState, setErrorState] = useState<{ scope: string; message: string }>()
 	const error = errorState?.scope === errorScope ? errorState.message : undefined
 	const setError = (message?: string) => setErrorState(message ? { scope: errorScope, message } : undefined)
@@ -83,11 +94,12 @@ export function FooterActions({
 									if (!dispatchTaskAction || !supportedTaskAction) {
 										return
 									}
+									const taskScope = dispatchScope
 									setError(undefined)
-									setPending(true)
+									beginPending()
 									void dispatchTaskAction(action)
 										.catch((cause: unknown) => setError(errorMessage(cause)))
-										.finally(() => setPending(false))
+										.finally(() => endPending(taskScope))
 									return
 								}
 								const capturedDraft = captureInteractionDraft(draft)
@@ -95,8 +107,9 @@ export function FooterActions({
 								if (!request) {
 									return
 								}
+								const interactionScope = dispatchScope
 								setError(undefined)
-								setPending(true)
+								beginPending()
 								void dispatch(request)
 									.then((response) => {
 										if (!response.accepted) {
@@ -115,7 +128,7 @@ export function FooterActions({
 										}
 									})
 									.catch((cause: unknown) => setError(errorMessage(cause)))
-									.finally(() => setPending(false))
+									.finally(() => endPending(interactionScope))
 							}}
 							role="button">
 							{action.label}
