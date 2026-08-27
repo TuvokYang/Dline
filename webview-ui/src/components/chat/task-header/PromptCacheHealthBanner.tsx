@@ -13,16 +13,18 @@ export const PromptCacheHealthBanner: React.FC<PromptCacheHealthBannerProps> = (
 	}
 
 	if (health.status === "warming") {
+		if (health.warmingRound < 2) {
+			return null
+		}
+
 		return (
-			<div
-				className="w-full rounded-sm border border-foreground/15 bg-banner-background px-2 py-1.5 text-banner-foreground"
-				role="status">
-				<div className="flex items-center gap-1.5 text-sm font-medium">
-					<ActivityIcon className="size-3.5 shrink-0" />
-					<span>{`Prompt cache warming (${health.warmingRound}/${health.warmingTarget})`}</span>
-				</div>
-				<div className="pl-5 text-xs opacity-80">Dline is checking whether cached input grows across requests.</div>
-			</div>
+			<Alert
+				icon={<ActivityIcon className="size-3.5 shrink-0" />}
+				key="warming"
+				role="status"
+				title={`Prompt cache warming (${health.warmingRound}/${health.warmingTarget})`}>
+				<AlertDescription>Dline is checking whether cached input grows across requests.</AlertDescription>
+			</Alert>
 		)
 	}
 
@@ -33,7 +35,7 @@ export const PromptCacheHealthBanner: React.FC<PromptCacheHealthBannerProps> = (
 		: "Cached input did not improve across three eligible requests. Check the active Profile, Provider, or proxy cache before the context grows further."
 
 	return (
-		<Alert title={title} variant="warning">
+		<Alert key={`warning-${health.warningReason ?? "unknown"}`} title={title} variant="warning">
 			<AlertDescription>{description}</AlertDescription>
 		</Alert>
 	)

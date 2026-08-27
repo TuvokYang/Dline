@@ -23,8 +23,8 @@ vi.mock("@context/ExtensionStateContext", () => ({
 		navigateToSettings: vi.fn(),
 		promptCacheHealth: {
 			status: "warming",
-			sampleCount: 1,
-			warmingRound: 1,
+			sampleCount: 2,
+			warmingRound: 2,
 			warmingTarget: 3,
 			nearContextWindow: false,
 		},
@@ -74,7 +74,7 @@ describe("TaskHeader pricing", () => {
 		const taskHeader = screen.getByLabelText("Expand task header").closest("div.relative")
 		expect(taskHeader).not.toBeNull()
 		expect(warming.compareDocumentPosition(taskHeader as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-		expect(container).toHaveTextContent("Prompt cache warming (1/3)")
+		expect(container).toHaveTextContent("Prompt cache warming (2/3)")
 	})
 
 	it("renders RPM and TPM before usage metrics in an always-visible right-aligned region", () => {

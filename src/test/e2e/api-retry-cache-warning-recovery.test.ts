@@ -100,8 +100,17 @@ e2e("Prompt cache warning - stalled cache warning has a close button", async ({ 
 	await sendTask(sidebar, "Exercise the prompt cache warning close action.")
 
 	await expect(sidebar.getByText("E2E_CACHE_WARNING_ROUND_ONE", { exact: true })).toBeVisible({ timeout: 60_000 })
+	await expect(sidebar.getByText("Prompt cache warming", { exact: false })).toHaveCount(0)
+
 	await submitFeedback(sidebar, "E2E_CACHE_WARNING_FEEDBACK_ONE")
 	await expect(sidebar.getByText("E2E_CACHE_WARNING_ROUND_TWO", { exact: true })).toBeVisible({ timeout: 60_000 })
+	const warming = sidebar.getByRole("status").filter({ hasText: "Prompt cache warming (2/3)" })
+	await expect(warming).toBeVisible()
+	const warmingClose = warming.getByRole("button", { name: "Dismiss" })
+	await expect(warmingClose).toBeVisible()
+	await warmingClose.click()
+	await expect(warming).toHaveCount(0)
+
 	await submitFeedback(sidebar, "E2E_CACHE_WARNING_FEEDBACK_TWO")
 	await expect(sidebar.getByText("E2E_CACHE_WARNING_READY", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 
