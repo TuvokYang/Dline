@@ -2,6 +2,7 @@ import { shouldUseWebviewHmr, WebviewProvider } from "@core/webview"
 import * as vscode from "vscode"
 import { handleGrpcRequest, handleGrpcRequestCancel } from "@/core/controller/grpc-handler"
 import { OrchestratorController } from "@/core/orchestrator/OrchestratorController"
+import { normalizeTaskPanelTitle } from "@/core/task/TaskPanelTitle"
 import { HostProvider } from "@/hosts/host-provider"
 import type { ClineExtensionContext } from "@/shared/cline"
 import type { ExtensionMessage } from "@/shared/ExtensionMessage"
@@ -41,12 +42,9 @@ export class VscodeWebviewPanelProvider extends WebviewProvider {
 		const extUri = vscode.Uri.file(HostProvider.get().extensionFsPath)
 		const iconPath = vscode.Uri.joinPath(vscode.Uri.file(HostProvider.get().extensionFsPath), "assets", "icons", "icon.png")
 
-		// Truncate title to 16 characters for display
-		const truncatedTitle = title.length > 16 ? title.substring(0, 16) : title
-
 		const panel = vscode.window.createWebviewPanel(
 			"dlineTask",
-			truncatedTitle,
+			normalizeTaskPanelTitle(title),
 			{ viewColumn: dlineEditorGroup.getCreateViewColumn(), preserveFocus: true },
 			{
 				enableScripts: true,
@@ -142,7 +140,7 @@ export class VscodeWebviewPanelProvider extends WebviewProvider {
 		Logger.log(`[VscodeWebviewPanelProvider] Restoring panel for task ${taskId}`)
 		try {
 			const taskWithId = await provider.controller.getTaskWithId(taskId)
-			const title = taskWithId.historyItem.task?.substring(0, 16) || "Dline"
+			const title = normalizeTaskPanelTitle(taskWithId.historyItem.task || "Dline")
 			panel.title = title
 			// Persist state on next webviewReady
 			provider.setPendingTaskId(taskId)
@@ -181,7 +179,7 @@ export class VscodeWebviewPanelProvider extends WebviewProvider {
 	 */
 	updateTitle(title: string): void {
 		if (this.panel) {
-			this.panel.title = title.length > 16 ? title.substring(0, 16) : title
+			this.panel.title = normalizeTaskPanelTitle(title)
 		}
 	}
 
