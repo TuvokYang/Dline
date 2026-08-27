@@ -59,7 +59,7 @@ describe("TaskMetricsChartModel", () => {
 		expect(enabled.has("rpm")).toBe(true)
 	})
 
-	it("hides all-zero series while preserving explicit zero values in otherwise active series", () => {
+	it("hides all-zero series while drawing missing values as zero in one continuous segment", () => {
 		const visible = getVisibleTaskMetricsSeries(
 			[point(0, { cacheWriteTokens: 0, cacheHitRate: 0 }), point(60_000, { cacheWriteTokens: 0, cacheHitRate: 0.5 })],
 			"tokenCache",
@@ -79,10 +79,12 @@ describe("TaskMetricsChartModel", () => {
 		)
 		const input = layout.series.find(({ descriptor }) => descriptor.key === "input")
 		const cacheHit = layout.series.find(({ descriptor }) => descriptor.key === "cacheHit")
-		expect(input?.points.map(({ value }) => value)).toEqual([0, 50])
-		expect(input?.segments.map((segment) => segment.length)).toEqual([1, 1])
-		expect(cacheHit?.points.map(({ value }) => value)).toEqual([0, 0.5])
-		expect(cacheHit?.segments.map((segment) => segment.length)).toEqual([1, 1])
+		expect(input?.points.map(({ value }) => value)).toEqual([0, 0, 50])
+		expect(input?.segments.map((segment) => segment.length)).toEqual([3])
+		expect(cacheHit?.points.map(({ value }) => value)).toEqual([0, 0, 0.5])
+		expect(cacheHit?.segments.map((segment) => segment.length)).toEqual([3])
+		expect(input?.points[0]?.x).toBe(layout.plotLeft)
+		expect(input?.points.at(-1)?.x).toBe(layout.plotRight)
 		expect(layout.percentageTicks.map(({ label }) => label)).toEqual(["0%", "20%", "40%", "60%", "80%", "100%"])
 	})
 

@@ -168,6 +168,7 @@ export function TaskMetricsChart({ points, view, chartType, degraded = false }: 
 				{chart.hitAreas.map((hitArea) => (
 					<rect
 						aria-label={`Show metrics at ${new Date(hitArea.point.bucketStartMs).toLocaleString()}`}
+						data-bucket-start-ms={hitArea.point.bucketStartMs}
 						data-testid={`task-metrics-hit-area-${hitArea.pointIndex}`}
 						fill="transparent"
 						height={chart.plotBottom - chart.plotTop}
@@ -206,11 +207,10 @@ export function TaskMetricsChart({ points, view, chartType, degraded = false }: 
 						{descriptors
 							.filter(({ key }) => enabledSeries.has(key))
 							.map((descriptor) => {
-								const value = readTaskMetricsSeriesValue(activePoint, descriptor.key)
+								const value = readTaskMetricsSeriesValue(activePoint, descriptor.key) ?? 0
 								return (
 									<div key={descriptor.key}>
-										{descriptor.label}:{" "}
-										{value === undefined ? "Unavailable" : formatTaskMetricsSeriesValue(descriptor, value)}
+										{descriptor.label}: {formatTaskMetricsSeriesValue(descriptor, value)}
 									</div>
 								)
 							})}

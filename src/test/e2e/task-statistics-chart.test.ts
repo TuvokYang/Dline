@@ -9,6 +9,7 @@ import { seedTaskStatistics } from "./utils/seed-task-statistics"
 const TASK_TEXT = "E2E_TASK_STATISTICS_CHART"
 const COMPLETION_TEXT = "E2E_TASK_STATISTICS_CHART_READY"
 const GRPC_METHOD = "getTaskRateMetrics"
+const HOUR_MS = 60 * 60 * 1_000
 
 interface GrpcLogEntry {
 	service?: string
@@ -129,10 +130,21 @@ async function expectTooltipWithinDialog(dialog: Locator, tooltip: Locator): Pro
 
 async function expectToolbarControlsWithinDialog(dialog: Locator): Promise<void> {
 	const toolbar = dialog.getByRole("toolbar", { name: "Task metrics controls" })
-	await expect.poll(() => toolbar.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true)
+	await expect(toolbar).toHaveCSS("flex-wrap", "wrap")
+	await expect
+		.poll(async () => {
+			const geometry = await toolbar.evaluate((element) => ({
+				clientHeight: element.clientHeight,
+				clientWidth: element.clientWidth,
+				scrollHeight: element.scrollHeight,
+				scrollWidth: element.scrollWidth,
+			}))
+			return { ...geometry, fitsHorizontally: geometry.scrollWidth <= geometry.clientWidth }
+		})
+		.toMatchObject({ fitsHorizontally: true })
 	for (const control of [
 		dialog.getByRole("combobox", { name: "History resolution", exact: true }),
-		dialog.getByRole("radio", { name: "Token/Cache Hit", exact: true }),
+		dialog.getByRole("radio", { name: "Token/Cache", exact: true }),
 		dialog.getByRole("radio", { name: "TPM/RPM", exact: true }),
 		dialog.getByRole("radio", { name: "Bar", exact: true }),
 		dialog.getByRole("radio", { name: "Line", exact: true }),
@@ -154,8 +166,9 @@ async function assertDefaultTokenCacheChart(dialog: Locator): Promise<void> {
 	await expect(toolbar).toBeVisible()
 	const resolution = dialog.getByRole("combobox", { name: "History resolution", exact: true })
 	await expect(resolution).toHaveValue("hour")
+	await expect(resolution).toHaveCSS("text-align-last", "center")
 	await expect(dialog.getByRole("option", { name: "Round", exact: true })).toHaveCount(0)
-	await expect(dialog.getByRole("radio", { name: "Token/Cache Hit", exact: true })).toHaveAttribute("aria-checked", "true")
+	await expect(dialog.getByRole("radio", { name: "Token/Cache", exact: true })).toHaveAttribute("aria-checked", "true")
 	await expect(dialog.getByRole("radio", { name: "Line", exact: true })).toHaveAttribute("aria-checked", "true")
 	await expectToolbarControlsWithinDialog(dialog)
 
@@ -173,6 +186,13 @@ async function assertDefaultTokenCacheChart(dialog: Locator): Promise<void> {
 		await expect(dialog.getByRole("button", { name: label, exact: true })).toHaveAttribute("aria-pressed", String(enabled))
 	}
 	await expect(dialog.getByTestId("task-metrics-percentage-tick")).toHaveText(["0%", "20%", "40%", "60%", "80%", "100%"])
+	await expect(dialog.locator('[data-testid^="task-metrics-hit-area-"]')).toHaveCount(24)
+	const inputPoints = dialog.locator('[data-testid^="task-metrics-point-input-"]')
+	await expect(inputPoints).toHaveCount(24)
+	await expect(inputPoints.first()).toHaveAttribute("data-value", "0")
+	await expect(inputPoints.first()).toHaveAttribute("cx", "62")
+	await expect(inputPoints.last()).toHaveAttribute("data-value", "0")
+	await expect(inputPoints.last()).toHaveAttribute("cx", "666")
 
 	for (const [key, color] of [
 		["input", "--vscode-charts-blue"],
@@ -241,14 +261,20 @@ e2e(
 			expect(server.getMockConsumptions("openai-compatible-responses")).toHaveLength(1)
 			await waitForRateMetricsRpcCount(recorderPath, 0)
 
+			const taskHeaderToggle = sidebar.locator('[aria-label="Expand task header"], [aria-label="Collapse task header"]')
+			await expect(taskHeaderToggle).toHaveCount(1)
+			const initialHeaderLabel = await taskHeaderToggle.getAttribute("aria-label")
+			if (!initialHeaderLabel) throw new Error("Expected the Task header expansion label before opening rate history")
 			await rate.click()
 			const dialog = sidebar.getByRole("dialog")
 			await expect(dialog.getByRole("heading", { name: "API rate history", exact: true })).toBeVisible()
 			await assertDefaultTokenCacheChart(dialog)
+			await expect(taskHeaderToggle).toHaveAttribute("aria-label", initialHeaderLabel)
 			await waitForRateMetricsRpcCount(recorderPath, 1)
 			await captureDialog(dialog, testInfo, "task-statistics-hour-token-cache-line.png")
 
-			const secondHitArea = dialog.getByTestId("task-metrics-hit-area-1")
+			const activeHourStarts = seeded.completedAtMs.map((completedAtMs) => Math.floor(completedAtMs / HOUR_MS) * HOUR_MS)
+			const secondHitArea = dialog.locator(`[data-bucket-start-ms="${activeHourStarts[1]}"]`)
 			await secondHitArea.hover({ force: true })
 			let tooltip = dialog.getByRole("tooltip")
 			await expect(tooltip).toContainText("Input: 800")
@@ -261,7 +287,7 @@ e2e(
 			await expectTooltipWithinDialog(dialog, tooltip)
 			await captureDialog(dialog, testInfo, "task-statistics-hour-token-cache-hover-tooltip.png")
 
-			await dialog.getByTestId("task-metrics-hit-area-2").focus()
+			await dialog.locator(`[data-bucket-start-ms="${activeHourStarts[2]}"]`).focus()
 			tooltip = dialog.getByRole("tooltip")
 			await expect(tooltip).toContainText("Input: 1,600")
 			await expect(tooltip).toContainText("Cache Hit Rate: 33.3%")
@@ -295,21 +321,29 @@ e2e(
 
 			await dialog.getByRole("radio", { name: "Bar", exact: true }).click()
 			await expect(chart).toHaveAttribute("data-chart-type", "bar")
-			await expect(dialog.locator('[data-testid^="task-metrics-bar-tpm-"]').first()).toBeVisible()
-			await expect(dialog.locator('[data-testid^="task-metrics-bar-rpm-"]').first()).toBeVisible()
+			await expect(dialog.locator('[data-testid^="task-metrics-bar-tpm-"]:not([height="0"])').first()).toBeVisible()
+			await expect(dialog.locator('[data-testid^="task-metrics-bar-rpm-"]:not([height="0"])').first()).toBeVisible()
 			await waitForRateMetricsRpcCount(recorderPath, 1)
 			await captureDialog(dialog, testInfo, "task-statistics-hour-tpm-rpm-bar.png")
 
 			const resolution = dialog.getByRole("combobox", { name: "History resolution", exact: true })
 			await resolution.selectOption("minute")
 			await waitForRateMetricsRpcCount(recorderPath, 2)
+			await expect(resolution).toHaveValue("minute")
+			await expect(dialog.getByRole("img", { name: "Task metrics history chart", exact: true })).toBeVisible()
+			await expect(dialog.locator('[data-testid^="task-metrics-bar-tpm-"]:not([height="0"])').first()).toBeVisible()
 			await resolution.selectOption("day")
 			await waitForRateMetricsRpcCount(recorderPath, 3)
+			await expect(dialog.locator('[data-testid^="task-metrics-hit-area-"]')).toHaveCount(30)
 			expect(server.getMockConsumptions("openai-compatible-responses")).toHaveLength(1)
 
 			await dialog.getByRole("button", { name: "Refresh", exact: true }).click()
 			await waitForRateMetricsRpcCount(recorderPath, 4)
 			expect(server.getMockConsumptions("openai-compatible-responses")).toHaveLength(1)
+
+			await dialog.getByRole("button", { name: "Close", exact: true }).click()
+			await expect(dialog).toHaveCount(0)
+			await expect(taskHeaderToggle).toHaveAttribute("aria-label", initialHeaderLabel)
 
 			const recorderEvidence = await readFile(recorderPath)
 			await testInfo.attach("task-statistics-grpc-recording.json", {

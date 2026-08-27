@@ -283,7 +283,7 @@ async function expectRateMetricsDialog(frame: Frame, summary: RateSummary, exerc
 	await expect(dialog.getByRole("heading", { name: "API rate history", exact: true })).toBeVisible()
 	const resolutionSelect = dialog.getByRole("combobox", { name: "History resolution", exact: true })
 	await expect(resolutionSelect).toHaveValue("hour")
-	await expect(dialog.getByRole("radio", { name: "Token/Cache Hit", exact: true })).toHaveAttribute("aria-checked", "true")
+	await expect(dialog.getByRole("radio", { name: "Token/Cache", exact: true })).toHaveAttribute("aria-checked", "true")
 	const chart = dialog.getByRole("img", { name: "Task metrics history chart", exact: true })
 	await expect(chart).toBeVisible({ timeout: 30_000 })
 	await expect(chart).toHaveAttribute("data-view", "tokenCache")

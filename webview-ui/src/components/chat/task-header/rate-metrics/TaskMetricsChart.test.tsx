@@ -103,7 +103,7 @@ describe("TaskMetricsChart", () => {
 		expect(screen.getByTestId("task-metrics-line-tpm-0")).toBeInTheDocument()
 	})
 
-	it("renders monotone line segments without crossing unavailable gaps and supports Bar locally", () => {
+	it("renders one continuous monotone line with unavailable values at zero and supports Bar locally", () => {
 		const points = [
 			point(0, { inputTokens: 10 }),
 			point(60_000, { inputTokens: undefined, usageAvailable: false }),
@@ -112,14 +112,13 @@ describe("TaskMetricsChart", () => {
 		]
 		const rendered = render(<TaskMetricsChart chartType="line" points={points} view="tokenCache" />)
 		const paths = screen.getAllByTestId(/^task-metrics-line-input-/)
-		expect(paths).toHaveLength(2)
-		for (const path of paths) {
-			expect(path.getAttribute("d")).not.toMatch(/NaN|Infinity/)
-		}
+		expect(paths).toHaveLength(1)
+		expect(paths[0]?.getAttribute("d")).not.toMatch(/NaN|Infinity/)
+		expect(screen.getByTestId("task-metrics-point-input-1")).toHaveAttribute("data-value", "0")
 
 		rendered.rerender(<TaskMetricsChart chartType="bar" points={points} view="tokenCache" />)
 		expect(screen.getByRole("img", { name: "Task metrics history chart" })).toHaveAttribute("data-chart-type", "bar")
-		expect(screen.getAllByTestId(/^task-metrics-bar-input-/)).toHaveLength(3)
+		expect(screen.getAllByTestId(/^task-metrics-bar-input-/)).toHaveLength(4)
 	})
 
 	it("shows a contained keyboard tooltip without internal Round or Request identity", () => {

@@ -1,7 +1,11 @@
-import { render, screen } from "@testing-library/react"
-import { describe, expect, it, vi } from "vitest"
+import { fireEvent, render, screen } from "@testing-library/react"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 import TaskHeader from "./TaskHeader"
 import { formatTokenMetric, hasNonZeroModelPricing } from "./util"
+
+const mocks = vi.hoisted(() => ({
+	setExpandTaskHeader: vi.fn(),
+}))
 
 vi.mock("@components/settings/providers/useApiProfiles", () => ({
 	useApiProfiles: () => ({
@@ -28,8 +32,16 @@ vi.mock("@context/ExtensionStateContext", () => ({
 			warmingTarget: 3,
 			nearContextWindow: false,
 		},
-		setExpandTaskHeader: vi.fn(),
+		setExpandTaskHeader: mocks.setExpandTaskHeader,
 		taskLockStatus: undefined,
+	}),
+}))
+
+vi.mock("./rate-metrics/useTaskRateMetrics", () => ({
+	useTaskRateMetrics: () => ({
+		data: { points: [], degraded: false, truncated: false },
+		loading: false,
+		refresh: vi.fn(),
 	}),
 }))
 
@@ -39,6 +51,10 @@ const task = {
 	text: "Inspect pricing display",
 	ts: 1,
 }
+
+beforeEach(() => {
+	mocks.setExpandTaskHeader.mockReset()
+})
 
 describe("TaskHeader pricing", () => {
 	it("keeps the compact action out of the collapsed task-title row", () => {
@@ -103,6 +119,30 @@ describe("TaskHeader pricing", () => {
 		expect(rate).toHaveClass("rounded-full", "bg-success/80", "text-background")
 		expect(rate).toHaveAttribute("type", "button")
 		expect(rate.querySelectorAll("button")).toHaveLength(0)
+	})
+
+	it("does not toggle the Task header for interactions rendered through the rate-history portal", () => {
+		render(
+			<TaskHeader
+				doesModelSupportPromptCache={false}
+				onClose={vi.fn()}
+				requestsPerMinute={3}
+				task={task}
+				tokensIn={1_250}
+				tokensOut={250}
+				tokensPerMinute={4_500}
+				totalCost={0}
+			/>,
+		)
+
+		fireEvent.click(screen.getByTestId("task-rate-metrics"))
+		expect(screen.getByRole("dialog", { name: "API rate history" })).toBeInTheDocument()
+		expect(mocks.setExpandTaskHeader).not.toHaveBeenCalled()
+
+		fireEvent.click(screen.getByRole("radio", { name: "TPM/RPM" }))
+		fireEvent.keyDown(screen.getByRole("radio", { name: "Line" }), { key: "Enter" })
+		fireEvent.click(screen.getByRole("button", { name: "Close" }))
+		expect(mocks.setExpandTaskHeader).not.toHaveBeenCalled()
 	})
 
 	it("hides a zero-priced model cost while retaining token metrics", () => {

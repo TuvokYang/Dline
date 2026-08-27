@@ -32,7 +32,7 @@ describe("TaskRateMetricsDialog", () => {
 		const resolution = screen.getByRole("combobox", { name: "History resolution" })
 		expect(resolution).toHaveValue("hour")
 		expect(screen.queryByRole("option", { name: "Round" })).not.toBeInTheDocument()
-		expect(screen.getByRole("radio", { name: "Token/Cache Hit" })).toHaveAttribute("aria-checked", "true")
+		expect(screen.getByRole("radio", { name: "Token/Cache" })).toHaveAttribute("aria-checked", "true")
 		expect(screen.getByRole("radio", { name: "TPM/RPM" })).toHaveAttribute("aria-checked", "false")
 		expect(screen.queryByRole("radio", { name: "Usage & Cache" })).not.toBeInTheDocument()
 		expect(screen.queryByRole("radio", { name: "Total Tokens" })).not.toBeInTheDocument()
@@ -46,17 +46,20 @@ describe("TaskRateMetricsDialog", () => {
 		expect(mocks.useTaskRateMetrics).toHaveBeenLastCalledWith({ enabled: true, resolution: "day", taskId: "task-1" })
 	})
 
-	it("keeps resolution, view, chart type and Refresh in one compact toolbar", () => {
+	it("keeps compact controls aligned while allowing a narrow toolbar to wrap", () => {
 		renderDialog()
 		const toolbar = screen.getByRole("toolbar", { name: "Task metrics controls" })
-		expect(toolbar).toHaveClass("flex-nowrap", "overflow-hidden", "whitespace-nowrap")
+		expect(toolbar).toHaveClass("flex-wrap", "gap-x-2", "gap-y-1", "overflow-visible", "whitespace-nowrap")
 		const controls = within(toolbar)
 		const resolution = controls.getByRole("combobox", { name: "History resolution" })
 		expect(resolution).toHaveValue("hour")
-		expect(resolution).toHaveClass("h-5", "text-[11px]", "leading-normal")
+		expect(resolution).toHaveClass("h-5", "px-1", "text-center", "text-[11px]", "leading-normal", "[text-align-last:center]")
+		expect(controls.getByRole("radiogroup", { name: "History view" })).toHaveClass("gap-1")
+		expect(controls.getByRole("radiogroup", { name: "Chart type" })).toHaveClass("gap-1")
+		expect(controls.getByRole("radio", { name: "Token/Cache" })).toHaveClass("px-1")
 		expect(controls.getAllByRole("option").map((option) => option.textContent)).toEqual(["Minute", "Hour", "Day"])
 		expect(controls.getAllByRole("radio")).toHaveLength(4)
-		for (const name of ["Token/Cache Hit", "TPM/RPM", "Bar", "Line"] as const) {
+		for (const name of ["Token/Cache", "TPM/RPM", "Bar", "Line"] as const) {
 			expect(controls.getByRole("radio", { name })).toBeInTheDocument()
 		}
 		fireEvent.click(controls.getByRole("button", { name: "Refresh" }))
@@ -109,7 +112,7 @@ describe("TaskRateMetricsDialog", () => {
 		renderDialog()
 
 		expect(screen.getByText("History may be incomplete.")).toBeInTheDocument()
-		expect(screen.getByText("Showing the most recent active points.")).toBeInTheDocument()
+		expect(screen.getByText("Showing the most recent points.")).toBeInTheDocument()
 		expect(screen.queryByText(/History retained from/)).not.toBeInTheDocument()
 		expect(screen.getByTestId("task-metrics-chart")).toBeInTheDocument()
 		const chart = screen.getByRole("img", { name: "Task metrics history chart" })
@@ -126,8 +129,8 @@ describe("TaskRateMetricsDialog", () => {
 		expect(screen.getByRole("radio", { name: "Bar" })).toHaveAttribute("aria-checked", "true")
 		expect(chart).toHaveAttribute("data-chart-type", "bar")
 
-		fireEvent.click(screen.getByRole("radio", { name: "Token/Cache Hit" }))
-		expect(screen.getByRole("radio", { name: "Token/Cache Hit" })).toHaveAttribute("aria-checked", "true")
+		fireEvent.click(screen.getByRole("radio", { name: "Token/Cache" }))
+		expect(screen.getByRole("radio", { name: "Token/Cache" })).toHaveAttribute("aria-checked", "true")
 		expect(chart).toHaveAttribute("data-view", "tokenCache")
 	})
 })

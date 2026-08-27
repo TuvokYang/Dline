@@ -19,7 +19,7 @@ const RESOLUTION_OPTIONS: Array<{ value: TaskRateMetricsResolution; label: strin
 ]
 
 const VIEW_OPTIONS: Array<{ value: TaskMetricsView; label: string }> = [
-	{ value: "tokenCache", label: "Token/Cache Hit" },
+	{ value: "tokenCache", label: "Token/Cache" },
 	{ value: "rates", label: "TPM/RPM" },
 ]
 
@@ -45,12 +45,12 @@ export function TaskRateMetricsDialog({ taskId, open, onOpenChange }: TaskRateMe
 
 				<div
 					aria-label="Task metrics controls"
-					className="flex min-w-0 flex-nowrap items-center gap-px overflow-hidden whitespace-nowrap"
+					className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 overflow-visible whitespace-nowrap"
 					data-testid="task-metrics-toolbar"
 					role="toolbar">
 					<select
 						aria-label="History resolution"
-						className="h-5 w-[54px] shrink-0 rounded-sm border border-input-placeholder/30 bg-background px-0.5 text-[11px] leading-normal text-foreground"
+						className="h-5 w-[58px] shrink-0 rounded-sm border border-input-placeholder/30 bg-background px-1 text-center text-[11px] leading-normal text-foreground [text-align-last:center]"
 						onChange={(event) => setResolution(event.currentTarget.value as TaskRateMetricsResolution)}
 						value={resolution}>
 						{RESOLUTION_OPTIONS.map((option) => (
@@ -60,13 +60,13 @@ export function TaskRateMetricsDialog({ taskId, open, onOpenChange }: TaskRateMe
 						))}
 					</select>
 
-					<div aria-label="History view" className="flex shrink-0 items-center gap-px" role="radiogroup">
+					<div aria-label="History view" className="flex shrink-0 items-center gap-1" role="radiogroup">
 						{VIEW_OPTIONS.map((option) => {
 							const selected = view === option.value
 							return (
 								<button
 									aria-checked={selected}
-									className={`inline-flex h-5 items-center rounded-sm px-0.5 text-[11px] leading-normal ${
+									className={`inline-flex h-5 items-center rounded-sm px-1 text-[11px] leading-normal ${
 										selected
 											? "bg-button-background text-button-foreground"
 											: "bg-transparent text-description hover:bg-toolbar-hover"
@@ -81,7 +81,7 @@ export function TaskRateMetricsDialog({ taskId, open, onOpenChange }: TaskRateMe
 						})}
 					</div>
 
-					<div aria-label="Chart type" className="flex shrink-0 items-center gap-px" role="radiogroup">
+					<div aria-label="Chart type" className="flex shrink-0 items-center gap-1" role="radiogroup">
 						{CHART_TYPE_OPTIONS.map((option) => {
 							const selected = chartType === option.value
 							return (
@@ -135,7 +135,7 @@ export function TaskRateMetricsDialog({ taskId, open, onOpenChange }: TaskRateMe
 						{(data.degraded || data.truncated) && (
 							<div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-description">
 								{data.degraded && <span>History may be incomplete.</span>}
-								{data.truncated && <span>Showing the most recent active points.</span>}
+								{data.truncated && <span>Showing the most recent points.</span>}
 							</div>
 						)}
 						<TaskMetricsChart chartType={chartType} degraded={data.degraded} points={data.points} view={view} />

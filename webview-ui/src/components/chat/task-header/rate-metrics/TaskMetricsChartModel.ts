@@ -190,9 +190,11 @@ export function createTaskMetricsChartLayout(
 	const plotBottom = dimensions.height - dimensions.paddingBottom
 	const plotWidth = Math.max(1, plotRight - plotLeft)
 	const plotHeight = Math.max(1, plotBottom - plotTop)
-	const startMs = sortedPoints[0]?.bucketStartMs ?? 0
-	const endMs = sortedPoints.at(-1)?.bucketEndMs ?? startMs + 1
-	const durationMs = Math.max(1, endMs - startMs)
+	const firstPoint = sortedPoints[0]
+	const lastPoint = sortedPoints.at(-1)
+	const firstMidpointMs = firstPoint ? getBucketMidpointMs(firstPoint) : 0
+	const lastMidpointMs = lastPoint ? getBucketMidpointMs(lastPoint) : firstMidpointMs
+	const durationMs = Math.max(1, lastMidpointMs - firstMidpointMs)
 	const primaryValues = sortedPoints.flatMap((point) =>
 		descriptors
 			.filter(({ axis }) => axis === "primary")
@@ -213,8 +215,8 @@ export function createTaskMetricsChartLayout(
 			}))
 		: []
 	const xForPoint = (point: TaskRateMetricPoint): number => {
-		const midpointMs = point.bucketStartMs + (point.bucketEndMs - point.bucketStartMs) / 2
-		return plotLeft + ((midpointMs - startMs) / durationMs) * plotWidth
+		if (sortedPoints.length <= 1) return plotLeft + plotWidth / 2
+		return plotLeft + ((getBucketMidpointMs(point) - firstMidpointMs) / durationMs) * plotWidth
 	}
 
 	return {
@@ -231,6 +233,8 @@ export function createTaskMetricsChartLayout(
 				sortedPoints,
 				descriptor,
 				xForPoint,
+				plotLeft,
+				plotRight,
 				plotTop,
 				plotBottom,
 				primaryAxisMax,
@@ -286,6 +290,8 @@ function createSeries(
 	points: readonly TaskRateMetricPoint[],
 	descriptor: TaskMetricsSeriesDescriptor,
 	xForPoint: (point: TaskRateMetricPoint) => number,
+	plotLeft: number,
+	plotRight: number,
 	plotTop: number,
 	plotBottom: number,
 	primaryAxisMax: number,
@@ -300,24 +306,21 @@ function createSeries(
 	let currentSegment: TaskMetricsChartPoint[] | undefined
 
 	for (const point of points) {
-		const value = readTaskMetricsSeriesValue(point, descriptor.key)
-		if (value === undefined) {
-			currentSegment = undefined
-			continue
-		}
+		const value = readTaskMetricsSeriesValue(point, descriptor.key) ?? 0
 		const normalized = descriptor.axis === "percentage" ? clamp(value, 0, 1) : value / primaryAxisMax
 		const x = xForPoint(point)
 		const bucketWidth = ((point.bucketEndMs - point.bucketStartMs) / durationMs) * plotWidth
 		const groupWidth = clamp(bucketWidth * 0.72, MIN_BAR_WIDTH * seriesCount, MAX_BAR_GROUP_WIDTH)
 		const slotWidth = groupWidth / Math.max(1, seriesCount)
 		const barWidth = Math.max(MIN_BAR_WIDTH, slotWidth - 1)
+		const groupX = clamp(x - groupWidth / 2, plotLeft, Math.max(plotLeft, plotRight - groupWidth))
 		const y = plotBottom - normalized * plotHeight
 		const chartPoint: TaskMetricsChartPoint = {
 			point,
 			value,
 			x,
 			y,
-			barX: x - groupWidth / 2 + seriesIndex * slotWidth + (slotWidth - barWidth) / 2,
+			barX: groupX + seriesIndex * slotWidth + (slotWidth - barWidth) / 2,
 			barWidth,
 			barY: y,
 			barHeight: Math.max(0, plotBottom - y),
@@ -334,6 +337,10 @@ function createSeries(
 	}
 
 	return { descriptor, points: chartPoints, segments }
+}
+
+function getBucketMidpointMs(point: TaskRateMetricPoint): number {
+	return point.bucketStartMs + (point.bucketEndMs - point.bucketStartMs) / 2
 }
 
 function createChartTicks(maxValue: number, targetCount = 5): number[] {

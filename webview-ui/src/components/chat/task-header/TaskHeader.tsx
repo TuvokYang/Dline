@@ -162,11 +162,15 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 				<div
 					aria-label={isTaskExpanded ? "Collapse task header" : "Expand task header"}
 					className="flex justify-between items-center cursor-pointer"
-					onClick={toggleTaskExpanded}
-					onKeyDown={(e) => {
-						if (e.key === "Enter" || e.key === " ") {
-							e.preventDefault()
-							e.stopPropagation()
+					onClick={(event) => {
+						if (!event.currentTarget.contains(event.target as Node)) return
+						toggleTaskExpanded()
+					}}
+					onKeyDown={(event) => {
+						if (!event.currentTarget.contains(event.target as Node)) return
+						if (event.key === "Enter" || event.key === " ") {
+							event.preventDefault()
+							event.stopPropagation()
 							toggleTaskExpanded()
 						}
 					}}>

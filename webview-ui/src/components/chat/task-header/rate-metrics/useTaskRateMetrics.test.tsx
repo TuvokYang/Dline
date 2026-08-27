@@ -25,12 +25,13 @@ function deferred<T>() {
 	return { promise, reject, resolve }
 }
 
-function response(activeSeconds: number): GetTaskRateMetricsResponse {
+function response(activeSeconds: number, bucketMs = 60_000): GetTaskRateMetricsResponse {
+	const bucketEndMs = Math.floor(NOW_MS / bucketMs) * bucketMs
 	return {
 		points: [
 			{
-				bucketStartMs: NOW_MS - 60_000,
-				bucketEndMs: NOW_MS,
+				bucketStartMs: bucketEndMs - bucketMs,
+				bucketEndMs,
 				activeSeconds,
 				requestCount: 1,
 				tokenCount: 100,
@@ -60,36 +61,36 @@ describe("useTaskRateMetrics", () => {
 		expect(mocks.getTaskRateMetrics).not.toHaveBeenCalled()
 	})
 
-	it("queries at most 30 active minutes and omits inactive buckets", async () => {
+	it("queries at most 60 minutes and fills the complete window around active points", async () => {
 		const activeResponse = response(4)
 		const activePoint = activeResponse.points[0]
 		if (!activePoint) throw new Error("Expected active response point")
+		const earlierPoint = {
+			...activePoint,
+			bucketStartMs: activePoint.bucketStartMs - 2 * 60_000,
+			bucketEndMs: activePoint.bucketEndMs - 2 * 60_000,
+		}
 		mocks.getTaskRateMetrics.mockResolvedValueOnce({
 			...activeResponse,
-			points: [
-				{
-					...activePoint,
-					activeSeconds: 0,
-					requestCount: 0,
-					tokenCount: 0,
-					requestsPerMinute: 0,
-					tokensPerMinute: 0,
-				},
-				activePoint,
-			],
+			points: [earlierPoint, activePoint],
 		})
 		const { result } = renderHook(() => useTaskRateMetrics({ enabled: true, resolution: "minute", taskId: "task-1" }))
 
 		expect(result.current.loading).toBe(true)
-		await waitFor(() => expect(result.current.data?.points).toHaveLength(1))
-		expect(result.current.data?.points[0]?.activeSeconds).toBe(4)
+		await waitFor(() => expect(result.current.data?.points).toHaveLength(60))
+		const timeline = result.current.data?.points ?? []
+		expect(timeline[0]).toMatchObject({ providerRoundCount: 0, executionCount: 0 })
+		expect(timeline[0]?.activeSeconds).toBeUndefined()
+		expect(timeline.filter(({ activeSeconds }) => activeSeconds === 4)).toHaveLength(2)
+		expect(timeline.find(({ bucketStartMs }) => bucketStartMs === earlierPoint.bucketEndMs)?.activeSeconds).toBeUndefined()
+		expect(timeline.at(-1)?.activeSeconds).toBeUndefined()
 		expect(mocks.getTaskRateMetrics).toHaveBeenCalledWith(
 			expect.objectContaining({
 				taskId: "task-1",
 				resolution: ProtoResolution.TASK_RATE_METRICS_RESOLUTION_MINUTE,
-				startMs: NOW_MS - 30 * 60 * 1_000,
-				endMs: NOW_MS,
-				maxPoints: 30,
+				startMs: NOW_MS - 59 * 60 * 1_000,
+				endMs: NOW_MS + 60 * 1_000,
+				maxPoints: 60,
 			}),
 		)
 	})
@@ -112,7 +113,7 @@ describe("useTaskRateMetrics", () => {
 
 	it("discards a stale response after the resolution changes", async () => {
 		const staleMinute = deferred<GetTaskRateMetricsResponse>()
-		mocks.getTaskRateMetrics.mockReturnValueOnce(staleMinute.promise).mockResolvedValueOnce(response(24))
+		mocks.getTaskRateMetrics.mockReturnValueOnce(staleMinute.promise).mockResolvedValueOnce(response(24, 60 * 60 * 1_000))
 		const { result, rerender } = renderHook(
 			({ resolution }: { resolution: TaskRateMetricsResolution }) =>
 				useTaskRateMetrics({ enabled: true, resolution, taskId: "task-1" }),
@@ -121,32 +122,38 @@ describe("useTaskRateMetrics", () => {
 		await waitFor(() => expect(mocks.getTaskRateMetrics).toHaveBeenCalledTimes(1))
 
 		rerender({ resolution: "hour" })
-		await waitFor(() => expect(result.current.data?.points[0]?.activeSeconds).toBe(24))
+		await waitFor(() => expect(result.current.data?.points.some(({ activeSeconds }) => activeSeconds === 24)).toBe(true))
 
 		await act(async () => staleMinute.resolve(response(1)))
-		expect(result.current.data?.points[0]?.activeSeconds).toBe(24)
+		expect(result.current.data?.points.some(({ activeSeconds }) => activeSeconds === 24)).toBe(true)
 		expect(mocks.getTaskRateMetrics).toHaveBeenLastCalledWith(
 			expect.objectContaining({
 				resolution: ProtoResolution.TASK_RATE_METRICS_RESOLUTION_HOUR,
-				startMs: NOW_MS - 24 * 60 * 60 * 1_000,
+				startMs: NOW_MS - 23 * 60 * 60 * 1_000,
+				endMs: NOW_MS + 60 * 60 * 1_000,
 				maxPoints: 24,
 			}),
 		)
 	})
 
 	it("surfaces an RPC error and retries on demand", async () => {
-		mocks.getTaskRateMetrics.mockRejectedValueOnce(new Error("history unavailable")).mockResolvedValueOnce(response(2))
+		mocks.getTaskRateMetrics
+			.mockRejectedValueOnce(new Error("history unavailable"))
+			.mockResolvedValueOnce(response(2, 24 * 60 * 60 * 1_000))
 		const { result } = renderHook(() => useTaskRateMetrics({ enabled: true, resolution: "day", taskId: "task-1" }))
 
 		await waitFor(() => expect(result.current.error).toBe("history unavailable"))
 		act(() => result.current.refresh())
-		await waitFor(() => expect(result.current.data?.points[0]?.activeSeconds).toBe(2))
+		await waitFor(() => expect(result.current.data?.points.some(({ activeSeconds }) => activeSeconds === 2)).toBe(true))
 		expect(mocks.getTaskRateMetrics).toHaveBeenCalledTimes(2)
+		const dayMs = 24 * 60 * 60 * 1_000
+		const dayEndMs = Math.floor(NOW_MS / dayMs) * dayMs + dayMs
 		expect(mocks.getTaskRateMetrics).toHaveBeenLastCalledWith(
 			expect.objectContaining({
 				resolution: ProtoResolution.TASK_RATE_METRICS_RESOLUTION_DAY,
-				startMs: NOW_MS - 15 * 24 * 60 * 60 * 1_000,
-				maxPoints: 15,
+				startMs: dayEndMs - 30 * dayMs,
+				endMs: dayEndMs,
+				maxPoints: 30,
 			}),
 		)
 	})
