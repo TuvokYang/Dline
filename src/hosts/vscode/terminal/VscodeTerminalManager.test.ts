@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import * as vscode from "vscode"
 import { VscodeTerminalManager } from "./VscodeTerminalManager"
+import type { VscodeTerminalPool } from "./VscodeTerminalPool"
 import { TerminalRegistry } from "./VscodeTerminalRegistry"
 
 function clearTerminalRegistry(): void {
@@ -21,6 +22,117 @@ describe("VscodeTerminalManager Windows shell selection", () => {
 	afterEach(() => {
 		clearTerminalRegistry()
 		Object.defineProperty(process, "platform", { value: originalPlatform })
+	})
+
+	it("does not drain the shared pool when a new manager applies its initial profile", () => {
+		const drainAll = vi.fn(() => ({ closedCount: 0, busyTerminals: [] }))
+		const pool = {
+			configureShellIntegrationTimeout: vi.fn(),
+			drainAll,
+		} as unknown as VscodeTerminalPool
+		const manager = new VscodeTerminalManager(pool)
+
+		manager.configure({
+			defaultTerminalProfile: "powershell-legacy",
+			shellIntegrationTimeout: 4_000,
+			terminalOutputLineLimit: 500,
+			terminalReuseEnabled: true,
+		})
+		expect(drainAll).not.toHaveBeenCalled()
+
+		manager.configure({
+			defaultTerminalProfile: "cmd",
+			shellIntegrationTimeout: 4_000,
+			terminalOutputLineLimit: 500,
+			terminalReuseEnabled: true,
+		})
+		expect(drainAll).toHaveBeenCalledWith("profile_changed")
+	})
+
+	it("invalidates a pooled terminal whose shell integration lacks executeCommand", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true })
+		const terminalInfo = TerminalRegistry.createTerminal("C:\\workspace", "powershell")
+		Object.defineProperty(terminalInfo.terminal, "shellIntegration", {
+			configurable: true,
+			value: { cwd: vscode.Uri.file("C:\\workspace") },
+		})
+		const release = vi.fn(async () => undefined)
+		const pool = {
+			configureShellIntegrationTimeout: vi.fn(),
+			acquire: vi.fn(async () => ({
+				leaseId: "lease-1",
+				partitionKey: "partition-1",
+				terminalInfo,
+				reusePolicy: "reusable",
+				acquiredAt: Date.now(),
+			})),
+			release,
+			registerProcess: vi.fn(),
+			unregisterProcess: vi.fn(),
+		} as unknown as VscodeTerminalPool
+		const manager = new VscodeTerminalManager(pool)
+		manager.configure({
+			defaultTerminalProfile: "powershell-legacy",
+			shellIntegrationTimeout: 4_000,
+			terminalOutputLineLimit: 500,
+			terminalReuseEnabled: true,
+		})
+		const acquired = await manager.getOrCreateTerminal("C:\\workspace", {
+			workspaceRoot: "C:\\workspace",
+			profileId: "powershell-legacy",
+			environmentFingerprint: "default",
+		})
+
+		const execution = manager.runCommand(acquired, "echo ready")
+		await vi.advanceTimersByTimeAsync(3_000)
+		await execution
+
+		expect(release).toHaveBeenCalledTimes(1)
+		expect(release).toHaveBeenCalledWith(expect.objectContaining({ leaseId: "lease-1" }), {
+			healthy: false,
+			reason: "no_shell_integration",
+		})
+		vi.useRealTimers()
+	})
+
+	it("does not repeat the shell-integration wait for a cold fallback", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true })
+		try {
+			const pool = {
+				configureShellIntegrationTimeout: vi.fn(),
+				acquire: vi.fn(async () => {
+					throw new Error("Terminal warming already pending")
+				}),
+				registerProcess: vi.fn(),
+				unregisterProcess: vi.fn(),
+			} as unknown as VscodeTerminalPool
+			const manager = new VscodeTerminalManager(pool)
+			manager.configure({
+				defaultTerminalProfile: "powershell-legacy",
+				shellIntegrationTimeout: 4_000,
+				terminalOutputLineLimit: 500,
+				terminalReuseEnabled: true,
+			})
+			const terminal = await manager.getOrCreateTerminal("C:\\workspace", {
+				workspaceRoot: "C:\\workspace",
+				profileId: "powershell-legacy",
+				environmentFingerprint: "default",
+			})
+			Object.defineProperty(terminal.terminal, "shellIntegration", {
+				configurable: true,
+				value: undefined,
+			})
+			const sendText = vi.spyOn(terminal.terminal, "sendText")
+
+			const execution = manager.runCommand(terminal, "echo fallback")
+			await Promise.resolve()
+
+			expect(sendText).toHaveBeenCalledWith("echo fallback", true)
+			await vi.advanceTimersByTimeAsync(3_000)
+			await execution
+		} finally {
+			vi.useRealTimers()
+		}
 	})
 
 	it("creates the Dline default terminal with Windows PowerShell", async () => {

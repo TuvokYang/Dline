@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert"
 import { EventEmitter } from "node:events"
 import fs from "node:fs/promises"
 import * as path from "node:path"
-import { DlineTempManager } from "@services/temp"
+import { DlineRuntimeFileManager } from "@services/runtime-files"
 import { afterEach, describe, it, vi } from "vitest"
 import { StandaloneTerminalManager } from "../standalone/StandaloneTerminalManager"
 import type { BackgroundCommand } from "../types"
@@ -63,7 +63,7 @@ describe("StandaloneTerminalManager background command injection state", () => {
 		const manager = new StandaloneTerminalManager()
 		const process = new EventEmitter() as BackgroundCommand["process"]
 		let logFilePath: string | undefined
-		const expectedLogPath = path.join(DlineTempManager.getTempDir(), "command_100_1.log")
+		const expectedLogPath = path.join(DlineRuntimeFileManager.getTempDir(), "command_100_1.log")
 		await fs.rm(expectedLogPath, { force: true })
 
 		try {
@@ -91,7 +91,7 @@ describe("StandaloneTerminalManager background command injection state", () => {
 		const manager = new StandaloneTerminalManager()
 		const process = new EventEmitter() as BackgroundCommand["process"]
 		const onOutputFrame = vi.fn()
-		const expectedLogPath = path.join(DlineTempManager.getTempDir(), "command_frame_completion.log")
+		const expectedLogPath = path.join(DlineRuntimeFileManager.getTempDir(), "command_frame_completion.log")
 		await fs.rm(expectedLogPath, { force: true })
 
 		try {
@@ -120,7 +120,7 @@ describe("StandaloneTerminalManager background command injection state", () => {
 		const manager = new StandaloneTerminalManager()
 		const terminate = vi.fn()
 		const process = Object.assign(new EventEmitter(), { terminate }) as unknown as BackgroundCommand["process"]
-		const expectedLogPath = path.join(DlineTempManager.getTempDir(), "command_frame_cancel.log")
+		const expectedLogPath = path.join(DlineRuntimeFileManager.getTempDir(), "command_frame_cancel.log")
 		await fs.rm(expectedLogPath, { force: true })
 
 		try {
@@ -145,7 +145,7 @@ describe("StandaloneTerminalManager background command injection state", () => {
 		const manager = new StandaloneTerminalManager()
 		const terminate = vi.fn()
 		const process = Object.assign(new EventEmitter(), { terminate }) as unknown as BackgroundCommand["process"]
-		const expectedLogPath = path.join(DlineTempManager.getTempDir(), "command_frame_timeout.log")
+		const expectedLogPath = path.join(DlineRuntimeFileManager.getTempDir(), "command_frame_timeout.log")
 		await fs.rm(expectedLogPath, { force: true })
 
 		try {
@@ -171,7 +171,7 @@ describe("StandaloneTerminalManager background command injection state", () => {
 	it("drains pending output when the background process emits an error", async () => {
 		const manager = new StandaloneTerminalManager()
 		const process = new EventEmitter() as BackgroundCommand["process"]
-		const expectedLogPath = path.join(DlineTempManager.getTempDir(), "command_frame_error.log")
+		const expectedLogPath = path.join(DlineRuntimeFileManager.getTempDir(), "command_frame_error.log")
 		await fs.rm(expectedLogPath, { force: true })
 
 		try {
@@ -191,7 +191,7 @@ describe("StandaloneTerminalManager background command injection state", () => {
 	it("persists small completed background output to its activity-owned log", async () => {
 		const manager = new StandaloneTerminalManager()
 		const process = new EventEmitter() as BackgroundCommand["process"]
-		const expectedLogPath = path.join(DlineTempManager.getTempDir(), "command_100_small.log")
+		const expectedLogPath = path.join(DlineRuntimeFileManager.getTempDir(), "command_100_small.log")
 		await fs.rm(expectedLogPath, { force: true })
 
 		try {

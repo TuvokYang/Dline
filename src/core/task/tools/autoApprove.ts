@@ -3,7 +3,7 @@ import { isMultiRootEnabled } from "@core/workspace/multi-root-utils"
 import { ClineDefaultTool, CONVERSATIONAL_TOOL_NAMES } from "@shared/tools"
 import { StateManager } from "@/core/storage/StateManager"
 import { HostProvider } from "@/hosts/host-provider"
-import { DlineTempManager } from "@/services/temp/DlineTempManager"
+import { DlineRuntimeFileManager } from "@/services/runtime-files/DlineRuntimeFileManager"
 import { getDesktopDir, isLocatedInPath, isLocatedInWorkspace } from "@/utils/path"
 
 export class AutoApprove {
@@ -151,7 +151,7 @@ export class AutoApprove {
 				"AutoApprove.shouldAutoApproveToolWithPath",
 			) as string
 
-			if (DlineTempManager.isManagedPath(absolutePath)) {
+			if (DlineRuntimeFileManager.isManagedPath(absolutePath)) {
 				isLocalRead = true
 			} else if (isMultiRootScenario) {
 				// Multi-root: check if file is in ANY workspace

@@ -12,7 +12,7 @@
  * - Provides summary for environment details
  */
 
-import { DlineTempManager } from "@services/temp"
+import { DlineRuntimeFileManager } from "@services/runtime-files"
 import { getShellForProfile } from "@utils/shell"
 import * as fs from "fs"
 import { Logger } from "@/shared/services/Logger"
@@ -479,7 +479,7 @@ export class StandaloneTerminalManager implements ITerminalManager {
 			throw new Error(`Background command is already tracked: ${activityId}`)
 		}
 
-		const logFilePath = ownership.existingLogFilePath ?? DlineTempManager.createTempFilePath(activityId)
+		const logFilePath = ownership.existingLogFilePath ?? DlineRuntimeFileManager.createTempFilePath(activityId)
 		const logFlags = ownership.existingLogFilePath ? "a" : "w"
 		const logFd = fs.openSync(logFilePath, logFlags)
 		const logStream = fs.createWriteStream(logFilePath, { fd: logFd, flags: logFlags, autoClose: true })

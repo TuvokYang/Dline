@@ -30,6 +30,7 @@ export interface ShellEnvironmentConfiguration {
 }
 
 export interface ResolvedShellEnvironment {
+	readonly workspaceRoot: string
 	readonly configPath: string
 	readonly configurationId: string
 	readonly environment: Readonly<EnvironmentMap>
@@ -169,6 +170,7 @@ export class ShellEnvironmentConfigLoader {
 	private readonly workspaceRoots: string[]
 	private readonly platform: NodeJS.Platform
 	private readonly environment: NodeJS.ProcessEnv
+	private readonly cache = new Map<string, ResolvedShellEnvironment>()
 
 	constructor(options: ShellEnvironmentConfigLoaderOptions) {
 		this.workspaceRoots = [...options.workspaceRoots].map((root) => path.resolve(root)).sort((a, b) => b.length - a.length)
@@ -176,20 +178,28 @@ export class ShellEnvironmentConfigLoader {
 		this.environment = options.environment ?? process.env
 	}
 
-	async resolve(workdirectory: string, profile: string): Promise<ResolvedShellEnvironment | undefined> {
+	resolveWorkspaceRoot(workdirectory: string): string | undefined {
 		const absoluteWorkdirectory = path.resolve(workdirectory)
-		const workspaceRoot = this.workspaceRoots.find((root) => isPathWithin(root, absoluteWorkdirectory))
+		return this.workspaceRoots.find((root) => isPathWithin(root, absoluteWorkdirectory))
+	}
+
+	async resolve(workdirectory: string, profile: string): Promise<ResolvedShellEnvironment | undefined> {
+		const workspaceRoot = this.resolveWorkspaceRoot(workdirectory)
 		if (!workspaceRoot) return undefined
 
 		const configPath = path.join(workspaceRoot, CONFIG_RELATIVE_PATH)
+		let fileStat
 		try {
-			await stat(configPath)
+			fileStat = await stat(configPath)
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined
 			throw error
 		}
 
 		try {
+			const cacheKey = `${configPath}:${fileStat.mtimeMs}:${fileStat.size}:${profile}:${this.platform}`
+			const cached = this.cache.get(cacheKey)
+			if (cached) return cached
 			const raw = await readFile(configPath, "utf8")
 			const configuration = parseShellEnvironmentConfiguration(parseYaml(raw))
 			const platform = configuration.platforms[this.platform as (typeof PLATFORM_NAMES)[number]]
@@ -226,7 +236,10 @@ export class ShellEnvironmentConfigLoader {
 				)
 				.digest("hex")
 				.slice(0, 16)
-			return { configPath, configurationId, environment, startupScripts, preCommands, postCommand }
+			const resolved = { workspaceRoot, configPath, configurationId, environment, startupScripts, preCommands, postCommand }
+			if (this.cache.size >= 32) this.cache.clear()
+			this.cache.set(cacheKey, resolved)
+			return resolved
 		} catch (error) {
 			throw new Error(`Invalid ${CONFIG_RELATIVE_PATH} at ${configPath}: ${error instanceof Error ? error.message : error}`)
 		}
@@ -385,15 +398,14 @@ export function buildShellEnvironmentCommand(options: ShellEnvironmentCommandOpt
 	return buildPosixCommand(options)
 }
 
-export async function logShellEnvironmentDiagnostics(diagnosticsPath: string): Promise<void> {
+export async function consumeShellEnvironmentDiagnostics(diagnosticsPath: string): Promise<string[]> {
+	let lines: string[] = []
 	try {
 		const diagnostics = await readFile(diagnosticsPath, "utf8")
-		for (const line of diagnostics
+		lines = diagnostics
 			.split(/\r?\n/)
 			.map((entry) => entry.trim())
-			.filter(Boolean)) {
-			Logger.error(`[ShellEnvironment] ${line}`)
-		}
+			.filter(Boolean)
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
 			Logger.error(`[ShellEnvironment] Failed to read diagnostics: ${diagnosticsPath}`, error)
@@ -404,5 +416,12 @@ export async function logShellEnvironmentDiagnostics(diagnosticsPath: string): P
 				Logger.error(`[ShellEnvironment] Failed to remove diagnostics: ${diagnosticsPath}`, error)
 			}
 		})
+	}
+	return lines
+}
+
+export async function logShellEnvironmentDiagnostics(diagnosticsPath: string): Promise<void> {
+	for (const line of await consumeShellEnvironmentDiagnostics(diagnosticsPath)) {
+		Logger.error(`[ShellEnvironment] ${line}`)
 	}
 }

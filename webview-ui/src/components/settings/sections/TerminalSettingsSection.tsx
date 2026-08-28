@@ -149,8 +149,8 @@ export const TerminalSettingsSection: React.FC<TerminalSettingsSectionProps> = (
 							</VSCodeCheckbox>
 						</div>
 						<p className="text-xs text-(--vscode-descriptionForeground)">
-							When enabled, Dline will reuse existing terminal windows that aren't in the current working directory.
-							Disable this if you experience issues with task lockout after a terminal command.
+							When enabled, Dline reuses healthy prewarmed terminals across commands and working directories. When
+							disabled, each command consumes a fresh prewarmed terminal.
 						</p>
 					</div>
 					{isVsCodePlatform && (

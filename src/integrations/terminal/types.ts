@@ -212,6 +212,9 @@ export interface ITerminalManager {
 	 */
 	getOrCreateTerminal(cwd: string, launchConfiguration?: TerminalLaunchConfiguration): Promise<TerminalInfo>
 
+	/** Non-blockingly establish the configured standby watermark when supported. */
+	ensureWarm?(cwd: string, launchConfiguration?: TerminalLaunchConfiguration): Promise<void>
+
 	/**
 	 * Get terminals filtered by busy state.
 	 * @param busy Whether to get busy or idle terminals
@@ -275,6 +278,17 @@ export interface StandaloneTerminalOptions {
 export interface TerminalLaunchConfiguration {
 	readonly environment?: Readonly<Record<string, string | null>>
 	readonly configurationId?: string
+	/** Workspace boundary used to isolate reusable VS Code terminal partitions. */
+	readonly workspaceRoot?: string
+	/** Selected terminal profile identity used by the warm pool partition. */
+	readonly profileId?: string
+	/** Stable fingerprint of Dline-managed environment overrides. */
+	readonly environmentFingerprint?: string
+	/** Create terminal-specific initialization artifacts for concurrent warm slots. */
+	readonly createInitialization?: () => {
+		readonly command?: string
+		readonly diagnosticsPath?: string
+	}
 	/** Hidden command used to initialize a newly-created persistent terminal. */
 	readonly initializationCommand?: string
 	/** Internal diagnostics file populated only when terminal initialization fails. */

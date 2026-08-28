@@ -57,8 +57,8 @@ import { exportVSCodeStorageToSharedFiles } from "./hosts/vscode/vscode-to-file-
 import { ExtensionRegistryInfo } from "./registry"
 import { AuthService } from "./services/auth/AuthService"
 import { LogoutReason } from "./services/auth/types"
+import { DlineRuntimeFileManager } from "./services/runtime-files"
 import { telemetryService } from "./services/telemetry"
-import { DlineTempManager } from "./services/temp"
 import { SharedUriHandler, TASK_URI_PATH } from "./services/uri/SharedUriHandler"
 import { ShowMessageType } from "./shared/proto/dline/host/window"
 import { fileExistsAtPath } from "./utils/fs"
@@ -730,9 +730,9 @@ async function showJupyterPromptInput(title: string, placeholder: string): Promi
 }
 
 function setupHostProvider(context: ExtensionContext) {
-	DlineTempManager.initialize()
-	DlineTempManager.startPeriodicCleanup()
-	context.subscriptions.push({ dispose: () => DlineTempManager.stopPeriodicCleanup() })
+	DlineRuntimeFileManager.initialize()
+	DlineRuntimeFileManager.startPeriodicCleanup()
+	context.subscriptions.push({ dispose: () => DlineRuntimeFileManager.stopPeriodicCleanup() })
 	const outputChannel = registerClineOutputChannel(context)
 	outputChannel.appendLine("[Dline] Setting up VS Code host...")
 

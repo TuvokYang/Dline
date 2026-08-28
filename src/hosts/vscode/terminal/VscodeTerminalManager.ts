@@ -12,6 +12,7 @@ import {
 	TerminalManagerConfigurationResult,
 } from "@/integrations/terminal/types"
 import { Logger } from "@/shared/services/Logger"
+import { type VscodeTerminalLease, VscodeTerminalPool, type VscodeTerminalPoolPreparation } from "./VscodeTerminalPool"
 import { mergePromise, VscodeTerminalProcess } from "./VscodeTerminalProcess"
 import { TerminalInfo, TerminalRegistry } from "./VscodeTerminalRegistry"
 
@@ -113,8 +114,14 @@ export class VscodeTerminalManager implements ITerminalManager {
 	private terminalReuseEnabled = true
 	private terminalOutputLineLimit = 500
 	private defaultTerminalProfile = "default"
+	private hasAppliedConfiguration = false
+	private readonly shellPathsByProfile = new Map<string, string | undefined>()
+	private readonly leases = new Map<number, VscodeTerminalLease>()
+	private readonly coldFallbackTerminalIds = new Set<number>()
+	private readonly skipShellIntegrationWaitTerminalIds = new Set<number>()
 
-	constructor() {
+	constructor(private readonly pool?: VscodeTerminalPool) {
+		if (pool) return
 		let disposable: vscode.Disposable | undefined
 		try {
 			disposable = (vscode.window as vscode.Window).onDidStartTerminalShellExecution?.(async (e) => {
@@ -185,23 +192,45 @@ export class VscodeTerminalManager implements ITerminalManager {
 		// Cast to VSCode-specific TerminalInfo for internal use
 		// Using unknown as intermediate cast due to structural differences between ITerminal and vscode.Terminal
 		const vscodeTerminalInfo = terminalInfo as unknown as TerminalInfo
-		Logger.log(`[TerminalManager] Running command on terminal ${vscodeTerminalInfo.id}: "${command}"`)
-		Logger.log(`[TerminalManager] Terminal ${vscodeTerminalInfo.id} busy state before: ${vscodeTerminalInfo.busy}`)
+		const requestedAt = performance.now()
+		let processStartedAt: number | undefined
+		let processCapability = "pending"
+		const startProcess = (capability: "shell_integration" | "cold_fallback" | "shell_wait") => {
+			processCapability = capability
+			processStartedAt = performance.now()
+			Logger.debug(
+				`[TerminalPerf] phase=process_start terminalId=${vscodeTerminalInfo.id} capability=${capability} waitMs=${Math.round(processStartedAt - requestedAt)}`,
+			)
+			process.run(vscodeTerminalInfo.terminal, command)
+		}
 
 		vscodeTerminalInfo.busy = true
 		vscodeTerminalInfo.lastCommand = command
 		const process = new VscodeTerminalProcess()
 		this.processes.set(vscodeTerminalInfo.id, process)
+		this.pool?.registerProcess(vscodeTerminalInfo, process)
 
 		process.once("completed", () => {
-			Logger.log(`[TerminalManager] Terminal ${vscodeTerminalInfo.id} completed, setting busy to false`)
+			Logger.debug(
+				`[TerminalPerf] phase=process_complete terminalId=${vscodeTerminalInfo.id} capability=${processCapability} durationMs=${Math.round(performance.now() - requestedAt)} executionMs=${processStartedAt === undefined ? 0 : Math.round(performance.now() - processStartedAt)}`,
+			)
 			vscodeTerminalInfo.busy = false
+			this.pool?.unregisterProcess(vscodeTerminalInfo, process)
+			void this.releaseLease(
+				vscodeTerminalInfo.id,
+				vscodeTerminalInfo.terminal.shellIntegration?.executeCommand !== undefined && !process.wasTerminalDisposed(),
+				process.wasTerminalDisposed() ? "terminal_disposed" : undefined,
+			)
+			this.disposeColdFallback(vscodeTerminalInfo)
 		})
 
 		// if shell integration is not available, remove terminal so it does not get reused as it may be running a long-running process
 		process.once("no_shell_integration", () => {
-			Logger.log(`no_shell_integration received for terminal ${vscodeTerminalInfo.id}`)
-			// Remove the terminal so we can't reuse it (in case it's running a long-running process)
+			Logger.warn(
+				`[TerminalPerf] phase=capability_failure terminalId=${vscodeTerminalInfo.id} capability=no_shell_integration durationMs=${Math.round(performance.now() - requestedAt)}`,
+			)
+			this.pool?.unregisterProcess(vscodeTerminalInfo, process)
+			void this.releaseLease(vscodeTerminalInfo.id, false, "no_shell_integration")
 			TerminalRegistry.removeTerminal(vscodeTerminalInfo.id)
 			this.terminalIds.delete(vscodeTerminalInfo.id)
 			this.processes.delete(vscodeTerminalInfo.id)
@@ -213,38 +242,42 @@ export class VscodeTerminalManager implements ITerminalManager {
 			})
 			process.once("error", (error) => {
 				Logger.error(`Error in terminal ${vscodeTerminalInfo.id}:`, error)
+				this.pool?.unregisterProcess(vscodeTerminalInfo, process)
+				void this.releaseLease(vscodeTerminalInfo.id, false, "process_error")
 				reject(error)
 			})
 		})
 
+		// A cold fallback is created only after the pool has already spent its bounded
+		// warm-acquire budget. Do not pay the same shell-integration wait again.
+		const skipShellIntegrationWait = this.skipShellIntegrationWaitTerminalIds.delete(vscodeTerminalInfo.id)
 		// if shell integration is already active, run the command immediately
-		if (vscodeTerminalInfo.terminal.shellIntegration) {
+		if (vscodeTerminalInfo.terminal.shellIntegration?.executeCommand || skipShellIntegrationWait) {
 			process.waitForShellIntegration = false
-			process.run(vscodeTerminalInfo.terminal, command)
+			startProcess(skipShellIntegrationWait ? "cold_fallback" : "shell_integration")
 		} else {
-			// docs recommend waiting 3s for shell integration to activate
-			Logger.log(
-				`[TerminalManager Test] Waiting for shell integration for terminal ${vscodeTerminalInfo.id} with timeout ${this.shellIntegrationTimeout}ms`,
+			// A legacy non-pool terminal may still acquire shell integration shortly after creation.
+			Logger.debug(
+				`[TerminalPerf] phase=shell_wait_start terminalId=${vscodeTerminalInfo.id} timeoutMs=${this.shellIntegrationTimeout}`,
 			)
 			pWaitFor(() => vscodeTerminalInfo.terminal.shellIntegration !== undefined, {
 				timeout: this.shellIntegrationTimeout,
 			})
 				.then(() => {
-					Logger.log(
-						`[TerminalManager Test] Shell integration activated for terminal ${vscodeTerminalInfo.id} within timeout.`,
+					Logger.debug(
+						`[TerminalPerf] phase=shell_wait_complete terminalId=${vscodeTerminalInfo.id} durationMs=${Math.round(performance.now() - requestedAt)} outcome=available`,
 					)
 				})
-				.catch((err) => {
+				.catch(() => {
 					Logger.warn(
-						`[TerminalManager Test] Shell integration timed out or failed for terminal ${vscodeTerminalInfo.id}: ${err.message}`,
+						`[TerminalPerf] phase=shell_wait_complete terminalId=${vscodeTerminalInfo.id} durationMs=${Math.round(performance.now() - requestedAt)} outcome=timeout`,
 					)
 				})
 				.finally(() => {
-					Logger.log(`[TerminalManager Test] Proceeding with command execution for terminal ${vscodeTerminalInfo.id}.`)
 					const existingProcess = this.processes.get(vscodeTerminalInfo.id)
 					if (existingProcess?.waitForShellIntegration) {
 						existingProcess.waitForShellIntegration = false
-						existingProcess.run(vscodeTerminalInfo.terminal, command)
+						startProcess("shell_wait")
 					}
 				})
 		}
@@ -253,7 +286,21 @@ export class VscodeTerminalManager implements ITerminalManager {
 	}
 
 	async getOrCreateTerminal(cwd: string, launchConfiguration?: TerminalLaunchConfiguration): Promise<ITerminalInfo> {
-		const terminals = TerminalRegistry.getAllTerminals()
+		const preparation = this.createPoolPreparation(cwd, launchConfiguration)
+		let forceColdCreate = false
+		if (this.pool && preparation) {
+			try {
+				const lease = await this.pool.acquire(preparation, cwd, this.terminalReuseEnabled ? "reusable" : "consume")
+				this.leases.set(lease.terminalInfo.id, lease)
+				this.terminalIds.add(lease.terminalInfo.id)
+				return lease.terminalInfo as unknown as ITerminalInfo
+			} catch (error) {
+				forceColdCreate = true
+				Logger.warn("[TerminalPool] operation=fallback reason=warm_acquire_failed")
+			}
+		}
+
+		const terminals = forceColdCreate ? [] : TerminalRegistry.getAllTerminals()
 		const expectedShellPath = this.getConfiguredShellPath(this.defaultTerminalProfile)
 		const expectedConfigurationId = launchConfiguration?.configurationId
 
@@ -353,8 +400,17 @@ export class VscodeTerminalManager implements ITerminalManager {
 				}
 			}
 		}
+		if (forceColdCreate) {
+			this.coldFallbackTerminalIds.add(newTerminalInfo.id)
+			this.skipShellIntegrationWaitTerminalIds.add(newTerminalInfo.id)
+		}
 		// Cast to ITerminalInfo for interface compatibility
 		return newTerminalInfo as unknown as ITerminalInfo
+	}
+
+	async ensureWarm(cwd: string, launchConfiguration?: TerminalLaunchConfiguration): Promise<void> {
+		const preparation = this.createPoolPreparation(cwd, launchConfiguration)
+		if (this.pool && preparation) await this.pool.ensureWarm(preparation)
 	}
 
 	getTerminals(busy: boolean): { id: number; lastCommand: string }[] {
@@ -388,10 +444,16 @@ export class VscodeTerminalManager implements ITerminalManager {
 	}
 
 	configure(configuration: TerminalManagerConfiguration): TerminalManagerConfigurationResult {
+		const isInitialConfiguration = !this.hasAppliedConfiguration && this.terminalIds.size === 0 && this.leases.size === 0
 		this.shellIntegrationTimeout = configuration.shellIntegrationTimeout
+		this.pool?.configureShellIntegrationTimeout(configuration.shellIntegrationTimeout)
 		this.terminalReuseEnabled = configuration.terminalReuseEnabled
 		this.terminalOutputLineLimit = configuration.terminalOutputLineLimit
-		return this.configureDefaultTerminalProfile(configuration.defaultTerminalProfile)
+		const result = isInitialConfiguration
+			? this.applyInitialTerminalProfile(configuration.defaultTerminalProfile)
+			: this.configureDefaultTerminalProfile(configuration.defaultTerminalProfile)
+		this.hasAppliedConfiguration = true
+		return result
 	}
 
 	getConfiguration(): TerminalManagerConfiguration {
@@ -404,6 +466,10 @@ export class VscodeTerminalManager implements ITerminalManager {
 	}
 
 	reinitializeTerminals(): TerminalManagerConfigurationResult {
+		if (this.pool) {
+			const result = this.pool.drainAll("manual_reinitialize")
+			return { closedCount: result.closedCount, busyTerminals: result.busyTerminals as unknown as ITerminalInfo[] }
+		}
 		const busyTerminals = this.filterTerminals((terminal) => terminal.busy)
 		const closedCount = this.closeTerminals((terminal) => !terminal.busy)
 		return { closedCount, busyTerminals: busyTerminals as unknown as ITerminalInfo[] }
@@ -428,6 +494,10 @@ export class VscodeTerminalManager implements ITerminalManager {
 
 		const _oldProfileId = this.defaultTerminalProfile
 		this.defaultTerminalProfile = profileId
+		if (this.pool) {
+			const result = this.pool.drainAll("profile_changed")
+			return { closedCount: result.closedCount, busyTerminals: result.busyTerminals }
+		}
 
 		// Get the shell path for the new profile
 		const newShellPath = this.getConfiguredShellPath(profileId)
@@ -446,9 +516,64 @@ export class VscodeTerminalManager implements ITerminalManager {
 		return result
 	}
 
+	private applyInitialTerminalProfile(profileId: string): TerminalManagerConfigurationResult {
+		this.defaultTerminalProfile = profileId
+		return { closedCount: 0, busyTerminals: [] }
+	}
+
+	private createPoolPreparation(
+		cwd: string,
+		launchConfiguration?: TerminalLaunchConfiguration,
+	): VscodeTerminalPoolPreparation | undefined {
+		if (
+			!launchConfiguration?.workspaceRoot ||
+			!launchConfiguration.profileId ||
+			!launchConfiguration.environmentFingerprint
+		) {
+			return undefined
+		}
+		return {
+			cwd,
+			workspaceRoot: launchConfiguration.workspaceRoot,
+			profileId: launchConfiguration.profileId,
+			shellPath: this.getConfiguredShellPath(launchConfiguration.profileId),
+			configurationId: launchConfiguration.configurationId,
+			environmentFingerprint: launchConfiguration.environmentFingerprint,
+			createLaunchConfiguration: () => {
+				const initialization = launchConfiguration.createInitialization?.()
+				return {
+					...launchConfiguration,
+					createInitialization: undefined,
+					initializationCommand: initialization?.command ?? launchConfiguration.initializationCommand,
+					initializationDiagnosticsPath:
+						initialization?.diagnosticsPath ?? launchConfiguration.initializationDiagnosticsPath,
+				}
+			},
+		}
+	}
+
+	private async releaseLease(terminalId: number, healthy: boolean, reason?: string): Promise<void> {
+		const lease = this.leases.get(terminalId)
+		if (!lease || !this.pool) return
+		this.leases.delete(terminalId)
+		await this.pool.release(lease, { healthy, reason })
+	}
+
+	private disposeColdFallback(terminalInfo: TerminalInfo): void {
+		if (!this.coldFallbackTerminalIds.delete(terminalInfo.id)) return
+		this.skipShellIntegrationWaitTerminalIds.delete(terminalInfo.id)
+		terminalInfo.terminal.dispose()
+		TerminalRegistry.removeTerminal(terminalInfo.id)
+		this.terminalIds.delete(terminalInfo.id)
+		this.processes.delete(terminalInfo.id)
+	}
+
 	/** Resolve the shell path Dline owns for a profile without changing non-Windows default behavior. */
 	private getConfiguredShellPath(profileId: string): string | undefined {
-		return profileId === "default" && process.platform !== "win32" ? undefined : getShellForProfile(profileId)
+		if (this.shellPathsByProfile.has(profileId)) return this.shellPathsByProfile.get(profileId)
+		const shellPath = profileId === "default" && process.platform !== "win32" ? undefined : getShellForProfile(profileId)
+		this.shellPathsByProfile.set(profileId, shellPath)
+		return shellPath
 	}
 
 	/**

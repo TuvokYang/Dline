@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import fs from "node:fs/promises"
-import { DlineTempManager } from "@services/temp"
+import { DlineRuntimeFileManager } from "@services/runtime-files"
 import { EventEmitter } from "events"
 import { afterEach, describe, it, vi } from "vitest"
 import { Logger } from "@/shared/services/Logger"
@@ -306,7 +306,7 @@ describe("CommandOrchestrator background transitions", () => {
 		const onProceedWhileRunning = vi.fn(() => ({ backgroundCommandId: "unexpected-background" }))
 		const onTimeout = vi.fn()
 		const activityId = "command_timeout_log_contract"
-		const expectedLogPath = DlineTempManager.createTempFilePath(activityId)
+		const expectedLogPath = DlineRuntimeFileManager.createTempFilePath(activityId)
 		const execution = orchestrateCommandExecution(process.asResultPromise(), createTerminalManager(1), createCallbacks(), {
 			activityId,
 			command: "blocking-command",
@@ -510,7 +510,7 @@ describe("CommandOrchestrator exit status messaging", () => {
 	it("reports non-zero exit codes with the existing log path on its own result line", async () => {
 		const process = new FakeTerminalProcess()
 		const activityId = "command_failed_log_contract"
-		const expectedLogPath = DlineTempManager.createTempFilePath(activityId)
+		const expectedLogPath = DlineRuntimeFileManager.createTempFilePath(activityId)
 		const orchestrationPromise = orchestrateCommandExecution(
 			process.asResultPromise(),
 			createTerminalManager(1),

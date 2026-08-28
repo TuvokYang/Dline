@@ -16,9 +16,9 @@ import { ExtensionRegistryInfo } from "./registry"
 import { ErrorService } from "./services/error"
 import { featureFlagsService } from "./services/feature-flags"
 import { getDistinctId } from "./services/logging/distinctId"
+import { DlineRuntimeFileManager } from "./services/runtime-files"
 import { telemetryService } from "./services/telemetry"
 import { PostHogClientProvider } from "./services/telemetry/providers/posthog/PostHogClientProvider"
-import { DlineTempManager } from "./services/temp"
 import { cleanupTestMode } from "./services/test/TestMode"
 import { ShowMessageType } from "./shared/proto/dline/host/window"
 import { syncWorker } from "./shared/services/worker/sync"
@@ -116,7 +116,7 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 	const blobStoreSettings = stateManager.getRemoteConfigSettings()?.blobStoreConfig ?? getBlobStoreSettingsFromEnv()
 	syncWorker().init({ ...blobStoreSettings, userDistinctId: getDistinctId() })
 	// Clean up old temp files in background (non-blocking) and start periodic cleanup every 24 hours
-	DlineTempManager.startPeriodicCleanup()
+	DlineRuntimeFileManager.startPeriodicCleanup()
 	// Clean up orphaned file context warnings (startup cleanup)
 	FileContextTracker.cleanupOrphanedWarnings(stateManager)
 
@@ -221,7 +221,7 @@ export async function tearDown(): Promise<void> {
 	// Clean up hook discovery cache
 	HookDiscoveryCache.getInstance().dispose()
 	// Stop periodic temp file cleanup
-	DlineTempManager.stopPeriodicCleanup()
+	DlineRuntimeFileManager.stopPeriodicCleanup()
 
 	// Clean up test mode
 	cleanupTestMode()

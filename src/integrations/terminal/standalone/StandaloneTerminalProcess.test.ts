@@ -5,6 +5,14 @@ import os from "node:os"
 import path from "node:path"
 import { afterEach, describe, it, vi } from "vitest"
 import { WINDOWS_POWERSHELL_LEGACY_PATH } from "@/utils/shell"
+
+const execSyncMock = vi.hoisted(() => vi.fn(() => "Active code page: 65001"))
+
+vi.mock("child_process", async (importOriginal) => ({
+	...(await importOriginal<typeof import("child_process")>()),
+	execSync: execSyncMock,
+}))
+
 import { StandaloneTerminal } from "./StandaloneTerminal"
 import { StandaloneTerminalProcess } from "./StandaloneTerminalProcess"
 
@@ -13,6 +21,21 @@ afterEach(() => {
 })
 
 describe("StandaloneTerminalProcess output streams", () => {
+	it("detects the Windows code page only once per extension process", () => {
+		const originalPlatform = process.platform
+		try {
+			Object.defineProperty(process, "platform", { value: "win32" })
+			execSyncMock.mockClear()
+
+			new StandaloneTerminalProcess()
+			new StandaloneTerminalProcess()
+
+			assert.equal(execSyncMock.mock.calls.length, 1)
+		} finally {
+			Object.defineProperty(process, "platform", { value: originalPlatform })
+		}
+	})
+
 	it("preserves UTF-8 characters split across output chunks", () => {
 		const terminalProcess = new StandaloneTerminalProcess()
 		const decodeBuffer = (

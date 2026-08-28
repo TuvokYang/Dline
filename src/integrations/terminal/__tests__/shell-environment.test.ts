@@ -73,6 +73,17 @@ platforms:
 		assert.ok(resolved.configurationId.length > 0)
 	})
 
+	it("reuses a cached resolved configuration while the file signature is unchanged", async () => {
+		const workspace = await createWorkspace("version: 1\nenvironment:\n  CACHE_VALUE: stable\n")
+		const loader = new ShellEnvironmentConfigLoader({ workspaceRoots: [workspace], platform: "linux" })
+
+		const first = await loader.resolve(workspace, "default")
+		const second = await loader.resolve(path.join(workspace, "src"), "default")
+
+		assert.equal(second, first)
+		assert.equal(second?.workspaceRoot, workspace)
+	})
+
 	it("does not load a project configuration for an external workdirectory", async () => {
 		const workspace = await createWorkspace("version: 1\nenvironment:\n  SHOULD_NOT_LOAD: yes\n")
 		const external = await mkdtemp(path.join(os.tmpdir(), "dline-shell-external-"))

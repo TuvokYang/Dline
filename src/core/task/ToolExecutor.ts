@@ -14,7 +14,7 @@ import type { CommandCancellationResult, CommandExecutionOptions, CommandExecuti
 import { BrowserSession } from "@services/browser/BrowserSession"
 import { UrlContentFetcher } from "@services/browser/UrlContentFetcher"
 import { McpHub } from "@services/mcp/McpHub"
-import { DlineTempManager } from "@services/temp/DlineTempManager"
+import { DlineRuntimeFileManager } from "@services/runtime-files/DlineRuntimeFileManager"
 import { DEFAULT_API_PROVIDER } from "@shared/api"
 import { ClineAsk, ClineSay, ClineSayTool, type CommandStatus } from "@shared/ExtensionMessage"
 import { ClineContent, type ClineToolResponseContent, type ClineUserToolResultContentBlock } from "@shared/messages/content"
@@ -133,7 +133,7 @@ function getApprovePath(block: ToolUse): string | undefined {
 function isLocalPath(cwd: string, toolPath: string, workspaceRoots?: string[]): boolean {
 	const absolutePath = path.isAbsolute(toolPath) ? path.resolve(toolPath) : path.resolve(cwd, toolPath)
 	const roots = workspaceRoots && workspaceRoots.length > 0 ? workspaceRoots : [cwd]
-	return DlineTempManager.isManagedPath(absolutePath) || roots.some((root) => isLocatedInPath(root, absolutePath))
+	return DlineRuntimeFileManager.isManagedPath(absolutePath) || roots.some((root) => isLocatedInPath(root, absolutePath))
 }
 
 /**

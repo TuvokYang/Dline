@@ -1,0 +1,521 @@
+import { createHash, randomUUID } from "node:crypto"
+import path from "node:path"
+import type { TerminalCompletionDetails, TerminalLaunchConfiguration } from "@/integrations/terminal/types"
+import { Logger } from "@/shared/services/Logger"
+import { arePathsEqual } from "@/utils/path"
+import type { TerminalInfo } from "./VscodeTerminalRegistry"
+
+export const DEFAULT_TERMINAL_STANDBY_COUNT = 3
+
+export type VscodeTerminalPoolState = "warming" | "ready" | "leased" | "retiring" | "invalid" | "disposed"
+export type VscodeTerminalReusePolicy = "reusable" | "consume"
+
+export interface VscodeTerminalPoolPreparation {
+	readonly cwd: string
+	readonly workspaceRoot: string
+	readonly profileId: string
+	readonly shellPath?: string
+	readonly configurationId?: string
+	readonly environmentFingerprint: string
+	readonly createLaunchConfiguration: () => TerminalLaunchConfiguration
+}
+
+export interface VscodeTerminalLease {
+	readonly leaseId: string
+	readonly partitionKey: string
+	readonly terminalInfo: TerminalInfo
+	readonly reusePolicy: VscodeTerminalReusePolicy
+	readonly acquiredAt: number
+}
+
+export interface VscodeTerminalReleaseResult {
+	readonly healthy: boolean
+	readonly reason?: string
+}
+
+export interface VscodeTerminalPoolSnapshot {
+	warming: number
+	ready: number
+	leased: number
+	draining: boolean
+}
+
+interface TerminalProcessCompletionSink {
+	setCompletionDetails(details: TerminalCompletionDetails): void
+}
+
+export interface VscodeTerminalPoolRuntime {
+	createTerminal(
+		cwd: string,
+		shellPath: string | undefined,
+		launchConfiguration: TerminalLaunchConfiguration | undefined,
+	): TerminalInfo
+	prepareTerminal?(
+		terminal: TerminalInfo,
+		preparation: VscodeTerminalPoolPreparation,
+		launchConfiguration: TerminalLaunchConfiguration,
+	): Promise<void>
+	prepareCwd?(terminal: TerminalInfo, cwd: string): Promise<void>
+	disposeTerminal(terminal: TerminalInfo): void
+	isTerminalClosed(terminal: TerminalInfo): boolean
+	onDidCloseTerminal(listener: (terminal: TerminalInfo["terminal"]) => void): { dispose(): void }
+	onDidStartTerminalShellExecution?(
+		listener: (event: { execution?: { read?: () => unknown } }) => void,
+	): { dispose(): void } | undefined
+	onDidEndTerminalShellExecution?(
+		listener: (event: { terminal: TerminalInfo["terminal"]; exitCode: number | undefined }) => void,
+	): { dispose(): void } | undefined
+	setShellIntegrationTimeout?(timeoutMs: number): void
+}
+
+interface PooledTerminal {
+	readonly terminalInfo: TerminalInfo
+	readonly partitionKey: string
+	readonly partition: TerminalPartition
+	state: VscodeTerminalPoolState
+	currentCwd: string
+	userCommandCount: number
+	createdAt: number
+	activeLeaseId?: string
+}
+
+interface TerminalPartition {
+	readonly key: string
+	readonly scopeKey: string
+	preparation: VscodeTerminalPoolPreparation
+	readonly entries: Map<number, PooledTerminal>
+	draining: boolean
+	lastActiveAt: number
+	retryAttempt: number
+	retryTimer?: NodeJS.Timeout
+	ensurePromise?: Promise<void>
+}
+
+export interface VscodeTerminalPoolOptions {
+	readonly targetStandby?: number
+	readonly maxConcurrentLeases?: number
+	readonly maxGlobalTerminals?: number
+	readonly idlePartitionTtlMs?: number
+	readonly cleanupIntervalMs?: number
+	readonly retryDelaysMs?: readonly number[]
+	/** Maximum time one acquire may wait for a newly-started warm batch. */
+	readonly acquireWaitTimeoutMs?: number
+}
+
+export class VscodeTerminalPool {
+	private readonly targetStandby: number
+	private readonly maxConcurrentLeases: number
+	private readonly maxGlobalTerminals: number
+	private readonly idlePartitionTtlMs: number
+	private readonly retryDelaysMs: readonly number[]
+	private readonly acquireWaitTimeoutMs: number
+	private readonly partitions = new Map<string, TerminalPartition>()
+	private readonly leases = new Map<string, PooledTerminal>()
+	private readonly processByTerminal = new Map<TerminalInfo["terminal"], TerminalProcessCompletionSink>()
+	private readonly disposables: Array<{ dispose(): void }> = []
+	private readonly cleanupTimer: NodeJS.Timeout
+	private disposed = false
+
+	constructor(
+		private readonly runtime: VscodeTerminalPoolRuntime,
+		options: VscodeTerminalPoolOptions = {},
+	) {
+		this.targetStandby = options.targetStandby ?? DEFAULT_TERMINAL_STANDBY_COUNT
+		this.maxConcurrentLeases = options.maxConcurrentLeases ?? DEFAULT_TERMINAL_STANDBY_COUNT
+		this.maxGlobalTerminals = options.maxGlobalTerminals ?? 24
+		this.idlePartitionTtlMs = options.idlePartitionTtlMs ?? 10 * 60_000
+		this.retryDelaysMs = options.retryDelaysMs ?? [1_000, 5_000, 30_000]
+		this.acquireWaitTimeoutMs = options.acquireWaitTimeoutMs ?? 250
+		this.disposables.push(runtime.onDidCloseTerminal((terminal) => this.handleTerminalClosed(terminal)))
+		const startDisposable = runtime.onDidStartTerminalShellExecution?.((event) => event.execution?.read?.())
+		if (startDisposable) this.disposables.push(startDisposable)
+		const endDisposable = runtime.onDidEndTerminalShellExecution?.((event) => {
+			this.processByTerminal.get(event.terminal)?.setCompletionDetails({ exitCode: event.exitCode })
+		})
+		if (endDisposable) this.disposables.push(endDisposable)
+		this.cleanupTimer = setInterval(() => this.pruneIdlePartitions(), options.cleanupIntervalMs ?? 60_000)
+		this.cleanupTimer.unref?.()
+	}
+
+	configureShellIntegrationTimeout(timeoutMs: number): void {
+		this.runtime.setShellIntegrationTimeout?.(timeoutMs)
+	}
+
+	registerProcess(terminalInfo: TerminalInfo, process: TerminalProcessCompletionSink): void {
+		this.processByTerminal.set(terminalInfo.terminal, process)
+	}
+
+	unregisterProcess(terminalInfo: TerminalInfo, process: TerminalProcessCompletionSink): void {
+		if (this.processByTerminal.get(terminalInfo.terminal) === process) this.processByTerminal.delete(terminalInfo.terminal)
+	}
+
+	getPartitionScopeKey(preparation: VscodeTerminalPoolPreparation): string {
+		return createHash("sha256")
+			.update(
+				JSON.stringify({
+					workspaceRoot: path.resolve(preparation.workspaceRoot),
+					profileId: preparation.profileId,
+					shellPath: preparation.shellPath ?? "",
+				}),
+			)
+			.digest("hex")
+			.slice(0, 16)
+	}
+
+	getPartitionKey(preparation: VscodeTerminalPoolPreparation): string {
+		return createHash("sha256")
+			.update(
+				JSON.stringify({
+					workspaceRoot: path.resolve(preparation.workspaceRoot),
+					profileId: preparation.profileId,
+					shellPath: preparation.shellPath ?? "",
+					configurationId: preparation.configurationId ?? "",
+					environmentFingerprint: preparation.environmentFingerprint,
+				}),
+			)
+			.digest("hex")
+			.slice(0, 16)
+	}
+
+	getPartitionSnapshot(preparation: VscodeTerminalPoolPreparation): VscodeTerminalPoolSnapshot {
+		const partition = this.partitions.get(this.getPartitionKey(preparation))
+		if (!partition) return { warming: 0, ready: 0, leased: 0, draining: false }
+		return this.snapshot(partition)
+	}
+
+	ensureWarm(preparation: VscodeTerminalPoolPreparation): Promise<void> {
+		if (this.disposed) return Promise.resolve()
+		const partition = this.getOrCreatePartition(preparation)
+		partition.lastActiveAt = Date.now()
+		if (partition.retryTimer || partition.draining) return partition.ensurePromise ?? Promise.resolve()
+		const desiredDeficit = Math.max(0, this.targetStandby - this.countStandby(partition))
+		const deficit = Math.min(desiredDeficit, Math.max(0, this.maxGlobalTerminals - this.countGlobalTerminals()))
+		if (deficit === 0) {
+			if (desiredDeficit > 0) this.scheduleWarmRetry(partition)
+			return partition.ensurePromise ?? Promise.resolve()
+		}
+
+		const startedAt = performance.now()
+		const warming = Array.from({ length: deficit }, () => this.warmOne(partition))
+		const pending = Promise.allSettled(warming).then(() => {
+			if (partition.ensurePromise === pending) partition.ensurePromise = undefined
+			const snapshot = this.snapshot(partition)
+			if (snapshot.ready === this.targetStandby) partition.retryAttempt = 0
+			else this.scheduleWarmRetry(partition)
+			Logger.debug(
+				`[TerminalPool] operation=ensureWarm partition=${partition.key} target=${this.targetStandby} durationMs=${Math.round(performance.now() - startedAt)} ready=${snapshot.ready} warming=${snapshot.warming}`,
+			)
+		})
+		partition.ensurePromise = pending
+		return pending
+	}
+
+	async acquire(
+		preparation: VscodeTerminalPoolPreparation,
+		cwd: string,
+		reusePolicy: VscodeTerminalReusePolicy,
+	): Promise<VscodeTerminalLease> {
+		const startedAt = performance.now()
+		const partition = this.getOrCreatePartition(preparation)
+		partition.lastActiveAt = Date.now()
+		if (this.countLeased(partition) >= this.maxConcurrentLeases) {
+			throw new Error(`Terminal partition lease capacity reached: ${partition.key}`)
+		}
+		const selectReady = () => {
+			const ready = [...partition.entries.values()].filter(
+				(entry) =>
+					entry.state === "ready" &&
+					(reusePolicy === "reusable" || entry.userCommandCount === 0) &&
+					!this.runtime.isTerminalClosed(entry.terminalInfo),
+			)
+			return ready.find((candidate) => arePathsEqual(candidate.currentCwd, cwd)) ?? ready[0]
+		}
+		let entry = selectReady()
+		if (!entry) {
+			if (partition.retryTimer) throw new Error(`Terminal warming retry pending: ${partition.key}`)
+			if (partition.ensurePromise) throw new Error(`Terminal warming already pending: ${partition.key}`)
+			const warming = this.ensureWarm(preparation)
+			await this.waitForWarmBatch(warming, partition.key)
+			if (partition.draining) throw new Error(`Terminal partition is draining: ${partition.key}`)
+			if (this.countLeased(partition) >= this.maxConcurrentLeases) {
+				throw new Error(`Terminal partition lease capacity reached: ${partition.key}`)
+			}
+			entry = selectReady()
+		}
+		if (!entry) throw new Error(`No ready terminal available for partition ${partition.key}`)
+		const sameCwd = arePathsEqual(entry.currentCwd, cwd)
+
+		const leaseId = randomUUID()
+		entry.state = "leased"
+		entry.activeLeaseId = leaseId
+		entry.userCommandCount++
+		entry.terminalInfo.busy = true
+		this.leases.set(leaseId, entry)
+
+		if (!sameCwd) {
+			try {
+				await this.runtime.prepareCwd?.(entry.terminalInfo, cwd)
+				entry.currentCwd = cwd
+			} catch (error) {
+				await this.invalidateEntry(entry, error instanceof Error ? error.message : String(error))
+				throw error
+			}
+		}
+
+		void this.ensureWarm(preparation)
+		Logger.debug(
+			`[TerminalPool] operation=acquire partition=${partition.key} terminalId=${entry.terminalInfo.id} policy=${reusePolicy} sameCwd=${sameCwd} durationMs=${Math.round(performance.now() - startedAt)} readyAfter=${this.snapshot(partition).ready}`,
+		)
+		return { leaseId, partitionKey: partition.key, terminalInfo: entry.terminalInfo, reusePolicy, acquiredAt: Date.now() }
+	}
+
+	async release(lease: VscodeTerminalLease, result: VscodeTerminalReleaseResult): Promise<void> {
+		const startedAt = performance.now()
+		const entry = this.leases.get(lease.leaseId)
+		if (!entry || entry.activeLeaseId !== lease.leaseId) return
+		this.leases.delete(lease.leaseId)
+		entry.activeLeaseId = undefined
+		entry.terminalInfo.busy = false
+		const partition = entry.partition
+		partition.lastActiveAt = Date.now()
+		const shouldDispose =
+			!result.healthy ||
+			lease.reusePolicy === "consume" ||
+			partition?.draining === true ||
+			this.runtime.isTerminalClosed(entry.terminalInfo)
+		if (shouldDispose) {
+			await this.invalidateEntry(entry, result.reason ?? (lease.reusePolicy === "consume" ? "consumed" : "unhealthy"))
+		} else {
+			entry.state = "ready"
+			entry.terminalInfo.lastActive = Date.now()
+			this.trimExcessStandby(partition)
+		}
+		if (partition && !partition.draining) void this.ensureWarm(partition.preparation)
+		Logger.debug(
+			`[TerminalPool] operation=release partition=${entry.partitionKey} terminalId=${entry.terminalInfo.id} disposition=${shouldDispose ? "disposed" : "reusable"} durationMs=${Math.round(performance.now() - startedAt)} ready=${this.snapshot(partition).ready}`,
+		)
+	}
+
+	drainAll(reason: string): { closedCount: number; busyTerminals: TerminalInfo[] } {
+		let closedCount = 0
+		const busyTerminals: TerminalInfo[] = []
+		for (const partition of [...this.partitions.values()]) {
+			const result = this.drainPartition(partition)
+			closedCount += result.closedCount
+			busyTerminals.push(...result.busyTerminals)
+		}
+		Logger.debug(`[TerminalPool] operation=drain reason=${reason} closed=${closedCount} leased=${busyTerminals.length}`)
+		return { closedCount, busyTerminals }
+	}
+
+	pruneIdlePartitions(now = Date.now()): number {
+		let closedCount = 0
+		for (const partition of [...this.partitions.values()]) {
+			if (this.countLeased(partition) > 0 || now - partition.lastActiveAt < this.idlePartitionTtlMs) continue
+			closedCount += this.drainPartition(partition).closedCount
+		}
+		if (closedCount > 0) Logger.debug(`[TerminalPool] operation=pruneIdle closed=${closedCount}`)
+		return closedCount
+	}
+
+	dispose(): void {
+		if (this.disposed) return
+		this.disposed = true
+		clearInterval(this.cleanupTimer)
+		for (const disposable of this.disposables.splice(0)) disposable.dispose()
+		const entries = new Set<PooledTerminal>()
+		for (const partition of this.partitions.values()) {
+			if (partition.retryTimer) clearTimeout(partition.retryTimer)
+			for (const entry of partition.entries.values()) entries.add(entry)
+		}
+		for (const entry of this.leases.values()) entries.add(entry)
+		for (const entry of entries) this.disposeEntry(entry)
+		this.partitions.clear()
+		this.leases.clear()
+		this.processByTerminal.clear()
+	}
+
+	private getOrCreatePartition(preparation: VscodeTerminalPoolPreparation): TerminalPartition {
+		const key = this.getPartitionKey(preparation)
+		const scopeKey = this.getPartitionScopeKey(preparation)
+		let partition = this.partitions.get(key)
+		if (!partition) {
+			for (const existing of [...this.partitions.values()]) {
+				if (existing.scopeKey === scopeKey && existing.key !== key) this.drainPartition(existing)
+			}
+			partition = {
+				key,
+				scopeKey,
+				preparation,
+				entries: new Map(),
+				draining: false,
+				lastActiveAt: Date.now(),
+				retryAttempt: 0,
+			}
+			this.partitions.set(key, partition)
+		} else {
+			partition.preparation = preparation
+			partition.lastActiveAt = Date.now()
+		}
+		return partition
+	}
+
+	private async warmOne(partition: TerminalPartition): Promise<void> {
+		const startedAt = performance.now()
+		const preparation = partition.preparation
+		const launchConfiguration = preparation.createLaunchConfiguration()
+		const terminalInfo = this.runtime.createTerminal(preparation.cwd, preparation.shellPath, launchConfiguration)
+		const entry: PooledTerminal = {
+			terminalInfo,
+			partitionKey: partition.key,
+			partition,
+			state: "warming",
+			currentCwd: preparation.cwd,
+			userCommandCount: 0,
+			createdAt: Date.now(),
+		}
+		partition.entries.set(terminalInfo.id, entry)
+		try {
+			await this.runtime.prepareTerminal?.(terminalInfo, preparation, launchConfiguration)
+			if (partition.draining || this.runtime.isTerminalClosed(terminalInfo)) {
+				this.disposeEntry(entry)
+				return
+			}
+			entry.state = "ready"
+			terminalInfo.busy = false
+			terminalInfo.lastCommand = ""
+			this.trimExcessStandby(partition)
+			Logger.debug(
+				`[TerminalPool] operation=warm partition=${partition.key} terminalId=${terminalInfo.id} state=ready durationMs=${Math.round(performance.now() - startedAt)}`,
+			)
+		} catch (error) {
+			await this.invalidateEntry(entry, error instanceof Error ? error.message : String(error))
+			throw error
+		}
+	}
+
+	private async invalidateEntry(entry: PooledTerminal, reason: string): Promise<void> {
+		entry.state = "invalid"
+		Logger.warn(
+			`[TerminalPool] operation=invalidate partition=${entry.partitionKey} terminalId=${entry.terminalInfo.id} reason=${reason}`,
+		)
+		this.disposeEntry(entry)
+	}
+
+	private disposeEntry(entry: PooledTerminal): void {
+		if (entry.state === "disposed") return
+		entry.state = "disposed"
+		entry.terminalInfo.busy = false
+		this.leases.forEach((leasedEntry, leaseId) => {
+			if (leasedEntry === entry) this.leases.delete(leaseId)
+		})
+		entry.partition.entries.delete(entry.terminalInfo.id)
+		if (!this.runtime.isTerminalClosed(entry.terminalInfo)) this.runtime.disposeTerminal(entry.terminalInfo)
+	}
+
+	private handleTerminalClosed(terminal: TerminalInfo["terminal"]): void {
+		const activeEntry = [...this.partitions.values()]
+			.flatMap((partition) => [...partition.entries.values()])
+			.find((candidate) => candidate.terminalInfo.terminal === terminal)
+		const entry =
+			activeEntry ?? [...new Set(this.leases.values())].find((candidate) => candidate.terminalInfo.terminal === terminal)
+		if (!entry) return
+		const partition = entry.partition
+		this.processByTerminal.delete(entry.terminalInfo.terminal)
+		this.disposeEntry(entry)
+		if (!partition.draining) void this.ensureWarm(partition.preparation)
+	}
+
+	private trimExcessStandby(partition: TerminalPartition): void {
+		let excess = this.countStandby(partition) - this.targetStandby
+		if (excess <= 0) return
+		const candidates = [...partition.entries.values()]
+			.filter((entry) => entry.state === "ready" && entry.userCommandCount === 0)
+			.sort((left, right) => right.createdAt - left.createdAt)
+		for (const candidate of candidates) {
+			if (excess <= 0) break
+			this.disposeEntry(candidate)
+			excess--
+		}
+	}
+
+	private drainPartition(partition: TerminalPartition): { closedCount: number; busyTerminals: TerminalInfo[] } {
+		partition.draining = true
+		this.partitions.delete(partition.key)
+		if (partition.retryTimer) clearTimeout(partition.retryTimer)
+		let closedCount = 0
+		const busyTerminals: TerminalInfo[] = []
+		for (const entry of [...partition.entries.values()]) {
+			if (entry.state === "leased") {
+				busyTerminals.push(entry.terminalInfo)
+				continue
+			}
+			closedCount++
+			this.disposeEntry(entry)
+		}
+		return { closedCount, busyTerminals }
+	}
+
+	private scheduleWarmRetry(partition: TerminalPartition): void {
+		if (this.disposed || partition.draining || partition.retryTimer || this.countStandby(partition) >= this.targetStandby)
+			return
+		const delay = this.retryDelaysMs[Math.min(partition.retryAttempt, this.retryDelaysMs.length - 1)] ?? 30_000
+		partition.retryAttempt++
+		Logger.warn(
+			`[TerminalPool] operation=retry partition=${partition.key} delayMs=${delay} attempt=${partition.retryAttempt}`,
+		)
+		partition.retryTimer = setTimeout(() => {
+			partition.retryTimer = undefined
+			void this.ensureWarm(partition.preparation)
+		}, delay)
+		partition.retryTimer.unref?.()
+	}
+
+	private async waitForWarmBatch(warming: Promise<void>, partitionKey: string): Promise<void> {
+		let timeout: NodeJS.Timeout | undefined
+		try {
+			await Promise.race([
+				warming,
+				new Promise<never>((_, reject) => {
+					timeout = setTimeout(
+						() =>
+							reject(
+								new Error(`Terminal warm wait timed out after ${this.acquireWaitTimeoutMs}ms: ${partitionKey}`),
+							),
+						this.acquireWaitTimeoutMs,
+					)
+					timeout.unref?.()
+				}),
+			])
+		} finally {
+			if (timeout) clearTimeout(timeout)
+		}
+	}
+
+	private countGlobalTerminals(): number {
+		const entries = new Set<PooledTerminal>()
+		for (const partition of this.partitions.values()) {
+			for (const entry of partition.entries.values()) entries.add(entry)
+		}
+		for (const entry of this.leases.values()) entries.add(entry)
+		return entries.size
+	}
+
+	private countLeased(partition: TerminalPartition): number {
+		return [...partition.entries.values()].filter((entry) => entry.state === "leased").length
+	}
+
+	private countStandby(partition: TerminalPartition): number {
+		return [...partition.entries.values()].filter((entry) => entry.state === "ready" || entry.state === "warming").length
+	}
+
+	private snapshot(partition: TerminalPartition): VscodeTerminalPoolSnapshot {
+		const entries = [...partition.entries.values()]
+		return {
+			warming: entries.filter((entry) => entry.state === "warming").length,
+			ready: entries.filter((entry) => entry.state === "ready").length,
+			leased: entries.filter((entry) => entry.state === "leased").length,
+			draining: partition.draining,
+		}
+	}
+}

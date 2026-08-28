@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { DlineTempManager } from "@services/temp"
+import { DlineRuntimeFileManager } from "@services/runtime-files"
 import { EventEmitter } from "events"
 import { describe, it, vi } from "vitest"
 import { Logger } from "@/shared/services/Logger"
@@ -79,6 +79,7 @@ function createTerminalManager(outputLineLimit = terminalConfiguration.terminalO
 		disposeAll: vi.fn(),
 		getConfiguration: vi.fn(() => ({ ...terminalConfiguration, terminalOutputLineLimit: outputLineLimit })),
 		getOrCreateTerminal: vi.fn(),
+		ensureWarm: vi.fn(async () => undefined),
 		getTerminals: vi.fn(() => []),
 		getUnretrievedOutput: vi.fn(() => ""),
 		isProcessHot: vi.fn(() => false),
@@ -224,6 +225,31 @@ describe("CommandExecutor explicit background execution", () => {
 		}
 	})
 
+	it("prewarms every workspace root after the initial terminal configuration", async () => {
+		const firstRoot = path.resolve("C:\\workspace-a")
+		const secondRoot = path.resolve("C:\\workspace-b")
+		const primaryManager = createTerminalManager()
+		new CommandExecutor(
+			{
+				cwd: firstRoot,
+				workspaceRoots: [firstRoot, secondRoot],
+				taskId: "task-prewarm",
+				terminalExecutionMode: "vscodeTerminal",
+				terminalManager: primaryManager,
+				terminalConfiguration,
+				ulid: "task-prewarm-ulid",
+			},
+			createCallbacks(),
+		)
+
+		await vi.waitFor(() => assert.equal(vi.mocked(primaryManager.ensureWarm!).mock.calls.length, 2))
+		for (const [cwd, launchConfiguration] of vi.mocked(primaryManager.ensureWarm!).mock.calls) {
+			assert.equal(launchConfiguration?.workspaceRoot, cwd)
+			assert.equal(launchConfiguration?.profileId, "default")
+			assert.equal(launchConfiguration?.environmentFingerprint, "default")
+		}
+	})
+
 	it("applies one configuration to both primary and background terminal managers", () => {
 		const primaryManager = createTerminalManager()
 		const standaloneConfigure = vi.spyOn(StandaloneTerminalManager.prototype, "configure")
@@ -245,6 +271,32 @@ describe("CommandExecutor explicit background execution", () => {
 		} finally {
 			standaloneConfigure.mockRestore()
 		}
+	})
+
+	it("prewarms the replacement partition after configuration changes and manual reinitialization", async () => {
+		const workspace = path.resolve("C:\\workspace")
+		const primaryManager = createTerminalManager()
+		primaryManager.reinitializeTerminals = vi.fn(() => ({ closedCount: 3, busyTerminals: [] }))
+		const executor = new CommandExecutor(
+			{
+				cwd: workspace,
+				workspaceRoots: [workspace],
+				taskId: "task-rewarm",
+				terminalExecutionMode: "vscodeTerminal",
+				terminalManager: primaryManager,
+				terminalConfiguration,
+				ulid: "task-rewarm-ulid",
+			},
+			createCallbacks(),
+		)
+		await vi.waitFor(() => assert.equal(vi.mocked(primaryManager.ensureWarm!).mock.calls.length, 1))
+
+		executor.configure({ ...terminalConfiguration, defaultTerminalProfile: "powershell" })
+		await vi.waitFor(() => assert.equal(vi.mocked(primaryManager.ensureWarm!).mock.calls.length, 2))
+		assert.equal(vi.mocked(primaryManager.ensureWarm!).mock.calls[1]?.[1]?.profileId, "powershell")
+
+		executor.reinitializeTerminals()
+		await vi.waitFor(() => assert.equal(vi.mocked(primaryManager.ensureWarm!).mock.calls.length, 3))
 	})
 
 	it("reinitializes every owned terminal manager without forcing busy terminals closed", () => {
@@ -583,7 +635,7 @@ describe("CommandExecutor explicit background execution", () => {
 				updateCommandActivity,
 			},
 		)
-		const expectedLogPath = DlineTempManager.createTempFilePath("command_77_1")
+		const expectedLogPath = DlineRuntimeFileManager.createTempFilePath("command_77_1")
 
 		try {
 			const execution = executor.execute("watch", undefined, { commandTs: 77, functionId: "call-watch" })

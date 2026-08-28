@@ -228,8 +228,13 @@ describe("TerminalProcess (Integration Tests)", () => {
 		expect(emitSpy).toHaveBeenCalledWith("completed", expect.any(Object))
 		expect(emitSpy).toHaveBeenCalledWith("continue")
 
-		// This event should be emitted for terminals without shell integration
+		// Capability failure must be published before completion so the manager invalidates the lease first.
 		expect(emitSpy).toHaveBeenCalledWith("no_shell_integration")
+		const noShellOrder =
+			emitSpy.mock.invocationCallOrder[emitSpy.mock.calls.findIndex(([event]) => event === "no_shell_integration")]
+		const completedOrder = emitSpy.mock.invocationCallOrder[emitSpy.mock.calls.findIndex(([event]) => event === "completed")]
+		expect(noShellOrder).toBeLessThan(completedOrder)
+		expect(getLatestTerminalOutput).toHaveBeenCalledTimes(1)
 	})
 
 	it("emits a fallback terminal snapshot as individual lines", async () => {
@@ -244,6 +249,7 @@ describe("TerminalProcess (Integration Tests)", () => {
 		await vi.advanceTimersByTimeAsync(3000)
 		await runPromise
 
+		expect(getLatestTerminalOutput).toHaveBeenCalledTimes(1)
 		expect(lines).toEqual([
 			"The command's output could not be captured due to some technical issue, however it has been executed successfully. Here's the current terminal's content to help you get the command's output:",
 			"",

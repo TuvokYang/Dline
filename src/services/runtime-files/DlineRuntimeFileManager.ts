@@ -20,13 +20,20 @@ interface CleanupResult {
 }
 
 /** Owns Dline temporary log paths and their retention lifecycle. */
-class DlineTempManagerImpl {
+class DlineRuntimeFileManagerImpl {
 	private readonly tempDir = path.join(os.tmpdir(), "dline")
 	private readonly legacyTempDir = path.join(os.tmpdir(), "cline")
 	private cleanupIntervalId: NodeJS.Timeout | null = null
+	private initialized = false
 
 	getTempDir(): string {
 		return this.tempDir
+	}
+
+	/** Create the managed temp directory before command execution enters latency-sensitive paths. */
+	initialize(): void {
+		if (this.initialized) return
+		this.ensureTempDirExists()
 	}
 
 	/** Return whether a path is owned by Dline's system-temp directory. */
@@ -51,7 +58,7 @@ class DlineTempManagerImpl {
 			throw new Error(`Invalid Dline temp file stem: ${stableStem}`)
 		}
 
-		this.ensureTempDirExists()
+		this.initialize()
 		return path.join(this.tempDir, `${stableStem}.log`)
 	}
 
@@ -111,6 +118,7 @@ class DlineTempManagerImpl {
 	private ensureTempDirExists(): void {
 		try {
 			fs.mkdirSync(this.tempDir, { recursive: true })
+			this.initialized = true
 		} catch (error) {
 			throw new Error(`Failed to create Dline temp directory: ${this.tempDir}`, { cause: error })
 		}
@@ -190,4 +198,4 @@ class DlineTempManagerImpl {
 	}
 }
 
-export const DlineTempManager = new DlineTempManagerImpl()
+export const DlineRuntimeFileManager = new DlineRuntimeFileManagerImpl()

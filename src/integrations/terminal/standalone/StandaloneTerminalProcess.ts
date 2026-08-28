@@ -33,6 +33,30 @@ import type {
 
 type StandaloneOutputStream = Exclude<TerminalOutputStream, "combined">
 
+let cachedSystemEncoding: string | null | undefined
+
+/** Detect the host terminal encoding once because Windows code page lookup starts a synchronous process. */
+function getSystemEncoding(): string | null {
+	if (cachedSystemEncoding !== undefined) return cachedSystemEncoding
+	cachedSystemEncoding = null
+	if (process.platform !== "win32") return cachedSystemEncoding
+	try {
+		const output = execSync("chcp", { encoding: "utf-8", timeout: 1000 })
+		const match = output.match(/(\d+)/)
+		if (!match) return cachedSystemEncoding
+		const cpMap: Record<number, string> = {
+			936: "gbk",
+			65001: "utf-8",
+			950: "big5",
+			932: "shift_jis",
+		}
+		cachedSystemEncoding = cpMap[Number.parseInt(match[1], 10)] ?? null
+	} catch {
+		cachedSystemEncoding = null
+	}
+	return cachedSystemEncoding
+}
+
 /**
  * Manages the execution of a command in a standalone terminal environment.
  * Extends EventEmitter to provide real-time output streaming.
@@ -57,7 +81,7 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 	isListening = true
 
 	/** Detected system encoding for the terminal */
-	private systemEncoding: string | null = null
+	private readonly systemEncoding: string | null
 
 	/** Per-stream buffers for incomplete lines. */
 	private buffers: Record<StandaloneOutputStream, string> = {
@@ -104,32 +128,7 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 		this.started = new Promise<number>((resolve) => {
 			this.resolveStarted = resolve
 		})
-		this.detectSystemEncoding()
-	}
-
-	/**
-	 * Detect system terminal encoding using OS-specific commands.
-	 * On Windows, uses chcp to get the active code page (e.g., 936 = GBK, 65001 = UTF-8).
-	 */
-	private detectSystemEncoding(): void {
-		try {
-			if (process.platform === "win32") {
-				const output = execSync("chcp", { encoding: "utf-8", timeout: 1000 })
-				const match = output.match(/(\d+)/)
-				if (match) {
-					const cp = Number.parseInt(match[1], 10)
-					const cpMap: Record<number, string> = {
-						936: "gbk",
-						65001: "utf-8",
-						950: "big5",
-						932: "shift_jis",
-					}
-					this.systemEncoding = cpMap[cp] || null
-				}
-			}
-		} catch {
-			this.systemEncoding = null
-		}
+		this.systemEncoding = getSystemEncoding()
 	}
 
 	/** All encodings to try, ordered by priority. */

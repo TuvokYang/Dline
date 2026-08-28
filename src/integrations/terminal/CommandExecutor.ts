@@ -14,7 +14,7 @@
  */
 
 import { randomUUID } from "node:crypto"
-import { DlineTempManager } from "@services/temp"
+import { DlineRuntimeFileManager } from "@services/runtime-files"
 import { findLastIndex } from "@shared/array"
 import { DEFAULT_TERMINAL_COMMAND_HANDOFF_SECONDS } from "@shared/terminal-settings"
 import { Logger } from "@/shared/services/Logger"
@@ -40,6 +40,7 @@ import type {
 	CommandExecutorConfig,
 	ITerminalManager,
 	ShellIntegrationWarningTracker,
+	TerminalLaunchConfiguration,
 	TerminalManagerConfiguration,
 	TerminalManagerConfigurationResult,
 	TerminalOutputLine,
@@ -62,6 +63,7 @@ export class CommandExecutor {
 	private callbacks: CommandExecutorCallbacks
 	private terminalConfiguration: TerminalManagerConfiguration
 	private readonly shellEnvironmentLoader: ShellEnvironmentConfigLoader
+	private readonly workspaceRoots: readonly string[]
 
 	// Track the currently executing foreground process for cancellation
 	private currentProcess: TerminalProcessResultPromise | null = null
@@ -96,8 +98,9 @@ export class CommandExecutor {
 		this.terminalManager = config.terminalManager
 		this.callbacks = callbacks
 		this.terminalConfiguration = config.terminalConfiguration
+		this.workspaceRoots = config.workspaceRoots ?? [config.cwd]
 		this.shellEnvironmentLoader = new ShellEnvironmentConfigLoader({
-			workspaceRoots: config.workspaceRoots ?? [config.cwd],
+			workspaceRoots: this.workspaceRoots,
 		})
 
 		// When in backgroundExec mode, the terminalManager is already a StandaloneTerminalManager
@@ -125,6 +128,7 @@ export class CommandExecutor {
 			closedCount += result.closedCount
 			busyTerminals.push(...result.busyTerminals)
 		}
+		if (this.terminalExecutionMode === "vscodeTerminal") void this.prewarmWorkspaceRoots()
 		return { closedCount, busyTerminals }
 	}
 
@@ -138,6 +142,7 @@ export class CommandExecutor {
 			closedCount += result.closedCount
 			busyTerminals.push(...result.busyTerminals)
 		}
+		if (this.terminalExecutionMode === "vscodeTerminal") void this.prewarmWorkspaceRoots()
 		return { closedCount, busyTerminals }
 	}
 
@@ -158,6 +163,8 @@ export class CommandExecutor {
 		options?: CommandExecutionOptions,
 	): Promise<CommandExecutionOutcome> {
 		const workdirectory = options?.workdirectory ?? this.cwd
+		const activityId = `command_${options?.commandTs ?? Date.now()}_${this.nextActivityNumber++}`
+		const executeStartedAt = performance.now()
 		// Strip leading `cd` to workspace from command
 		const workspaceCdPrefix = `cd ${workdirectory} && `
 		if (command.startsWith(workspaceCdPrefix)) {
@@ -181,18 +188,20 @@ export class CommandExecutor {
 						: "foreground"
 		const manager = useStandalone ? this.standaloneManager : this.terminalManager
 		Logger.debug(
-			`[Task ${this.taskId}] Executing command in ${useStandalone ? "standalone" : "VSCode"} terminal (cwd: ${workdirectory}): ${command}`,
+			`[TerminalPerf] phase=execute_start taskId=${this.taskId} activityId=${activityId} terminalMode=${useStandalone ? "standalone" : "vscode"}`,
 		)
 		this.callbacks.markWorkspaceScanRequired?.()
 
 		// Get terminal and run command
 		let shellEnvironment: ResolvedShellEnvironment | undefined
+		let shellEnvironmentLoadFailed = false
 		try {
 			shellEnvironment = await this.shellEnvironmentLoader.resolve(
 				workdirectory,
 				this.terminalConfiguration.defaultTerminalProfile,
 			)
 		} catch (error) {
+			shellEnvironmentLoadFailed = true
 			Logger.error("[ShellEnvironment] Failed to load project terminal configuration; continuing without it", error)
 		}
 		const hasShellCommands = Boolean(
@@ -202,7 +211,7 @@ export class CommandExecutor {
 					shellEnvironment.postCommand),
 		)
 		const diagnosticsPath = hasShellCommands
-			? DlineTempManager.createTempFilePath(
+			? DlineRuntimeFileManager.createTempFilePath(
 					`shell_environment_${this.ulid}_${Date.now()}_${this.nextShellEnvironmentDiagnosticsNumber++}`,
 				)
 			: undefined
@@ -220,20 +229,20 @@ export class CommandExecutor {
 						completionMarkerToken: useStandalone ? undefined : randomUUID(),
 					})
 				: command
-		const initializationCommand =
-			shellEnvironment && diagnosticsPath && !useStandalone
-				? buildTerminalInitializationCommand(shellEnvironment.startupScripts, profile, diagnosticsPath)
-				: undefined
-		const terminalInfo = await manager.getOrCreateTerminal(
-			workdirectory,
-			shellEnvironment
+		const launchConfiguration = useStandalone
+			? shellEnvironment
 				? {
 						environment: shellEnvironment.environment,
 						configurationId: shellEnvironment.configurationId,
-						initializationCommand,
-						initializationDiagnosticsPath: initializationCommand ? diagnosticsPath : undefined,
 					}
-				: undefined,
+				: undefined
+			: shellEnvironmentLoadFailed
+				? undefined
+				: this.createVscodeLaunchConfiguration(workdirectory, shellEnvironment)
+		const terminalAcquireStartedAt = performance.now()
+		const terminalInfo = await manager.getOrCreateTerminal(workdirectory, launchConfiguration)
+		Logger.debug(
+			`[TerminalPerf] phase=terminal_acquired taskId=${this.taskId} activityId=${activityId} terminalId=${terminalInfo.id} durationMs=${Math.round(performance.now() - terminalAcquireStartedAt)} elapsedMs=${Math.round(performance.now() - executeStartedAt)}`,
 		)
 		if (options?.startInBackground) {
 			terminalInfo.terminal.hide()
@@ -252,7 +261,6 @@ export class CommandExecutor {
 			process.once("error", logDiagnostics)
 		}
 		terminalInfo.lastCommand = command
-		const activityId = `command_${options?.commandTs ?? Date.now()}_${this.nextActivityNumber++}`
 		const cancellationOwner: CommandCancellationOwner = options?.startInBackground ? "explicit" : "task"
 		// Synchronous foreground commands stay in the foreground loop; the UI can
 		// request a manual move to background once the handoff wait has elapsed.
@@ -317,6 +325,9 @@ export class CommandExecutor {
 		process.once("completed", (details) => {
 			const cancelled = this.cancelledActivityIds.has(activityId)
 			const failed = !isCommandCompletionSuccessful(details)
+			Logger.debug(
+				`[TerminalPerf] phase=execute_complete taskId=${this.taskId} activityId=${activityId} terminalId=${terminalInfo.id} durationMs=${Math.round(performance.now() - executeStartedAt)} outcome=${cancelled ? "cancelled" : timedOut ? "timeout" : failed ? "failed_or_unverified" : "completed"}`,
+			)
 			this.callbacks.updateCommandActivity?.(activityId, {
 				status: cancelled ? "cancelled" : timedOut ? "timeout" : failed ? "failed" : "completed",
 				latestEvent: cancelled
@@ -339,6 +350,9 @@ export class CommandExecutor {
 		})
 		process.once("error", (error: Error) => {
 			const cancelled = this.cancelledActivityIds.has(activityId)
+			Logger.debug(
+				`[TerminalPerf] phase=execute_error taskId=${this.taskId} activityId=${activityId} terminalId=${terminalInfo.id} durationMs=${Math.round(performance.now() - executeStartedAt)} outcome=${cancelled ? "cancelled" : timedOut ? "timeout" : "error"}`,
+			)
 			this.callbacks.updateCommandActivity?.(activityId, {
 				status: cancelled ? "cancelled" : timedOut ? "timeout" : "failed",
 				latestEvent: cancelled ? "Cancelled by user" : timedOut ? "Command timed out" : "Command failed",
@@ -527,6 +541,59 @@ export class CommandExecutor {
 		}
 
 		return result
+	}
+
+	private async prewarmWorkspaceRoots(): Promise<void> {
+		await Promise.allSettled(
+			this.workspaceRoots.map(async (workspaceRoot) => {
+				let shellEnvironment: ResolvedShellEnvironment | undefined
+				try {
+					shellEnvironment = await this.shellEnvironmentLoader.resolve(
+						workspaceRoot,
+						this.terminalConfiguration.defaultTerminalProfile,
+					)
+				} catch (error) {
+					Logger.error("[ShellEnvironment] Failed to resolve terminal warm-pool configuration", error)
+					return
+				}
+				const launchConfiguration = this.createVscodeLaunchConfiguration(workspaceRoot, shellEnvironment)
+				if (launchConfiguration) await this.terminalManager.ensureWarm?.(workspaceRoot, launchConfiguration)
+			}),
+		)
+	}
+
+	private createVscodeLaunchConfiguration(
+		workdirectory: string,
+		shellEnvironment: ResolvedShellEnvironment | undefined,
+	): TerminalLaunchConfiguration | undefined {
+		const workspaceRoot = shellEnvironment?.workspaceRoot ?? this.shellEnvironmentLoader.resolveWorkspaceRoot(workdirectory)
+		if (!workspaceRoot) return undefined
+		const profileId = this.terminalConfiguration.defaultTerminalProfile
+		const createInitialization =
+			shellEnvironment && shellEnvironment.startupScripts.length > 0
+				? () => {
+						const diagnosticsPath = DlineRuntimeFileManager.createTempFilePath(
+							`shell_environment_${this.ulid}_${Date.now()}_${this.nextShellEnvironmentDiagnosticsNumber++}`,
+						)
+						const command = buildTerminalInitializationCommand(
+							shellEnvironment.startupScripts,
+							profileId,
+							diagnosticsPath,
+						)
+						return { command, diagnosticsPath: command ? diagnosticsPath : undefined }
+					}
+				: undefined
+		const initialInitialization = createInitialization?.()
+		return {
+			environment: shellEnvironment?.environment,
+			configurationId: shellEnvironment?.configurationId,
+			workspaceRoot,
+			profileId,
+			environmentFingerprint: shellEnvironment?.configurationId ?? "default",
+			createInitialization,
+			initializationCommand: initialInitialization?.command,
+			initializationDiagnosticsPath: initialInitialization?.diagnosticsPath,
+		}
 	}
 
 	/** Cancel exactly one command by its stable activity identity. */

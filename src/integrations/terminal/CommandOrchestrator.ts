@@ -15,8 +15,8 @@
 
 import { formatResponse } from "@core/prompts/responses"
 import { processFilesIntoText } from "@integrations/misc/extract-text"
+import { DlineRuntimeFileManager } from "@services/runtime-files"
 import { TerminalHangStage, telemetryService } from "@services/telemetry"
-import { DlineTempManager } from "@services/temp"
 import * as fs from "fs"
 import { Logger } from "@/shared/services/Logger"
 import { isCommandCompletionSuccessful } from "./command-completion"
@@ -230,7 +230,7 @@ export async function orchestrateCommandExecution(
 		if (isWritingToFile) return
 		isWritingToFile = true
 		const largeOutputStem = activityId ?? `large-output-${cmdTs ?? Date.now()}`
-		largeOutputLogPath = DlineTempManager.createTempFilePath(largeOutputStem)
+		largeOutputLogPath = DlineRuntimeFileManager.createTempFilePath(largeOutputStem)
 		const logFd = fs.openSync(largeOutputLogPath, "w")
 		largeOutputLogStream = fs.createWriteStream(largeOutputLogPath, { fd: logFd, flags: "w", autoClose: true })
 		largeOutputLogCompletion = new Promise<void>((resolve) => {
