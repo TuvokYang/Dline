@@ -12,6 +12,7 @@ import { sendMcpButtonClickedEvent } from "./core/controller/ui/subscribeToMcpBu
 import { sendSettingsButtonClickedEvent } from "./core/controller/ui/subscribeToSettingsButtonClicked"
 import { sendWorktreesButtonClickedEvent } from "./core/controller/ui/subscribeToWorktreesButtonClicked"
 import { WebviewProvider } from "./core/webview"
+import { registerExtensionReloadWatcher } from "./dev/ExtensionReloadWatcher"
 import { createClineAPI } from "./exports"
 import { initializeTestMode } from "./services/test/TestMode"
 import "./utils/path" // necessary to have access to String.prototype.toPosix
@@ -48,6 +49,8 @@ import {
 	getVscodeCommentReviewController,
 } from "./hosts/vscode/review/VscodeCommentReviewController"
 import { VscodeTerminalManager } from "./hosts/vscode/terminal/VscodeTerminalManager"
+import { VscodeTerminalPool } from "./hosts/vscode/terminal/VscodeTerminalPool"
+import { DefaultVscodeTerminalPoolRuntime } from "./hosts/vscode/terminal/VscodeTerminalPoolRuntime"
 import { VscodeDiffViewProvider } from "./hosts/vscode/VscodeDiffViewProvider"
 import { VscodeWebviewProvider } from "./hosts/vscode/VscodeWebviewProvider"
 import { exportVSCodeStorageToSharedFiles } from "./hosts/vscode/vscode-to-file-migration"
@@ -55,6 +58,7 @@ import { ExtensionRegistryInfo } from "./registry"
 import { AuthService } from "./services/auth/AuthService"
 import { LogoutReason } from "./services/auth/types"
 import { telemetryService } from "./services/telemetry"
+import { DlineTempManager } from "./services/temp"
 import { SharedUriHandler, TASK_URI_PATH } from "./services/uri/SharedUriHandler"
 import { ShowMessageType } from "./shared/proto/dline/host/window"
 import { fileExistsAtPath } from "./utils/fs"
@@ -73,6 +77,9 @@ export async function activate(context: vscode.ExtensionContext) {
 	// IMPORTANT: This must be done before any service can be registered
 	Logger.debug(`[Dline] extension activate: setupHostProvider +${Math.round(performance.now() - activationStartTime)}ms`)
 	setupHostProvider(context)
+	if (IS_DEV && !IS_E2E && DEV_WORKSPACE_FOLDER) {
+		registerExtensionReloadWatcher(context, DEV_WORKSPACE_FOLDER)
+	}
 	const webview = HostProvider.get().createWebviewProvider() as VscodeWebviewProvider
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider(VscodeWebviewProvider.SIDEBAR_ID, webview, {
@@ -723,6 +730,9 @@ async function showJupyterPromptInput(title: string, placeholder: string): Promi
 }
 
 function setupHostProvider(context: ExtensionContext) {
+	DlineTempManager.initialize()
+	DlineTempManager.startPeriodicCleanup()
+	context.subscriptions.push({ dispose: () => DlineTempManager.stopPeriodicCleanup() })
 	const outputChannel = registerClineOutputChannel(context)
 	outputChannel.appendLine("[Dline] Setting up VS Code host...")
 
@@ -733,7 +743,9 @@ function setupHostProvider(context: ExtensionContext) {
 	}
 	const createDiffView = () => new VscodeDiffViewProvider()
 	const createCommentReview = () => getVscodeCommentReviewController()
-	const createTerminalManager = () => new VscodeTerminalManager()
+	const terminalPool = new VscodeTerminalPool(new DefaultVscodeTerminalPoolRuntime())
+	context.subscriptions.push({ dispose: () => terminalPool.dispose() })
+	const createTerminalManager = () => new VscodeTerminalManager(terminalPool)
 
 	const getCallbackUrl = async (path: string, _preferredPort?: number) => {
 		const scheme = vscode.env.uriScheme || "vscode"
@@ -859,27 +871,9 @@ export async function deactivate() {
 	disposeVscodeCommentReviewController()
 }
 
-// TODO: Find a solution for automatically removing DEV related content from production builds.
-//  This type of code is fine in production to keep. We just will want to remove it from production builds
-//  to bring down built asset sizes.
-//
-// This is a workaround to reload the extension when the source code changes
-// since vscode doesn't support hot reload for extensions
 const IS_DEV = envFlagEnabled(process.env.IS_DEV)
 const IS_E2E = envFlagEnabled(process.env.E2E_TEST)
 const DEV_WORKSPACE_FOLDER = process.env.DEV_WORKSPACE_FOLDER
-
-// The source watcher is only available in an interactive Extension Development Host.
-// E2E hosts must remain stable while parallel tasks modify the source checkout.
-if (IS_DEV && !IS_E2E && DEV_WORKSPACE_FOLDER) {
-	const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(DEV_WORKSPACE_FOLDER, "src/**/*"))
-
-	watcher.onDidChange(({ scheme, path }) => {
-		Logger.info(`${scheme} ${path} changed. Reloading VSCode...`)
-
-		vscode.commands.executeCommand("workbench.action.reloadWindow")
-	})
-}
 
 /**
  * Migrate legacy Cline data to Dline paths with VSCode progress notification.
