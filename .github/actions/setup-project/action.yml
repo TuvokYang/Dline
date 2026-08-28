@@ -1,0 +1,44 @@
+name: Setup project
+description: Configure Node.js and install locked project dependencies.
+
+inputs:
+  install-webview:
+    description: Install dependencies for webview-ui.
+    required: false
+    default: "false"
+  include-optional:
+    description: Include optional dependencies during installation.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v6
+      with:
+        node-version: 22
+        cache: npm
+        cache-dependency-path: |
+          package-lock.json
+          webview-ui/package-lock.json
+
+    - name: Install root dependencies
+      if: inputs.include-optional != 'true'
+      shell: bash
+      run: npm ci
+
+    - name: Install root dependencies with optional packages
+      if: inputs.include-optional == 'true'
+      shell: bash
+      run: npm ci --include=optional
+
+    - name: Install webview dependencies
+      if: inputs.install-webview == 'true' && inputs.include-optional != 'true'
+      shell: bash
+      run: npm --prefix webview-ui ci
+
+    - name: Install webview dependencies with optional packages
+      if: inputs.install-webview == 'true' && inputs.include-optional == 'true'
+      shell: bash
+      run: npm --prefix webview-ui ci --include=optional

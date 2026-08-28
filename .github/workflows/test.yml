@@ -1,41 +1,159 @@
-name: Vitest Smoke Tests
+name: Tests
 
 on:
-    push:
-        branches:
-            - main
-            - dev
-    workflow_dispatch:
-    pull_request:
-        branches:
-            - main
-            - dev
-    workflow_call:
+  pull_request:
+    branches: [main, dev]
+    types: [opened, reopened, synchronize, ready_for_review]
+  push:
+    branches: [main, dev]
+  workflow_call:
+    inputs:
+      package_profile:
+        description: VSIX build profile.
+        type: string
+        required: false
+        default: ci
+    secrets:
+      TELEMETRY_SERVICE_API_KEY:
+        required: false
+      ERROR_SERVICE_API_KEY:
+        required: false
+      OTEL_TELEMETRY_ENABLED:
+        required: false
+      OTEL_EXPORTER_OTLP_PROTOCOL:
+        required: false
+      OTEL_EXPORTER_OTLP_ENDPOINT:
+        required: false
+      OTEL_EXPORTER_OTLP_HEADERS:
+        required: false
 
 permissions:
-    contents: read
+  contents: read
+
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
-    FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-    smoke:
-        name: Vitest smoke
-        runs-on: ubuntu-latest
-        steps:
-            - name: Checkout code
-              uses: actions/checkout@v6
+  typecheck:
+    name: TypeScript
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      package_profile: ${{ steps.package-profile.outputs.value }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
 
-            - name: Setup Node.js environment
-              uses: actions/setup-node@v6
-              with:
-                  node-version: 22
-                  cache: npm
+      - name: Setup project
+        uses: ./.github/actions/setup-project
+        with:
+          install-webview: "true"
 
-            - name: Install dependencies
-              run: npm ci
-              env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check types
+        run: npm run check-types
 
-            - name: Run Vitest smoke test
-              run: npm run test:smoke
+      - name: Resolve package profile
+        id: package-profile
+        shell: bash
+        env:
+          REQUESTED_PROFILE: ${{ inputs.package_profile }}
+        run: |
+          profile="${REQUESTED_PROFILE:-ci}"
+          if [[ "$profile" != "ci" && "$profile" != "release" ]]; then
+            echo "Error: package profile must be 'ci' or 'release'"
+            exit 1
+          fi
+          echo "value=$profile" >> "$GITHUB_OUTPUT"
+
+  biome:
+    name: Biome
+    needs: typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup project
+        uses: ./.github/actions/setup-project
+
+      - name: Resolve Biome comparison base
+        id: biome-base
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            base="origin/$BASE_REF"
+          elif [[ -n "$BEFORE_SHA" && ! "$BEFORE_SHA" =~ ^0+$ ]]; then
+            base="$BEFORE_SHA"
+          else
+            base="HEAD^"
+          fi
+          git rev-parse --verify "$base^{commit}"
+          echo "value=$base" >> "$GITHUB_OUTPUT"
+
+      - name: Check Biome formatting
+        run: npm run format -- --since="${{ steps.biome-base.outputs.value }}"
+
+      - name: Check Biome and protobuf lint rules
+        run: npm run lint
+
+  smoke:
+    name: Smoke
+    needs: biome
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup project
+        uses: ./.github/actions/setup-project
+
+      - name: Run smoke tests
+        run: npm run test:smoke
+
+  vitest:
+    name: Vitest
+    needs: smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup project
+        uses: ./.github/actions/setup-project
+        with:
+          install-webview: "true"
+
+      - name: Run Vitest
+        run: npm run test:run
+
+  e2e:
+    name: E2E
+    needs: vitest
+    uses: ./.github/workflows/e2e.yml
+
+  package:
+    name: Package VSIX
+    needs: [typecheck, e2e]
+    uses: ./.github/workflows/package.yml
+    with:
+      profile: ${{ needs.typecheck.outputs.package_profile }}
+    secrets:
+      TELEMETRY_SERVICE_API_KEY: ${{ needs.typecheck.outputs.package_profile == 'release' && secrets.TELEMETRY_SERVICE_API_KEY || '' }}
+      ERROR_SERVICE_API_KEY: ${{ needs.typecheck.outputs.package_profile == 'release' && secrets.ERROR_SERVICE_API_KEY || '' }}
+      OTEL_TELEMETRY_ENABLED: ${{ needs.typecheck.outputs.package_profile == 'release' && secrets.OTEL_TELEMETRY_ENABLED || '' }}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${{ needs.typecheck.outputs.package_profile == 'release' && secrets.OTEL_EXPORTER_OTLP_PROTOCOL || '' }}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${{ needs.typecheck.outputs.package_profile == 'release' && secrets.OTEL_EXPORTER_OTLP_ENDPOINT || '' }}
+      OTEL_EXPORTER_OTLP_HEADERS: ${{ needs.typecheck.outputs.package_profile == 'release' && secrets.OTEL_EXPORTER_OTLP_HEADERS || '' }}

@@ -1,170 +1,98 @@
-name: "Publish Release To Github"
+name: Production Release
 
-# Triggered by v* tags on main branch → full release
 on:
   push:
     tags:
-      - 'v*'
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Tag to publish (e.g., v3.1.2)"
-        required: true
-        type: string
+      - "v*"
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: production-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  test:
-    uses: ./.github/workflows/test.yml
-
-  publish:
-    needs: test
-    name: Publish Extension
+  verify-tag:
+    name: Verify production release tag
     runs-on: ubuntu-latest
-    environment: publish
-
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout repository history
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           fetch-tags: true
-          lfs: true
 
-      - name: Resolve Release Tag
-        id: resolve_tag
-        env:
-          TAG: ${{ github.event_name == 'push' && github.ref_name || github.event.inputs.tag }}
+      - name: Verify tag, version, and main ancestry
+        shell: bash
         run: |
-          if [[ -z "$TAG" ]]; then
-            echo "Error: tag is required"
-            exit 1
-          fi
-          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]; then
-            echo "Error: tag must match vX.Y.Z (optionally with -suffix or .suffix)"
+          tag="$GITHUB_REF_NAME"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Error: production tag must match vX.Y.Z"
             exit 1
           fi
 
-          git fetch origin --tags
-          TAG_REF="refs/tags/$TAG"
-          if ! git show-ref --verify --quiet "$TAG_REF"; then
-            echo "Error: tag $TAG does not exist in the repository"
+          tag_version="${tag#v}"
+          package_version=$(node -p "require('./package.json').version")
+          if [[ "$tag_version" != "$package_version" ]]; then
+            echo "Error: tag version '$tag_version' does not match package version '$package_version'"
             exit 1
           fi
 
-          # Switch to tag commit
-          git checkout --detach "$TAG_REF^{commit}"
-          TAG_SHA=$(git rev-parse HEAD)
+          git fetch origin main --no-tags
+          tag_sha=$(git rev-parse "${tag}^{commit}")
+          if ! git merge-base --is-ancestor "$tag_sha" origin/main; then
+            echo "Error: production tag '$tag' does not point to a commit on main"
+            exit 1
+          fi
 
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "resolved_sha=$TAG_SHA" >> $GITHUB_OUTPUT
+  tests:
+    name: Test and package release
+    needs: verify-tag
+    uses: ./.github/workflows/test.yml
+    with:
+      package_profile: release
+    secrets:
+      TELEMETRY_SERVICE_API_KEY: ${{ secrets.TELEMETRY_SERVICE_API_KEY }}
+      ERROR_SERVICE_API_KEY: ${{ secrets.ERROR_SERVICE_API_KEY }}
+      OTEL_TELEMETRY_ENABLED: ${{ secrets.OTEL_TELEMETRY_ENABLED }}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${{ secrets.OTEL_EXPORTER_OTLP_PROTOCOL }}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${{ secrets.OTEL_EXPORTER_OTLP_ENDPOINT }}
+      OTEL_EXPORTER_OTLP_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
 
-          # Determine prerelease: true if tag has suffix (e.g. v3.1.2-beta, v3.1.2-rc.1)
-          # This is a full release, never a draft
-          echo "release_draft=false" >> $GITHUB_OUTPUT
-          if [[ "$TAG" =~ -[0-9A-Za-z.]+$ ]]; then
-            echo "release_prerelease=true" >> $GITHUB_OUTPUT
-            echo "release_type=pre-release" >> $GITHUB_OUTPUT
+  release:
+    name: Publish GitHub production release
+    needs: tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download tested VSIX
+        uses: actions/download-artifact@v6
+        with:
+          name: dline-vsix-${{ github.sha }}
+          path: release-artifact
+
+      - name: Create or update production release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" \
+              --draft=false \
+              --prerelease=false \
+              --title "Dline ${TAG}" \
+              --repo "$GITHUB_REPOSITORY"
+            gh release upload "$TAG" release-artifact/*.vsix --clobber --repo "$GITHUB_REPOSITORY"
           else
-            echo "release_prerelease=false" >> $GITHUB_OUTPUT
-            echo "release_type=release" >> $GITHUB_OUTPUT
+            gh release create "$TAG" release-artifact/*.vsix \
+              --verify-tag \
+              --generate-notes \
+              --title "Dline ${TAG}" \
+              --repo "$GITHUB_REPOSITORY"
           fi
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
-
-      - name: Install root dependencies
-        run: npm ci --include=optional
-
-      - name: Install webview-ui dependencies
-        run: cd webview-ui && npm ci
-
-      - name: Install Packaging Tool
-        run: npm install -g @vscode/vsce
-
-      - name: Get Version
-        id: get_version
-        run: |
-          VERSION=$(node -p "require('./package.json').version")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Verify Tag Matches Package Version
-        run: |
-          TAG="${{ steps.resolve_tag.outputs.tag }}"
-          VERSION="v${{ steps.get_version.outputs.version }}"
-          if [[ "$TAG" != "$VERSION" ]]; then
-            echo "Error: tag '$TAG' does not match package version '$VERSION'"
-            exit 1
-          fi
-          echo "Tag and package version match: $TAG"
-
-      - name: Verify LFS media assets are resolved
-        run: |
-          for FILE in webview-ui/src/assets/cline_kanban_demo.mp4 webview-ui/src/assets/cline_kanban_demo.webm; do
-            if grep -q "git-lfs.github.com/spec/v1" "$FILE"; then
-              echo "Error: $FILE is still a Git LFS pointer in CI checkout"
-              exit 1
-            fi
-          done
-
-      - name: Build Package
-        env:
-          DLINE_ENVIRONMENT: production
-          RELEASE_TYPE: ${{ steps.resolve_tag.outputs.release_type }}
-          TELEMETRY_SERVICE_API_KEY: ${{ secrets.TELEMETRY_SERVICE_API_KEY }}
-          ERROR_SERVICE_API_KEY: ${{ secrets.ERROR_SERVICE_API_KEY }}
-          OTEL_TELEMETRY_ENABLED: ${{ secrets.OTEL_TELEMETRY_ENABLED }}
-          OTEL_LOGS_EXPORTER: otlp
-          OTEL_METRICS_EXPORTER: otlp
-          OTEL_EXPORTER_OTLP_PROTOCOL: ${{ secrets.OTEL_EXPORTER_OTLP_PROTOCOL }}
-          OTEL_EXPORTER_OTLP_ENDPOINT: ${{ secrets.OTEL_EXPORTER_OTLP_ENDPOINT }}
-          OTEL_EXPORTER_OTLP_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
-        run: |
-          # Required to generate the .vsix
-          vsce package --no-dependencies --allow-package-secrets sendgrid --out "dline-${{ steps.get_version.outputs.version }}.vsix"
-
-      - name: Get Previous Tag
-        id: prev_tag
-        run: |
-          CURRENT_TAG="${{ steps.resolve_tag.outputs.tag }}"
-          PREV_TAG=$(git describe --tags --abbrev=0 "$CURRENT_TAG^" 2>/dev/null || echo "")
-          echo "prev_tag=$PREV_TAG" >> $GITHUB_OUTPUT
-
-      - name: Get Changelog Entry
-        id: changelog
-        run: |
-          TAG="${{ steps.resolve_tag.outputs.tag }}"
-          VERSION_NUM="${TAG#v}"
-          ESCAPED_VER=$(echo "$VERSION_NUM" | sed 's/\./\\./g')
-          CONTENT=$(awk -v ver="$ESCAPED_VER" '
-            $0 ~ "^## \\[" ver "\\]" { found=1; next }
-            found && /^## \[/ { exit }
-            found { print }
-          ' CHANGELOG.md)
-          if [[ -z "$CONTENT" ]]; then
-            echo "Error: no changelog entry found for version $VERSION_NUM"
-            exit 1
-          fi
-          DELIM="EOF_${RANDOM}"
-          echo "content<<${DELIM}" >> $GITHUB_OUTPUT
-          echo "$CONTENT" >> $GITHUB_OUTPUT
-          echo "${DELIM}" >> $GITHUB_OUTPUT
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.resolve_tag.outputs.tag }}
-          files: "*.vsix"
-          draft: ${{ steps.resolve_tag.outputs.release_draft == 'true' }}
-          prerelease: ${{ steps.resolve_tag.outputs.release_prerelease == 'true' }}
-          body: |
-            ${{ steps.changelog.outputs.content }}
-            **Full Changelog**: https://github.com/${{ github.repository }}/compare/${{ steps.prev_tag.outputs.prev_tag }}...${{ steps.resolve_tag.outputs.tag }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

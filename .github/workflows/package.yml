@@ -1,0 +1,150 @@
+name: Package VSIX
+
+on:
+  workflow_call:
+    inputs:
+      profile:
+        description: VSIX build profile.
+        type: string
+        required: false
+        default: ci
+    secrets:
+      TELEMETRY_SERVICE_API_KEY:
+        required: false
+      ERROR_SERVICE_API_KEY:
+        required: false
+      OTEL_TELEMETRY_ENABLED:
+        required: false
+      OTEL_EXPORTER_OTLP_PROTOCOL:
+        required: false
+      OTEL_EXPORTER_OTLP_ENDPOINT:
+        required: false
+      OTEL_EXPORTER_OTLP_HEADERS:
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  validate-profile:
+    name: Validate package profile
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate profile
+        shell: bash
+        env:
+          PROFILE: ${{ inputs.profile }}
+        run: |
+          if [[ "$PROFILE" != "ci" && "$PROFILE" != "release" ]]; then
+            echo "Error: package profile must be 'ci' or 'release'"
+            exit 1
+          fi
+
+  package-ci:
+    name: Package tested VSIX
+    needs: validate-profile
+    if: inputs.profile == 'ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code with LFS assets
+        uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - name: Setup project
+        uses: ./.github/actions/setup-project
+        with:
+          install-webview: "true"
+          include-optional: "true"
+
+      - name: Verify LFS assets
+        shell: bash
+        run: |
+          for file in webview-ui/src/assets/cline_kanban_demo.mp4 webview-ui/src/assets/cline_kanban_demo.webm; do
+            if grep -q "git-lfs.github.com/spec/v1" "$file"; then
+              echo "Error: $file is still a Git LFS pointer"
+              exit 1
+            fi
+          done
+
+      - name: Resolve VSIX filename
+        id: package
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          short_sha="${GITHUB_SHA:0:12}"
+          echo "filename=dline-${version}-${short_sha}.vsix" >> "$GITHUB_OUTPUT"
+
+      - name: Build production VSIX
+        env:
+          DLINE_ENVIRONMENT: production
+        run: npm exec -- vsce package --no-dependencies --allow-package-secrets sendgrid --out "dist/${{ steps.package.outputs.filename }}"
+
+      - name: Upload tested VSIX
+        uses: actions/upload-artifact@v5
+        with:
+          name: dline-vsix-${{ github.sha }}
+          path: dist/${{ steps.package.outputs.filename }}
+          if-no-files-found: error
+          retention-days: 14
+
+  package-release:
+    name: Package release VSIX
+    needs: validate-profile
+    if: inputs.profile == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: publish
+    steps:
+      - name: Checkout code with LFS assets
+        uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - name: Setup project
+        uses: ./.github/actions/setup-project
+        with:
+          install-webview: "true"
+          include-optional: "true"
+
+      - name: Verify LFS assets
+        shell: bash
+        run: |
+          for file in webview-ui/src/assets/cline_kanban_demo.mp4 webview-ui/src/assets/cline_kanban_demo.webm; do
+            if grep -q "git-lfs.github.com/spec/v1" "$file"; then
+              echo "Error: $file is still a Git LFS pointer"
+              exit 1
+            fi
+          done
+
+      - name: Resolve VSIX filename
+        id: package
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "filename=dline-${version}.vsix" >> "$GITHUB_OUTPUT"
+
+      - name: Build production VSIX
+        env:
+          DLINE_ENVIRONMENT: production
+          TELEMETRY_SERVICE_API_KEY: ${{ secrets.TELEMETRY_SERVICE_API_KEY }}
+          ERROR_SERVICE_API_KEY: ${{ secrets.ERROR_SERVICE_API_KEY }}
+          OTEL_TELEMETRY_ENABLED: ${{ secrets.OTEL_TELEMETRY_ENABLED }}
+          OTEL_LOGS_EXPORTER: otlp
+          OTEL_METRICS_EXPORTER: otlp
+          OTEL_EXPORTER_OTLP_PROTOCOL: ${{ secrets.OTEL_EXPORTER_OTLP_PROTOCOL }}
+          OTEL_EXPORTER_OTLP_ENDPOINT: ${{ secrets.OTEL_EXPORTER_OTLP_ENDPOINT }}
+          OTEL_EXPORTER_OTLP_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
+        run: npm exec -- vsce package --no-dependencies --allow-package-secrets sendgrid --out "dist/${{ steps.package.outputs.filename }}"
+
+      - name: Upload release VSIX
+        uses: actions/upload-artifact@v5
+        with:
+          name: dline-vsix-${{ github.sha }}
+          path: dist/${{ steps.package.outputs.filename }}
+          if-no-files-found: error
+          retention-days: 14
