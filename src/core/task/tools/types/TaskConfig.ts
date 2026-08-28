@@ -77,6 +77,8 @@ export interface TaskConfig {
 	isSubagentExecution: boolean
 	/** Request-frozen global Web Tools switch. */
 	webToolsEnabled?: boolean
+	/** Request-frozen Standard subagent feature gate. */
+	subagentsEnabled?: boolean
 	/** Request-frozen route used to admit or reject local Web Search execution. */
 	webSearchRoutingPlan?: WebSearchRoutingPlan
 	/** Request-scoped one-shot authority for explicit-only tools. */

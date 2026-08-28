@@ -6,6 +6,10 @@ export type CapabilitySource = "mcp" | "skills" | "workflows" | "subagents"
 export interface CapabilityEntry {
 	readonly name: string
 	readonly description: string
+	/** Optional privacy-safe fingerprint for capability content that is loaded on demand. */
+	readonly contentHash?: string
+	/** Optional privacy-safe fingerprint for the provider-visible native tool identity. */
+	readonly nativeToolHash?: string
 }
 
 /**

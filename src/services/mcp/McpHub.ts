@@ -17,6 +17,7 @@ import {
 	ReadResourceResultSchema,
 } from "@modelcontextprotocol/sdk/types.js"
 import {
+	CLINE_MCP_TOOL_IDENTIFIER,
 	DEFAULT_MCP_TIMEOUT_SECONDS,
 	McpPrompt,
 	McpPromptResponse,
@@ -39,6 +40,7 @@ import { HostProvider } from "@/hosts/host-provider"
 import { fetch } from "@/shared/net"
 import { ShowMessageType } from "@/shared/proto/dline/host/window"
 import { Logger } from "@/shared/services/Logger"
+import { hashStableJson } from "@/shared/stable-json"
 import { expandEnvironmentVariables } from "@/utils/envExpansion"
 import { getServerAuthHash } from "@/utils/mcpAuth"
 import { TelemetryService } from "../telemetry/TelemetryService"
@@ -112,6 +114,8 @@ export class McpHub {
 
 	// Callbacks for sending notifications to active tasks (multicast for shared instance)
 	private notificationCallbacks: Set<(serverName: string, level: string, message: string) => void> = new Set()
+	private promptCatalogChangeListeners: Set<() => void> = new Set()
+	private promptCatalogSignature = "[]"
 
 	// Shared singleton — multiple Controllers share one McpHub to avoid duplicate
 	// docker gateway processes and reduce resource contention.
@@ -160,6 +164,12 @@ export class McpHub {
 		// Only return enabled servers
 
 		return this.connections.filter((conn) => !conn.server.disabled).map((conn) => conn.server)
+	}
+
+	/** Subscribe to committed prompt-visible MCP catalog changes. */
+	subscribeToPromptCatalogChanges(listener: () => void): () => void {
+		this.promptCatalogChangeListeners.add(listener)
+		return () => this.promptCatalogChangeListeners.delete(listener)
 	}
 
 	getServersForOwner(ownerId: string): McpServer[] {
@@ -522,6 +532,7 @@ export class McpHub {
 							this.appendErrorMessage(connection, error instanceof Error ? error.message : `${error}`)
 						}
 						await this.notifyWebviewOfServerChanges()
+						this.publishPromptCatalogIfChanged()
 					}
 
 					transport.onclose = async () => {
@@ -532,6 +543,7 @@ export class McpHub {
 							McpHub.mcpServerKeys.delete(connection.server.uid || name)
 						}
 						await this.notifyWebviewOfServerChanges()
+						this.publishPromptCatalogIfChanged()
 					}
 
 					Logger.debug(`[MCP ${name}] spawning: ${expandedConfig.command} ${(expandedConfig.args || []).join(" ")}`)
@@ -1061,6 +1073,7 @@ export class McpHub {
 			if (connectionChangesOccurred && source === "internal") {
 				await this.notifyWebviewOfServerChanges()
 			}
+			this.publishPromptCatalogIfChanged()
 		} finally {
 			this.isConnecting = false
 		}
@@ -1148,6 +1161,7 @@ export class McpHub {
 		}
 
 		this.isConnecting = false
+		this.publishPromptCatalogIfChanged()
 
 		return this.getLatestMcpServersRPC()
 	}
@@ -1186,6 +1200,7 @@ export class McpHub {
 
 		await this.notifyWebviewOfServerChanges()
 		this.isConnecting = false
+		this.publishPromptCatalogIfChanged()
 	}
 
 	/**
@@ -1218,6 +1233,46 @@ export class McpHub {
 		return this.workspaceMcpRegistry
 			.getDescriptorsForOwner(ownerId)
 			.some((descriptor) => descriptor.internalName === server.name)
+	}
+
+	private buildPromptCatalogSignature(): string {
+		const entries = this.connections
+			.filter((connection) => connection.server.status === "connected" && connection.server.disabled !== true)
+			.flatMap((connection) =>
+				(connection.server.tools ?? []).map((tool) => ({
+					name: `${connection.server.name}.${tool.name.trim()}`,
+					description: (tool.description ?? "").replace(/\s+/g, " ").trim().slice(0, 240),
+					contractHash: hashStableJson({
+						nativeToolName: `${connection.server.uid ?? connection.server.name}${CLINE_MCP_TOOL_IDENTIFIER}${tool.name}`,
+						inputSchema: tool.inputSchema ?? { type: "object", properties: {} },
+					}),
+				})),
+			)
+			.filter((entry) => entry.name.length > 0)
+			.sort(
+				(left, right) =>
+					left.name.localeCompare(right.name) ||
+					left.description.localeCompare(right.description) ||
+					left.contractHash.localeCompare(right.contractHash),
+			)
+		return JSON.stringify(entries)
+	}
+
+	private notifyPromptCatalogChanged(): void {
+		for (const listener of this.promptCatalogChangeListeners) {
+			try {
+				listener()
+			} catch (error) {
+				Logger.error("[McpHub] Prompt catalog listener failed:", error)
+			}
+		}
+	}
+
+	private publishPromptCatalogIfChanged(): void {
+		const signature = this.buildPromptCatalogSignature()
+		if (signature === this.promptCatalogSignature) return
+		this.promptCatalogSignature = signature
+		this.notifyPromptCatalogChanged()
 	}
 
 	private async notifyWebviewOfServerChanges(): Promise<void> {
@@ -1260,6 +1315,7 @@ export class McpHub {
 					}
 				}
 
+				this.publishPromptCatalogIfChanged()
 				const serverOrder = Object.keys(config.mcpServers || {})
 				return this.getSortedMcpServers(serverOrder)
 			}
@@ -1743,6 +1799,7 @@ export class McpHub {
 		}
 		McpHub._sharedInstance = null
 		this.notificationCallbacks.clear()
+		this.promptCatalogChangeListeners.clear()
 		this.removeAllFileWatchers()
 		for (const connection of this.connections) {
 			try {

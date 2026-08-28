@@ -17,7 +17,7 @@ import type { Controller } from ".."
  * Modifies frontmatter fields (profile, tools, skills, description)
  * while preserving the system prompt body and comments.
  */
-export async function updateSubagentConfig(_controller: Controller, request: UpdateSubagentConfigRequest): Promise<Empty> {
+export async function updateSubagentConfig(controller: Controller, request: UpdateSubagentConfigRequest): Promise<Empty> {
 	const { subagentPath, profile, tools, skills, description, replaceTools, replaceSkills } = request
 
 	if (!subagentPath) {
@@ -78,6 +78,12 @@ export async function updateSubagentConfig(_controller: Controller, request: Upd
 	} catch (err) {
 		Logger.error(`[updateSubagentConfig] Failed to write subagent file: ${subagentPath}`, err)
 		throw new Error(`Failed to write subagent file: ${subagentPath}`)
+	}
+
+	if (controller.task) {
+		await controller.task.flushPromptFreshnessInvalidation("capability_mutation")
+	} else {
+		await controller.postStateToWebview()
 	}
 
 	return Empty.create({})

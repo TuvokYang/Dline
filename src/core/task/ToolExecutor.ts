@@ -8,6 +8,7 @@ import { getHookModelContext } from "@core/hooks/hook-model-context"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import { ClineIgnoreController } from "@core/ignore/ClineIgnoreController"
 import { CommandPermissionController } from "@core/permissions"
+import type { ResolvedPromptRuntime } from "@core/prompts/system-prompt-cache/FrozenPromptRuntime"
 import { TaskFileTracker } from "@integrations/checkpoints/TaskFileTracker"
 import { DiffViewProvider } from "@integrations/editor/DiffViewProvider"
 import type { CommandCancellationResult, CommandExecutionOptions, CommandExecutionOutcome } from "@integrations/terminal"
@@ -164,6 +165,7 @@ export class ToolExecutor {
 	private allowedNativeToolNames: ReadonlySet<string> | undefined
 	private webToolsEnabled: boolean | undefined
 	private webSearchRoutingPlan: WebSearchRoutingPlan | undefined
+	private promptRuntime: ResolvedPromptRuntime | undefined
 	private explicitInstructions: ExplicitInstructionConsumePort | undefined
 	private hostedServerToolLifecycle: ServerToolLifecycle | undefined
 	private readonly postCommitDirectives = new Map<string, ToolPostCommitDirective>()
@@ -208,6 +210,11 @@ export class ToolExecutor {
 		return this.subagentJobManager
 	}
 
+	/** Rebind one persisted failed subagent before the Activity Retry action runs. */
+	public restoreSubagentRetry(activityId: string): Promise<boolean> {
+		return this.coordinator.restoreSubagentRetry(this.asToolConfig(), activityId)
+	}
+
 	/** Freeze the ordinary native functions exposed in the current API request. */
 	public setAllowedNativeToolNames(toolNames: ReadonlySet<string>): void {
 		this.allowedNativeToolNames = new Set(Array.from(toolNames, normalizeNativeToolName))
@@ -224,8 +231,15 @@ export class ToolExecutor {
 		return this.explicitInstructions?.getPendingToolAuthorization(toolName) !== undefined
 	}
 
-	/** Freeze Web Tools admission alongside the current request's tool schemas. */
+	/** Freeze the complete prompt-visible execution projection for the current Provider input. */
+	public setPromptRuntime(runtime: ResolvedPromptRuntime, allowHosted = true): void {
+		this.setWebSearchRoutingPlan(runtime.webSearchRoutingPlan, runtime.webToolsEnabled, allowHosted)
+		this.promptRuntime = runtime
+	}
+
+	/** Set the legacy Web-only projection and clear any complete runtime left by an earlier request. */
 	public setWebSearchRoutingPlan(plan: WebSearchRoutingPlan, webToolsEnabled: boolean, allowHosted = true): void {
+		this.promptRuntime = undefined
 		this.webToolsEnabled = webToolsEnabled
 		this.webSearchRoutingPlan = plan
 		this.hostedServerToolLifecycle = new ServerToolLifecycle(plan, allowHosted, async (update) => {
@@ -282,8 +296,16 @@ export class ToolExecutor {
 
 	/** Use live settings only for restored approvals that no longer have a request scope. */
 	private getWebToolsEnabledForExecution(): boolean {
+		if (this.promptRuntime) return this.promptRuntime.webToolsEnabled
 		if (this.webToolsEnabled !== undefined) return this.webToolsEnabled
 		return this.stateManager.getGlobalSettingsKey("clineWebToolsEnabled") === true
+	}
+
+	private getFocusChainEnabledForExecution(): boolean {
+		return (
+			this.promptRuntime?.focusChainEnabled ??
+			this.stateManager.getGlobalSettingsKey("focusChainSettings")?.enabled === true
+		)
 	}
 
 	/** Resolve a route for restored tool approvals that no longer have their live request scope. */
@@ -479,6 +501,7 @@ export class ToolExecutor {
 			enableParallelToolCalling: this.isParallelToolCallingEnabled(),
 			isSubagentExecution: false,
 			webToolsEnabled,
+			subagentsEnabled: this.promptRuntime?.subagentsEnabled,
 			webSearchRoutingPlan: this.getWebSearchRoutingPlanForExecution(webToolsEnabled),
 			explicitInstructions: this.explicitInstructions,
 			cwd: this.cwd,
@@ -490,9 +513,18 @@ export class ToolExecutor {
 			api: this.api,
 			autoApprovalSettings: this.stateManager.getGlobalSettingsKey("autoApprovalSettings"),
 			autoApprover: this.autoApprover,
-			browserSettings: this.stateManager.getGlobalSettingsKey("browserSettings"),
-			focusChainSettings: this.stateManager.getGlobalSettingsKey("focusChainSettings"),
-			capabilityToggles: this.getTaskCapabilityToggles(),
+			browserSettings: this.promptRuntime
+				? {
+						...this.stateManager.getGlobalSettingsKey("browserSettings"),
+						disableToolUse: !this.promptRuntime.browserEnabled,
+						viewport: this.promptRuntime.browserViewport,
+					}
+				: this.stateManager.getGlobalSettingsKey("browserSettings"),
+			focusChainSettings: {
+				...this.stateManager.getGlobalSettingsKey("focusChainSettings"),
+				enabled: this.getFocusChainEnabledForExecution(),
+			},
+			capabilityToggles: this.promptRuntime?.capabilityToggles ?? this.getTaskCapabilityToggles(),
 			interactions: this.interactions,
 			compactionAttemptGuard: this.compactionAttemptGuard,
 			services: {
@@ -613,7 +645,14 @@ export class ToolExecutor {
 		await this.browserSession.dispose()
 		const apiHandlerModel = this.api.getModel()
 		const useWebp = this.api ? !modelDoesntSupportWebp(apiHandlerModel) : true
-		this.browserSession = new BrowserSession(this.stateManager, useWebp)
+		const browserSettings = this.promptRuntime
+			? {
+					...this.stateManager.getGlobalSettingsKey("browserSettings"),
+					disableToolUse: !this.promptRuntime.browserEnabled,
+					viewport: this.promptRuntime.browserViewport,
+				}
+			: undefined
+		this.browserSession = new BrowserSession(this.stateManager, useWebp, browserSettings)
 		return this.browserSession
 	}
 
@@ -686,6 +725,7 @@ export class ToolExecutor {
 	 * 2. The current model/provider supports native tool calling and handles parallel tools well
 	 */
 	private isParallelToolCallingEnabled(): boolean {
+		if (this.promptRuntime) return this.promptRuntime.parallelToolsEnabled
 		const enableParallelSetting = this.stateManager.getGlobalSettingsKey("enableParallelToolCalling")
 		const model = this.api.getModel()
 		const apiConfig = this.stateManager.getApiConfiguration()
@@ -726,7 +766,7 @@ export class ToolExecutor {
 			if (block.isNativeToolCall && isInternalNativeToolName(block.name)) {
 				if (!block.partial) {
 					const taskProgress = block.params?.task_progress
-					const focusChainEnabled = this.stateManager.getGlobalSettingsKey("focusChainSettings")?.enabled === true
+					const focusChainEnabled = this.getFocusChainEnabledForExecution()
 					const hasTodoUpdate = focusChainEnabled && typeof taskProgress === "string" && hasValidTodoItem(taskProgress)
 					if (hasTodoUpdate) {
 						await this.updateFCListFromToolResponse(taskProgress)
@@ -1076,7 +1116,7 @@ export class ToolExecutor {
 			}
 
 			// Block attempt_completion when focus chain is incomplete (other turn-ending tools remain available)
-			const focusChainEnabled = this.stateManager.getGlobalSettingsKey("focusChainSettings").enabled
+			const focusChainEnabled = this.getFocusChainEnabledForExecution()
 			const fcChecklist = this.taskState.currentFocusChainChecklist
 			if (
 				block.name === ClineDefaultTool.ATTEMPT &&
@@ -1184,7 +1224,7 @@ export class ToolExecutor {
 		const taskProgress = block.params.task_progress
 		if (
 			!block.partial &&
-			this.stateManager.getGlobalSettingsKey("focusChainSettings").enabled &&
+			this.getFocusChainEnabledForExecution() &&
 			typeof taskProgress === "string" &&
 			hasValidTodoItem(taskProgress)
 		) {

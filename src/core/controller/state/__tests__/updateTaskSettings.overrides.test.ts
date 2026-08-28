@@ -1,5 +1,6 @@
 import { ApiProfile } from "@shared/proto/dline/profile"
 import { UpdateTaskSettingsRequest } from "@shared/proto/dline/state"
+import { createTaskCapabilityToggles, serializeTaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { Controller } from "../.."
 import { updateTaskSettings } from "../updateTaskSettings"
@@ -44,6 +45,9 @@ function createController() {
 	const rebuildApiHandler = vi.fn(async () => {
 		order.push("rebuild")
 	})
+	const flushPromptFreshnessInvalidation = vi.fn(async () => {
+		order.push("freshness")
+	})
 	const postStateToWebview = vi.fn(async () => {
 		order.push("post")
 	})
@@ -67,7 +71,7 @@ function createController() {
 				return undefined
 			}),
 		},
-		task: { taskId: "task-1", rebuildApiHandler },
+		task: { taskId: "task-1", rebuildApiHandler, flushPromptFreshnessInvalidation },
 		restartAccountUsagePolling: vi.fn(),
 		postStateToWebview,
 	} as unknown as Controller
@@ -76,6 +80,7 @@ function createController() {
 		clearTaskSetting,
 		controller,
 		flushPendingState,
+		flushPromptFreshnessInvalidation,
 		getApiConfigurationForTask,
 		order,
 		postStateToWebview,
@@ -264,5 +269,39 @@ describe("updateTaskSettings Task runtime overrides", () => {
 
 		expect(fixture.rebuildApiHandler).not.toHaveBeenCalled()
 		expect(fixture.postStateToWebview).not.toHaveBeenCalled()
+	})
+
+	it("re-evaluates the active Task after the complete capability snapshot is durable", async () => {
+		const fixture = createController()
+		const taskCapabilityToggles = serializeTaskCapabilityToggles(
+			createTaskCapabilityToggles({
+				localWorkflowToggles: { "e:/workspace/project/.agents/workflows/review.md": false },
+				localSkillsToggles: { "e:/workspace/project/.agents/skills/review/SKILL.md": true },
+				localSubagentsToggles: { "e:/workspace/project/.agents/subagents/reviewer.yaml": true },
+				mcpServers: { docs: true },
+			}),
+		)
+
+		await updateTaskSettings(
+			fixture.controller,
+			UpdateTaskSettingsRequest.create({ taskId: "task-1", settings: { taskCapabilityToggles } }),
+		)
+
+		expect(fixture.flushPromptFreshnessInvalidation).toHaveBeenCalledWith("task_capability_toggle")
+		expect(fixture.order).toEqual(["flush", "freshness"])
+		expect(fixture.postStateToWebview).not.toHaveBeenCalled()
+	})
+
+	it("does not re-evaluate the active Task when updating another Task capability snapshot", async () => {
+		const fixture = createController()
+		const taskCapabilityToggles = serializeTaskCapabilityToggles(createTaskCapabilityToggles({ mcpServers: { docs: false } }))
+
+		await updateTaskSettings(
+			fixture.controller,
+			UpdateTaskSettingsRequest.create({ taskId: "task-2", settings: { taskCapabilityToggles } }),
+		)
+
+		expect(fixture.flushPromptFreshnessInvalidation).not.toHaveBeenCalled()
+		expect(fixture.order).toEqual(["flush", "post"])
 	})
 })

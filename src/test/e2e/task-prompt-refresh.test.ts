@@ -3,6 +3,8 @@ import path from "node:path"
 import { expect, type Frame } from "@playwright/test"
 import { E2ETestHelper, e2e } from "./utils/helpers"
 
+e2e.use({ installVsix: false })
+
 interface TaskPromptContext {
 	systemPrompt?: {
 		frozen?: {

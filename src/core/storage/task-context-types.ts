@@ -1,5 +1,7 @@
+import type { WebSearchRoutingPlan } from "@core/api/server-tools"
 import type { PromptFreshnessBaseline } from "@shared/PromptFreshness"
 import type { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
+import type { TaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
 import type { ClineTool } from "@shared/tools"
 import type { WebSearchRoute } from "@/core/api/server-tools"
 
@@ -26,10 +28,27 @@ export interface TaskSystemPromptContext {
 /**
  * Stores the frozen system prompt used by ordinary API requests in a task.
  */
+export interface FrozenPromptRuntime {
+	/** Optional so runtime snapshots created before parallel-tool freezing remain readable. */
+	readonly parallelToolsEnabled?: boolean
+	readonly webToolsEnabled: boolean
+	readonly webSearchMode: WebSearchRoutingPlan["mode"]
+	readonly webSearchRoute: WebSearchRoute
+	readonly webSearchLocalFallbackAvailable: boolean
+	readonly serverTools: readonly ServerTool[]
+	readonly focusChainEnabled: boolean
+	readonly subagentsEnabled: boolean
+	readonly capabilityToggles: TaskCapabilityToggles
+	readonly browserEnabled: boolean
+	readonly browserViewport: Readonly<{ width: number; height: number }>
+}
+
 export interface FrozenSystemPromptCache {
 	readonly text: string
 	readonly tools: readonly ClineTool[] | null
 	readonly capabilitiesHash: string
+	/** Optional so caches created before runtime snapshotting remain readable. */
+	readonly runtime?: FrozenPromptRuntime
 	/** Optional so frozen prompts created before freshness tracking remain readable. */
 	readonly freshnessBaseline?: PromptFreshnessBaseline
 	readonly createdAt: number
@@ -60,4 +79,8 @@ export interface FrozenPromptBuilderInfo {
 	readonly webToolsEnabled?: boolean
 	/** Effective request route used to project local or hosted Web Search. */
 	readonly webSearchRoute?: WebSearchRoute
+	/** Web Search mode used to resolve the frozen route. */
+	readonly webSearchMode?: WebSearchRoutingPlan["mode"]
+	/** Whether the frozen hosted route could fall back to local Web Search. */
+	readonly webSearchLocalFallbackAvailable?: boolean
 }

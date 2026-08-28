@@ -35,11 +35,12 @@ export async function deleteRuleFile(controller: Controller, request: RuleFileRe
 		throw new Error(result.message || "Failed to delete rule file")
 	}
 
-	// we refresh inside of the deleteRuleFileImpl(..) call
-	//await refreshClineRulesToggles(controller.context, cwd)
-	//await refreshExternalRulesToggles(controller.context, cwd)
-	//await refreshWorkflowToggles(controller.context, cwd)
-	await controller.postStateToWebview()
+	// The delete implementation updates the canonical toggle store before returning.
+	if (controller.task) {
+		await controller.task.flushPromptFreshnessInvalidation("capability_mutation")
+	} else {
+		await controller.postStateToWebview()
+	}
 
 	const fileName = getWorkspaceBasename(request.rulePath, "Controller.deleteRuleFile")
 

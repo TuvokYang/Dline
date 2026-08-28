@@ -15,7 +15,7 @@ import {
 } from "@shared/proto/dline/file"
 import { VSCodeButton, VSCodeLink } from "@vscode/webview-ui-toolkit/react"
 import React, { useEffect, useRef, useState } from "react"
-import { useClickAway, useWindowSize } from "react-use"
+import { useClickAway } from "react-use"
 import styled from "styled-components"
 import ShellEnvironmentModal from "@/components/chat/ShellEnvironmentModal"
 import PopupModalContainer from "@/components/common/PopupModalContainer"
@@ -31,6 +31,15 @@ import RuleRow from "./RuleRow"
 import RulesToggleList from "./RulesToggleList"
 import SubagentRow from "./SubagentRow"
 
+function projectDiscoveredToggles(
+	discovered: Record<string, boolean>,
+	taskSnapshot: Record<string, boolean> | undefined,
+): Record<string, boolean> {
+	return Object.fromEntries(
+		Object.keys(discovered).map((resourceId) => [resourceId, taskSnapshot?.[resourceId] ?? discovered[resourceId]]),
+	)
+}
+
 const ClineRulesToggleModal: React.FC = () => {
 	const {
 		globalClineRulesToggles: globalClineRulesTogglesState = {},
@@ -40,8 +49,6 @@ const ClineRulesToggleModal: React.FC = () => {
 		localAgentsRulesToggles: localAgentsRulesTogglesState = {},
 		localWorkflowToggles: localWorkflowTogglesState = {},
 		globalWorkflowToggles: globalWorkflowTogglesState = {},
-		globalSkillsToggles: globalSkillsTogglesState = {},
-		localSkillsToggles: localSkillsTogglesState = {},
 		remoteRulesToggles: remoteRulesTogglesState = {},
 		remoteWorkflowToggles: remoteWorkflowTogglesState = {},
 		remoteConfigSettings = {},
@@ -60,15 +67,34 @@ const ClineRulesToggleModal: React.FC = () => {
 		setRemoteWorkflowToggles,
 	} = useExtensionState()
 	const capabilityScope = useTaskCapabilityToggles()
-	const globalClineRulesToggles = capabilityScope.snapshot?.globalClineRulesToggles ?? globalClineRulesTogglesState
-	const localClineRulesToggles = capabilityScope.snapshot?.localClineRulesToggles ?? localClineRulesTogglesState
-	const localCursorRulesToggles = capabilityScope.snapshot?.localCursorRulesToggles ?? localCursorRulesTogglesState
-	const localWindsurfRulesToggles = capabilityScope.snapshot?.localWindsurfRulesToggles ?? localWindsurfRulesTogglesState
-	const localAgentsRulesToggles = capabilityScope.snapshot?.localAgentsRulesToggles ?? localAgentsRulesTogglesState
-	const localWorkflowToggles = capabilityScope.snapshot?.localWorkflowToggles ?? localWorkflowTogglesState
-	const globalWorkflowToggles = capabilityScope.snapshot?.globalWorkflowToggles ?? globalWorkflowTogglesState
-	const globalSkillsToggles = capabilityScope.snapshot?.globalSkillsToggles ?? globalSkillsTogglesState
-	const localSkillsToggles = capabilityScope.snapshot?.localSkillsToggles ?? localSkillsTogglesState
+	const globalClineRulesToggles = projectDiscoveredToggles(
+		globalClineRulesTogglesState,
+		capabilityScope.snapshot?.globalClineRulesToggles,
+	)
+	const localClineRulesToggles = projectDiscoveredToggles(
+		localClineRulesTogglesState,
+		capabilityScope.snapshot?.localClineRulesToggles,
+	)
+	const localCursorRulesToggles = projectDiscoveredToggles(
+		localCursorRulesTogglesState,
+		capabilityScope.snapshot?.localCursorRulesToggles,
+	)
+	const localWindsurfRulesToggles = projectDiscoveredToggles(
+		localWindsurfRulesTogglesState,
+		capabilityScope.snapshot?.localWindsurfRulesToggles,
+	)
+	const localAgentsRulesToggles = projectDiscoveredToggles(
+		localAgentsRulesTogglesState,
+		capabilityScope.snapshot?.localAgentsRulesToggles,
+	)
+	const localWorkflowToggles = projectDiscoveredToggles(
+		localWorkflowTogglesState,
+		capabilityScope.snapshot?.localWorkflowToggles,
+	)
+	const globalWorkflowToggles = projectDiscoveredToggles(
+		globalWorkflowTogglesState,
+		capabilityScope.snapshot?.globalWorkflowToggles,
+	)
 	const remoteRulesToggles = capabilityScope.snapshot?.remoteRulesToggles ?? remoteRulesTogglesState
 	const remoteWorkflowToggles = capabilityScope.snapshot?.remoteWorkflowToggles ?? remoteWorkflowTogglesState
 	const [globalHooks, setGlobalHooks] = useState<Array<{ name: string; enabled: boolean; absolutePath: string }>>([])
@@ -92,7 +118,6 @@ const ClineRulesToggleModal: React.FC = () => {
 	const [isVisible, setIsVisible] = useState(false)
 	const buttonRef = useRef<HTMLDivElement>(null)
 	const modalRef = useRef<HTMLDivElement>(null)
-	const { width: viewportWidth, height: viewportHeight } = useWindowSize()
 	const [arrowPosition, setArrowPosition] = useState(0)
 	const [menuPosition, setMenuPosition] = useState(0)
 	const [currentView, setCurrentView] = useState<"rules" | "workflows" | "hooks" | "skills" | "subagents" | "environment">(

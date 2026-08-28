@@ -37,7 +37,9 @@ export async function updateTaskSettings(controller: Controller, request: Update
 		taskId = controller.task.taskId
 	}
 
+	let promptFreshnessPublished = false
 	if (request.settings) {
+		const taskCapabilityTogglesChanged = request.settings.taskCapabilityToggles !== undefined
 		const hasTaskRuntimeOverrideUpdate = Object.entries(request.settings).some(
 			([key, value]) => value !== undefined && TASK_RUNTIME_OVERRIDE_KEYS.has(key),
 		)
@@ -186,9 +188,13 @@ export async function updateTaskSettings(controller: Controller, request: Update
 				controller.restartAccountUsagePolling()
 			}
 		}
+		if (taskCapabilityTogglesChanged && controller.task && controller.task.taskId === taskId) {
+			await controller.task.flushPromptFreshnessInvalidation("task_capability_toggle")
+			promptFreshnessPublished = true
+		}
 	}
 
-	await controller.postStateToWebview()
+	if (!promptFreshnessPublished) await controller.postStateToWebview()
 
 	return Empty.create()
 }

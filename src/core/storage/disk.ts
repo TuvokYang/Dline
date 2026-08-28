@@ -6,6 +6,7 @@ import { envFlagEnabled } from "@shared/env"
 import { HistoryItem } from "@shared/HistoryItem"
 import { requiresLegacyConversationMigration } from "@shared/messages/legacy-identity-migration"
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
+import { WebSearchMode } from "@shared/proto/dline/provider/common"
 import { RemoteConfig } from "@shared/remote-config/schema"
 import { GlobalState, Settings } from "@shared/storage/state-keys"
 import { fileExistsAtPath, isDirectory } from "@utils/fs"
@@ -594,6 +595,56 @@ function isFrozenTool(value: unknown): boolean {
 	return false
 }
 
+const TASK_CAPABILITY_TOGGLE_KEYS = [
+	"globalClineRulesToggles",
+	"localClineRulesToggles",
+	"localCursorRulesToggles",
+	"localWindsurfRulesToggles",
+	"localAgentsRulesToggles",
+	"globalWorkflowToggles",
+	"localWorkflowToggles",
+	"globalSkillsToggles",
+	"localSkillsToggles",
+	"remoteSkillsToggles",
+	"remoteRulesToggles",
+	"remoteWorkflowToggles",
+	"globalSubagentsToggles",
+	"localSubagentsToggles",
+	"mcpServers",
+] as const
+
+function isBooleanRecord(value: unknown): boolean {
+	return isJsonObject(value) && Object.values(value).every((enabled) => typeof enabled === "boolean")
+}
+
+function isPromptRuntime(value: unknown): boolean {
+	if (!isJsonObject(value) || !isJsonObject(value.capabilityToggles) || !isJsonObject(value.browserViewport)) return false
+	const capabilityToggles = value.capabilityToggles
+	const browserViewport = value.browserViewport
+	return (
+		(value.parallelToolsEnabled === undefined || typeof value.parallelToolsEnabled === "boolean") &&
+		typeof value.webToolsEnabled === "boolean" &&
+		isKnownWebSearchMode(value.webSearchMode) &&
+		(value.webSearchRoute === "disabled" ||
+			value.webSearchRoute === "local" ||
+			value.webSearchRoute === "hosted" ||
+			value.webSearchRoute === "unavailable") &&
+		typeof value.webSearchLocalFallbackAvailable === "boolean" &&
+		Array.isArray(value.serverTools) &&
+		value.serverTools.every((tool) => isKnownServerTool(tool)) &&
+		typeof value.focusChainEnabled === "boolean" &&
+		typeof value.subagentsEnabled === "boolean" &&
+		TASK_CAPABILITY_TOGGLE_KEYS.every((key) => isBooleanRecord(capabilityToggles[key])) &&
+		typeof value.browserEnabled === "boolean" &&
+		typeof browserViewport.width === "number" &&
+		Number.isFinite(browserViewport.width) &&
+		browserViewport.width >= 0 &&
+		typeof browserViewport.height === "number" &&
+		Number.isFinite(browserViewport.height) &&
+		browserViewport.height >= 0
+	)
+}
+
 function isPromptBuilderInfo(value: unknown): value is FrozenPromptBuilderInfo {
 	return (
 		isJsonObject(value) &&
@@ -608,11 +659,22 @@ function isPromptBuilderInfo(value: unknown): value is FrozenPromptBuilderInfo {
 		(value.serverTools === undefined ||
 			(Array.isArray(value.serverTools) && value.serverTools.every((tool) => isKnownServerTool(tool)))) &&
 		(value.webToolsEnabled === undefined || typeof value.webToolsEnabled === "boolean") &&
+		(value.webSearchMode === undefined || isKnownWebSearchMode(value.webSearchMode)) &&
+		(value.webSearchLocalFallbackAvailable === undefined || typeof value.webSearchLocalFallbackAvailable === "boolean") &&
 		(value.webSearchRoute === undefined ||
 			value.webSearchRoute === "disabled" ||
 			value.webSearchRoute === "local" ||
 			value.webSearchRoute === "hosted" ||
 			value.webSearchRoute === "unavailable")
+	)
+}
+
+function isKnownWebSearchMode(value: unknown): value is WebSearchMode {
+	return (
+		value === WebSearchMode.WEB_SEARCH_MODE_AUTO ||
+		value === WebSearchMode.WEB_SEARCH_MODE_FORCE_LOCAL ||
+		value === WebSearchMode.WEB_SEARCH_MODE_FORCE_OFF ||
+		value === WebSearchMode.WEB_SEARCH_MODE_FORCE_REMOTE
 	)
 }
 
@@ -647,7 +709,13 @@ function migrateLegacyPromptProfile(value: unknown): void {
 function isFrozenSystemPromptCache(value: unknown): boolean {
 	if (!isJsonObject(value)) return false
 	const toolsValid = value.tools === null || (Array.isArray(value.tools) && value.tools.every(isFrozenTool))
-	if (!toolsValid || !isPromptBuilderInfo(value.promptBuilder)) return false
+	if (
+		!toolsValid ||
+		!isPromptBuilderInfo(value.promptBuilder) ||
+		(value.runtime !== undefined && !isPromptRuntime(value.runtime))
+	) {
+		return false
+	}
 	const hasNativeTools = Array.isArray(value.tools) && value.tools.length > 0
 	return (
 		isNonEmptyString(value.text) &&

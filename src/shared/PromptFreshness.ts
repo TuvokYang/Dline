@@ -8,6 +8,7 @@ export type PromptFreshnessChangeKind =
 	| "browser"
 	| "web_tools"
 	| "focus_chain"
+	| "rules"
 	| "subagents"
 	| "mcp"
 	| "skills"
@@ -16,7 +17,7 @@ export type PromptFreshnessChangeKind =
 
 /** Stable, content-safe projection persisted beside one frozen prompt. */
 export interface PromptFreshnessBaseline {
-	readonly schemaVersion: 1
+	readonly schemaVersion: 2
 	readonly providerId: string
 	readonly modelId: string
 	readonly promptProfile: "standard" | "lite"
@@ -27,6 +28,7 @@ export interface PromptFreshnessBaseline {
 	readonly webToolsEnabled: boolean
 	readonly webSearchRoute: string
 	readonly focusChainEnabled: boolean
+	readonly rulesHash: string
 	readonly subagentsEnabled: boolean
 	readonly capabilityHashes: {
 		readonly mcp: string

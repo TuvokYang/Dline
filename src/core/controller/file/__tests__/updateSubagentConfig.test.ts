@@ -3,10 +3,21 @@ import { UpdateSubagentConfigRequest } from "@shared/proto/dline/file"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { afterEach, describe, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { updateSubagentConfig } from "../updateSubagentConfig"
 
 const temporaryDirectories: string[] = []
+
+function createController() {
+	const flushPromptFreshnessInvalidation = vi.fn().mockResolvedValue(undefined)
+	return {
+		controller: {
+			task: { flushPromptFreshnessInvalidation },
+			postStateToWebview: vi.fn().mockResolvedValue(undefined),
+		} as never,
+		flushPromptFreshnessInvalidation,
+	}
+}
 
 describe("updateSubagentConfig", () => {
 	afterEach(async () => {
@@ -31,7 +42,8 @@ describe("updateSubagentConfig", () => {
 				}),
 			).finish(),
 		)
-		await updateSubagentConfig({} as never, request)
+		const fixture = createController()
+		await updateSubagentConfig(fixture.controller, request)
 
 		const content = await fs.readFile(subagentPath, "utf8")
 		assert.match(content, /tools:\n\s{2}- read_file\n\s{2}- search_files/)
@@ -39,6 +51,7 @@ describe("updateSubagentConfig", () => {
 		assert.match(content, /description: Research agent/)
 		assert.match(content, /profile: "own-openai:deepseek-v4-flash"/)
 		assert.match(content, /Custom reviewer instructions\./)
+		expect(fixture.flushPromptFreshnessInvalidation).toHaveBeenCalledWith("capability_mutation")
 	})
 
 	it("clears tools and skills only when replacement intent is explicit", async () => {
@@ -51,8 +64,9 @@ describe("updateSubagentConfig", () => {
 			"utf8",
 		)
 
+		const fixture = createController()
 		await updateSubagentConfig(
-			{} as never,
+			fixture.controller,
 			UpdateSubagentConfigRequest.create({
 				subagentPath,
 				tools: [],
@@ -66,6 +80,7 @@ describe("updateSubagentConfig", () => {
 		assert.match(content, /tools: \[\]/)
 		assert.match(content, /skills: \[\]/)
 		assert.match(content, /Prompt body/)
+		expect(fixture.flushPromptFreshnessInvalidation).toHaveBeenCalledOnce()
 	})
 
 	it("keeps YAML frontmatter delimiters on separate lines when updating fields", async () => {
@@ -78,20 +93,19 @@ describe("updateSubagentConfig", () => {
 			"utf8",
 		)
 
-		await updateSubagentConfig(
-			{} as never,
-			{
-				subagentPath,
-				profile: "deepseek:deepseek-v4-pro",
-				tools: [],
-				skills: [],
-				description: "Research and exploration subagent",
-			} as never,
-		)
+		const fixture = createController()
+		await updateSubagentConfig(fixture.controller, {
+			subagentPath,
+			profile: "deepseek:deepseek-v4-pro",
+			tools: [],
+			skills: [],
+			description: "Research and exploration subagent",
+		} as never)
 
 		const content = await fs.readFile(subagentPath, "utf8")
 		assert.match(content, /^---\nname: reviewer\n/)
 		assert.doesNotMatch(content, /^---name:/)
 		assert.match(content, /\n---\nPrompt body/)
+		expect(fixture.flushPromptFreshnessInvalidation).toHaveBeenCalledOnce()
 	})
 })

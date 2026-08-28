@@ -1,14 +1,13 @@
 import {
 	createTaskCapabilityToggles,
-	reconcileTaskCapabilityToggles,
 	serializeTaskCapabilityToggles,
 	type TaskCapabilityToggleKey,
 	type TaskCapabilityToggles,
-	updateTaskCapabilityToggle,
 } from "@shared/TaskCapabilityToggles"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { updateTaskSettings } from "@/components/settings/utils/settingsHandlers"
 import { useExtensionState } from "@/context/ExtensionStateContext"
+import { taskCapabilityMutationCoordinator } from "./TaskCapabilityMutationCoordinator"
 
 export function useTaskCapabilityToggles() {
 	const {
@@ -67,142 +66,65 @@ export function useTaskCapabilityToggles() {
 		],
 	)
 	const authoritativeSnapshot = isTaskScoped ? (taskCapabilityToggles ?? inheritedSnapshot) : undefined
-	type PendingIntent = { taskId: string; enabled: boolean; startRevision: number; persisted: boolean }
-	const pendingRef = useRef(new Map<string, PendingIntent>())
-	const writeQueuesRef = useRef(new Map<string, Promise<unknown>>())
-	const pendingTaskIdRef = useRef(taskId)
+	const authoritativeRevision = stateRevision ?? 0
 	const currentTaskIdRef = useRef(taskId)
-	const authoritativeRef = useRef(authoritativeSnapshot)
-	const stateRevisionRef = useRef(stateRevision ?? 0)
-	const [, setPendingVersion] = useState(0)
-	if (pendingTaskIdRef.current !== taskId) {
-		pendingTaskIdRef.current = taskId
-		pendingRef.current.clear()
-	}
 	currentTaskIdRef.current = taskId
-	authoritativeRef.current = authoritativeSnapshot
-	stateRevisionRef.current = stateRevision ?? 0
-
-	const pendingKey = (pendingTaskId: string, key: TaskCapabilityToggleKey, resourceId: string) =>
-		`${pendingTaskId}\u0000${key}\u0000${resourceId}`
-	const overlayPending = useCallback(
-		(base: TaskCapabilityToggles | undefined) => {
-			if (!base) return undefined
-			let next = base
-			for (const [identity, intent] of pendingRef.current) {
-				if (intent.taskId !== taskId) continue
-				const keySeparator = identity.indexOf("\u0000")
-				const resourceSeparator = identity.indexOf("\u0000", keySeparator + 1)
-				const key = identity.slice(keySeparator + 1, resourceSeparator) as TaskCapabilityToggleKey
-				const resourceId = identity.slice(resourceSeparator + 1)
-				next = updateTaskCapabilityToggle(next, key, resourceId, intent.enabled)
-			}
-			return next
-		},
-		[taskId],
-	)
-	const snapshot = overlayPending(authoritativeSnapshot)
-	const snapshotRef = useRef(snapshot)
-	snapshotRef.current = snapshot
-
-	const settleAcknowledgedIntents = useCallback(() => {
-		const authoritative = authoritativeRef.current
-		if (!authoritative) return
-		let changed = false
-		for (const [identity, intent] of pendingRef.current) {
-			if (
-				intent.taskId !== currentTaskIdRef.current ||
-				!intent.persisted ||
-				stateRevisionRef.current <= intent.startRevision
-			) {
-				continue
-			}
-			const keySeparator = identity.indexOf("\u0000")
-			const resourceSeparator = identity.indexOf("\u0000", keySeparator + 1)
-			const key = identity.slice(keySeparator + 1, resourceSeparator) as TaskCapabilityToggleKey
-			const resourceId = identity.slice(resourceSeparator + 1)
-			if (authoritative[key][resourceId] === intent.enabled) {
-				pendingRef.current.delete(identity)
-				changed = true
-			}
-		}
-		if (changed) setPendingVersion((version) => version + 1)
-	}, [])
+	const [, setCoordinatorVersion] = useState(0)
+	const snapshot =
+		taskId && authoritativeSnapshot
+			? taskCapabilityMutationCoordinator.observe(taskId, authoritativeSnapshot, authoritativeRevision)
+			: undefined
 
 	useEffect(() => {
-		settleAcknowledgedIntents()
-	}, [authoritativeSnapshot, stateRevision, settleAcknowledgedIntents])
+		if (!taskId || !authoritativeSnapshot) return
+		taskCapabilityMutationCoordinator.observe(taskId, authoritativeSnapshot, authoritativeRevision)
+		return taskCapabilityMutationCoordinator.subscribe(taskId, () => setCoordinatorVersion((version) => version + 1))
+	}, [authoritativeRevision, authoritativeSnapshot, taskId])
 
-	const enqueueTaskSnapshotWrite = useCallback((operationTaskId: string, next: TaskCapabilityToggles) => {
-		const previousWrite = writeQueuesRef.current.get(operationTaskId)
-		const persist = () => updateTaskSettings(operationTaskId, { taskCapabilityToggles: serializeTaskCapabilityToggles(next) })
-		const durableWrite = previousWrite ? previousWrite.catch(() => undefined).then(persist) : persist()
-		writeQueuesRef.current.set(operationTaskId, durableWrite)
-		return durableWrite.finally(() => {
-			if (writeQueuesRef.current.get(operationTaskId) === durableWrite) writeQueuesRef.current.delete(operationTaskId)
-		})
-	}, [])
-
-	const persistSnapshot = useCallback(
-		(next: TaskCapabilityToggles) => {
-			snapshotRef.current = next
-			if (taskId === undefined) return Promise.resolve()
-			setTaskCapabilityToggles(next)
-			return updateTaskSettings(taskId, { taskCapabilityToggles: serializeTaskCapabilityToggles(next) })
+	const publish = useCallback(
+		(operationTaskId: string, next: TaskCapabilityToggles) => {
+			if (currentTaskIdRef.current === operationTaskId) setTaskCapabilityToggles(next)
 		},
-		[taskId, setTaskCapabilityToggles],
+		[setTaskCapabilityToggles],
+	)
+	const persist = useCallback(
+		(operationTaskId: string, next: TaskCapabilityToggles) =>
+			updateTaskSettings(operationTaskId, {
+				taskCapabilityToggles: serializeTaskCapabilityToggles(next),
+			}).then(() => undefined),
+		[],
 	)
 
 	const updateToggle = useCallback(
-		async (key: TaskCapabilityToggleKey, resourceId: string, enabled: boolean) => {
-			const current = snapshotRef.current
-			if (!current || taskId === undefined) return
-			const operationTaskId = taskId
-			const identity = pendingKey(operationTaskId, key, resourceId)
-			pendingRef.current.set(identity, {
-				taskId: operationTaskId,
+		(key: TaskCapabilityToggleKey, resourceId: string, enabled: boolean) => {
+			if (!taskId || !authoritativeSnapshot) return Promise.resolve()
+			return taskCapabilityMutationCoordinator.updateToggle({
+				taskId,
+				authoritative: authoritativeSnapshot,
+				authoritativeRevision,
+				key,
+				resourceId,
 				enabled,
-				startRevision: stateRevisionRef.current,
-				persisted: false,
+				persist: (next) => persist(taskId, next),
+				publish: (next) => publish(taskId, next),
 			})
-			const next = updateTaskCapabilityToggle(current, key, resourceId, enabled)
-			snapshotRef.current = next
-			setTaskCapabilityToggles(next)
-			setPendingVersion((version) => version + 1)
-			try {
-				await enqueueTaskSnapshotWrite(operationTaskId, next)
-				if (currentTaskIdRef.current !== operationTaskId) return
-				const pending = pendingRef.current.get(identity)
-				if (pending?.enabled === enabled) {
-					pending.persisted = true
-					settleAcknowledgedIntents()
-				}
-			} catch (error) {
-				const pending = pendingRef.current.get(identity)
-				if (pending?.enabled === enabled) {
-					pendingRef.current.delete(identity)
-					if (currentTaskIdRef.current === operationTaskId) {
-						setTaskCapabilityToggles(authoritativeRef.current)
-						setPendingVersion((version) => version + 1)
-					}
-				}
-				throw error
-			}
 		},
-		[enqueueTaskSnapshotWrite, settleAcknowledgedIntents, setTaskCapabilityToggles, taskId],
+		[authoritativeRevision, authoritativeSnapshot, persist, publish, taskId],
 	)
 
 	const reconcile = useCallback(
 		(discovered: Partial<TaskCapabilityToggles>) => {
-			const current = snapshotRef.current
-			if (!current) return Promise.resolve()
-			const next = reconcileTaskCapabilityToggles(current, discovered)
-			if (serializeTaskCapabilityToggles(next) === serializeTaskCapabilityToggles(current)) {
-				return Promise.resolve()
-			}
-			return persistSnapshot(next)
+			if (!taskId || !authoritativeSnapshot) return Promise.resolve()
+			return taskCapabilityMutationCoordinator.reconcile({
+				taskId,
+				authoritative: authoritativeSnapshot,
+				authoritativeRevision,
+				discovered,
+				persist: (next) => persist(taskId, next),
+				publish: (next) => publish(taskId, next),
+			})
 		},
-		[persistSnapshot],
+		[authoritativeRevision, authoritativeSnapshot, persist, publish, taskId],
 	)
 
 	return { isTaskScoped, snapshot, updateToggle, reconcile }

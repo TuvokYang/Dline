@@ -1,5 +1,6 @@
 import type { TaskContextCache } from "@core/storage/task-context-types"
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
+import { createTaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
 import type { ClineTool } from "@shared/tools"
 import fs from "fs/promises"
 import os from "os"
@@ -57,6 +58,19 @@ function buildContext(taskId: string): TaskContextCache {
 				createdAt: 100,
 				refreshedAt: 200,
 				refreshReason: "task_start",
+				runtime: {
+					parallelToolsEnabled: true,
+					webToolsEnabled: true,
+					webSearchMode: 0,
+					webSearchRoute: "hosted",
+					webSearchLocalFallbackAvailable: true,
+					serverTools: [ServerTool.WEB_SEARCH],
+					focusChainEnabled: true,
+					subagentsEnabled: true,
+					capabilityToggles: createTaskCapabilityToggles({ mcpServers: { frozen: true } }),
+					browserEnabled: true,
+					browserViewport: { width: 1280, height: 800 },
+				},
 				promptBuilder: {
 					contractVersion: 2,
 					providerId: "test-provider",
@@ -91,6 +105,17 @@ describe("task context cache", () => {
 
 		expect(actual).toEqual(expected)
 		expect(actual.systemPrompt?.frozen?.tools).toEqual(expected.systemPrompt?.frozen?.tools)
+		expect(actual.systemPrompt?.frozen?.runtime).toMatchObject({
+			parallelToolsEnabled: true,
+			webToolsEnabled: true,
+			webSearchRoute: "hosted",
+			serverTools: [ServerTool.WEB_SEARCH],
+			focusChainEnabled: true,
+			subagentsEnabled: true,
+			capabilityToggles: { mcpServers: { frozen: true } },
+			browserEnabled: true,
+			browserViewport: { width: 1280, height: 800 },
+		})
 		expect(actual.systemPrompt?.frozen?.promptBuilder).toMatchObject({
 			apiFormat: ApiFormat.OPENAI_RESPONSES,
 			serverTools: [ServerTool.WEB_SEARCH],
@@ -265,6 +290,56 @@ describe("task context cache", () => {
 						},
 					},
 				},
+			}),
+			"utf8",
+		)
+
+		const actual = await getTaskContext(taskId)
+
+		expect(actual.systemPrompt).toBeUndefined()
+	})
+
+	it.each([
+		[
+			"missing-toggle-map",
+			(runtime: Record<string, unknown>) => delete (runtime.capabilityToggles as Record<string, unknown>).mcpServers,
+		],
+		[
+			"invalid-parallel-tools",
+			(runtime: Record<string, unknown>) => {
+				runtime.parallelToolsEnabled = "yes"
+			},
+		],
+		[
+			"invalid-toggle-entry",
+			(runtime: Record<string, unknown>) => {
+				;(runtime.capabilityToggles as Record<string, unknown>).mcpServers = { frozen: "yes" }
+			},
+		],
+		[
+			"invalid-server-tool",
+			(runtime: Record<string, unknown>) => {
+				runtime.serverTools = [999]
+			},
+		],
+		[
+			"invalid-browser-viewport",
+			(runtime: Record<string, unknown>) => {
+				runtime.browserViewport = { width: -1, height: 800 }
+			},
+		],
+	] as const)("rejects malformed frozen runtime: %s", async (caseId, mutateRuntime) => {
+		const taskId = `task-malformed-runtime-${caseId}`
+		const filePath = path.join(testDir, "tasks", taskId, GlobalFileNames.taskContext)
+		await fs.mkdir(path.dirname(filePath), { recursive: true })
+		const malformed = buildContext(taskId)
+		const runtime = structuredClone(malformed.systemPrompt?.frozen?.runtime) as unknown as Record<string, unknown>
+		mutateRuntime(runtime)
+		await fs.writeFile(
+			filePath,
+			JSON.stringify({
+				...malformed,
+				systemPrompt: { frozen: { ...malformed.systemPrompt?.frozen, runtime } },
 			}),
 			"utf8",
 		)

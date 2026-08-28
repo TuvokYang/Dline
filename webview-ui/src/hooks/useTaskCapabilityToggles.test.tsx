@@ -15,6 +15,7 @@ vi.mock("@/components/settings/utils/settingsHandlers", () => ({
 	updateTaskSettings: mocks.updateTaskSettings,
 }))
 
+import { taskCapabilityMutationCoordinator } from "./TaskCapabilityMutationCoordinator"
 import { useTaskCapabilityToggles } from "./useTaskCapabilityToggles"
 
 const baseState = () => ({
@@ -40,6 +41,7 @@ const baseState = () => ({
 
 describe("useTaskCapabilityToggles", () => {
 	beforeEach(() => {
+		taskCapabilityMutationCoordinator.reset()
 		mocks.state = baseState()
 		mocks.updateTaskSettings.mockReset().mockResolvedValue(undefined)
 	})
@@ -256,6 +258,48 @@ describe("useTaskCapabilityToggles", () => {
 			await secondWrite
 		})
 		expect(result.current.snapshot?.mcpServers.docs).toBe(true)
+	})
+
+	it("merges queued writes from independent hook consumers for the same task", async () => {
+		let resolveFirst: (() => void) | undefined
+		mocks.updateTaskSettings
+			.mockImplementationOnce(
+				() =>
+					new Promise<void>((resolve) => {
+						resolveFirst = resolve
+					}),
+			)
+			.mockResolvedValueOnce(undefined)
+		mocks.state = {
+			...baseState(),
+			taskViewState: { taskId: "task-1" },
+			taskCapabilityToggles: createTaskCapabilityToggles({
+				localSubagentsToggles: { agent: false },
+				mcpServers: { docs: false },
+			}),
+		}
+		const firstConsumer = renderHook(() => useTaskCapabilityToggles())
+		const secondConsumer = renderHook(() => useTaskCapabilityToggles())
+		let firstWrite: Promise<void> | undefined
+		let secondWrite: Promise<void> | undefined
+
+		act(() => {
+			firstWrite = firstConsumer.result.current.updateToggle("localSubagentsToggles", "agent", true)
+			secondWrite = secondConsumer.result.current.updateToggle("mcpServers", "docs", true)
+		})
+		expect(mocks.updateTaskSettings).toHaveBeenCalledTimes(1)
+
+		await act(async () => {
+			resolveFirst?.()
+			await firstWrite
+		})
+		await vi.waitFor(() => expect(mocks.updateTaskSettings).toHaveBeenCalledTimes(2))
+		const secondSnapshot = parseTaskCapabilityToggles(mocks.updateTaskSettings.mock.calls[1][1].taskCapabilityToggles)
+		expect(secondSnapshot?.localSubagentsToggles.agent).toBe(true)
+		expect(secondSnapshot?.mcpServers.docs).toBe(true)
+		await act(async () => {
+			await secondWrite
+		})
 	})
 
 	it("reconciles discoveries without overwriting an existing task choice or pruning a temporarily missing resource", async () => {

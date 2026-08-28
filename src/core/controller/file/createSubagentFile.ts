@@ -88,6 +88,11 @@ export async function createSubagentFile(controller: Controller, request: Create
 	// Create the YAML file from template
 	const content = SUBAGENT_TEMPLATE.replace(/\{\{SUBAGENT_NAME\}\}/g, sanitizedName)
 	await fs.writeFile(filePath, content, "utf-8")
+	if (controller.task) {
+		await controller.task.flushPromptFreshnessInvalidation("capability_mutation")
+	} else {
+		await controller.postStateToWebview()
+	}
 
 	// Open the file for editing
 	await openFile(controller, { value: filePath })

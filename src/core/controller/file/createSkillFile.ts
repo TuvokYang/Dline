@@ -94,6 +94,11 @@ export async function createSkillFile(controller: Controller, request: CreateSki
 	const skillMdPath = path.join(skillDir, "SKILL.md")
 	const content = SKILL_TEMPLATE.replace(/\{\{SKILL_NAME\}\}/g, sanitizedName)
 	await fs.writeFile(skillMdPath, content, "utf-8")
+	if (controller.task) {
+		await controller.task.flushPromptFreshnessInvalidation("capability_mutation")
+	} else {
+		await controller.postStateToWebview()
+	}
 
 	// Open the file for editing
 	await openFile(controller, { value: skillMdPath })

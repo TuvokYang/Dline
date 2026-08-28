@@ -39,6 +39,11 @@ export async function deleteSubagentFile(controller: Controller, request: Delete
 		delete localToggles[subagentPath]
 		controller.stateManager.setWorkspaceState("localSubagentsToggles", localToggles)
 	}
+	if (controller.task) {
+		await controller.task.flushPromptFreshnessInvalidation("capability_mutation")
+	} else {
+		await controller.postStateToWebview()
+	}
 
 	return SubagentToggles.create({
 		globalSubagentsToggles: globalToggles,

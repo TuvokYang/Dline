@@ -1,5 +1,6 @@
 import { setTimeout as setTimeoutPromise } from "node:timers/promises"
 import { Controller } from "@core/controller"
+import type { BrowserSettings } from "@shared/BrowserSettings"
 import { BrowserActionResult } from "@shared/ExtensionMessage"
 import { fileExistsAtPath } from "@utils/fs"
 import axios from "axios"
@@ -50,9 +51,17 @@ export class BrowserSession {
 	private ulid?: string
 	private stateManager: StateManager
 
-	constructor(stateManager: StateManager, useWebp = true) {
+	constructor(
+		stateManager: StateManager,
+		useWebp = true,
+		private readonly browserSettingsSnapshot?: BrowserSettings,
+	) {
 		this.stateManager = stateManager
 		this.useWebp = useWebp
+	}
+
+	private getBrowserSettings(): BrowserSettings {
+		return this.browserSettingsSnapshot ?? this.stateManager.getGlobalSettingsKey("browserSettings")
 	}
 
 	// Tests remote browser connection
@@ -67,15 +76,13 @@ export class BrowserSession {
 		return {
 			isConnected: !!this.browser,
 			isRemote: this.isConnectedToRemote,
-			host: this.isConnectedToRemote
-				? this.stateManager.getGlobalSettingsKey("browserSettings").remoteBrowserHost
-				: undefined,
+			host: this.isConnectedToRemote ? this.getBrowserSettings().remoteBrowserHost : undefined,
 		}
 	}
 
 	async getDetectedChromePath(): Promise<{ path: string; isBundled: boolean }> {
 		// First check browserSettings (from UI, stored in global state)
-		const browserSettings = this.stateManager.getGlobalSettingsKey("browserSettings")
+		const browserSettings = this.getBrowserSettings()
 		if (browserSettings.chromeExecutablePath && (await fileExistsAtPath(browserSettings.chromeExecutablePath))) {
 			return {
 				path: browserSettings.chromeExecutablePath,
@@ -108,7 +115,7 @@ export class BrowserSession {
 			}
 			Logger.info("chrome installation", installation)
 
-			const userArgs = splitArgs(this.stateManager.getGlobalSettingsKey("browserSettings").customArgs)
+			const userArgs = splitArgs(this.getBrowserSettings().customArgs)
 
 			const args = [
 				`--remote-debugging-port=${DEBUG_PORT}`,
@@ -164,7 +171,7 @@ export class BrowserSession {
 		// Reset remote connection status
 		this.isConnectedToRemote = false
 
-		const browserSettings = this.stateManager.getGlobalSettingsKey("browserSettings")
+		const browserSettings = this.getBrowserSettings()
 
 		if (browserSettings.remoteBrowserEnabled) {
 			Logger.log(`launch browser called -- remote host mode (non-headless)`)
@@ -210,7 +217,7 @@ export class BrowserSession {
 	}
 
 	async launchLocalBrowser() {
-		const browserSettings = this.stateManager.getGlobalSettingsKey("browserSettings")
+		const browserSettings = this.getBrowserSettings()
 		const { path } = await this.getDetectedChromePath()
 		const userArgs = splitArgs(browserSettings.customArgs)
 		this.browser = await launch({
@@ -226,7 +233,7 @@ export class BrowserSession {
 	}
 
 	async launchRemoteBrowser() {
-		const browserSettings = this.stateManager.getGlobalSettingsKey("browserSettings")
+		const browserSettings = this.getBrowserSettings()
 		let remoteBrowserHost = browserSettings.remoteBrowserHost
 		let browserWSEndpoint: string | undefined = this.cachedWebSocketEndpoint
 		let _reconnectionAttempted = false

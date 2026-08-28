@@ -12,7 +12,9 @@ import type {
 	TaskContextCache,
 } from "@core/storage/task-context-types"
 import type { PromptFreshnessSnapshot } from "@shared/PromptFreshness"
+import { emptyTaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
 import type { ClineTool } from "@shared/tools"
+import Mutex from "p-mutex"
 import { hashPromptContent } from "./hash"
 import { buildPromptFreshnessBaseline, comparePromptFreshness } from "./PromptFreshnessProjection"
 
@@ -43,11 +45,6 @@ export interface RefreshSystemPromptInput extends GetOrCreatePromptInput {
 	readonly reason: SystemPromptRefreshReason
 }
 
-function sameServerTools(left: readonly number[] | undefined, right: readonly number[] | undefined): boolean {
-	if (left === undefined || right === undefined) return left === right
-	return left.length === right.length && left.every((tool, index) => tool === right[index])
-}
-
 /**
  * Manage task-level frozen system prompt cache stored in task context.json.
  */
@@ -64,6 +61,7 @@ export class SystemPromptCacheService {
 		tools: readonly ClineTool[] | undefined,
 	) => FrozenPromptBuilderInfo
 	private readonly now: () => number
+	private readonly operationMutex = new Mutex()
 	private lastTools?: readonly ClineTool[]
 	private latestPromptFreshness: PromptFreshnessSnapshot = { status: "unknown", changes: [], checkedAt: 0 }
 	private pendingGetOrCreate?: Promise<FrozenSystemPromptCache>
@@ -99,19 +97,7 @@ export class SystemPromptCacheService {
 
 	/** Re-evaluate freshness without rebuilding or persisting the frozen prompt and tools. */
 	public async reevaluateFreshness(input: GetOrCreatePromptInput): Promise<PromptFreshnessSnapshot> {
-		const context = await this.getContext(this.taskId)
-		const cached = context.systemPrompt?.frozen
-		if (!cached) {
-			this.latestPromptFreshness = {
-				status: "unknown",
-				changes: [],
-				checkedAt: this.now(),
-			}
-			return this.latestPromptFreshness
-		}
-
-		await this.updateFreshnessSnapshot(cached, input.promptContext)
-		return this.latestPromptFreshness
+		return this.operationMutex.withLock(() => this.reevaluateFreshnessLocked(input))
 	}
 
 	/**
@@ -123,7 +109,7 @@ export class SystemPromptCacheService {
 	public getOrCreate(input: GetOrCreatePromptInput): Promise<FrozenSystemPromptCache> {
 		if (this.pendingGetOrCreate) return this.pendingGetOrCreate
 
-		const pending = this.loadOrCreate(input)
+		const pending = this.operationMutex.withLock(() => this.loadOrCreateLocked(input))
 		this.pendingGetOrCreate = pending
 		const clearPending = () => {
 			if (this.pendingGetOrCreate === pending) this.pendingGetOrCreate = undefined
@@ -139,6 +125,26 @@ export class SystemPromptCacheService {
 	 * @returns Refreshed frozen system prompt cache entry.
 	 */
 	public async refresh(input: RefreshSystemPromptInput): Promise<FrozenSystemPromptCache> {
+		return this.operationMutex.withLock(() => this.refreshLocked(input))
+	}
+
+	private async reevaluateFreshnessLocked(input: GetOrCreatePromptInput): Promise<PromptFreshnessSnapshot> {
+		const context = await this.getContext(this.taskId)
+		const cached = context.systemPrompt?.frozen
+		if (!cached) {
+			this.latestPromptFreshness = {
+				status: "unknown",
+				changes: [],
+				checkedAt: this.now(),
+			}
+			return this.latestPromptFreshness
+		}
+
+		await this.updateFreshnessSnapshot(cached, input.promptContext)
+		return this.latestPromptFreshness
+	}
+
+	private async refreshLocked(input: RefreshSystemPromptInput): Promise<FrozenSystemPromptCache> {
 		const context = await this.getContext(this.taskId)
 		const capabilities = await this.collectCapabilitiesFn({
 			cwd: input.promptContext.cwd ?? process.cwd(),
@@ -162,6 +168,7 @@ export class SystemPromptCacheService {
 			text: built.systemPrompt,
 			tools: built.tools ?? null,
 			capabilitiesHash,
+			runtime: this.buildPromptRuntime(input.promptContext),
 			freshnessBaseline,
 			createdAt: context.systemPrompt?.frozen?.createdAt ?? now,
 			refreshedAt: now,
@@ -188,7 +195,7 @@ export class SystemPromptCacheService {
 	}
 
 	/** Load a valid frozen pair or rebuild and persist one complete replacement. */
-	private async loadOrCreate(input: GetOrCreatePromptInput): Promise<FrozenSystemPromptCache> {
+	private async loadOrCreateLocked(input: GetOrCreatePromptInput): Promise<FrozenSystemPromptCache> {
 		const context = await this.getContext(this.taskId)
 		const cached = context.systemPrompt?.frozen
 		if (cached) {
@@ -203,20 +210,40 @@ export class SystemPromptCacheService {
 				cachedBuilder.modelId !== currentBuilder.modelId ||
 				cachedBuilder.profile !== currentBuilder.profile ||
 				cachedBuilder.nativeTools !== Boolean(input.promptContext.enableNativeToolCalls) ||
-				cachedBuilder.focusChainEnabled !== currentBuilder.focusChainEnabled ||
-				cachedBuilder.subagentsEnabled !== currentBuilder.subagentsEnabled ||
-				cachedBuilder.apiFormat !== currentBuilder.apiFormat ||
-				cachedBuilder.webToolsEnabled !== currentBuilder.webToolsEnabled ||
-				cachedBuilder.webSearchRoute !== currentBuilder.webSearchRoute ||
-				!sameServerTools(cachedBuilder.serverTools, currentBuilder.serverTools)
+				cachedBuilder.apiFormat !== currentBuilder.apiFormat
 			if (providerProjectionChanged) {
-				return this.refresh({ promptContext: input.promptContext, reason: "capability_change" })
+				return this.refreshLocked({ promptContext: input.promptContext, reason: "capability_change" })
 			}
 			await this.updateFreshnessSnapshot(cached, input.promptContext)
 			this.lastTools = cached.tools ?? undefined
 			return cached
 		}
-		return this.refresh({ promptContext: input.promptContext, reason: "task_start" })
+		return this.refreshLocked({ promptContext: input.promptContext, reason: "task_start" })
+	}
+
+	private buildPromptRuntime(context: SystemPromptContext): NonNullable<FrozenSystemPromptCache["runtime"]> {
+		const browserEnabled = context.supportsBrowserUse === true && context.browserSettings?.disableToolUse !== true
+		const capabilityToggles = context.taskCapabilityToggles ?? emptyTaskCapabilityToggles()
+		if (!context.webSearchRoutingPlan) throw new Error("System prompt context is missing its Web Search routing plan")
+		return {
+			parallelToolsEnabled: context.enableParallelToolCalling === true,
+			webToolsEnabled: context.clineWebToolsEnabled === true,
+			webSearchMode: context.webSearchRoutingPlan.mode,
+			webSearchRoute: context.webSearchRoutingPlan.route,
+			webSearchLocalFallbackAvailable: context.webSearchRoutingPlan.localFallbackAvailable,
+			serverTools: [...context.webSearchRoutingPlan.serverTools],
+			focusChainEnabled: context.promptProfile === PromptProfile.Standard && context.focusChainSettings?.enabled === true,
+			subagentsEnabled: context.promptProfile === PromptProfile.Standard && context.subagentsEnabled === true,
+			capabilityToggles: {
+				...capabilityToggles,
+				mcpServers: context.mcpHub ? { ...capabilityToggles.mcpServers } : {},
+			},
+			browserEnabled,
+			browserViewport: {
+				width: browserEnabled ? (context.browserSettings?.viewport.width ?? 0) : 0,
+				height: browserEnabled ? (context.browserSettings?.viewport.height ?? 0) : 0,
+			},
+		}
 	}
 
 	private async updateFreshnessSnapshot(cached: FrozenSystemPromptCache, promptContext: SystemPromptContext): Promise<void> {
@@ -263,7 +290,13 @@ export class SystemPromptCacheService {
 				? {}
 				: { apiFormat: webSearchRoutingPlan.serverToolPlan.apiFormat }),
 			webToolsEnabled: context.clineWebToolsEnabled === true,
-			...(webSearchRoutingPlan === undefined ? {} : { webSearchRoute: webSearchRoutingPlan.route }),
+			...(webSearchRoutingPlan === undefined
+				? {}
+				: {
+						webSearchRoute: webSearchRoutingPlan.route,
+						webSearchMode: webSearchRoutingPlan.mode,
+						webSearchLocalFallbackAvailable: webSearchRoutingPlan.localFallbackAvailable,
+					}),
 			serverTools: webSearchRoutingPlan?.serverTools ?? [],
 		}
 	}

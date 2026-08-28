@@ -12,6 +12,58 @@ import { APIKeySchema, type APIKeySettings, RemoteConfig, RemoteConfigSchema } f
 import { deleteRemoteConfigFromCache, readRemoteConfigFromCache, writeRemoteConfigToCache } from "../disk"
 import { applyRemoteConfig, clearRemoteConfig, isRemoteConfigEnabled } from "./utils"
 
+function normalizeRemoteEntries(value: unknown): Array<{ name: string; contents: string; alwaysEnabled: boolean }> {
+	if (!Array.isArray(value)) return []
+	return value
+		.map((entry) => {
+			const candidate = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {}
+			return {
+				name: typeof candidate.name === "string" ? candidate.name : "",
+				contents: typeof candidate.contents === "string" ? candidate.contents : "",
+				alwaysEnabled: candidate.alwaysEnabled === true,
+			}
+		})
+		.sort(
+			(left, right) =>
+				left.name.localeCompare(right.name) ||
+				left.contents.localeCompare(right.contents) ||
+				Number(left.alwaysEnabled) - Number(right.alwaysEnabled),
+		)
+}
+
+function normalizeToggleMap(value: unknown): Record<string, boolean> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+	return Object.fromEntries(
+		Object.entries(value as Record<string, unknown>)
+			.filter((entry): entry is [string, boolean] => typeof entry[1] === "boolean")
+			.sort(([left], [right]) => left.localeCompare(right)),
+	)
+}
+
+function getRemotePromptInputProjection(controller: Controller): string {
+	const stateManager = controller.stateManager as Controller["stateManager"] & {
+		getRemoteConfigSettings?: () => Record<string, unknown>
+		getGlobalStateKey?: (key: string) => unknown
+	}
+	const remote = stateManager.getRemoteConfigSettings?.() ?? {}
+	return JSON.stringify({
+		rules: normalizeRemoteEntries(remote.remoteGlobalRules),
+		workflows: normalizeRemoteEntries(remote.remoteGlobalWorkflows),
+		skills: normalizeRemoteEntries(remote.remoteGlobalSkills),
+		ruleToggles: normalizeToggleMap(stateManager.getGlobalStateKey?.("remoteRulesToggles")),
+		workflowToggles: normalizeToggleMap(stateManager.getGlobalStateKey?.("remoteWorkflowToggles")),
+		skillToggles: normalizeToggleMap(stateManager.getGlobalStateKey?.("remoteSkillsToggles")),
+	})
+}
+
+async function publishRemotePromptInputChange(controller: Controller, before: string): Promise<void> {
+	if (controller.task && getRemotePromptInputProjection(controller) !== before) {
+		await controller.task.flushPromptFreshnessInvalidation("remote_config")
+		return
+	}
+	await controller.postStateToWebview()
+}
+
 /**
  * Parses API keys from a JSON string response
  * @param value The JSON string containing API keys
@@ -212,11 +264,12 @@ async function resolveRemoteConfig(organizationId: string, discoveredValue?: str
  */
 async function ensureUserInOrgWithRemoteConfig(controller: Controller): Promise<RemoteConfig | undefined> {
 	const authService = AuthService.getInstance()
+	const remotePromptInputBefore = getRemotePromptInputProjection(controller)
 	const discovered = await discoverRemoteConfigOrg()
 
 	if (!discovered) {
 		clearRemoteConfig()
-		controller.postStateToWebview()
+		await publishRemotePromptInputChange(controller, remotePromptInputBefore)
 		return undefined
 	}
 
@@ -226,7 +279,7 @@ async function ensureUserInOrgWithRemoteConfig(controller: Controller): Promise<
 
 	if (!remoteConfig) {
 		clearRemoteConfig()
-		controller.postStateToWebview()
+		await publishRemotePromptInputChange(controller, remotePromptInputBefore)
 		return undefined
 	}
 
@@ -259,7 +312,7 @@ async function ensureUserInOrgWithRemoteConfig(controller: Controller): Promise<
 	} else {
 		clearRemoteConfig()
 	}
-	controller.postStateToWebview()
+	await publishRemotePromptInputChange(controller, remotePromptInputBefore)
 
 	return remoteConfig
 }

@@ -53,10 +53,19 @@ export async function createRuleFile(controller: Controller, request: RuleFileRe
 	} else {
 		if (request.type === "workflow") {
 			await refreshWorkflowToggles(controller, cwd)
+			if (controller.task) {
+				await controller.task.flushPromptFreshnessInvalidation("capability_mutation")
+			} else {
+				await controller.postStateToWebview()
+			}
 		} else {
 			await refreshClineRulesToggles(controller, cwd)
+			if (controller.task) {
+				await controller.task.flushPromptFreshnessInvalidation("capability_mutation")
+			} else {
+				await controller.postStateToWebview()
+			}
 		}
-		await controller.postStateToWebview()
 
 		await openFile(controller, { value: filePath })
 

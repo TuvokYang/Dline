@@ -4,6 +4,8 @@ import { expect, type Frame, type Locator } from "@playwright/test"
 import { parseTaskCapabilityToggles, type TaskCapabilityToggles } from "../../shared/TaskCapabilityToggles"
 import { E2ETestHelper, e2e } from "./utils/helpers"
 
+e2e.use({ installVsix: false })
+
 const SKILL_NAME = "e2e-live-skill"
 const WORKFLOW_NAME = "e2e-live-workflow"
 const SUBAGENT_NAME = "e2e-live-agent"
@@ -283,6 +285,13 @@ e2e(
 		const mcpInternalName = mcpInternalNames[0]
 		const files: CapabilityFiles = { ...promptFiles, mcp }
 		expectCapabilityState(initialToggles, files, mcpInternalName, false)
+		const initialPromptContext = await readPromptContext(dlineDocsDir, taskId)
+		const initialFrozen = initialPromptContext.systemPrompt?.frozen
+		if (!initialFrozen) throw new Error("Initial task system prompt was not persisted")
+		const refreshButton = sidebar.locator("button:has(svg.lucide-refresh-cw)").first()
+		const freshnessWarning = refreshButton.getByTestId("prompt-freshness-warning")
+		await expect(refreshButton).toBeVisible()
+		await expect(freshnessWarning).toHaveCount(0)
 
 		await openCapabilityModal(sidebar)
 		await selectCapabilityTab(sidebar, "Workflows")
@@ -300,16 +309,24 @@ e2e(
 			.poll(async () => readTaskCapabilityToggles(dlineDocsDir, taskId))
 			.toEqual(expect.objectContaining({ mcpServers: expect.objectContaining({ [mcpInternalName]: true }) }))
 		expectCapabilityState(await readTaskCapabilityToggles(dlineDocsDir, taskId), files, mcpInternalName, true)
+		await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(1)
+		await expect(freshnessWarning).toBeVisible({ timeout: 30_000 })
+		await refreshButton.hover()
+		const freshnessTooltip = sidebar.getByRole("tooltip").filter({ hasText: "Prompt update available" })
+		await expect(freshnessTooltip).toContainText("Workflows changed")
+		await expect(freshnessTooltip).toContainText("Skills changed")
+		await expect(freshnessTooltip).toContainText("Subagents changed")
+		await expect(freshnessTooltip).toContainText("MCP tools changed")
 
 		const beforeRefresh = await readPromptContext(dlineDocsDir, taskId)
 		const beforeFrozen = beforeRefresh.systemPrompt?.frozen
-		if (!beforeFrozen) throw new Error("Initial task system prompt was not persisted")
+		if (!beforeFrozen) throw new Error("Stale task system prompt was not persisted")
+		expect(beforeFrozen.refreshedAt).toBe(initialFrozen.refreshedAt)
 		expect(beforeFrozen.text).not.toContain(SKILL_NAME)
 		expect(beforeFrozen.text).not.toContain(WORKFLOW_NAME)
 		expect(beforeFrozen.text).not.toContain(SUBAGENT_NAME)
 		expect(beforeFrozen.text).not.toContain(MCP_TOOL_NAME)
 
-		const refreshButton = sidebar.locator("button:has(svg.lucide-refresh-cw)").first()
 		await refreshButton.click()
 		const dialog = sidebar.getByRole("dialog")
 		await dialog.getByRole("button", { name: "Confirm", exact: true }).click()
@@ -324,6 +341,8 @@ e2e(
 		expect(refreshed.text).toContain(WORKFLOW_NAME)
 		expect(refreshed.text).toContain(SUBAGENT_NAME)
 		expect(refreshed.text).toContain(MCP_TOOL_NAME)
+		await expect(freshnessWarning).toHaveCount(0)
+		expect(server.getRequestCount("openai-compatible-chat")).toBe(1)
 
 		await input.fill("E2E_CAPABILITY_REFRESH_FEEDBACK")
 		await input.press("Enter")
@@ -338,10 +357,11 @@ e2e(
 		// welcome screen; the user then explicitly submits the next task.
 		await startNewTask.click()
 		await expect(input).toHaveValue("")
-		// Wait until the previous task is fully closed (the welcome input
-		// placeholder is only shown once no task is active), otherwise the
-		// submission is swallowed while the webview still tracks the old task.
-		await expect(input).toHaveAttribute("placeholder", "Type your task here...")
+		// Task termination can consume the full five-second backend fence before
+		// the Webview receives the cleared Task state. Wait beyond that boundary
+		// so the next submission cannot race the previous Task's shutdown.
+		await expect(input).toHaveAttribute("placeholder", "Type your task here...", { timeout: 30_000 })
+		await expect(input).toBeEnabled()
 		await input.fill("E2E_CAPABILITY_WORKSPACE_DEFAULT_TASK")
 		await input.press("Enter")
 		await expect(sidebar.getByText("E2E_CAPABILITY_WORKSPACE_DEFAULT_TASK_READY", { exact: false }).last()).toBeVisible({
@@ -386,10 +406,10 @@ e2e(
 			.poll(async () => {
 				const toggles = await readTaskCapabilityToggles(dlineDocsDir, newTaskId)
 				return {
-					skill: taskResourceId(files.skill) in toggles.localSkillsToggles,
-					workflow: taskResourceId(files.workflow) in toggles.localWorkflowToggles,
-					subagent: taskResourceId(files.subagent) in toggles.localSubagentsToggles,
-					mcp: mcpInternalName in toggles.mcpServers,
+					skill: toggles.localSkillsToggles[taskResourceId(files.skill)],
+					workflow: toggles.localWorkflowToggles[taskResourceId(files.workflow)],
+					subagent: toggles.localSubagentsToggles[taskResourceId(files.subagent)],
+					mcp: toggles.mcpServers[mcpInternalName],
 				}
 			})
 			.toEqual({ skill: false, workflow: false, subagent: false, mcp: false })

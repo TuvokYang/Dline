@@ -1,11 +1,21 @@
+import { CLINE_MCP_TOOL_IDENTIFIER } from "@shared/mcp"
+import { hashStableJson } from "@shared/stable-json"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { describe, expect, it, vi } from "vitest"
+import { hashPromptContent } from "../../system-prompt-cache/hash"
 import { collectCapabilities } from "../CapabilitiesAggregator"
 
 vi.mock("@core/context/instructions/user-instructions/skills", () => ({
 	discoverAvailableSkills: vi.fn(async () => [{ name: "writer", description: "Write text", path: "skill", source: "project" }]),
+	getSkillContent: vi.fn(async () => ({
+		name: "writer",
+		description: "Write text",
+		path: "skill",
+		source: "project",
+		instructions: "PRIVATE_SKILL_INSTRUCTIONS",
+	})),
 }))
 
 describe("collectCapabilities", () => {
@@ -18,15 +28,36 @@ describe("collectCapabilities", () => {
 						name: "server",
 						config: "{}",
 						status: "connected" as const,
-						tools: [{ name: "tool", description: "Run tool", inputSchema: { type: "object" } }],
+						tools: [
+							{
+								name: "tool",
+								description: "Run tool",
+								inputSchema: { type: "object", properties: { privateMarker: { type: "string" } } },
+							},
+						],
 					},
 				],
 			},
 		})
 
-		expect(snapshot.mcp).toEqual([{ name: "server.tool", description: "Run tool" }])
-		expect(snapshot.skills).toEqual([{ name: "writer", description: "Write text" }])
+		expect(snapshot.mcp).toEqual([
+			{
+				name: "server.tool",
+				description: "Run tool",
+				contentHash: hashStableJson({ type: "object", properties: { privateMarker: { type: "string" } } }),
+				nativeToolHash: hashPromptContent(`server${CLINE_MCP_TOOL_IDENTIFIER}tool`),
+			},
+		])
+		expect(snapshot.skills).toEqual([
+			{
+				name: "writer",
+				description: "Write text",
+				contentHash: hashPromptContent("PRIVATE_SKILL_INSTRUCTIONS"),
+			},
+		])
 		expect(JSON.stringify(snapshot)).not.toContain("inputSchema")
+		expect(JSON.stringify(snapshot)).not.toContain("privateMarker")
+		expect(JSON.stringify(snapshot)).not.toContain("PRIVATE_SKILL_INSTRUCTIONS")
 	})
 
 	it("collects workflow and subagent capabilities from project files", async () => {
@@ -54,12 +85,116 @@ describe("collectCapabilities", () => {
 
 			const snapshot = await collectCapabilities({ cwd })
 
-			expect(snapshot.workflows).toEqual([{ name: "release", description: "Release flow" }])
-			expect(snapshot.subagents).toEqual([
-				{ name: "default", description: "Customized default research" },
-				{ name: "reviewer", description: "Review code" },
+			expect(snapshot.workflows).toEqual([
+				{
+					name: "release",
+					description: "Release flow",
+					contentHash: hashPromptContent("---\nname: release\ndescription: Release flow\n---\nbody"),
+				},
 			])
-			expect(JSON.stringify(snapshot)).not.toContain("systemPrompt")
+			expect(snapshot.subagents).toEqual([
+				{
+					name: "default",
+					description: "Customized default research",
+					contentHash: hashPromptContent(
+						"---\nname: default\ndescription: Customized default research\ntools: []\n---\nCustom default prompt",
+					),
+				},
+				{
+					name: "reviewer",
+					description: "Review code",
+					contentHash: hashPromptContent(
+						"---\nname: reviewer\ndescription: Review code\ntools: []\n---\nReview system prompt",
+					),
+				},
+			])
+			expect(JSON.stringify(snapshot)).not.toContain("Review system prompt")
+			expect(JSON.stringify(snapshot)).not.toContain("Custom default prompt")
+		} finally {
+			await fs.rm(cwd, { recursive: true, force: true })
+		}
+	})
+
+	it("collects enabled remote workflows while preserving local precedence", async () => {
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "dline-capabilities-"))
+		try {
+			const workflowDir = path.join(cwd, ".agents", "workflows")
+			await fs.mkdir(workflowDir, { recursive: true })
+			await fs.writeFile(
+				path.join(workflowDir, "shared.md"),
+				"---\nname: shared\ndescription: Local workflow wins\n---\nbody",
+				"utf8",
+			)
+
+			const snapshot = await collectCapabilities({
+				cwd,
+				remoteWorkflowEntries: [
+					{
+						name: "shared",
+						alwaysEnabled: true,
+						contents: "---\ndescription: Remote duplicate\n---\nbody",
+					},
+					{
+						name: "remote-enabled",
+						alwaysEnabled: false,
+						contents: "---\ndescription: Remote enabled workflow\n---\nbody",
+					},
+					{
+						name: "remote-disabled",
+						alwaysEnabled: false,
+						contents: "---\ndescription: Remote disabled workflow\n---\nbody",
+					},
+				],
+				remoteWorkflowToggles: {
+					"remote-enabled": true,
+					"remote-disabled": false,
+				},
+			})
+
+			expect(snapshot.workflows).toEqual([
+				{
+					name: "remote-enabled",
+					description: "Remote enabled workflow",
+					contentHash: hashPromptContent("---\ndescription: Remote enabled workflow\n---\nbody"),
+				},
+				{
+					name: "shared",
+					description: "Local workflow wins",
+					contentHash: hashPromptContent("---\nname: shared\ndescription: Local workflow wins\n---\nbody"),
+				},
+			])
+			expect(JSON.stringify(snapshot)).not.toContain("Remote duplicate")
+			expect(JSON.stringify(snapshot)).not.toContain("Remote disabled workflow")
+		} finally {
+			await fs.rm(cwd, { recursive: true, force: true })
+		}
+	})
+
+	it("changes the Subagent content fingerprint when only its execution config changes", async () => {
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "dline-capabilities-"))
+		try {
+			const subagentDir = path.join(cwd, ".agents", "subagents")
+			const subagentPath = path.join(subagentDir, "reviewer.yaml")
+			await fs.mkdir(subagentDir, { recursive: true })
+			await fs.writeFile(
+				subagentPath,
+				"---\nname: reviewer\ndescription: Review code\ntools: []\n---\nPrivate prompt version one",
+				"utf8",
+			)
+			const first = await collectCapabilities({ cwd })
+
+			await fs.writeFile(
+				subagentPath,
+				"---\nname: reviewer\ndescription: Review code\ntools: []\n---\nPrivate prompt version two",
+				"utf8",
+			)
+			const second = await collectCapabilities({ cwd })
+
+			const firstReviewer = first.subagents.find((entry) => entry.name === "reviewer")
+			const secondReviewer = second.subagents.find((entry) => entry.name === "reviewer")
+			expect(firstReviewer?.description).toBe(secondReviewer?.description)
+			expect(firstReviewer?.contentHash).not.toBe(secondReviewer?.contentHash)
+			expect(JSON.stringify(second)).not.toContain("Private prompt version two")
 		} finally {
 			await fs.rm(cwd, { recursive: true, force: true })
 		}

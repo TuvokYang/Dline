@@ -288,6 +288,92 @@ describe("fetchRemoteConfig", () => {
 		assert.strictEqual(controller.postStateToWebview.mock.calls.length, 0)
 	})
 
+	it("flushes active Task freshness when remote Rules, Workflows, or Skills change", async () => {
+		Object.assign(authServiceStub, { getActiveOrganizationId: () => "org-target" })
+		fetchUserRemoteConfigStub.mockResolvedValue({
+			organizationId: "org-target",
+			value: JSON.stringify({
+				version: "v1",
+				globalRules: [{ name: "policy", alwaysEnabled: true, contents: "RULES_V2" }],
+				globalWorkflows: [{ name: "release", alwaysEnabled: false, contents: "WORKFLOW_V2" }],
+				globalSkills: [{ name: "review", alwaysEnabled: false, contents: "SKILL_V2" }],
+			}),
+		})
+		const remoteState: Record<string, unknown> = {
+			remoteGlobalRules: [{ name: "policy", alwaysEnabled: true, contents: "RULES_V1" }],
+			remoteGlobalWorkflows: [{ name: "release", alwaysEnabled: false, contents: "WORKFLOW_V1" }],
+			remoteGlobalSkills: [{ name: "review", alwaysEnabled: false, contents: "SKILL_V1" }],
+		}
+		const globalState = new Map<string, unknown>([
+			["remoteWorkflowToggles", { release: true }],
+			["remoteSkillsToggles", { review: true }],
+		])
+		vi.mocked(remoteConfigUtils.applyRemoteConfig).mockImplementationOnce(async (config) => {
+			remoteState.remoteGlobalRules = config.globalRules ?? []
+			remoteState.remoteGlobalWorkflows = config.globalWorkflows ?? []
+			remoteState.remoteGlobalSkills = config.globalSkills ?? []
+		})
+		const flushPromptFreshnessInvalidation = vi.fn().mockResolvedValue(undefined)
+		const controller = {
+			accountService: { switchAccount: vi.fn() },
+			stateManager: {
+				setSecret: vi.fn(),
+				getRemoteConfigSettings: () => remoteState,
+				getGlobalStateKey: (key: string) => globalState.get(key),
+			},
+			mcpHub: {},
+			task: { flushPromptFreshnessInvalidation },
+			postStateToWebview: vi.fn(),
+		}
+
+		await remoteConfigFetch.fetchRemoteConfig(controller as any)
+
+		expect(flushPromptFreshnessInvalidation).toHaveBeenCalledWith("remote_config")
+		expect(controller.postStateToWebview).not.toHaveBeenCalled()
+	})
+
+	it("does not re-evaluate freshness for an equivalent periodic remote config fetch", async () => {
+		Object.assign(authServiceStub, { getActiveOrganizationId: () => "org-target" })
+		const rules = [{ name: "policy", alwaysEnabled: true, contents: "RULES_V1" }]
+		const workflows = [{ name: "release", alwaysEnabled: false, contents: "WORKFLOW_V1" }]
+		const skills = [{ name: "review", alwaysEnabled: false, contents: "SKILL_V1" }]
+		fetchUserRemoteConfigStub.mockResolvedValue({
+			organizationId: "org-target",
+			value: JSON.stringify({ version: "v1", globalRules: rules, globalWorkflows: workflows, globalSkills: skills }),
+		})
+		const remoteState: Record<string, unknown> = {
+			remoteGlobalRules: rules,
+			remoteGlobalWorkflows: workflows,
+			remoteGlobalSkills: skills,
+		}
+		const globalState = new Map<string, unknown>([
+			["remoteWorkflowToggles", { release: true }],
+			["remoteSkillsToggles", { review: true }],
+		])
+		vi.mocked(remoteConfigUtils.applyRemoteConfig).mockImplementationOnce(async (config) => {
+			remoteState.remoteGlobalRules = config.globalRules ?? []
+			remoteState.remoteGlobalWorkflows = config.globalWorkflows ?? []
+			remoteState.remoteGlobalSkills = config.globalSkills ?? []
+		})
+		const flushPromptFreshnessInvalidation = vi.fn().mockResolvedValue(undefined)
+		const controller = {
+			accountService: { switchAccount: vi.fn() },
+			stateManager: {
+				setSecret: vi.fn(),
+				getRemoteConfigSettings: () => remoteState,
+				getGlobalStateKey: (key: string) => globalState.get(key),
+			},
+			mcpHub: {},
+			task: { flushPromptFreshnessInvalidation },
+			postStateToWebview: vi.fn(),
+		}
+
+		await remoteConfigFetch.fetchRemoteConfig(controller as any)
+
+		expect(flushPromptFreshnessInvalidation).not.toHaveBeenCalled()
+		expect(controller.postStateToWebview).toHaveBeenCalledOnce()
+	})
+
 	it("preserves existing config when switchAccount rejects", async () => {
 		Object.assign(authServiceStub, {
 			getActiveOrganizationId: () => "org-current",

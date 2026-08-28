@@ -22,6 +22,7 @@ const PROMPT_FRESHNESS_SETTINGS_KEYS = new Set<SettingsKey>([
 	"clineWebToolsEnabled",
 	"enableParallelToolCalling",
 	"focusChainSettings",
+	"lazyTeammateModeEnabled",
 	"localWebSearchEngine",
 	"mcpEnabled",
 	"searxngSearchUrl",
@@ -33,11 +34,35 @@ export function settingsAffectPromptFreshness(changedKeys: readonly SettingsKey[
 	return changedKeys.some((key) => PROMPT_FRESHNESS_SETTINGS_KEYS.has(key))
 }
 
-function hashCapabilityEntries(entries: readonly CapabilityEntry[]): string {
+function hashPromptVisibleRules(context: SystemPromptContext): string {
+	return hashPromptContent(
+		JSON.stringify({
+			globalDline: context.globalClineRulesFileInstructions ?? "",
+			localDline: context.localClineRulesFileInstructions ?? "",
+			cursorFile: context.localCursorRulesFileInstructions ?? "",
+			cursorDirectory: context.localCursorRulesDirInstructions ?? "",
+			windsurf: context.localWindsurfRulesFileInstructions ?? "",
+			agents: context.localAgentsRulesFileInstructions ?? "",
+		}),
+	)
+}
+
+function hashCapabilityEntries(entries: readonly CapabilityEntry[], includeNativeToolIdentity = false): string {
 	const normalized = entries
-		.map((entry) => ({ name: entry.name.trim(), description: entry.description.replace(/\s+/g, " ").trim() }))
+		.map((entry) => ({
+			name: entry.name.trim(),
+			description: entry.description.replace(/\s+/g, " ").trim(),
+			contentHash: entry.contentHash ?? "",
+			nativeToolHash: includeNativeToolIdentity ? (entry.nativeToolHash ?? "") : "",
+		}))
 		.filter((entry) => entry.name.length > 0)
-		.sort((left, right) => left.name.localeCompare(right.name) || left.description.localeCompare(right.description))
+		.sort(
+			(left, right) =>
+				left.name.localeCompare(right.name) ||
+				left.description.localeCompare(right.description) ||
+				left.contentHash.localeCompare(right.contentHash) ||
+				left.nativeToolHash.localeCompare(right.nativeToolHash),
+		)
 	return hashPromptContent(JSON.stringify(normalized))
 }
 
@@ -64,7 +89,7 @@ export function buildPromptFreshnessBaseline(
 	const browserEnabled = context.supportsBrowserUse === true && context.browserSettings?.disableToolUse !== true
 	const viewport = browserEnabled ? context.browserSettings?.viewport : undefined
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		providerId: context.providerInfo.providerId,
 		modelId: context.providerInfo.model.id,
 		promptProfile: context.promptProfile,
@@ -78,9 +103,10 @@ export function buildPromptFreshnessBaseline(
 				? (context.webSearchRoutingPlan?.route ?? "none")
 				: "disabled",
 		focusChainEnabled: standardProfile && context.focusChainSettings?.enabled === true,
+		rulesHash: hashPromptVisibleRules(context),
 		subagentsEnabled: subagentsVisible,
 		capabilityHashes: {
-			mcp: hashCapabilityEntries(capabilities.mcp),
+			mcp: hashCapabilityEntries(capabilities.mcp, context.enableNativeToolCalls === true),
 			skills: standardProfile ? hashCapabilityEntries(capabilities.skills) : EMPTY_CAPABILITY_HASH,
 			workflows: hashCapabilityEntries(capabilities.workflows),
 			subagents: subagentsVisible ? hashCapabilityEntries(capabilities.subagents) : EMPTY_CAPABILITY_HASH,
@@ -118,6 +144,7 @@ export function comparePromptFreshness(
 		addChange(changes, "web_tools", "Web tools changed")
 	}
 	if (frozen.focusChainEnabled !== current.focusChainEnabled) addChange(changes, "focus_chain", "Focus Chain changed")
+	if (frozen.rulesHash !== current.rulesHash) addChange(changes, "rules", "Rules changed")
 	if (frozen.subagentsEnabled !== current.subagentsEnabled) addChange(changes, "subagents", "Subagents changed")
 	if (frozen.capabilityHashes.mcp !== current.capabilityHashes.mcp) addChange(changes, "mcp", "MCP tools changed")
 	if (frozen.capabilityHashes.skills !== current.capabilityHashes.skills) addChange(changes, "skills", "Skills changed")

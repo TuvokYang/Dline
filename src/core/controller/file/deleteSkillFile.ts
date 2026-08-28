@@ -53,7 +53,11 @@ export async function deleteSkillFile(controller: Controller, request: DeleteSki
 		controller.stateManager.setWorkspaceState("localSkillsToggles", localToggles)
 	}
 
-	await controller.postStateToWebview()
+	if (controller.task) {
+		await controller.task.flushPromptFreshnessInvalidation("capability_mutation")
+	} else {
+		await controller.postStateToWebview()
+	}
 
 	return SkillsToggles.create({
 		globalSkillsToggles: globalToggles,

@@ -7,6 +7,7 @@ import type { WebSearchRoutingPlan } from "@/core/api/server-tools"
 import type { BrowserSettings } from "@/shared/BrowserSettings"
 import type { FocusChainSettings } from "@/shared/FocusChainSettings"
 import type { SkillMetadata } from "@/shared/skills"
+import type { TaskCapabilityToggles } from "@/shared/TaskCapabilityToggles"
 import type { ClineDefaultTool } from "@/shared/tools"
 
 /** Complete runtime context consumed by profile prompt generators. */
@@ -23,6 +24,8 @@ export interface SystemPromptContext {
 	readonly capabilities?: CapabilitiesSnapshot
 	readonly capabilitiesSection?: string
 	readonly capabilityToggleState?: CapabilityToggleState
+	/** Complete Task-scoped execution snapshot frozen alongside prompt and tools. */
+	readonly taskCapabilityToggles?: TaskCapabilityToggles
 	readonly focusChainSettings?: FocusChainSettings
 	readonly globalClineRulesFileInstructions?: string
 	readonly localClineRulesFileInstructions?: string

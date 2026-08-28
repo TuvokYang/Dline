@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { isOutputLimitExceededError } from "@core/api/stream/OutputLimitExceededError"
 import type { CompactionPassIdentity } from "@core/context/context-management/target-window-fitting"
+import type { ResolvedPromptRuntime } from "@core/prompts/system-prompt-cache/FrozenPromptRuntime"
 import type { ClineStorageMessage } from "@shared/messages"
 import type { ServerTool } from "@shared/proto/dline/models/metadata"
 import type { ClineTool } from "@shared/tools"
@@ -12,6 +13,8 @@ export interface CompactionProviderInput {
 	messages: ClineStorageMessage[]
 	tools?: ClineTool[]
 	readonly serverTools: readonly ServerTool[]
+	/** Frozen prompt/tool execution projection for this Provider input. */
+	readonly runtime?: ResolvedPromptRuntime
 	providerOutputCap?: number
 }
 
@@ -125,7 +128,11 @@ export class CompactionRequestReplay {
 
 	/** Return whether the immutable Pass is still active for this logical request. */
 	isActivePass(apiIndex: number, identity: CompactionPassIdentity): boolean {
-		return this.state?.apiIndex === apiIndex && this.state.passIdentity !== undefined && samePassIdentity(this.state.passIdentity, identity)
+		return (
+			this.state?.apiIndex === apiIndex &&
+			this.state.passIdentity !== undefined &&
+			samePassIdentity(this.state.passIdentity, identity)
+		)
 	}
 
 	/** Return whether a result still belongs to the latest attempt of the active Pass. */

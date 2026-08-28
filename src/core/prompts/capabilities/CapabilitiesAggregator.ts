@@ -1,18 +1,23 @@
 import { parseYamlFrontmatter } from "@core/context/instructions/user-instructions/frontmatter"
 import type { SkillToggleState } from "@core/context/instructions/user-instructions/skills"
-import { discoverAvailableSkills } from "@core/context/instructions/user-instructions/skills"
+import { discoverAvailableSkills, getSkillContent } from "@core/context/instructions/user-instructions/skills"
 import { getSubagentsScanDirectories, getWorkflowsScanDirectories } from "@core/storage/disk"
 import { parseAgentConfigFromYaml } from "@core/task/tools/subagent/AgentConfigLoader"
 import { DEFAULT_SUBAGENT_CONFIG } from "@core/task/tools/subagent/DefaultSubagentConfig"
-import type { McpServer } from "@shared/mcp"
+import { CLINE_MCP_TOOL_IDENTIFIER, type McpServer } from "@shared/mcp"
+import type { GlobalInstructionsFile } from "@shared/remote-config/schema"
+import { hashStableJson } from "@shared/stable-json"
 import { fileExistsAtPath, isDirectory } from "@utils/fs"
 import fs from "fs/promises"
 import path from "path"
+import { hashPromptContent } from "../system-prompt-cache/hash"
 import type { CapabilitiesSnapshot, CapabilityEntry } from "./types"
 
 export interface CapabilityToggleState extends SkillToggleState {
 	readonly workflowToggles?: Record<string, boolean>
 	readonly globalWorkflowToggles?: Record<string, boolean>
+	readonly remoteWorkflowEntries?: readonly GlobalInstructionsFile[]
+	readonly remoteWorkflowToggles?: Record<string, boolean>
 	readonly subagentToggles?: Record<string, boolean>
 	readonly globalSubagentToggles?: Record<string, boolean>
 }
@@ -49,7 +54,12 @@ function stableEntries(entries: CapabilityEntry[]): CapabilityEntry[] {
 		if (!name || deduped.has(name)) {
 			continue
 		}
-		deduped.set(name, { name, description: normalizeDescription(entry.description) })
+		deduped.set(name, {
+			name,
+			description: normalizeDescription(entry.description),
+			...(entry.contentHash === undefined ? {} : { contentHash: entry.contentHash }),
+			...(entry.nativeToolHash === undefined ? {} : { nativeToolHash: entry.nativeToolHash }),
+		})
 	}
 	return Array.from(deduped.values()).sort((a, b) => a.name.localeCompare(b.name))
 }
@@ -72,6 +82,8 @@ function collectMcp(mcpHub: CapabilityMcpHub | undefined): CapabilityEntry[] {
 				(server.tools ?? []).map((tool) => ({
 					name: `${server.name}.${tool.name}`,
 					description: tool.description ?? "",
+					contentHash: hashStableJson(tool.inputSchema ?? { type: "object", properties: {} }),
+					nativeToolHash: hashPromptContent(`${server.uid ?? server.name}${CLINE_MCP_TOOL_IDENTIFIER}${tool.name}`),
 				})),
 			),
 	)
@@ -85,7 +97,17 @@ function collectMcp(mcpHub: CapabilityMcpHub | undefined): CapabilityEntry[] {
  */
 async function collectSkills(input: CollectCapabilitiesInput): Promise<CapabilityEntry[]> {
 	const skills = await discoverAvailableSkills(input.cwd, input)
-	return stableEntries(skills.map((skill) => ({ name: skill.name, description: skill.description })))
+	const entries = await Promise.all(
+		skills.map(async (skill) => {
+			const content = await getSkillContent(skill.name, skills, input.remoteSkillEntries)
+			return {
+				name: skill.name,
+				description: skill.description,
+				contentHash: hashPromptContent(content?.instructions ?? ""),
+			}
+		}),
+	)
+	return stableEntries(entries)
 }
 
 /**
@@ -153,9 +175,17 @@ async function collectWorkflows(input: CollectCapabilitiesInput): Promise<Capabi
 				const { data } = parseYamlFrontmatter(content)
 				const name = typeof data.name === "string" ? data.name : path.basename(filePath, path.extname(filePath))
 				const description = typeof data.description === "string" ? data.description : ""
-				entries.push({ name, description })
+				entries.push({ name, description, contentHash: hashPromptContent(content) })
 			} catch {}
 		}
+	}
+	for (const workflow of input.remoteWorkflowEntries ?? []) {
+		if (!workflow.alwaysEnabled && input.remoteWorkflowToggles?.[workflow.name] === false) continue
+		try {
+			const { data } = parseYamlFrontmatter(workflow.contents)
+			const description = typeof data.description === "string" ? data.description : ""
+			entries.push({ name: workflow.name, description, contentHash: hashPromptContent(workflow.contents) })
+		} catch {}
 	}
 	return stableEntries(entries)
 }
@@ -184,7 +214,7 @@ async function collectSubagents(input: CollectCapabilitiesInput): Promise<Capabi
 			try {
 				const content = await fs.readFile(filePath, "utf8")
 				const config = parseAgentConfigFromYaml(content)
-				entries.push({ name: config.name, description: config.description })
+				entries.push({ name: config.name, description: config.description, contentHash: hashPromptContent(content) })
 			} catch {}
 		}
 	}

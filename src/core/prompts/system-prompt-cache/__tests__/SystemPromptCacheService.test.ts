@@ -3,6 +3,7 @@ import { PromptProfile } from "@core/prompts/profiles/types"
 import type { SystemPromptContext } from "@core/prompts/system-prompt"
 import type { TaskContextCache } from "@core/storage/task-context-types"
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
+import { createTaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
 import type { ClineTool } from "@shared/tools"
 import { describe, expect, it } from "vitest"
 import { HOSTED_WEB_SEARCH_ROUTING_PLAN, LOCAL_WEB_SEARCH_ROUTING_PLAN } from "../../__tests__/web-search-routing-fixtures"
@@ -31,6 +32,8 @@ const testPromptBuilderInfo = {
 	serverTools: LOCAL_WEB_SEARCH_ROUTING_PLAN.serverTools,
 	webToolsEnabled: true,
 	webSearchRoute: LOCAL_WEB_SEARCH_ROUTING_PLAN.route,
+	webSearchMode: LOCAL_WEB_SEARCH_ROUTING_PLAN.mode,
+	webSearchLocalFallbackAvailable: LOCAL_WEB_SEARCH_ROUTING_PLAN.localFallbackAvailable,
 }
 
 const promptContext = {
@@ -106,9 +109,44 @@ describe("SystemPromptCacheService", () => {
 		expect(result.refreshReason).toBe("task_start")
 		expect(result.tools).toBeNull()
 		expect(result.freshnessBaseline).toBeDefined()
+		expect(result.runtime).toMatchObject({
+			webToolsEnabled: true,
+			webSearchRoute: "local",
+			focusChainEnabled: false,
+			subagentsEnabled: false,
+			browserEnabled: false,
+		})
+		expect(result.runtime?.capabilityToggles).toEqual(expect.objectContaining({ mcpServers: {} }))
 		expect(saved?.systemPrompt?.frozen?.text).toBe(result.text)
 		expect(saved?.systemPrompt?.frozen?.tools).toBeNull()
 		expect(service.getPromptFreshness()).toMatchObject({ status: "fresh", changes: [], frozenAt: 10 })
+	})
+
+	it("projects MCP enablement out of runtime when the global MCP gate is closed", async () => {
+		const taskCapabilityToggles = createTaskCapabilityToggles({ mcpServers: { "frozen-server": true } })
+		const build = async (taskId: string, mcpHub: SystemPromptContext["mcpHub"]) => {
+			const service = new SystemPromptCacheService({
+				taskId,
+				deps: {
+					getContext: async () => emptyContext(taskId),
+					saveContext: async () => undefined,
+					collectCapabilities: async () => EMPTY_CAPABILITIES,
+					buildSystemPrompt: async () => ({ systemPrompt: "prompt" }),
+					getPromptBuilderInfo: () => testPromptBuilderInfo,
+					now: () => 10,
+				},
+			})
+			return service.getOrCreate({
+				promptContext: { ...promptContext, taskId, taskCapabilityToggles, mcpHub },
+			})
+		}
+
+		const disabled = await build("task-mcp-disabled", undefined)
+		const enabled = await build("task-mcp-enabled", { getServers: () => [] })
+
+		expect(disabled.runtime?.capabilityToggles.mcpServers).toEqual({})
+		expect(enabled.runtime?.capabilityToggles.mcpServers).toEqual({ "frozen-server": true })
+		expect(taskCapabilityToggles.mcpServers).toEqual({ "frozen-server": true })
 	})
 
 	it("rebuilds provider-shaped tools when the active provider changes", async () => {
@@ -339,7 +377,9 @@ describe("SystemPromptCacheService", () => {
 		expect(buildCount).toBe(1)
 	})
 
-	it("rebuilds the frozen pair when the Standard subagents tool projection changes", async () => {
+	it("keeps the frozen pair when the Standard subagents setting changes", async () => {
+		const disabledContext: SystemPromptContext = { ...promptContext, enableNativeToolCalls: true, subagentsEnabled: false }
+		const enabledContext: SystemPromptContext = { ...disabledContext, subagentsEnabled: true }
 		const cached = {
 			...emptyContext("task-1"),
 			systemPrompt: {
@@ -347,6 +387,7 @@ describe("SystemPromptCacheService", () => {
 					text: "subagents-disabled prompt",
 					tools: [buildTool("spawn_task")],
 					capabilitiesHash: EMPTY_CAPABILITIES_HASH,
+					freshnessBaseline: buildPromptFreshnessBaseline(disabledContext, EMPTY_CAPABILITIES),
 					createdAt: 1,
 					refreshedAt: 1,
 					refreshReason: "task_start" as const,
@@ -363,21 +404,27 @@ describe("SystemPromptCacheService", () => {
 				collectCapabilities: async () => EMPTY_CAPABILITIES,
 				buildSystemPrompt: async () => {
 					buildCount += 1
-					return { systemPrompt: "subagents-enabled prompt", tools: [buildTool("use_subagent")] }
+					return { systemPrompt: "must not build" }
 				},
 			},
 		})
 
-		const result = await service.getOrCreate({
-			promptContext: { ...promptContext, enableNativeToolCalls: true, subagentsEnabled: true },
-		})
+		const result = await service.getOrCreate({ promptContext: enabledContext })
 
-		expect(result.text).toBe("subagents-enabled prompt")
-		expect(result.refreshReason).toBe("capability_change")
-		expect(buildCount).toBe(1)
+		expect(result.text).toBe("subagents-disabled prompt")
+		expect(buildCount).toBe(0)
+		expect(service.getPromptFreshness().changes).toEqual([{ kind: "subagents", summary: "Subagents changed" }])
 	})
 
-	it("rebuilds the frozen pair when focus-chain injection changes", async () => {
+	it("keeps the frozen pair when focus-chain injection changes", async () => {
+		const disabledContext: SystemPromptContext = {
+			...promptContext,
+			focusChainSettings: { enabled: false, remindClineInterval: 6 },
+		}
+		const enabledContext: SystemPromptContext = {
+			...promptContext,
+			focusChainSettings: { enabled: true, remindClineInterval: 6 },
+		}
 		const cached = {
 			...emptyContext("task-1"),
 			systemPrompt: {
@@ -385,6 +432,7 @@ describe("SystemPromptCacheService", () => {
 					text: "no-focus prompt",
 					tools: null,
 					capabilitiesHash: EMPTY_CAPABILITIES_HASH,
+					freshnessBaseline: buildPromptFreshnessBaseline(disabledContext, EMPTY_CAPABILITIES),
 					createdAt: 1,
 					refreshedAt: 1,
 					refreshReason: "task_start" as const,
@@ -401,21 +449,16 @@ describe("SystemPromptCacheService", () => {
 				collectCapabilities: async () => EMPTY_CAPABILITIES,
 				buildSystemPrompt: async () => {
 					buildCount += 1
-					return { systemPrompt: "focus prompt" }
+					return { systemPrompt: "must not build" }
 				},
 			},
 		})
 
-		const result = await service.getOrCreate({
-			promptContext: {
-				...promptContext,
-				focusChainSettings: { enabled: true, remindClineInterval: 6 },
-			},
-		})
+		const result = await service.getOrCreate({ promptContext: enabledContext })
 
-		expect(result.text).toBe("focus prompt")
-		expect(result.promptBuilder.focusChainEnabled).toBe(true)
-		expect(buildCount).toBe(1)
+		expect(result.text).toBe("no-focus prompt")
+		expect(buildCount).toBe(0)
+		expect(service.getPromptFreshness().changes).toEqual([{ kind: "focus_chain", summary: "Focus Chain changed" }])
 	})
 
 	it("rebuilds the frozen pair when the request routing plan changes the active server-tool projection", async () => {
@@ -464,10 +507,19 @@ describe("SystemPromptCacheService", () => {
 	})
 
 	it.each([
-		["global Web Tools setting", { webToolsEnabled: false }],
-		["effective route", { webSearchRoute: "disabled" as const }],
-		["hosted server tools", { serverTools: [ServerTool.WEB_SEARCH] }],
-	] as const)("rebuilds when the cached %s differs from the request projection", async (_label, cachedOverride) => {
+		[
+			"global Web Tools setting",
+			{
+				...promptContext,
+				clineWebToolsEnabled: false,
+				webSearchRoutingPlan: { ...LOCAL_WEB_SEARCH_ROUTING_PLAN, route: "disabled" as const },
+			},
+		],
+		[
+			"effective route",
+			{ ...promptContext, webSearchRoutingPlan: { ...LOCAL_WEB_SEARCH_ROUTING_PLAN, route: "disabled" as const } },
+		],
+	] as const)("keeps the frozen pair when the cached %s differs from the request projection", async (_label, frozenContext) => {
 		const cached: TaskContextCache = {
 			...emptyContext("task-1"),
 			systemPrompt: {
@@ -475,10 +527,11 @@ describe("SystemPromptCacheService", () => {
 					text: "stale web projection",
 					tools: null,
 					capabilitiesHash: EMPTY_CAPABILITIES_HASH,
+					freshnessBaseline: buildPromptFreshnessBaseline(frozenContext as SystemPromptContext, EMPTY_CAPABILITIES),
 					createdAt: 1,
 					refreshedAt: 1,
 					refreshReason: "task_start",
-					promptBuilder: { ...testPromptBuilderInfo, ...cachedOverride },
+					promptBuilder: testPromptBuilderInfo,
 				},
 			},
 		}
@@ -491,16 +544,16 @@ describe("SystemPromptCacheService", () => {
 				collectCapabilities: async () => EMPTY_CAPABILITIES,
 				buildSystemPrompt: async () => {
 					buildCount += 1
-					return { systemPrompt: "current web projection" }
+					return { systemPrompt: "must not build" }
 				},
 			},
 		})
 
 		const result = await service.getOrCreate({ promptContext })
 
-		expect(result.text).toBe("current web projection")
-		expect(result.refreshReason).toBe("capability_change")
-		expect(buildCount).toBe(1)
+		expect(result.text).toBe("stale web projection")
+		expect(buildCount).toBe(0)
+		expect(service.getPromptFreshness().changes).toEqual([{ kind: "web_tools", summary: "Web tools changed" }])
 	})
 
 	it("does not derive a cache projection from changed model metadata", async () => {
@@ -598,6 +651,110 @@ describe("SystemPromptCacheService", () => {
 		expect(result.text).toBe("rebuilt exact prompt")
 		expect(result.tools).toEqual(rebuiltTools)
 		expect(service.getLastTools()).toEqual(rebuiltTools)
+	})
+
+	it("keeps the frozen prompt until an explicit refresh and reports Rules changes as stale", async () => {
+		const frozenContext: SystemPromptContext = { ...promptContext, localClineRulesFileInstructions: "RULES_V1" }
+		const currentContext: SystemPromptContext = { ...promptContext, localClineRulesFileInstructions: "RULES_V2" }
+		const cached: TaskContextCache = {
+			...emptyContext("task-1"),
+			systemPrompt: {
+				frozen: {
+					text: "frozen prompt RULES_V1",
+					tools: null,
+					capabilitiesHash: EMPTY_CAPABILITIES_HASH,
+					freshnessBaseline: buildPromptFreshnessBaseline(frozenContext, EMPTY_CAPABILITIES),
+					createdAt: 1,
+					refreshedAt: 1,
+					refreshReason: "task_start",
+					promptBuilder: testPromptBuilderInfo,
+				},
+			},
+		}
+		let saved: TaskContextCache | undefined
+		const service = new SystemPromptCacheService({
+			taskId: "task-1",
+			deps: {
+				getContext: async () => saved ?? cached,
+				saveContext: async (_taskId, context) => {
+					saved = context
+				},
+				collectCapabilities: async () => EMPTY_CAPABILITIES,
+				buildSystemPrompt: async (context) => ({ systemPrompt: `refreshed ${context.localClineRulesFileInstructions}` }),
+				getPromptBuilderInfo: () => testPromptBuilderInfo,
+				now: () => 20,
+			},
+		})
+
+		const frozen = await service.getOrCreate({ promptContext: currentContext })
+
+		expect(frozen.text).toBe("frozen prompt RULES_V1")
+		expect(saved).toBeUndefined()
+		expect(service.getPromptFreshness()).toMatchObject({
+			status: "stale",
+			changes: [{ kind: "rules", summary: "Rules changed" }],
+		})
+
+		const refreshed = await service.refresh({ promptContext: currentContext, reason: "manual" })
+		expect(refreshed.text).toBe("refreshed RULES_V2")
+		expect(service.getPromptFreshness().status).toBe("fresh")
+	})
+
+	it("serializes a delayed freshness evaluation behind a newer manual refresh", async () => {
+		const oldContext: SystemPromptContext = { ...promptContext, localClineRulesFileInstructions: "RULES_V1" }
+		const newContext: SystemPromptContext = { ...promptContext, localClineRulesFileInstructions: "RULES_V2" }
+		let context: TaskContextCache = {
+			...emptyContext("task-1"),
+			systemPrompt: {
+				frozen: {
+					text: "frozen RULES_V1",
+					tools: null,
+					capabilitiesHash: EMPTY_CAPABILITIES_HASH,
+					freshnessBaseline: buildPromptFreshnessBaseline(oldContext, EMPTY_CAPABILITIES),
+					createdAt: 1,
+					refreshedAt: 1,
+					refreshReason: "task_start",
+					promptBuilder: testPromptBuilderInfo,
+				},
+			},
+		}
+		let releaseCollection: (() => void) | undefined
+		let collectCount = 0
+		let buildCount = 0
+		const blocked = new Promise<void>((resolve) => {
+			releaseCollection = resolve
+		})
+		const service = new SystemPromptCacheService({
+			taskId: "task-1",
+			deps: {
+				getContext: async () => context,
+				saveContext: async (_taskId, next) => {
+					context = next
+				},
+				collectCapabilities: async () => {
+					collectCount += 1
+					if (collectCount === 1) await blocked
+					return EMPTY_CAPABILITIES
+				},
+				buildSystemPrompt: async (current) => {
+					buildCount += 1
+					return { systemPrompt: `refreshed ${current.localClineRulesFileInstructions}` }
+				},
+				getPromptBuilderInfo: () => testPromptBuilderInfo,
+				now: () => 30,
+			},
+		})
+
+		const reevaluation = service.reevaluateFreshness({ promptContext: newContext })
+		await Promise.resolve()
+		const refresh = service.refresh({ promptContext: newContext, reason: "manual" })
+		await Promise.resolve()
+		expect(buildCount).toBe(0)
+		releaseCollection?.()
+		await Promise.all([reevaluation, refresh])
+
+		expect(context.systemPrompt?.frozen?.text).toBe("refreshed RULES_V2")
+		expect(service.getPromptFreshness().status).toBe("fresh")
 	})
 
 	it("keeps the frozen prompt until an explicit refresh and reports visible capability changes as stale", async () => {

@@ -207,6 +207,7 @@ export class Controller {
 			const roots = workspaceRoots ?? (await HostProvider.workspace.getWorkspacePaths({})).paths
 			if (this.disposed || generation !== this.workspaceMcpRegistrationGeneration) return
 			await this.mcpHub.registerWorkspaceOwner(this.mcpOwnerId, roots)
+			this.task?.invalidatePromptFreshness("mcp_registry")
 		})().catch((error) => {
 			Logger.error("[Controller] Failed to register workspace MCP descriptors:", error)
 		})
@@ -244,6 +245,7 @@ export class Controller {
 	// Invoked in dispose() to unregister this controller from global
 	// state-change notifications so closed windows don't keep receiving them.
 	private stateManagerCallbacksDispose?: () => void
+	private mcpPromptCatalogDispose?: () => void
 
 	/** Public getter for account usage data, used by subscribeToState/getLatestState. */
 	getAccountUsage(): AccountUsage | undefined {
@@ -302,7 +304,8 @@ export class Controller {
 			onSyncExternalChange: async (event) => {
 				await this.configureGlobalComponents()
 				if (event.source === "settings" && this.task && settingsAffectPromptFreshness(event.commit.changedKeys)) {
-					await this.task.reevaluatePromptFreshness()
+					await this.task.flushPromptFreshnessInvalidation("settings")
+					return
 				}
 				await this.postStateToWebview()
 			},
@@ -324,6 +327,9 @@ export class Controller {
 			ExtensionRegistryInfo.version,
 			telemetryService,
 		)
+		this.mcpPromptCatalogDispose = this.mcpHub.subscribeToPromptCatalogChanges(() => {
+			this.task?.invalidatePromptFreshness("mcp_registry")
+		})
 		void this.updateWorkspaceMcpRegistration()
 
 		// Clean up legacy checkpoints
@@ -408,6 +414,8 @@ export class Controller {
 		this.stopAccountUsagePolling()
 
 		await this.clearTask()
+		this.mcpPromptCatalogDispose?.()
+		this.mcpPromptCatalogDispose = undefined
 		await this.workspaceMcpRegistration
 		await this.mcpHub.unregisterWorkspaceOwner(this.mcpOwnerId)
 		await this.mcpHub.dispose()
@@ -1075,7 +1083,7 @@ export class Controller {
 			for (const provider of panels) {
 				if (provider instanceof VscodeWebviewPanelProvider && provider.hasController() && provider.controller === this) {
 					provider.updateTitle(title)
-					Logger.debug(`[Controller] Panel title synced: ${title}`)
+					Logger.debug(`[Controller] Panel title synced: ${title.slice(0, 64)}`)
 					break
 				}
 			}
