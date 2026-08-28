@@ -194,7 +194,7 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 				menuPosition &&
 				createPortal(
 					<div
-						className="fixed z-[2000] max-h-[360px] min-w-[280px] overflow-y-auto rounded border border-editor-group-border bg-menu text-menu-foreground shadow-lg"
+						className="fixed z-[2000] flex max-h-[360px] min-w-[280px] flex-col overflow-hidden rounded border border-editor-group-border bg-menu text-menu-foreground shadow-lg"
 						data-testid="profile-menu"
 						ref={menuRef}
 						style={{
@@ -202,7 +202,7 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 							left: menuPosition.left,
 						}}>
 						{/* Title row with separation toggle */}
-						<div className="flex items-center justify-between border-b border-editor-group-border px-3 py-2">
+						<div className="flex shrink-0 items-center justify-between border-b border-editor-group-border px-3 py-2">
 							<span className="text-xs font-medium" style={{ color: "var(--vscode-foreground)" }}>
 								Available Models
 							</span>
@@ -234,7 +234,7 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 
 						{/* Act/Plan tabs (only in separated mode) */}
 						{planActSeparateModelsSetting && (
-							<div className="flex border-b border-editor-group-border">
+							<div className="flex shrink-0 border-b border-editor-group-border">
 								{(["act", "plan"] as ModeTab[]).map((tab) => (
 									<button
 										className="flex-1 cursor-pointer bg-transparent border-0 py-1.5 text-xs font-medium"
@@ -258,89 +258,91 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 						)}
 
 						{/* Profile list */}
-						{visibleProfiles.length === 0 ? (
-							<div className="px-3 py-2 text-xs" style={{ color: "var(--vscode-descriptionForeground)" }}>
-								{profiles.length === 0 ? "No models configured." : "No models for this mode."}
-							</div>
-						) : (
-							visibleProfiles.map((profile) => {
-								const name = profile.name || `${profile.provider}:${profile.modelId}` || "Unnamed"
-								const selected = isSelected(name)
-								const isHovered = hoveredId === profile.id
+						<div className="min-h-0 overflow-y-auto overscroll-contain" data-testid="profile-list">
+							{visibleProfiles.length === 0 ? (
+								<div className="px-3 py-2 text-xs" style={{ color: "var(--vscode-descriptionForeground)" }}>
+									{profiles.length === 0 ? "No models configured." : "No models for this mode."}
+								</div>
+							) : (
+								visibleProfiles.map((profile) => {
+									const name = profile.name || `${profile.provider}:${profile.modelId}` || "Unnamed"
+									const selected = isSelected(name)
+									const isHovered = hoveredId === profile.id
 
-								// Build capability tooltip from modelInfo
-								const capLines: string[] = [name]
-								const mi = profile.modelInfo
-								if (mi) {
-									if (mi.capabilities?.contextWindow)
-										capLines.push(`Context: ${mi.capabilities.contextWindow.toLocaleString()} tokens`)
-									if (mi.pricing?.inputPrice != null)
-										capLines.push(
-											`In: $${mi.pricing.inputPrice}/M | Out: $${mi.pricing.outputPrice ?? "?"}/M`,
-										)
-									if (mi.capabilities?.supportsReasoning)
-										capLines.push(
-											`Reasoning: ${mi.capabilities?.thinking?.effortLevels?.join(", ") || "yes"}`,
-										)
-									if (mi.capabilities?.supportsImages) capLines.push("Images: yes")
-									if (mi.capabilities?.supportsPromptCache) capLines.push("Prompt Cache: yes")
-								}
-								const capTooltip = capLines.join("\n")
+									// Build capability tooltip from modelInfo
+									const capLines: string[] = [name]
+									const mi = profile.modelInfo
+									if (mi) {
+										if (mi.capabilities?.contextWindow)
+											capLines.push(`Context: ${mi.capabilities.contextWindow.toLocaleString()} tokens`)
+										if (mi.pricing?.inputPrice != null)
+											capLines.push(
+												`In: $${mi.pricing.inputPrice}/M | Out: $${mi.pricing.outputPrice ?? "?"}/M`,
+											)
+										if (mi.capabilities?.supportsReasoning)
+											capLines.push(
+												`Reasoning: ${mi.capabilities?.thinking?.effortLevels?.join(", ") || "yes"}`,
+											)
+										if (mi.capabilities?.supportsImages) capLines.push("Images: yes")
+										if (mi.capabilities?.supportsPromptCache) capLines.push("Prompt Cache: yes")
+									}
+									const capTooltip = capLines.join("\n")
 
-								return (
-									<div
-										aria-disabled={profileSwitchFlow.isSwitchPending}
-										aria-selected={selected}
-										className="flex items-center px-3 py-2 cursor-pointer transition-colors"
-										key={profile.id}
-										onClick={() => !profileSwitchFlow.isSwitchPending && handleSelect(name)}
-										onKeyDown={(e) => {
-											if (!profileSwitchFlow.isSwitchPending && (e.key === "Enter" || e.key === " "))
-												handleSelect(name)
-										}}
-										onMouseEnter={() => setHoveredId(profile.id)}
-										onMouseLeave={() => setHoveredId(null)}
-										role="option"
-										style={{
-											background: selected
-												? "var(--vscode-list-activeSelectionBackground)"
-												: isHovered
-													? "var(--vscode-list-hoverBackground)"
-													: "transparent",
-											transition: "background 0.1s ease",
-										}}
-										tabIndex={profileSwitchFlow.isSwitchPending ? -1 : 0}
-										title={capTooltip}>
-										{/* Check circle */}
+									return (
 										<div
-											className="shrink-0 mr-2 flex items-center justify-center rounded-full"
+											aria-disabled={profileSwitchFlow.isSwitchPending}
+											aria-selected={selected}
+											className="flex items-center px-3 py-2 cursor-pointer transition-colors"
+											key={profile.id}
+											onClick={() => !profileSwitchFlow.isSwitchPending && handleSelect(name)}
+											onKeyDown={(e) => {
+												if (!profileSwitchFlow.isSwitchPending && (e.key === "Enter" || e.key === " "))
+													handleSelect(name)
+											}}
+											onMouseEnter={() => setHoveredId(profile.id)}
+											onMouseLeave={() => setHoveredId(null)}
+											role="option"
 											style={{
-												width: 16,
-												height: 16,
-												border: selected
-													? "1px solid var(--vscode-button-background)"
-													: "1px solid var(--vscode-descriptionForeground)",
-												background: selected ? "var(--vscode-button-background)" : "transparent",
-											}}>
-											{selected && <CheckIcon color="var(--vscode-button-foreground)" size={10} />}
+												background: selected
+													? "var(--vscode-list-activeSelectionBackground)"
+													: isHovered
+														? "var(--vscode-list-hoverBackground)"
+														: "transparent",
+												transition: "background 0.1s ease",
+											}}
+											tabIndex={profileSwitchFlow.isSwitchPending ? -1 : 0}
+											title={capTooltip}>
+											{/* Check circle */}
+											<div
+												className="shrink-0 mr-2 flex items-center justify-center rounded-full"
+												style={{
+													width: 16,
+													height: 16,
+													border: selected
+														? "1px solid var(--vscode-button-background)"
+														: "1px solid var(--vscode-descriptionForeground)",
+													background: selected ? "var(--vscode-button-background)" : "transparent",
+												}}>
+												{selected && <CheckIcon color="var(--vscode-button-foreground)" size={10} />}
+											</div>
+											<div className="flex-1 min-w-0">
+												<span
+													className="text-xs truncate block"
+													style={{ color: "var(--vscode-foreground)" }}
+													title={name}>
+													{name}
+												</span>
+												<span
+													className="text-[10px] block"
+													style={{ color: "var(--vscode-descriptionForeground)" }}>
+													{profile.usedFor.length > 0 ? profile.usedFor.join(", ") : "all modes"}
+												</span>
+											</div>
 										</div>
-										<div className="flex-1 min-w-0">
-											<span
-												className="text-xs truncate block"
-												style={{ color: "var(--vscode-foreground)" }}
-												title={name}>
-												{name}
-											</span>
-											<span
-												className="text-[10px] block"
-												style={{ color: "var(--vscode-descriptionForeground)" }}>
-												{profile.usedFor.length > 0 ? profile.usedFor.join(", ") : "all modes"}
-											</span>
-										</div>
-									</div>
-								)
-							})
-						)}
+									)
+								})
+							)}
+						</div>
 					</div>,
 					document.body,
 				)}

@@ -103,8 +103,25 @@ describe("ModelSwitcher Profile transitions", () => {
 
 		fireEvent.click(screen.getByRole("button", { name: "Select model" }))
 
-		expect(screen.getByTestId("profile-menu")).toHaveClass("bg-menu", "text-menu-foreground", "border-editor-group-border")
-		expect(screen.getByTestId("profile-menu")).not.toHaveStyle({
+		const menu = screen.getByTestId("profile-menu")
+		const list = screen.getByTestId("profile-list")
+
+		expect(menu).toHaveClass(
+			"flex",
+			"max-h-[360px]",
+			"flex-col",
+			"overflow-hidden",
+			"bg-menu",
+			"text-menu-foreground",
+			"border-editor-group-border",
+		)
+		expect(menu).not.toHaveClass("overflow-y-auto")
+		expect(list).toHaveClass("min-h-0", "overflow-y-auto", "overscroll-contain")
+		expect(list).not.toHaveClass("max-h-72", "snap-y", "snap-mandatory")
+		for (const option of screen.getAllByRole("option")) {
+			expect(option).not.toHaveClass("h-12", "snap-always", "snap-start")
+		}
+		expect(menu).not.toHaveStyle({
 			background: "var(--vscode-dropdown-background)",
 		})
 	})
