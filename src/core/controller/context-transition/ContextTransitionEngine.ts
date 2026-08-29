@@ -175,6 +175,10 @@ export class ContextTransitionEngine {
 			return this.failPreparation(policy.kind, operationId, error)
 		}
 		if (!this.isActive(operationId, policy.kind)) {
+			// Preflight awaits an expensive context projection. Returning without discarding
+			// the stale transition kept `active` and the shared lease pinned forever, so every
+			// later request reported `in_progress` and the selector stayed disabled.
+			await this.discardTransition(operationId, policy.kind)
 			return { status: "rejected", operationId, error: "Context transition became stale during preflight." }
 		}
 		if (preparation.kind === "rejected") {
@@ -323,8 +327,14 @@ export class ContextTransitionEngine {
 
 	private async failActive(reason: string, releaseBarrier: boolean): Promise<ContextTransitionRequestResult> {
 		const active = this.active
-		if (!active?.operation) {
+		if (!active) {
 			return { status: "rejected", error: reason }
+		}
+		if (!active.operation) {
+			// A transition can fail validation before any operation is recorded. It still owns
+			// the lease, so it must be discarded instead of leaving the engine permanently busy.
+			await this.discardTransition(active.operationId, active.kind)
+			return { status: "rejected", operationId: active.operationId, error: reason }
 		}
 		let reportedReason = reason
 		try {
@@ -369,6 +379,21 @@ export class ContextTransitionEngine {
 
 	private isActive(operationId: string, kind: ContextTransitionKind): boolean {
 		return this.active?.operationId === operationId && this.active.kind === kind && this.deps.lease.owns(operationId)
+	}
+
+	/**
+	 * Discard a transition that can no longer complete, whether or not it still owns the lease.
+	 *
+	 * `clearActive` intentionally ignores an operation that lost ownership, so a stale
+	 * transition needs this unconditional teardown to return the engine to idle.
+	 *
+	 * @param operationId The transition being discarded.
+	 * @param kind The transition kind whose published snapshot must return to idle.
+	 */
+	private async discardTransition(operationId: string, kind: ContextTransitionKind): Promise<void> {
+		if (this.active?.operationId === operationId) this.active = undefined
+		this.deps.lease.release(operationId)
+		await this.publish(kind, { phase: "idle" })
 	}
 
 	private async clearActive(operationId: string): Promise<void> {

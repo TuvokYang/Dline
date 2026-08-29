@@ -45,6 +45,23 @@ const API_PROFILES_FILE = "api_profiles.json"
 let needsCleanRewrite = false
 let apiProfilesWriteQueue: Promise<void> = Promise.resolve()
 let cleanRewriteInProgress = false
+/**
+ * Registry-derived modelInfo drift is repaired on disk at most once per process.
+ *
+ * `getApiProfiles` is a read RPC served by every Controller (sidebar and each
+ * editor panel). Writing on every read created a self-sustaining storm: the write
+ * woke the Catalog watcher, the watcher advanced the Catalog revision, every
+ * Webview reloaded, and each reload wrote again. With several panels open the
+ * amplification kept `api_profiles.json` from ever reaching the watcher's write
+ * stability window, so newly opened panels stayed on "Loading profiles…"
+ * regardless of how small the file was.
+ */
+let registryModelInfoRepairedPaths = new Set<string>()
+
+/** Reset the process-local registry repair gate. Test-only seam. */
+export function resetRegistryModelInfoRepairGateForTest(): void {
+	registryModelInfoRepairedPaths = new Set<string>()
+}
 let apiProfilesReadCache:
 	| {
 			filePath: string
@@ -470,10 +487,20 @@ export async function getApiProfiles(controller: Controller, _request: EmptyRequ
 		hydrateProviderSecrets(profiles)
 		const modelInfoChanged = await hydrateModelInfoFromRegistry(profiles)
 		if (parsed.recovered) {
+			// Recovered JSON is genuinely damaged on disk and must be repaired now.
 			needsCleanRewrite = false
+			registryModelInfoRepairedPaths.add(filePath)
 			await writeApiProfilesToFile(filePath, profiles)
-		} else if (needsCleanRewrite || modelInfoChanged) {
+		} else if (needsCleanRewrite) {
+			// An embedded secret was migrated into the secret store; the stripped
+			// Catalog must be persisted exactly once.
 			needsCleanRewrite = false
+			registryModelInfoRepairedPaths.add(filePath)
+			await cleanRewriteApiProfiles(profiles)
+		} else if (modelInfoChanged && !registryModelInfoRepairedPaths.has(filePath)) {
+			// Registry drift only needs to reach disk once per process. Every later
+			// read serves the hydrated in-memory Catalog without waking the watcher.
+			registryModelInfoRepairedPaths.add(filePath)
 			await cleanRewriteApiProfiles(profiles)
 		}
 		// Flush any pending globalState writes before ensureProfileDefaults
@@ -736,8 +763,13 @@ export function readApiProfiles(): ApiProfile[] {
 		const modelInfoChanged = applyRegistryModelInfo(profiles) || defaultsChanged
 		if (parsed.recovered || needsCleanRewrite) {
 			needsCleanRewrite = false
+			registryModelInfoRepairedPaths.add(filePath)
 			cleanRewriteApiProfiles(profiles)
-		} else if (modelInfoChanged) {
+		} else if (modelInfoChanged && !registryModelInfoRepairedPaths.has(filePath)) {
+			// This synchronous reader runs on hot paths such as findEnabledProfiles and
+			// profile-reference resolution. Rewriting on every call re-triggered the
+			// Catalog watcher and starved newly opened panels of a settled Catalog.
+			registryModelInfoRepairedPaths.add(filePath)
 			cleanRewriteApiProfiles(profiles)
 		}
 		apiProfilesReadCache = {

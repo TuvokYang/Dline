@@ -18,7 +18,7 @@ export default defineConfig({
 		clearMocks: false,
 		restoreMocks: false,
 		pool: "vmThreads",
-		maxWorkers: 2,
+		maxWorkers: 4,
 	},
 	resolve: {
 		alias: {

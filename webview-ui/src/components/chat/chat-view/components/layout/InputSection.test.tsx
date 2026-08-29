@@ -204,6 +204,31 @@ describe("InputSection deferred task submission", () => {
 		expect(onSubmit).not.toHaveBeenCalled()
 	})
 
+	// The queue panel owns the text once the entry is accepted. Leaving it in the
+	// composer showed the same input twice and invited a duplicate send.
+	it("clears the composer once a blocked draft is queued", () => {
+		const setInputValue = vi.fn()
+		const setSelectedImages = vi.fn()
+		const setSelectedFiles = vi.fn()
+		const current = props(draft("queue me"))
+		current.chatState = { ...current.chatState, setInputValue, setSelectedImages, setSelectedFiles }
+		render(
+			<InputSection
+				{...current}
+				enabled={false}
+				onEnqueueInput={vi.fn()}
+				onSubmit={vi.fn(async () => undefined)}
+				submissionScope="task-1"
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: "Submit" }))
+
+		expect(setInputValue).toHaveBeenCalledWith("")
+		expect(setSelectedImages).toHaveBeenCalledWith([])
+		expect(setSelectedFiles).toHaveBeenCalledWith([])
+	})
+
 	// Editing pulls the entry back into the composer, because adding images or
 	// file references is only possible there.
 	it("loads a queue entry back into the composer when editing starts", () => {

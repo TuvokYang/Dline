@@ -51,8 +51,13 @@ export function resolveChatRestoreBoundary(input: {
 	}
 
 	const userMessageIndex = (message.conversationHistoryIndex ?? -1) + 1
-	const apiKeepCount = userMessageIndex + 1
-	if (!Number.isInteger(apiKeepCount) || apiKeepCount < 0 || apiKeepCount > apiCount) {
+	// An ordinary card points at the assistant message of its round, so the round is
+	// kept through the following user message. A failed compaction card is anchored to
+	// the last assistant message of an unfinished round and has no successor user
+	// message, so the same arithmetic would run one past the end of the conversation.
+	// Clamp to the conversation length instead of rejecting a legitimate restore.
+	const apiKeepCount = Math.min(userMessageIndex + 1, apiCount)
+	if (!Number.isInteger(apiKeepCount) || apiKeepCount < 0 || userMessageIndex > apiCount) {
 		throw new Error("Restore API boundary is outside the current conversation")
 	}
 	validateDeletedRange(message.conversationHistoryDeletedRange, apiKeepCount)

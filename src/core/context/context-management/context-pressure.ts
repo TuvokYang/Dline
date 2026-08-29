@@ -1,4 +1,4 @@
-import type { ClineApiReqInfo } from "@shared/ExtensionMessage"
+import type { ClineApiReqInfo, ClineMessage, ClineSayTool } from "@shared/ExtensionMessage"
 import type { ContextWindowRequestPressure } from "./context-window-projection"
 import { computeCompactTrigger, computeSummarizeBudget } from "./context-window-utils"
 
@@ -75,6 +75,51 @@ export function readContextWindowRequestPressure(text?: string): ContextWindowRe
 
 function normalizePositiveTokens(value: unknown): number {
 	return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
+}
+
+/**
+ * Decide whether a message is a durable card for a successfully completed compaction.
+ *
+ * @param message The chat message to classify.
+ * @returns True when the message reports a completed compaction unit.
+ */
+function isCompletedCompactionCard(message: ClineMessage): boolean {
+	if (message.type !== "say" || message.say !== "tool" || message.partial || !message.text) return false
+	try {
+		const tool = JSON.parse(message.text) as ClineSayTool
+		return tool.tool === "summarizeTask" && tool.compactionStatus === "completed"
+	} catch {
+		return false
+	}
+}
+
+/**
+ * Collect request pressure records that still describe the live conversation.
+ *
+ * A completed compaction replaces the preceding conversation with a summary, so provider
+ * occupancy recorded before that boundary no longer measures the current context. Keeping
+ * those records made the first post-compaction request inherit the pre-compaction baseline
+ * until fresh provider usage arrived, which displayed a context far larger than was sent.
+ *
+ * @param messages The chat messages in chronological order.
+ * @returns Pressure records recorded after the latest completed compaction.
+ */
+export function collectContextWindowRequestPressures(messages: readonly ClineMessage[]): readonly ContextWindowRequestPressure[] {
+	let startIndex = 0
+	for (let index = messages.length - 1; index >= 0; index--) {
+		if (isCompletedCompactionCard(messages[index])) {
+			startIndex = index + 1
+			break
+		}
+	}
+	const pressures: ContextWindowRequestPressure[] = []
+	for (let index = startIndex; index < messages.length; index++) {
+		const message = messages[index]
+		if (message.say !== "api_req_started") continue
+		const pressure = readContextWindowRequestPressure(message.text)
+		if (pressure !== undefined) pressures.push(pressure)
+	}
+	return pressures
 }
 
 /**

@@ -119,6 +119,19 @@ export const InputSection: React.FC<InputSectionProps> = ({
 		}
 	}, [editingEntryId, editedEntryExists])
 
+	/**
+	 * Clear the composer once a draft has been handed to the queue.
+	 *
+	 * The queue panel now owns the text, so leaving it in the composer would show
+	 * the same input twice and invite an accidental duplicate send.
+	 */
+	const clearComposerDraft = () => {
+		setInputValue("")
+		setSelectedImages([])
+		setSelectedFiles([])
+		setActiveQuote(null)
+	}
+
 	const enqueueBlockedDraft = (capturedDraft: ModeSwitchDraft) => {
 		const draft = {
 			text: capturedDraft.text,
@@ -131,9 +144,14 @@ export const InputSection: React.FC<InputSectionProps> = ({
 		if (editingEntryId && editedEntryExists && onCommitQueuedInput) {
 			onCommitQueuedInput(editingEntryId, draft)
 			setEditingEntryId(undefined)
+			clearComposerDraft()
 			return
 		}
-		onEnqueueInput?.(draft)
+		if (!onEnqueueInput) {
+			return
+		}
+		onEnqueueInput(draft)
+		clearComposerDraft()
 	}
 
 	const handleSend = (capturedDraft?: ModeSwitchDraft) => {

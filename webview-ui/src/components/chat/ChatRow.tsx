@@ -752,8 +752,6 @@ export const ChatRowContent = memo(
 					const content = status === "failed" ? "" : typeof tool.content === "string" ? tool.content : ""
 					if (status === "running" && !content) return null
 					const isSummaryRefit = tool.compactionUnitKind === "summary_refit"
-					const durabilityLabel =
-						tool.compactionDurable === true ? "Durable" : tool.compactionDurable === false ? "Live" : undefined
 					const title =
 						status === "preparing"
 							? isSummaryRefit
@@ -797,18 +795,6 @@ export const ChatRowContent = memo(
 							<div className="flex items-center gap-2.5 px-2.5 py-2">
 								<FoldVerticalIcon className="size-2" />
 								<span className="min-w-0 flex-1 font-bold">{title}</span>
-								{durabilityLabel ? (
-									<span
-										className={cn(
-											"shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide",
-											tool.compactionDurable
-												? "border-success/40 bg-success/10 text-success"
-												: "border-editor-group-border text-description",
-										)}
-										data-testid="compaction-durability">
-										{durabilityLabel}
-									</span>
-								) : null}
 							</div>
 							{status === "failed" && tool.error && (
 								<div className="px-2.5 pb-2.5">
@@ -1068,7 +1054,9 @@ export const ChatRowContent = memo(
 					case "task":
 						return (
 							<UserMessage
+								inputKind={message.userInputKind}
 								messageTs={message.ts}
+								queuedInputMode={message.queuedInputMode}
 								sendMessageFromChatRow={sendMessageFromChatRow}
 								text={message.text}
 							/>
@@ -1121,7 +1109,9 @@ export const ChatRowContent = memo(
 							<UserMessage
 								files={message.files}
 								images={message.images}
+								inputKind={message.userInputKind}
 								messageTs={message.ts}
+								queuedInputMode={message.queuedInputMode}
 								sendMessageFromChatRow={sendMessageFromChatRow}
 								text={message.text}
 							/>

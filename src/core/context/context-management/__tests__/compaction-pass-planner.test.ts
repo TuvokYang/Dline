@@ -163,6 +163,7 @@ describe("compaction Pass planner", () => {
 		})
 		if (result.kind !== "planned") throw new Error("Expected a planned compaction Pass")
 		expect(result.plan.candidateEstimateCount).toBe(estimateCount)
-		expect(estimateCount).toBeLessThanOrEqual(6)
+		// One extra estimate covers the complete-range probe that prevents needless Pass splits.
+		expect(estimateCount).toBeLessThanOrEqual(7)
 	})
 })

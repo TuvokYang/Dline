@@ -422,28 +422,33 @@ export class TaskActivityStore {
 	 * otherwise consume the whole budget and leave the rest untouched. Each
 	 * activity reaches its own terminal state independently, and a rejecting
 	 * canceller only fails its own activity.
+	 *
+	 * Results are collected by request position rather than by settle order:
+	 * cancellers finish in an order decided by the remote runtime, so appending
+	 * as they settle made the same batch answer differently run to run. The
+	 * caller compares this response against the ids it requested.
 	 */
 	async cancel(activityIds: string[]): Promise<string[]> {
-		const cancelled: string[] = []
-		await Promise.all(
-			activityIds.map(async (activityId) => {
+		const outcomes = await Promise.all(
+			activityIds.map(async (activityId): Promise<string | undefined> => {
 				const activity = this.activities.get(activityId)
 				const cancel = this.cancellers.get(activityId)
-				if (!activity || !cancel || activity.status !== "running") return
+				if (!activity || !cancel || activity.status !== "running") return undefined
 				this.update(activityId, { status: "cancelling", latestEvent: "Cancellation requested" })
 				try {
 					await cancel()
 					this.update(activityId, { status: "cancelled", latestEvent: "Cancelled by user" })
-					cancelled.push(activityId)
+					return activityId
 				} catch (error) {
 					this.update(activityId, {
 						status: "failed",
 						error: error instanceof Error ? error.message : String(error),
 					})
+					return undefined
 				}
 			}),
 		)
-		return cancelled
+		return outcomes.filter((activityId): activityId is string => activityId !== undefined)
 	}
 
 	dispose(): void {

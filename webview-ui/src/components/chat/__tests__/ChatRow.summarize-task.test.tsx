@@ -118,7 +118,7 @@ describe("ChatRow summarizeTask rendering", () => {
 		expect(card).toHaveAttribute("data-compaction-unit-kind", "pass")
 		expect(card).toHaveAttribute("data-compaction-unit-index", "2")
 		expect(card).toHaveAttribute("data-compaction-durable", "false")
-		expect(screen.getByText("Live")).toBeInTheDocument()
+		expect(screen.queryByText("Live")).not.toBeInTheDocument()
 		expect(screen.getByText(expectedTitle)).toBeInTheDocument()
 	})
 
@@ -177,7 +177,9 @@ describe("ChatRow summarizeTask rendering", () => {
 		const card = screen.getByTestId("compaction-pass")
 		expect(card).toHaveAttribute("data-compaction-durable", "true")
 		expect(card).toHaveClass("bg-code", "border", "border-editor-group-border", "rounded-[3px]")
-		expect(screen.getByText("Durable")).toBeInTheDocument()
+		// Durability is diagnostic metadata only; it must not reach the card header.
+		expect(screen.queryByTestId("compaction-durability")).not.toBeInTheDocument()
+		expect(screen.queryByText("Durable")).not.toBeInTheDocument()
 		const summaryContent = screen.getByTestId("compaction-summary-content")
 		expect(summaryContent).not.toHaveClass("bg-code", "border", "border-editor-group-border", "rounded-[3px]")
 	})

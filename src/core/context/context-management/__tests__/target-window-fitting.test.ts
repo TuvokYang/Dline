@@ -97,6 +97,19 @@ function planThrough(
 	})
 }
 
+/** Every Pass history must be provider-projectable: no tool use may lack its result. */
+function expectPairedPassHistory(passHistory: readonly ClineStorageMessage[]): void {
+	const openFunctionIds = new Set<string>()
+	for (const message of passHistory) {
+		if (!Array.isArray(message.content)) continue
+		for (const block of message.content) {
+			if (block.type === "tool_use") openFunctionIds.add(block.function_id)
+			if (block.type === "tool_result") openFunctionIds.delete(block.function_id)
+		}
+	}
+	expect([...openFunctionIds], JSON.stringify(passHistory)).toEqual([])
+}
+
 describe("target window rolling fitting", () => {
 	it("requires an explicit Pass plan and preserves the exact selected turn prefix", () => {
 		const unplanned = startFitting(createHistory(), "operation-rolling")
@@ -120,7 +133,10 @@ describe("target window rolling fitting", () => {
 			passPlanned: true,
 		})
 		expect(state.summaryBaselineHash).toMatch(/^sha256:/)
-		expect(passHistory).toEqual(selectedTurnPrefix)
+		// The selected turn prefix is preserved verbatim. A trailing neutral pairing
+		// message may follow it when the range ends on an unclosed conversational call.
+		expect(passHistory.slice(0, selectedTurnPrefix.length)).toEqual(selectedTurnPrefix)
+		expectPairedPassHistory(passHistory)
 		expect(pass).toContain("E2E_ROLLING_TURN_A")
 		expect(pass).toContain("E2E_ROLLING_TURN_B")
 	})
@@ -146,7 +162,8 @@ describe("target window rolling fitting", () => {
 		})
 		expect(secondPlanned).toMatchObject({ passStartTurnIndex: 1, passEndTurnIndex: 1, passPlanned: true })
 		expect(afterFirst.summaryBaselineHash).not.toBe(initial.summaryBaselineHash)
-		expect(secondPassHistory.slice(1)).toEqual(selectedTurnMessages)
+		expect(secondPassHistory.slice(1, 1 + selectedTurnMessages.length)).toEqual(selectedTurnMessages)
+		expectPairedPassHistory(secondPassHistory)
 		expect(secondPass).toContain("E2E_ROLLING_SUMMARY_ONE")
 		expect(secondPass).toContain("E2E_ROLLING_TURN_B")
 		expect(secondPass).not.toContain("E2E_ROLLING_TURN_A")

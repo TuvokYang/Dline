@@ -152,6 +152,19 @@ describe("getApiProfiles", () => {
 		expect(stored[0].enabled).to.equal(false)
 	})
 
+	it("persists historical Profile names for name-only Task migration", () => {
+		const stored = serializeApiProfilesForStorage([
+			ApiProfile.create({
+				id: "renamed-profile",
+				name: "Current Name",
+				legacyNames: ["Previous Name", "Original Name"],
+				enabled: true,
+			}),
+		]) as Array<Record<string, unknown>>
+
+		expect(stored[0].legacyNames).to.deep.equal(["Previous Name", "Original Name"])
+	})
+
 	let tempDir: string
 	let originalDlineHomeDir: string | undefined
 	let originalDlineDir: string | undefined

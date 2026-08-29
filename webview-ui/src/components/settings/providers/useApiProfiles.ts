@@ -16,10 +16,15 @@ export interface ProfileUpdateResult {
 type ProfileMode = "plan" | "act"
 
 let sharedProfiles: ApiProfile[] = []
+let sharedExpandedId: string | null = null
 let sharedLoaded = false
 let sharedLoadError: Error | undefined
 let sharedLoadPromise: Promise<ApiProfile[]> | undefined
 let sharedCatalogRevision = -1
+/** Revision whose load failed, so a later attempt is never suppressed as "already tried". */
+let sharedFailedCatalogRevision: number | undefined
+/** Bounded backoff so a transient Catalog RPC failure never strands the selector. */
+const CATALOG_LOAD_RETRY_DELAYS_MS = [500, 1_500, 4_000] as const
 let sharedPersistQueue: Promise<void> = Promise.resolve()
 let sharedSelectionQueue: Promise<void> = Promise.resolve()
 const profileListeners = new Set<() => void>()
@@ -33,15 +38,31 @@ function replaceSharedProfiles(profiles: ApiProfile[]): void {
 	notifyProfileListeners()
 }
 
+function setSharedExpandedId(update: string | null | ((current: string | null) => string | null)): void {
+	sharedExpandedId = typeof update === "function" ? update(sharedExpandedId) : update
+	notifyProfileListeners()
+}
+
 function loadSharedProfiles(catalogRevision?: number, force = false): Promise<ApiProfile[]> {
 	if (sharedLoadPromise) {
-		return sharedLoadPromise.then(() =>
-			catalogRevision !== undefined && sharedCatalogRevision !== catalogRevision
-				? loadSharedProfiles(catalogRevision, true)
-				: sharedProfiles,
+		return sharedLoadPromise.then(
+			() =>
+				catalogRevision !== undefined && sharedCatalogRevision !== catalogRevision
+					? loadSharedProfiles(catalogRevision, true)
+					: sharedProfiles,
+			// The in-flight request failed. Do not inherit that rejection: this caller
+			// still needs a Catalog, so start a fresh attempt instead of leaving every
+			// consumer stuck on "Loading profiles…".
+			() => loadSharedProfiles(catalogRevision, true),
 		)
 	}
-	if (sharedLoaded && !force && (catalogRevision === undefined || sharedCatalogRevision === catalogRevision)) {
+	const alreadyFailedForRevision = sharedFailedCatalogRevision !== undefined && sharedFailedCatalogRevision === catalogRevision
+	if (
+		sharedLoaded &&
+		!force &&
+		!alreadyFailedForRevision &&
+		(catalogRevision === undefined || sharedCatalogRevision === catalogRevision)
+	) {
 		return Promise.resolve(sharedProfiles)
 	}
 
@@ -50,12 +71,15 @@ function loadSharedProfiles(catalogRevision?: number, force = false): Promise<Ap
 			sharedProfiles = response.profiles || []
 			sharedLoaded = true
 			if (catalogRevision !== undefined) sharedCatalogRevision = catalogRevision
+			sharedFailedCatalogRevision = undefined
 			sharedLoadError = undefined
 			notifyProfileListeners()
 			return sharedProfiles
 		})
 		.catch((error: unknown) => {
 			sharedLoaded = false
+			// Remember which revision failed so the next revision is always retried.
+			sharedFailedCatalogRevision = catalogRevision
 			sharedLoadError = error instanceof Error ? error : new Error(String(error))
 			notifyProfileListeners()
 			throw sharedLoadError
@@ -81,6 +105,17 @@ function persistSharedProfiles(profiles: ApiProfile[], clearApiKeyProfileIds: re
 			notifyProfileListeners()
 			void loadSharedProfiles(undefined, true).catch(() => undefined)
 		})
+}
+
+export function reorderProfilesById(profiles: ApiProfile[], activeId: string, overId: string): ApiProfile[] {
+	if (activeId === overId) return profiles
+	const activeIndex = profiles.findIndex((profile) => profile.id === activeId)
+	const overIndex = profiles.findIndex((profile) => profile.id === overId)
+	if (activeIndex < 0 || overIndex < 0) return profiles
+	const reordered = [...profiles]
+	const [activeProfile] = reordered.splice(activeIndex, 1)
+	reordered.splice(overIndex, 0, activeProfile)
+	return reordered
 }
 
 export function applyProfileUpdate(prev: ApiProfile[], id: string, updates: Partial<ApiProfile>): ProfileUpdateResult {
@@ -135,7 +170,6 @@ export function shouldUseTaskProfileSettings(taskId: string | undefined, hasActi
  */
 export function useApiProfiles() {
 	const [, forceRender] = useState(0)
-	const [expandedId, setExpandedId] = useState<string | null>(null)
 	const [editMode, setEditMode] = useState(false)
 	const extensionState = useContext(ExtensionStateContext)
 	const profileCatalogRevision = extensionState?.profileCatalogRevision ?? 0
@@ -149,7 +183,23 @@ export function useApiProfiles() {
 	}, [])
 
 	useEffect(() => {
-		void loadSharedProfiles(profileCatalogRevision).catch(() => undefined)
+		let cancelled = false
+		let retryTimer: ReturnType<typeof setTimeout> | undefined
+
+		// A failed Catalog load must never leave the selector on "Loading profiles…".
+		// Retry with bounded backoff so a transient RPC failure self-heals.
+		const attemptLoad = (attempt: number): void => {
+			void loadSharedProfiles(profileCatalogRevision).catch(() => {
+				if (cancelled || attempt >= CATALOG_LOAD_RETRY_DELAYS_MS.length) return
+				retryTimer = setTimeout(() => attemptLoad(attempt + 1), CATALOG_LOAD_RETRY_DELAYS_MS[attempt])
+			})
+		}
+		attemptLoad(0)
+
+		return () => {
+			cancelled = true
+			if (retryTimer) clearTimeout(retryTimer)
+		}
 	}, [profileCatalogRevision])
 
 	const persist = useCallback((profiles: ApiProfile[], clearApiKeyProfileIds: readonly string[] = []) => {
@@ -158,12 +208,13 @@ export function useApiProfiles() {
 		persistSharedProfiles(profiles, clearApiKeyProfileIds)
 	}, [])
 
-	const addProfile = useCallback(() => {
-		if (!sharedLoaded) return
+	const addProfile = useCallback((): string | undefined => {
+		if (!sharedLoaded) return undefined
 		const newProfile = createEmptyApiProfile()
 		newProfile.name = "New Model"
 		persist([...sharedProfiles, newProfile])
-		setExpandedId(newProfile.id)
+		setSharedExpandedId(newProfile.id)
+		return newProfile.id
 	}, [persist])
 
 	const updateProfile = useCallback(
@@ -177,10 +228,18 @@ export function useApiProfiles() {
 		[persist],
 	)
 
+	const reorderProfiles = useCallback(
+		(activeId: string, overId: string) => {
+			const reordered = reorderProfilesById(sharedProfiles, activeId, overId)
+			if (reordered !== sharedProfiles) persist(reordered)
+		},
+		[persist],
+	)
+
 	const removeProfile = useCallback(
 		(id: string) => {
 			persist(sharedProfiles.filter((profile) => profile.id !== id))
-			setExpandedId((current) => (current === id ? null : current))
+			setSharedExpandedId((current) => (current === id ? null : current))
 		},
 		[persist],
 	)
@@ -192,7 +251,7 @@ export function useApiProfiles() {
 		[persist],
 	)
 
-	const selectProfiles = useCallback((id: string, modes: ProfileMode[], taskId?: string, hasActiveTask = false) => {
+	const selectProfiles = useCallback((id: string, modes: ProfileMode[], _taskId?: string, _hasActiveTask = false) => {
 		const profile = sharedProfiles.find((item) => item.id === id)
 		if (!profile) return Promise.resolve()
 		sharedSelectionQueue = sharedSelectionQueue
@@ -232,19 +291,20 @@ export function useApiProfiles() {
 	)
 
 	const toggleExpand = useCallback((id: string) => {
-		setExpandedId((current) => (current === id ? null : id))
+		setSharedExpandedId((current) => (current === id ? null : id))
 	}, [])
 
 	const providerOptions = useMemo(() => PROVIDERS.list, [])
 
 	return {
 		profiles: sharedProfiles,
-		expandedId,
-		setExpandedId,
+		expandedId: sharedExpandedId,
+		setExpandedId: setSharedExpandedId,
 		editMode,
 		setEditMode,
 		addProfile,
 		updateProfile,
+		reorderProfiles,
 		removeProfile,
 		toggleEnabled,
 		toggleUsedFor,

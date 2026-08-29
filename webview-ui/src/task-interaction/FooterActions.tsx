@@ -39,19 +39,23 @@ export function FooterActions({
 	onSuccessorAccepted,
 	successorContext,
 }: FooterActionsProps) {
-	// A dispatch is pending only for the exact projection that issued it. Task
-	// clean-up (cancel in particular) can outlive its own RPC, so scoping the
-	// pending state keeps the footer following the backend projection: once a
-	// newer state arrives, its actions are live even while the old call is still
-	// in flight.
-	const dispatchScope = `${view.taskId}:${view.stateRevision}:${view.activeInteraction?.interactionId ?? ""}`
+	// A dispatch is pending for the task and interaction that issued it, but not
+	// for a single `stateRevision`. Cancelling makes the backend publish further
+	// projections of the same task while the RPC is still in flight; keying the
+	// latch on the revision let each of those releases re-enable the button
+	// mid-cancellation, so the user could fire duplicate cancels against a task
+	// that was already winding down. Switching task or interaction still starts
+	// a fresh scope, because that is genuinely different work.
+	const dispatchScope = `${view.taskId}:${view.activeInteraction?.interactionId ?? ""}`
 	const [pendingState, setPendingState] = useState<string>()
 	const pending = pendingState === dispatchScope
 	const beginPending = () => setPendingState(dispatchScope)
 	// Clear only the scope this call owns; a late settle must not release the
 	// pending state of a newer projection that has already started its own work.
 	const endPending = (scope: string) => setPendingState((current) => (current === scope ? undefined : current))
-	const errorScope = dispatchScope
+	// Errors stay bound to the exact projection that produced them: a newer
+	// backend state supersedes the failure the user was shown.
+	const errorScope = `${dispatchScope}:${view.stateRevision}`
 	const [errorState, setErrorState] = useState<{ scope: string; message: string }>()
 	const error = errorState?.scope === errorScope ? errorState.message : undefined
 	const setError = (message?: string) => setErrorState(message ? { scope: errorScope, message } : undefined)

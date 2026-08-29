@@ -1,6 +1,6 @@
 import type { ProfileSwitchSnapshot } from "@shared/profile-switch"
 import { PlanActMode, ProfileSwitchResponse, ProfileSwitchStatus } from "@shared/proto/dline/state"
-import { act, renderHook, waitFor } from "@testing-library/react"
+import { act, renderHook } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { StateServiceClient } from "../../../services/grpc-client"
 import { useProfileSwitch } from "./useProfileSwitch"
@@ -13,10 +13,24 @@ vi.mock("../../../services/grpc-client", () => ({
 	},
 }))
 
+/**
+ * Build a Profile switch RPC response.
+ *
+ * @param status The reported switch status.
+ * @param operationId The operation identity carried by the response.
+ * @param error An optional failure reason.
+ * @returns The protobuf response object.
+ */
 function response(status: ProfileSwitchStatus, operationId = "profile-operation-1", error?: string): ProfileSwitchResponse {
 	return ProfileSwitchResponse.create({ status, operationId, error })
 }
 
+/**
+ * Build a published Profile switch snapshot.
+ *
+ * @param phase The transition phase carried by the snapshot.
+ * @returns The snapshot published to the webview.
+ */
 function snapshot(phase: ProfileSwitchSnapshot["phase"]): ProfileSwitchSnapshot {
 	return {
 		phase,
@@ -47,12 +61,7 @@ describe("useProfileSwitch", () => {
 	})
 
 	it("requests an active-task Profile transition without optimistically adopting the target", async () => {
-		const { result } = renderHook(() =>
-			useProfileSwitch({
-				stateRevision: 1,
-				profileSwitch: { phase: "idle" },
-			}),
-		)
+		const { result } = renderHook(() => useProfileSwitch({ profileSwitch: { phase: "idle" } }))
 
 		await act(async () => result.current.requestSwitch("small-profile", ["act"]))
 
@@ -62,50 +71,72 @@ describe("useProfileSwitch", () => {
 				targetModes: [PlanActMode.ACT],
 			}),
 		)
-		expect(result.current.isSwitchPending).toBe(true)
 	})
 
-	it("describes target-Profile compaction and keeps the transaction pending", () => {
-		const { result } = renderHook(() =>
-			useProfileSwitch({
-				stateRevision: 2,
-				profileSwitch: snapshot("compacting"),
-			}),
-		)
+	it("describes target-Profile compaction through the published status text", () => {
+		const { result } = renderHook(() => useProfileSwitch({ profileSwitch: snapshot("compacting") }))
 
-		expect(result.current.isSwitchPending).toBe(true)
 		expect(result.current.statusText).toBe("Compacting with small-profile...")
 	})
 
-	it("keeps terminal compaction failure out of the persistent Profile selector status", async () => {
+	it("keeps terminal compaction failure out of the persistent Profile selector status", () => {
 		const { result } = renderHook(() =>
-			useProfileSwitch({
-				stateRevision: 2,
-				profileSwitch: { ...snapshot("failed"), error: "Compaction failed." },
-			}),
+			useProfileSwitch({ profileSwitch: { ...snapshot("failed"), error: "Compaction failed." } }),
 		)
 
-		await waitFor(() => expect(result.current.isSwitchPending).toBe(false))
 		expect(result.current.statusText).toBeUndefined()
 		expect(result.current.error).toBe("Compaction failed.")
 	})
 
-	it("releases local pending after a confirmed Profile switch succeeds", async () => {
-		const { result } = renderHook(() => useProfileSwitch({ stateRevision: 1, profileSwitch: { phase: "idle" } }))
+	it("publishes no status text once the backend returns to idle", () => {
+		const { result } = renderHook(() => useProfileSwitch({ profileSwitch: snapshot("idle") }))
+
+		expect(result.current.statusText).toBeUndefined()
+		expect(result.current.error).toBeUndefined()
+	})
+
+	it("accepts consecutive switches without any client-side latch", async () => {
+		// Selecting a Profile only rebinds the handler, so the selector must never refuse a
+		// later request. A previous client-side pending latch could strand itself and made
+		// the second selection silently disappear before reaching the backend.
+		const { result } = renderHook(() => useProfileSwitch({ profileSwitch: { phase: "idle" } }))
 
 		await act(async () => result.current.requestSwitch("small-profile", ["act"]))
-		await act(async () => result.current.confirmSwitch("profile-operation-1"))
+		await act(async () => result.current.requestSwitch("other-profile", ["act"]))
 
-		await waitFor(() => expect(result.current.isSwitchPending).toBe(false))
+		expect(StateServiceClient.requestProfileSwitch).toHaveBeenCalledTimes(2)
+		expect(StateServiceClient.requestProfileSwitch).toHaveBeenLastCalledWith(
+			expect.objectContaining({ targetProfile: "other-profile" }),
+		)
+	})
+
+	it("still issues a request while an earlier operation is awaiting confirmation", async () => {
+		const { result } = renderHook(() => useProfileSwitch({ profileSwitch: snapshot("awaiting_confirmation") }))
+
+		await act(async () => result.current.requestSwitch("other-profile", ["act"]))
+
+		expect(StateServiceClient.requestProfileSwitch).toHaveBeenCalledTimes(1)
+	})
+
+	it("ignores a request without any target mode", async () => {
+		const { result } = renderHook(() => useProfileSwitch({ profileSwitch: { phase: "idle" } }))
+
+		await act(async () => result.current.requestSwitch("small-profile", []))
+
+		expect(StateServiceClient.requestProfileSwitch).not.toHaveBeenCalled()
+	})
+
+	it("survives a rejected request RPC without throwing", async () => {
+		vi.mocked(StateServiceClient.requestProfileSwitch).mockRejectedValue(new Error("transport failed"))
+		const { result } = renderHook(() => useProfileSwitch({ profileSwitch: { phase: "idle" } }))
+
+		await act(async () => result.current.requestSwitch("small-profile", ["act"]))
+
+		expect(StateServiceClient.requestProfileSwitch).toHaveBeenCalledTimes(1)
 	})
 
 	it("confirms and cancels by immutable operation identity", async () => {
-		const { result } = renderHook(() =>
-			useProfileSwitch({
-				stateRevision: 2,
-				profileSwitch: snapshot("awaiting_confirmation"),
-			}),
-		)
+		const { result } = renderHook(() => useProfileSwitch({ profileSwitch: snapshot("awaiting_confirmation") }))
 
 		await act(async () => result.current.confirmSwitch("profile-operation-1"))
 		await act(async () => result.current.cancelSwitch("profile-operation-1"))

@@ -1,4 +1,4 @@
-import type { ClineStorageMessage } from "@shared/messages/content"
+import type { ClineAssistantToolUseBlock, ClineStorageMessage, ClineUserToolResultContentBlock } from "@shared/messages/content"
 import cloneDeep from "clone-deep"
 import { hashCompactionSummary, hashCompactionValue } from "./compaction-hash"
 import {
@@ -166,11 +166,48 @@ export function buildCompactionTurnHistoryForRange(
 	if (passTurns.length === 0) {
 		throw new Error("Compaction Pass has no uncovered logical turn")
 	}
-	return materializeCompactionSourceRange(
+	const turnHistory = materializeCompactionSourceRange(
 		state.sourceSnapshot,
 		passTurns[0].startMessageIndex,
 		passTurns[passTurns.length - 1].endMessageIndex,
 	)
+	return completePassToolPairing(turnHistory)
+}
+
+/**
+ * Close every tool use the selected Pass range leaves unpaired.
+ *
+ * A tagged conversational tool result both closes its call and opens the next
+ * user-authored round, so the logical-turn index deliberately assigns it to the
+ * following turn. A Pass ending on such a boundary would otherwise project a
+ * provider `function_call` without its `function_call_output`, which the
+ * Responses API rejects with "No tool output found for function call". The real
+ * result stays outside this Pass; only neutral identity-level pairing evidence
+ * is appended so the hidden request remains provider-projectable.
+ */
+function completePassToolPairing(passHistory: ClineStorageMessage[]): ClineStorageMessage[] {
+	const openToolUses = new Map<string, ClineAssistantToolUseBlock>()
+	for (const message of passHistory) {
+		if (!Array.isArray(message.content)) continue
+		if (message.role === "assistant") {
+			for (const block of message.content) {
+				if (block.type === "tool_use") openToolUses.set(block.function_id, block)
+			}
+			continue
+		}
+		for (const block of message.content) {
+			if (block.type === "tool_result") openToolUses.delete(block.function_id)
+		}
+	}
+	if (openToolUses.size === 0) return passHistory
+
+	const pairingResults: ClineUserToolResultContentBlock[] = [...openToolUses.values()].map((toolUse) => ({
+		type: "tool_result",
+		function_id: toolUse.function_id,
+		dline_tid: toolUse.dline_tid,
+		content: [{ type: "text", text: `Tool ${toolUse.name} executed successfully.` }],
+	}))
+	return [...passHistory, { role: "user", content: pairingResults }]
 }
 
 /** Build the exact canonical history included in one candidate hidden compaction Pass range. */

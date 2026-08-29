@@ -101,7 +101,7 @@ const recoveredTurnEndScenarios: readonly PairingScenario[] = [
 	{
 		id: "qna",
 		label: "recovered qna_respond",
-		knownSplitRegression: true,
+		knownSplitRegression: false,
 		tools: [
 			seededTool(
 				"qna",
@@ -114,7 +114,7 @@ const recoveredTurnEndScenarios: readonly PairingScenario[] = [
 	{
 		id: "plan",
 		label: "recovered make_plan",
-		knownSplitRegression: true,
+		knownSplitRegression: false,
 		tools: [
 			seededTool(
 				"plan",
@@ -127,7 +127,7 @@ const recoveredTurnEndScenarios: readonly PairingScenario[] = [
 	{
 		id: "followup",
 		label: "recovered ask_followup_question",
-		knownSplitRegression: true,
+		knownSplitRegression: false,
 		tools: [
 			seededTool(
 				"followup",
@@ -140,7 +140,7 @@ const recoveredTurnEndScenarios: readonly PairingScenario[] = [
 	{
 		id: "report",
 		label: "recovered generate_report",
-		knownSplitRegression: true,
+		knownSplitRegression: false,
 		tools: [
 			seededTool(
 				"report",
@@ -153,7 +153,7 @@ const recoveredTurnEndScenarios: readonly PairingScenario[] = [
 	{
 		id: "completion",
 		label: "recovered attempt_completion",
-		knownSplitRegression: true,
+		knownSplitRegression: false,
 		tools: [
 			seededTool(
 				"completion",

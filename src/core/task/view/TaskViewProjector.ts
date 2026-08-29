@@ -79,6 +79,13 @@ export function projectTaskView(
 		state.interaction.status === "awaiting"
 	const isCancellable = CANCELLABLE_PHASES.has(state.phase)
 	const interactionIsBeingResolved = state.interaction?.status === "resolving"
+	// An interaction is created before its anchor is presented, so a long turn
+	// can sit in `opening` indefinitely. Its own actions are projected disabled
+	// in that window, and a disabled list is not `undefined`, so the task Cancel
+	// fallback below never ran: a cancellable task lost its Cancel button until
+	// the interaction reached `awaiting`. Offer Cancel instead, which is the
+	// only action the backend can honour while the interaction is not ready.
+	const interactionIsOpening = state.interaction?.status === "opening"
 	const projectedActions =
 		options.autoRetryActive && !state.interaction
 			? [{ ...RETRY_PENDING_ACTION }, ...(isCancellable ? [{ ...CANCEL_ACTION }] : [])]
@@ -86,7 +93,9 @@ export function projectTaskView(
 				? isCancellable
 					? [{ ...CANCEL_ACTION }]
 					: []
-				: (interaction?.actions ?? (isCancellable ? [{ ...CANCEL_ACTION }] : []))
+				: interactionIsOpening && isCancellable
+					? [{ ...CANCEL_ACTION }]
+					: (interaction?.actions ?? (isCancellable ? [{ ...CANCEL_ACTION }] : []))
 	const commandHandoffAction: TaskViewAction | undefined = options.commandHandoffActivityId
 		? {
 				type: "continue_in_background",

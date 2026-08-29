@@ -11,6 +11,14 @@ const SAFETY_BUFFER_RATIO = 0.03
 const SUMMARIZE_INSTRUCTION_BUDGET = 2_500
 const ESTIMATION_TOLERANCE = 2_000
 export const COMPACTION_CLOSURE_RESERVE_TOKENS = 3_000
+/**
+ * Share of the compaction reserve a complete-range Pass probe may borrow.
+ *
+ * The trailing logical turn before compaction often overshoots the Pass ceiling by a small
+ * margin. Splitting that range into an extra Pass strands most of the context window, which
+ * is far worse than letting the turn encroach on part of the reserve.
+ */
+const COMPACTION_RESERVE_ENCROACHMENT_RATIO = 0.2
 
 export interface CompactTriggerOptions {
 	triggerPercent?: number
@@ -30,6 +38,26 @@ export interface CompactTriggerPolicy {
 	compactTriggerTokens: number
 	/** Backward-compatible alias for the hard hidden-Pass context boundary. */
 	passInputCeilingTokens: number
+	/** Tokens a complete-range Pass probe may borrow from the reserve before splitting. */
+	passInputCeilingAllowanceTokens: number
+}
+
+/**
+ * Resolve how far a complete-range Pass probe may exceed the Pass ceiling.
+ *
+ * @param reserveTokens The reserve the encroachment ratio applies to.
+ * @param hardPassContextWindowTokens The hard context boundary a Pass request must respect.
+ * @param passInputCeilingTokens The strict Pass ceiling used for every other candidate.
+ * @returns The allowance in tokens, never pushing a request past the hard context boundary.
+ */
+function resolvePassInputCeilingAllowance(
+	reserveTokens: number,
+	hardPassContextWindowTokens: number,
+	passInputCeilingTokens: number,
+): number {
+	const requestedAllowance = Math.floor(Math.max(0, reserveTokens) * COMPACTION_RESERVE_ENCROACHMENT_RATIO)
+	const availableHeadroom = Math.max(0, hardPassContextWindowTokens - passInputCeilingTokens - 1)
+	return Math.min(requestedAllowance, availableHeadroom)
 }
 
 /**
@@ -93,6 +121,7 @@ export function resolveCompactTriggerPolicy(
 			0,
 			effectiveContextLimitTokens - normalizedInstructionBudget - COMPACTION_CLOSURE_RESERVE_TOKENS,
 		)
+		const passInputCeilingTokens = Math.max(0, hardPassContextWindowTokens - COMPACTION_CLOSURE_RESERVE_TOKENS - 1)
 		return {
 			branch: "absolute_cap",
 			guardedReserveTokens: 0,
@@ -100,7 +129,12 @@ export function resolveCompactTriggerPolicy(
 			hardPassContextWindowTokens,
 			projectedUsageTriggerTokens,
 			compactTriggerTokens: projectedUsageTriggerTokens + ESTIMATION_TOLERANCE,
-			passInputCeilingTokens: Math.max(0, hardPassContextWindowTokens - COMPACTION_CLOSURE_RESERVE_TOKENS - 1),
+			passInputCeilingTokens,
+			passInputCeilingAllowanceTokens: resolvePassInputCeilingAllowance(
+				COMPACTION_CLOSURE_RESERVE_TOKENS,
+				hardPassContextWindowTokens,
+				passInputCeilingTokens,
+			),
 		}
 	}
 
@@ -118,6 +152,7 @@ export function resolveCompactTriggerPolicy(
 		0,
 		effectiveContextLimitTokens - normalizedInstructionBudget - COMPACTION_CLOSURE_RESERVE_TOKENS,
 	)
+	const passInputCeilingTokens = Math.max(0, hardPassContextWindowTokens - COMPACTION_CLOSURE_RESERVE_TOKENS - 1)
 	return {
 		branch: "percentage_guarded",
 		guardedReserveTokens,
@@ -125,7 +160,12 @@ export function resolveCompactTriggerPolicy(
 		hardPassContextWindowTokens,
 		projectedUsageTriggerTokens,
 		compactTriggerTokens: projectedUsageTriggerTokens + ESTIMATION_TOLERANCE,
-		passInputCeilingTokens: Math.max(0, hardPassContextWindowTokens - COMPACTION_CLOSURE_RESERVE_TOKENS - 1),
+		passInputCeilingTokens,
+		passInputCeilingAllowanceTokens: resolvePassInputCeilingAllowance(
+			guardedReserveTokens,
+			hardPassContextWindowTokens,
+			passInputCeilingTokens,
+		),
 	}
 }
 

@@ -25,8 +25,13 @@ const sharedTestConfig = {
 	testTimeout: 60_000,
 	clearMocks: false,
 	restoreMocks: false,
-	pool: "vmThreads" as const,
-	maxWorkers: 2,
+	// `vmThreads` gives every test file its own VM context, which cannot share the Node
+	// module cache. Each file therefore rebuilt the whole module graph, so import cost
+	// dominated the suite by two orders of magnitude over actual test execution. Worker
+	// threads reuse that cache while `isolate` still gives each file a fresh module
+	// registry, keeping shared global state contained.
+	pool: "threads" as const,
+	maxWorkers: 4,
 	minWorkers: 1,
 }
 
@@ -47,6 +52,11 @@ const backendResolve = {
 
 /**
  * Create one bounded backend project for an exclusive test domain.
+ *
+ * Keeping the domains separate is deliberate. Each project's narrow `include` also
+ * bounds how many files Vitest globs and resolves, so merging every domain into a
+ * single wide `include` made a focused run scan the entire suite and became far
+ * slower than paying each project's startup cost.
  *
  * @param name Project name exposed to Vitest selectors and reports.
  * @param include Test file patterns owned by the project.

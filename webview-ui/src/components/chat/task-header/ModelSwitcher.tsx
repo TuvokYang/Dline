@@ -8,6 +8,7 @@ import { useExtensionState } from "@/context/ExtensionStateContext"
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip"
 import { ProfileSwitchDialog } from "../profile-switch/ProfileSwitchDialog"
 import { useProfileSwitch } from "../profile-switch/useProfileSwitch"
+import { resolveProfileDisplayState } from "./profileDisplayState"
 
 interface ModelSwitcherProps {
 	onOpenSettings: () => void
@@ -30,9 +31,8 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 		taskTitleMessage,
 		taskViewState,
 		profileSwitch,
-		stateRevision,
 	} = useExtensionState()
-	const { profiles, selectProfile, selectProfiles } = useApiProfiles()
+	const { profiles, loaded, error, addProfile, selectProfile, selectProfiles } = useApiProfiles()
 	const [open, setOpen] = useState(false)
 	const [activeTab, setActiveTab] = useState<ModeTab>(mode || "act")
 	const [menuPosition, setMenuPosition] = useState<{ left: number; bottom: number }>()
@@ -44,7 +44,7 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 	// history item or title message is temporarily absent from the state window.
 	const taskId = taskViewState?.taskId ?? currentTaskItem?.id
 	const hasActiveTask = Boolean(taskId) || Boolean(taskTitleMessage)
-	const profileSwitchFlow = useProfileSwitch({ stateRevision, profileSwitch })
+	const profileSwitchFlow = useProfileSwitch({ profileSwitch })
 
 	useEffect(() => {
 		if (!open) setActiveTab(mode || "act")
@@ -83,13 +83,19 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 	// Stable identity remains valid across rename; name is legacy fallback only.
 	const currentProfileId = mode === "plan" ? planProfileId : actProfileId
 	const currentProfileName = mode === "plan" ? planProfileName : actProfileName
-	const currentProfile =
-		(currentProfileId ? profiles.find((profile) => profile.id === currentProfileId) : undefined) ??
-		(currentProfileName ? profiles.find((profile) => profile.name === currentProfileName) : undefined)
-	const displayLine = currentProfile ? currentProfile.name || `${currentProfile.provider}:${currentProfile.modelId}` : "-:-"
+	const displayState = resolveProfileDisplayState({
+		profiles,
+		loaded,
+		error,
+		profileId: currentProfileId,
+		profileName: currentProfileName,
+	})
+	const currentProfile = displayState.kind === "selected" ? displayState.profile : undefined
+	const displayLine = displayState.text
 
-	// Build detailed tooltip from modelInfo
+	// Build detailed tooltip from the explicit Profile state and model metadata.
 	const tooltipLines: string[] = [displayLine]
+	if ("detail" in displayState && displayState.detail) tooltipLines.push(displayState.detail)
 	const info = currentProfile?.modelInfo
 	if (info) {
 		if (info.capabilities?.contextWindow)
@@ -104,6 +110,12 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 	const tooltip = tooltipLines.join("\n")
 
 	// Handle profile selection
+	const handleCreateProfile = () => {
+		addProfile()
+		setOpen(false)
+		onOpenSettings()
+	}
+
 	const handleSelect = (profileName: string) => {
 		const profile = profiles.find((p) => p.name === profileName || `${p.provider}:${p.modelId}` === profileName)
 		if (!profile) return
@@ -172,8 +184,11 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 					<button
 						aria-label="Select model"
 						className="inline-flex h-[18.5px] w-full min-w-0 cursor-pointer items-center overflow-hidden rounded-sm border-0 bg-transparent px-1 py-0 text-left text-[12.5px] leading-none text-description transition-colors duration-150 hover:bg-toolbar-hover hover:text-foreground focus-visible:bg-toolbar-hover disabled:cursor-not-allowed disabled:opacity-60"
-						disabled={profileSwitchFlow.isSwitchPending}
 						onClick={() => {
+							if (displayState.kind === "create") {
+								handleCreateProfile()
+								return
+							}
 							if (open) {
 								setOpen(false)
 								return
@@ -260,9 +275,18 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 						{/* Profile list */}
 						<div className="min-h-0 overflow-y-auto overscroll-contain" data-testid="profile-list">
 							{visibleProfiles.length === 0 ? (
-								<div className="px-3 py-2 text-xs" style={{ color: "var(--vscode-descriptionForeground)" }}>
-									{profiles.length === 0 ? "No models configured." : "No models for this mode."}
-								</div>
+								profiles.length === 0 ? (
+									<button
+										className="w-full cursor-pointer border-0 bg-transparent px-3 py-2 text-left text-xs text-foreground hover:bg-list-hover"
+										onClick={handleCreateProfile}
+										type="button">
+										Create profile
+									</button>
+								) : (
+									<div className="px-3 py-2 text-xs" style={{ color: "var(--vscode-descriptionForeground)" }}>
+										No profiles for this mode.
+									</div>
+								)
 							) : (
 								visibleProfiles.map((profile) => {
 									const name = profile.name || `${profile.provider}:${profile.modelId}` || "Unnamed"
@@ -290,14 +314,12 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 
 									return (
 										<div
-											aria-disabled={profileSwitchFlow.isSwitchPending}
 											aria-selected={selected}
 											className="flex items-center px-3 py-2 cursor-pointer transition-colors"
 											key={profile.id}
-											onClick={() => !profileSwitchFlow.isSwitchPending && handleSelect(name)}
+											onClick={() => handleSelect(name)}
 											onKeyDown={(e) => {
-												if (!profileSwitchFlow.isSwitchPending && (e.key === "Enter" || e.key === " "))
-													handleSelect(name)
+												if (e.key === "Enter" || e.key === " ") handleSelect(name)
 											}}
 											onMouseEnter={() => setHoveredId(profile.id)}
 											onMouseLeave={() => setHoveredId(null)}
@@ -310,7 +332,7 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 														: "transparent",
 												transition: "background 0.1s ease",
 											}}
-											tabIndex={profileSwitchFlow.isSwitchPending ? -1 : 0}
+											tabIndex={0}
 											title={capTooltip}>
 											{/* Check circle */}
 											<div

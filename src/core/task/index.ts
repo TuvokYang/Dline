@@ -19,9 +19,9 @@ import { resolveCompactionWindowBudget } from "@core/context/context-management/
 import { projectContextCompactionBoundary } from "@core/context/context-management/context-compaction-boundary"
 import { checkContextWindowExceededError } from "@core/context/context-management/context-error-handling"
 import {
+	collectContextWindowRequestPressures,
 	getContextTokens,
 	readContextTokens,
-	readContextWindowRequestPressure,
 } from "@core/context/context-management/context-pressure"
 import {
 	type ContextWindowProjection,
@@ -79,6 +79,7 @@ import { parseMentions } from "@core/mentions"
 import { CommandPermissionController } from "@core/permissions"
 import { summarizeTask } from "@core/prompts/contextManagement"
 import { ToolPromptGenerator } from "@core/prompts/generators/ToolPromptGenerator"
+import { getPrompt } from "@core/prompts/i18n"
 import { PromptProfile } from "@core/prompts/profiles/types"
 import { formatResponse } from "@core/prompts/responses"
 import { type ResolvedPromptRuntime, resolveFrozenPromptRuntime } from "@core/prompts/system-prompt-cache/FrozenPromptRuntime"
@@ -257,7 +258,7 @@ import { HistoryResumeMaintenance } from "./history/HistoryResumeMaintenance"
 import { TaskCompletionProjector } from "./history/TaskCompletionProjector"
 import type { QueuedInputEntry } from "./input-queue/InputQueue"
 import { InputQueueCoordinator } from "./input-queue/InputQueueCoordinator"
-import { QUEUED_INPUT_GUIDANCE, type QueueDelivery } from "./input-queue/InputQueueDelivery"
+import type { QueueDelivery } from "./input-queue/InputQueueDelivery"
 import type { InputQueueMutation, InputQueueMutationResult } from "./input-queue/InputQueueMutation"
 import { hostedWebApprovalApiIndex, requestHostedWebApproval } from "./interaction/HostedWebApproval"
 import type { InteractionKind } from "./interaction/Interaction"
@@ -562,6 +563,7 @@ export class Task {
 		publishProjection: () => this.postStateToWebview(),
 		answerTurnEnd: (delivery) => this.answerTurnEndWithQueuedInput(delivery),
 		stageToolRoundInput: (delivery) => this.stageToolRoundQueuedInput(delivery),
+		presentDeliveredInput: (delivery) => this.presentDeliveredQueuedInput(delivery),
 	})
 	/**
 	 * The durable turn-end interaction currently waiting for an answer.
@@ -826,11 +828,13 @@ export class Task {
 							effect.images,
 							effect.files,
 							effect.interactionId,
+							effect.userInputKind,
+							effect.queuedInputMode,
 						)
 						if (effect.feedbackAcknowledgment) {
 							this.taskState.ackedFeedback = {
 								response: effect.feedbackAcknowledgment,
-								text: effect.presentation,
+								text: effect.feedbackAcknowledgmentText ?? effect.presentation,
 								images: effect.images,
 								files: effect.files,
 							}
@@ -1724,7 +1728,7 @@ export class Task {
 		})
 		const currentIndicator = this.contextWindowIndicator.getSnapshot()
 		const latestProviderTokens =
-			this.getContextWindowRequestPressures()
+			[...this.getContextWindowRequestPressures()]
 				.reverse()
 				.find(
 					(pressure) =>
@@ -2283,6 +2287,14 @@ export class Task {
 						computeSummarizeBudget(),
 						this.getAutoCondenseTriggerOptions(),
 					).passInputCeilingTokens
+				},
+				getPassInputCeilingAllowance: (input) => {
+					const { contextWindow } = getContextWindowInfo(input.compactionApi)
+					return resolveCompactTriggerPolicy(
+						contextWindow,
+						computeSummarizeBudget(),
+						this.getAutoCondenseTriggerOptions(),
+					).passInputCeilingAllowanceTokens
 				},
 				estimatePassInput: async (input, passHistory) => {
 					const request = await this.buildContextCompactionPassRequest(
@@ -3876,6 +3888,7 @@ export class Task {
 			// Reporting it as undelivered returns it to the queue.
 			return false
 		}
+		const modelBlocks = this.renderQueuedInputBlocks(delivery)
 		const result = await this.dispatchRuntime({
 			type: "INTERACTION_RESPONDED",
 			response: {
@@ -3885,10 +3898,17 @@ export class Task {
 				actionId: "reply",
 				stateRevision: this.taskRuntime.getState().revision,
 				draft: {
-					text: delivery.text,
+					text: modelBlocks.join("\n\n"),
 					images: [...delivery.images],
 					files: [...delivery.files],
 				},
+				presentationDraft: {
+					text: delivery.entries.map((entry) => entry.text).join("\n\n"),
+					images: [...delivery.images],
+					files: [...delivery.files],
+				},
+				userInputKind: "queued",
+				queuedInputMode: delivery.kind,
 			},
 		})
 		if (!result.accepted) {
@@ -3909,11 +3929,10 @@ export class Task {
 		// step threw: the entry would then be sent with this round and put
 		// back in the queue to be sent again.
 		const staged: ClineContent[] = []
-		// Each entry becomes its own block, preceded once by the shared
-		// guidance. Passing the batch through buildUserFeedbackContent would
-		// merge it into a single message and lose the per-entry boundaries.
-		staged.push({ type: "text", text: QUEUED_INPUT_GUIDANCE })
-		for (const block of delivery.blocks) {
+		// Each entry becomes its own complete model-only XML block. Passing the
+		// batch through buildUserFeedbackContent would merge the entries and lose
+		// their individual boundaries.
+		for (const block of this.renderQueuedInputBlocks(delivery)) {
 			staged.push({ type: "text", text: block })
 		}
 		if (delivery.images.length > 0) {
@@ -3926,6 +3945,40 @@ export class Task {
 			}
 		}
 		this.taskState.userMessageContent.push(...staged)
+	}
+
+	/** Persist a pure user-facing QueueInput row after a staged request became durable. */
+	private async presentDeliveredQueuedInput(delivery: QueueDelivery): Promise<void> {
+		await this.taskController.channel.presentSay(
+			"user_feedback",
+			delivery.entries.map((entry) => entry.text).join("\n\n"),
+			[...delivery.images],
+			[...delivery.files],
+			`input-queue:${delivery.entries.map((entry) => entry.id).join(",")}`,
+			"queued",
+			delivery.kind,
+		)
+	}
+
+	/** Build complete model-only XML blocks while retaining pure user data for UI history. */
+	private renderQueuedInputBlocks(delivery: QueueDelivery): string[] {
+		const description = this.escapeXmlAttribute(this.getQueuedInputGuidance())
+		return delivery.blocks.map((block) => `<user_message description="${description}">\n${block}\n</user_message>`)
+	}
+
+	/** Escape text embedded in a double-quoted XML attribute. */
+	private escapeXmlAttribute(value: string): string {
+		return value
+			.replace(/&/g, "&amp;")
+			.replace(/"/g, "&quot;")
+			.replace(/</g, "&lt;")
+			.replace(/>/g, "&gt;")
+			.replace(/'/g, "&apos;")
+	}
+
+	/** Render the versioned internal queue guidance in English. */
+	private getQueuedInputGuidance(): string {
+		return getPrompt("inputQueue", "auxiliaryAlignmentV1", "en")
 	}
 
 	/**
@@ -3958,6 +4011,12 @@ export class Task {
 	 *
 	 * Rejects when the write fails; the coordinator decides what that means for
 	 * the change it was carrying.
+	 *
+	 * Every flush serializes on the shared write chain and rewrites the whole
+	 * snapshot, so each call is expensive for a large task. The wait is still
+	 * required: the queue coordinator decides whether to roll a change back by
+	 * checking that this write actually reached the file, so a coalesced write
+	 * would report a change as lost while it was merely still pending.
 	 */
 	private async persistInputQueue(): Promise<void> {
 		// A fresh object per call, never the cached instance. The persistence
@@ -7477,13 +7536,9 @@ export class Task {
 		)
 	}
 
-	/** Parse every persisted API request pressure record without inventing zero usage. */
+	/** Parse the persisted API request pressure records that still describe the live conversation. */
 	private getContextWindowRequestPressures() {
-		return this.messageStateHandler.clineMessages.flatMap((message) => {
-			if (message.say !== "api_req_started") return []
-			const pressure = readContextWindowRequestPressure(message.text)
-			return pressure === undefined ? [] : [pressure]
-		})
+		return collectContextWindowRequestPressures(this.messageStateHandler.clineMessages)
 	}
 
 	/** Append one high-pressure warning to the dynamic environment block. */

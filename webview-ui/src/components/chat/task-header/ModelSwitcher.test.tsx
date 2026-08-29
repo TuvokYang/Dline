@@ -23,6 +23,22 @@ const mocks = vi.hoisted(() => ({
 	cancelSwitch: vi.fn(),
 	selectProfile: vi.fn(),
 	selectProfiles: vi.fn(),
+	addProfile: vi.fn(),
+	profileStore: {
+		profiles: [
+			{
+				id: "large-id",
+				name: "large-profile",
+				legacyNames: ["old-large-profile"],
+				provider: "test",
+				modelId: "large",
+				usedFor: [],
+			},
+			{ id: "small-id", name: "small-profile", legacyNames: [], provider: "test", modelId: "small", usedFor: [] },
+		],
+		loaded: true,
+		error: undefined as Error | undefined,
+	},
 }))
 
 vi.mock("@/context/ExtensionStateContext", () => ({
@@ -31,10 +47,8 @@ vi.mock("@/context/ExtensionStateContext", () => ({
 
 vi.mock("@/components/settings/providers/useApiProfiles", () => ({
 	useApiProfiles: () => ({
-		profiles: [
-			{ id: "large-id", name: "large-profile", provider: "test", modelId: "large", usedFor: [] },
-			{ id: "small-id", name: "small-profile", provider: "test", modelId: "small", usedFor: [] },
-		],
+		...mocks.profileStore,
+		addProfile: mocks.addProfile,
 		selectProfile: mocks.selectProfile,
 		selectProfiles: mocks.selectProfiles,
 	}),
@@ -67,6 +81,19 @@ describe("ModelSwitcher Profile transitions", () => {
 			actModeProfileId: "large-id",
 			actModeProfile: "large-profile",
 		}
+		mocks.profileStore.profiles = [
+			{
+				id: "large-id",
+				name: "large-profile",
+				legacyNames: ["old-large-profile"],
+				provider: "test",
+				modelId: "large",
+				usedFor: [],
+			},
+			{ id: "small-id", name: "small-profile", legacyNames: [], provider: "test", modelId: "small", usedFor: [] },
+		]
+		mocks.profileStore.loaded = true
+		mocks.profileStore.error = undefined
 	})
 
 	it("resolves a renamed active Profile by stable identity", () => {
@@ -96,6 +123,73 @@ describe("ModelSwitcher Profile transitions", () => {
 			"hover:text-foreground",
 		)
 		expect(profileText).toHaveClass("block", "min-w-0", "flex-1", "truncate")
+	})
+
+	it("shows loading instead of an empty placeholder while the Catalog loads", () => {
+		mocks.profileStore.loaded = false
+		mocks.profileStore.profiles = []
+
+		render(<ModelSwitcher onOpenSettings={vi.fn()} />)
+
+		expect(screen.getByRole("button", { name: "Select model" })).toHaveTextContent("Loading profiles…")
+		expect(screen.queryByText("-:-")).not.toBeInTheDocument()
+	})
+
+	it("shows a Catalog load error separately from a deleted Profile", () => {
+		mocks.profileStore.loaded = false
+		mocks.profileStore.profiles = []
+		mocks.profileStore.error = new Error("Catalog read failed")
+
+		render(<ModelSwitcher onOpenSettings={vi.fn()} />)
+
+		expect(screen.getByRole("button", { name: "Select model" })).toHaveTextContent("Profiles unavailable")
+	})
+
+	it("shows Select profile without silently matching the stale display name", () => {
+		mocks.state.apiConfiguration = {
+			planModeProfileId: "deleted-id",
+			planModeProfile: "large-profile",
+			actModeProfileId: "deleted-id",
+			actModeProfile: "large-profile",
+		}
+
+		render(<ModelSwitcher onOpenSettings={vi.fn()} />)
+
+		expect(screen.getByRole("button", { name: "Select model" })).toHaveTextContent("Select profile")
+		expect(screen.getByRole("button", { name: "Select model" })).not.toHaveTextContent("large-profile")
+	})
+
+	it("shows a selection prompt when no Profile has ever been selected", () => {
+		mocks.state.apiConfiguration = {}
+
+		render(<ModelSwitcher onOpenSettings={vi.fn()} />)
+
+		expect(screen.getByRole("button", { name: "Select model" })).toHaveTextContent("Select profile")
+	})
+
+	it("creates and opens a new API configuration when the Catalog is empty", () => {
+		mocks.profileStore.profiles = []
+		const onOpenSettings = vi.fn()
+
+		render(<ModelSwitcher onOpenSettings={onOpenSettings} />)
+
+		const button = screen.getByRole("button", { name: "Select model" })
+		expect(button).toHaveTextContent("Create profile")
+		fireEvent.click(button)
+		expect(mocks.addProfile).toHaveBeenCalledOnce()
+		expect(onOpenSettings).toHaveBeenCalledOnce()
+		expect(screen.queryByTestId("profile-menu")).not.toBeInTheDocument()
+	})
+
+	it("resolves a name-only legacy binding through the historical name", () => {
+		mocks.state.apiConfiguration = {
+			planModeProfile: "old-large-profile",
+			actModeProfile: "old-large-profile",
+		}
+
+		render(<ModelSwitcher onOpenSettings={vi.fn()} />)
+
+		expect(screen.getByRole("button", { name: "Select model" })).toHaveTextContent("large-profile")
 	})
 
 	it("uses the shared menu surface for the Profile list", () => {

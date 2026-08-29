@@ -209,6 +209,8 @@ export type ContextCompactionSessionEvent =
 
 export interface ContextCompactionSessionPorts {
 	getPassInputCeiling(input: ContextCompactionSessionInput): number
+	/** Tokens a complete-range Pass may borrow from the compaction reserve before splitting. */
+	getPassInputCeilingAllowance?(input: ContextCompactionSessionInput): number
 	estimatePassInput(input: ContextCompactionSessionInput, passHistory: readonly ClineStorageMessage[]): Promise<number>
 	buildPassRequest(
 		input: ContextCompactionSessionInput,
@@ -305,6 +307,7 @@ export class ContextCompactionSession {
 					const planResult = await planNextCompactionPass({
 						state,
 						passInputCeiling: this.ports.getPassInputCeiling(input),
+						passInputCeilingAllowance: this.ports.getPassInputCeilingAllowance?.(input),
 						estimateInputTokens: (passHistory) => this.ports.estimatePassInput(input, passHistory),
 					})
 					const plannerMs = elapsedCompactionMs(plannerStartedAtMs)

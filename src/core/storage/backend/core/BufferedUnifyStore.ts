@@ -258,6 +258,10 @@ export class BufferedUnifyStore<TEntity extends object, TItem extends { ts: numb
 			const retained = this.items.slice(0, keepCount)
 			const persistedPrefixLength = Math.min(keepCount, this.persistedItems.length)
 			for (let index = 0; index < persistedPrefixLength; index++) {
+				// Same reference short-circuit as the append path: an untouched entry
+				// is still the identical object, so only replaced entries need the
+				// expensive structural comparison.
+				if (retained[index] === this.persistedItems[index]) continue
 				if (JSON.stringify(retained[index]) !== JSON.stringify(this.persistedItems[index])) {
 					throw new Error("BufferedUnifyStore.truncateAt cannot preserve a structurally modified prefix")
 				}
@@ -383,6 +387,12 @@ export class BufferedUnifyStore<TEntity extends object, TItem extends { ts: numb
 	private getPureTailAdditions(): TItem[] | undefined {
 		if (this.ensureUniqueAppendTimestamp || this.items.length <= this.persistedItems.length) return undefined
 		for (let index = 0; index < this.persistedItems.length; index++) {
+			// Reference equality settles the common case without serializing: an
+			// untouched prefix still holds the very objects the baseline captured,
+			// because staging replaces whole entries instead of mutating them.
+			// Serializing every retained entry on each flush turned an append into
+			// work proportional to the entire history.
+			if (this.items[index] === this.persistedItems[index]) continue
 			if (JSON.stringify(this.items[index]) !== JSON.stringify(this.persistedItems[index])) return undefined
 		}
 		return this.items.slice(this.persistedItems.length)
@@ -463,7 +473,15 @@ export class BufferedUnifyStore<TEntity extends object, TItem extends { ts: numb
 
 	private setCommittedState(items: TItem[]): void {
 		this.items = items
-		this.persistedItems = items.map((item) => structuredClone(item))
+		// The baseline is only ever read: it is compared against `this.items` and
+		// sliced, never written through. Every staging path replaces a whole entry
+		// (`this.items[index] = item`) or builds a new object from a spread, so no
+		// entry is mutated in place and the two arrays cannot alias into each other.
+		//
+		// Deep-cloning every entry here doubled both the load time and the resident
+		// memory of a task's message history, which for a large task meant copying
+		// tens of megabytes on open before anything could be displayed.
+		this.persistedItems = [...items]
 		this.l2Cache.clear()
 		this.l2AccessOrder = []
 		this.rebuildTimestampIndex()
