@@ -96,6 +96,26 @@ For all configured root projects, do not run a foreground `npm run test:run`. Fo
 
 Do not use `npm test` for routine focused validation. Its `pretest` hook runs `npm run protos`, which can regenerate and format files before the tests. Use it only when that lifecycle behavior is intentionally required.
 
+## Regenerate Prompt Snapshots
+
+Any intentional change to prompt prose, prompt templates, prompt assembly, profile projection, or other generated system-prompt output MUST regenerate the repository-owned prompt snapshots before prompt validation is considered complete.
+
+Use the dedicated package script from the repository root:
+
+```
+npm run test:snapshot
+```
+
+Treat `package.json` as the source of truth for the exact generation scope. The script sets the required snapshot-update environment variables and runs the repository's prompt and focus-chain snapshot generators. Do not replace it with an ad hoc Vitest command, and NEVER hand-edit generated `.snap` files.
+
+After generation succeeds, review the resulting snapshot changes and run the owning prompt project without update flags:
+
+```
+npm run test:run -- --project backend-prompts
+```
+
+Snapshot generation passing proves that the generator completed; the subsequent project run verifies that the committed baselines and the rest of the prompt tests are consistent. Report separately any unrelated pre-existing failures rather than modifying their assertions or inventories to make the suite pass.
+
 ## Select The Project
 
 The root config assigns tests by path:
