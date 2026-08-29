@@ -51,6 +51,29 @@ function createPorts(): ContextCompactionSessionPorts {
 				initialAttemptId: `attempt-${state.passIndex}`,
 			}
 		},
+		buildSummaryRefitRequest: async (_input, state, carryLimitTokens, refitAttempt) => {
+			const explicitInstructions = new ExplicitInstructionRequestScope(new ExplicitInstructionRegistry(), {
+				requestId: `refit-request-${state.passIndex}-${refitAttempt}`,
+				attemptId: `refit-attempt-${state.passIndex}-${refitAttempt}`,
+			})
+			explicitInstructions.register({
+				type: "summarize_task",
+				source: "auto_compaction",
+				targetTool: ClineDefaultTool.SUMMARIZE_TASK,
+				operationId: state.operationId,
+			})
+			return {
+				providerInput: {
+					systemPrompt: "system",
+					messages: [{ role: "user", content: [{ type: "text", text: state.cumulativeSummary ?? "" }] }],
+					tools: [],
+					serverTools: [],
+					providerOutputCap: carryLimitTokens,
+				} satisfies CompactionProviderInput,
+				explicitInstructions,
+				initialAttemptId: `refit-attempt-${state.passIndex}-${refitAttempt}`,
+			}
+		},
 		reprojectTarget: async () => completeProjection(),
 		stageAcceptedPass: async () => undefined,
 		commit: async () => undefined,

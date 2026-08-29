@@ -129,6 +129,26 @@ describe("TaskActivityStore", () => {
 		})
 	})
 
+	it("rejects duplicate activity identities instead of rebinding a historical record", () => {
+		const store = new TaskActivityStore("task-1")
+		store.create({
+			activityId: "subagent-collision",
+			kind: "subagent",
+			executionMode: "background",
+			title: "first task",
+		})
+
+		expect(() =>
+			store.create({
+				activityId: "subagent-collision",
+				kind: "subagent",
+				executionMode: "background",
+				title: "second task",
+			}),
+		).toThrow("Task activity already exists: subagent-collision")
+		expect(store.get("subagent-collision")?.title).toBe("first task")
+	})
+
 	it("retries a retained failed subagent with the same activity identity", async () => {
 		const retry = vi.fn(async () => true)
 		const store = new TaskActivityStore("task-1")
@@ -152,6 +172,80 @@ describe("TaskActivityStore", () => {
 		expect(store.get("subagent-retry")?.error).toBeUndefined()
 		expect(store.get("subagent-retry")?.finishedAt).toBeUndefined()
 		expect(store.isRetryable("subagent-retry")).toBe(false)
+	})
+
+	it("keeps events separated by execution attempt across retry", async () => {
+		const store = new TaskActivityStore("task-1")
+		store.create({
+			activityId: "subagent-attempts",
+			kind: "subagent",
+			executionMode: "background",
+			title: "research",
+			retry: async () => true,
+		})
+		store.appendEvent("subagent-attempts", { kind: "assistant_message", phase: "final", text: "first attempt" })
+		store.update("subagent-attempts", { status: "failed", error: "temporary failure" })
+
+		expect(await store.retry(["subagent-attempts"])).toEqual(["subagent-attempts"])
+		store.appendEvent("subagent-attempts", { kind: "assistant_message", phase: "final", text: "second attempt" })
+
+		const activity = store.get("subagent-attempts")
+		expect(activity?.currentAttempt).toBe(2)
+		expect(
+			activity?.events.find((event) => event.kind === "assistant_message" && event.text === "first attempt")?.attempt,
+		).toBe(1)
+		expect(
+			activity?.events.find((event) => event.kind === "assistant_message" && event.text === "second attempt")?.attempt,
+		).toBe(2)
+	})
+
+	it("persists retry recipes without treating them as live retry controls after reopen", async () => {
+		const persisted: Array<ReturnType<TaskActivityStore["list"]>> = []
+		const persistence = {
+			load: vi.fn(async () => persisted.at(-1) ?? []),
+			save: vi.fn(async (activities: ReturnType<TaskActivityStore["list"]>) => {
+				persisted.push(activities)
+			}),
+		}
+		const store = new TaskActivityStore("task-1", persistence)
+		store.create({
+			activityId: "subagent-recipe",
+			kind: "subagent",
+			executionMode: "background",
+			title: "research",
+			retryRecipe: {
+				kind: "subagent",
+				schemaVersion: 1,
+				subagentName: "default",
+				task: "inspect retry",
+				prompt: "<task>inspect retry</task><context>ctx</context>",
+				timeoutSeconds: 30,
+				retryable: true,
+			},
+		})
+		store.update("subagent-recipe", { status: "failed", error: "temporary failure" })
+		await store.waitForPersistence()
+
+		const reopened = new TaskActivityStore("task-1", persistence)
+		await reopened.hydrate()
+
+		expect(reopened.get("subagent-recipe")).toMatchObject({
+			schemaVersion: 2,
+			currentAttempt: 1,
+			retryRecipe: {
+				kind: "subagent",
+				schemaVersion: 1,
+				subagentName: "default",
+				task: "inspect retry",
+				timeoutSeconds: 30,
+				retryable: true,
+			},
+		})
+		expect(reopened.isRetryable("subagent-recipe")).toBe(true)
+		expect(reopened.hasLiveRetryControl("subagent-recipe")).toBe(false)
+		reopened.setRetry("subagent-recipe", async () => true)
+		expect(reopened.isRetryable("subagent-recipe")).toBe(true)
+		expect(reopened.hasLiveRetryControl("subagent-recipe")).toBe(true)
 	})
 
 	it("does not expose subagent finish or retry controls for command activities", async () => {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { waitForIdle } from "./client.mjs"
+import { rerunWithScope, waitForIdle } from "./client.mjs"
 
 function file(id, state) {
 	return {
@@ -41,4 +41,25 @@ test("waitForIdle reports collected and expected counts on timeout", async () =>
 	}
 
 	await assert.rejects(waitForIdle(client, { timeoutMs: 5, pollMs: 0 }), /Collected 1\/2 files/)
+})
+
+test("rerun all dispatches every discovered path instead of only previously collected files", async () => {
+	const reruns = []
+	const client = {
+		getFiles: async () => [file("one", "pass")],
+		getPaths: async () => ["C:/repo/one.test.ts", "C:/repo/two.test.ts", "C:/repo/three.test.ts"],
+		rerun: async (paths, resetTestNamePattern) => {
+			reruns.push({ paths, resetTestNamePattern })
+		},
+	}
+
+	const result = await rerunWithScope(client, { scope: "all" })
+
+	assert.deepEqual(reruns, [
+		{
+			paths: ["C:/repo/one.test.ts", "C:/repo/two.test.ts", "C:/repo/three.test.ts"],
+			resetTestNamePattern: true,
+		},
+	])
+	assert.deepEqual(result.targets, ["C:/repo/one.test.ts", "C:/repo/two.test.ts", "C:/repo/three.test.ts"])
 })

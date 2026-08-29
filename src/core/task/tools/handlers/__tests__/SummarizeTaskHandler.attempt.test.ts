@@ -1,13 +1,16 @@
+import { createCompactionSourceSnapshot } from "@core/context/context-management/compaction-source-snapshot"
 import { indexLogicalTurns } from "@core/context/context-management/logical-turns"
-import {
-	applyCompactionPassPlan,
-	startTargetWindowFitting,
-} from "@core/context/context-management/target-window-fitting"
+import { applyCompactionPassPlan, startTargetWindowFitting } from "@core/context/context-management/target-window-fitting"
 import { ClineDefaultTool } from "@shared/tools"
 import { describe, expect, it, vi } from "vitest"
 import type { TaskConfig } from "../../types/TaskConfig"
 import { NO_TOOL_RESULT } from "../../utils/ToolResultUtils"
 import { SummarizeTaskHandler } from "../SummarizeTaskHandler"
+
+function startFitting(sourceHistory: Parameters<typeof createCompactionSourceSnapshot>[0], operationId: string) {
+	const snapshot = createCompactionSourceSnapshot(sourceHistory)
+	return startTargetWindowFitting(indexLogicalTurns(snapshot.messages), operationId, snapshot)
+}
 
 const summaryBlock = {
 	type: "tool_use",
@@ -25,7 +28,7 @@ describe("SummarizeTaskHandler compaction attempt identity", () => {
 			{ role: "user" as const, content: [{ type: "text" as const, text: "Original task" }] },
 			{ role: "assistant" as const, content: [{ type: "text" as const, text: "Original response" }] },
 		]
-		const initialState = startTargetWindowFitting(indexLogicalTurns(sourceHistory), "operation-current-attempt")
+		const initialState = startFitting(sourceHistory, "operation-current-attempt")
 		const fittingState = applyCompactionPassPlan(initialState, {
 			operationId: initialState.operationId,
 			passIndex: initialState.passIndex,
@@ -103,7 +106,7 @@ describe("SummarizeTaskHandler compaction attempt identity", () => {
 			{ role: "user" as const, content: [{ type: "text" as const, text: "Original task" }] },
 			{ role: "assistant" as const, content: [{ type: "text" as const, text: "Original response" }] },
 		]
-		const fittingState = startTargetWindowFitting(indexLogicalTurns(sourceHistory), "operation-stale-attempt")
+		const fittingState = startFitting(sourceHistory, "operation-stale-attempt")
 		const overwriteApiConversationHistory = vi.fn(async () => undefined)
 		const taskState = {
 			consecutiveMistakeCount: 0,

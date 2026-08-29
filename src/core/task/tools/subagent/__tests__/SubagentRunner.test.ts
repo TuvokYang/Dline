@@ -36,6 +36,7 @@ import type { GlobalInstructionsFile } from "@shared/remote-config/schema"
 import { HostProvider } from "@/hosts/host-provider"
 import { ApiFormat, ServerTool } from "@/shared/proto/dline/models/metadata"
 import { Logger } from "@/shared/services/Logger"
+import { createTaskCapabilityToggles } from "@/shared/TaskCapabilityToggles"
 import { ClineDefaultTool } from "@/shared/tools"
 import { TaskState } from "../../../TaskState"
 import { SubagentBuilder } from "../SubagentBuilder"
@@ -96,6 +97,7 @@ function createTaskConfig(nativeToolCallEnabled: boolean, options: any = {}): Ta
 		vscodeTerminalExecutionMode: "backgroundExec",
 		enableParallelToolCalling: false,
 		isSubagentExecution: false,
+		webToolsEnabled: options.webToolsEnabled,
 		providerRequestRounds: options.providerRequestRounds,
 		context: {},
 		taskState: new TaskState(),
@@ -137,6 +139,11 @@ function createTaskConfig(nativeToolCallEnabled: boolean, options: any = {}): Ta
 		},
 		browserSettings: {},
 		focusChainSettings: {},
+		capabilityToggles: createTaskCapabilityToggles({
+			globalSkillsToggles: options.taskGlobalSkillsToggles ?? options.globalSkillsToggles,
+			localSkillsToggles: options.taskLocalSkillsToggles ?? options.localSkillsToggles,
+			remoteSkillsToggles: options.taskRemoteSkillsToggles ?? options.remoteSkillsToggles,
+		}),
 		autoApprovalSettings: {
 			enableNotifications: false,
 			actions: { executeSafeCommands: false, executeAllCommands: false },
@@ -295,6 +302,32 @@ describe("SubagentRunner", () => {
 		assert.equal(progress.mock.calls.at(-1)?.[0].status, "cancelled")
 	})
 
+	it("allows an explicitly restored Activity runner to outlive an inert parent Task", async () => {
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			yield {
+				type: "tool_calls",
+				function_id: "restored-activity-complete",
+				tool_call: { function: { name: ClineDefaultTool.ATTEMPT, arguments: JSON.stringify({ result: "restored" }) } },
+			}
+		})
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+		const config = createTaskConfig(false)
+		config.taskState.abort = true
+
+		const result = await new SubagentRunner(config, "subagent", undefined, { inheritTaskAbort: false }).run(
+			"Resume explicit Activity",
+			() => {},
+		)
+
+		assert.equal(result.status, "completed", result.error)
+		assert.equal(result.result, "restored")
+		assert.equal(createMessage.mock.calls.length, 1)
+	})
+
 	it("does not give the default subagent hosted Web Search outside its tool allowlist", async () => {
 		const createMessage = vi.fn().mockImplementation(async function* () {
 			yield {
@@ -320,7 +353,41 @@ describe("SubagentRunner", () => {
 		)
 
 		assert.equal(result.status, "completed", result.error)
-		assert.deepEqual(createMessage.mock.calls[0][3], { serverTools: [] })
+		assert.deepEqual(createMessage.mock.calls[0][3], { serverTools: [], retryOwner: "subagent" })
+	})
+
+	it("uses the request-frozen Web Tools switch when the live setting changes", async () => {
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			yield {
+				type: "tool_calls",
+				function_id: "complete-with-frozen-search",
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.ATTEMPT,
+						arguments: JSON.stringify({ result: "done" }),
+					},
+				},
+			}
+		})
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage, 200_000, true)
+		initializeHostProvider()
+		const config = createTaskConfig(false, { clineWebToolsEnabled: false, webToolsEnabled: true })
+
+		const result = await new SubagentRunner(config, "web-researcher", {
+			name: "web-researcher",
+			description: "Researches current information on the web.",
+			tools: [ClineDefaultTool.WEB_SEARCH, ClineDefaultTool.ATTEMPT],
+			systemPrompt: "",
+		}).run("Use the frozen request gate", () => {})
+
+		assert.equal(result.status, "completed", result.error)
+		assert.deepEqual(createMessage.mock.calls[0][3], {
+			serverTools: [ServerTool.WEB_SEARCH],
+			retryOwner: "subagent",
+		})
 	})
 
 	it("reports hosted Web Search lifecycle when the subagent allowlist explicitly enables it", async () => {
@@ -366,7 +433,10 @@ describe("SubagentRunner", () => {
 		}).run("Search remotely", progress)
 
 		assert.equal(result.status, "completed", result.error)
-		assert.deepEqual(createMessage.mock.calls[0][3], { serverTools: [ServerTool.WEB_SEARCH] })
+		assert.deepEqual(createMessage.mock.calls[0][3], {
+			serverTools: [ServerTool.WEB_SEARCH],
+			retryOwner: "subagent",
+		})
 		const hostedEvents = progress.mock.calls
 			.map(([update]) => update.event)
 			.filter((event) => event?.toolName === "web_search")
@@ -584,6 +654,52 @@ describe("SubagentRunner", () => {
 		)
 		assert.equal(new Set(completedToolEvents.map((event) => event.toolCallId)).size, 2)
 		assert.ok(completedToolEvents.every((event) => event.toolCallId?.startsWith("dline_tid_")))
+	})
+
+	it("stops the current attempt at attempt_completion before executing later tool calls", async () => {
+		const executeListFiles = vi.fn().mockResolvedValue("must not run")
+		const createMessage = vi.fn().mockImplementationOnce(async function* () {
+			yield {
+				type: "tool_calls",
+				function_id: "toolu_completion_boundary",
+				tool_index: 0,
+				tool_call: { function: { name: ClineDefaultTool.ATTEMPT, arguments: JSON.stringify({ result: "done" }) } },
+			}
+			yield {
+				type: "tool_calls",
+				function_id: "toolu_after_completion",
+				tool_index: 1,
+				tool_call: { function: { name: ClineDefaultTool.LIST_FILES, arguments: JSON.stringify({ path: "." }) } },
+			}
+		})
+		stubSystemPrompt(true)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+		const config = createTaskConfig(true)
+		config.coordinator.getHandler = vi
+			.fn()
+			.mockImplementation((toolName) =>
+				toolName === ClineDefaultTool.LIST_FILES
+					? { execute: executeListFiles, getDescription: vi.fn().mockReturnValue("list_files") }
+					: undefined,
+			)
+		const progress = vi.fn()
+
+		const result = await new SubagentRunner(config).run("Complete before later tools", progress)
+
+		assert.equal(result.status, "completed", result.error)
+		assert.equal(result.result, "done")
+		assert.equal(result.stats.toolCalls, 1)
+		assert.equal(executeListFiles.mock.calls.length, 0)
+		const completedTools = progress.mock.calls
+			.map(([update]) => update.event)
+			.filter((event) => event?.kind === "tool_call" && event.toolStatus === "completed")
+		assert.deepEqual(
+			completedTools.map((event) => event.toolName),
+			[ClineDefaultTool.ATTEMPT],
+		)
 	})
 
 	it("switches a timeout finish request to an attempt_completion-only next turn", async () => {
@@ -1142,7 +1258,7 @@ describe("SubagentRunner", () => {
 		assert.match(result.error || "", /stream_initialization_failed|Temporary provider failure/i)
 	})
 
-	it.each([408, 409])("retries HTTP %s before returning a retryable failure", async (status) => {
+	it.each([408, 409, 425])("retries HTTP %s before returning a retryable failure", async (status) => {
 		const createMessage = vi.fn().mockImplementation(async function* () {
 			yield* []
 			throw Object.assign(new Error(`${status} Temporary provider failure`), { status })
@@ -1166,6 +1282,141 @@ describe("SubagentRunner", () => {
 			setTimeoutSpy.mock.calls.map(([, timeout]) => timeout),
 			[5_000, 8_000, 11_000, 14_000, 17_000],
 		)
+	})
+
+	it("retries a retryable failure after a usage-only prefix", async () => {
+		const createMessage = vi.fn()
+		createMessage.mockImplementationOnce(async function* () {
+			yield { type: "usage", inputTokens: 10, outputTokens: 0 }
+			throw Object.assign(new Error("408 Temporary provider failure"), { status: 408 })
+		})
+		createMessage.mockImplementationOnce(async function* () {
+			yield {
+				type: "tool_calls",
+				function_id: "usage-prefix-complete",
+				tool_call: { function: { name: ClineDefaultTool.ATTEMPT, arguments: JSON.stringify({ result: "done" }) } },
+			}
+		})
+		vi.spyOn(global, "setTimeout").mockImplementation(((callback: (...args: unknown[]) => void) => {
+			queueMicrotask(callback)
+			return {} as NodeJS.Timeout
+		}) as typeof setTimeout)
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false)).run("Retry after usage", () => {})
+
+		assert.equal(result.status, "completed", result.error)
+		assert.equal(createMessage.mock.calls.length, 2)
+	})
+
+	it("retries an Anthropic nested service_unavailable error after a usage-only prefix", async () => {
+		const createMessage = vi.fn()
+		const providerError = {
+			type: "error",
+			error: { type: "service_unavailable", message: "Temporary Anthropic stream failure" },
+			request_id: "req_usage_first",
+		}
+		createMessage.mockImplementationOnce(async function* () {
+			yield { type: "usage", inputTokens: 442_700, outputTokens: 0 }
+			throw Object.assign(new Error(JSON.stringify(providerError)), {
+				error: providerError,
+				type: "service_unavailable",
+			})
+		})
+		createMessage.mockImplementationOnce(async function* () {
+			yield {
+				type: "tool_calls",
+				function_id: "anthropic-usage-prefix-complete",
+				tool_call: { function: { name: ClineDefaultTool.ATTEMPT, arguments: JSON.stringify({ result: "done" }) } },
+			}
+		})
+		vi.spyOn(global, "setTimeout").mockImplementation(((callback: (...args: unknown[]) => void) => {
+			queueMicrotask(callback)
+			return {} as NodeJS.Timeout
+		}) as typeof setTimeout)
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false)).run("Retry Anthropic usage prefix", () => {})
+
+		assert.equal(result.status, "completed", result.error)
+		assert.equal(createMessage.mock.calls.length, 2)
+	})
+
+	it("retries structured Responses server errors before the first chunk", async () => {
+		const createMessage = vi.fn()
+		createMessage.mockImplementationOnce(async function* () {
+			yield* []
+			throw Object.assign(new Error("Responses API request failed: server_error: upstream exploded"), {
+				name: "ResponsesApiError",
+				code: "server_error",
+				request_id: "req_failed_1",
+				details: { code: "server_error", message: "upstream exploded" },
+			})
+		})
+		createMessage.mockImplementationOnce(async function* () {
+			yield {
+				type: "tool_calls",
+				function_id: "responses-server-error-complete",
+				tool_call: { function: { name: ClineDefaultTool.ATTEMPT, arguments: JSON.stringify({ result: "done" }) } },
+			}
+		})
+		vi.spyOn(global, "setTimeout").mockImplementation(((callback: (...args: unknown[]) => void) => {
+			queueMicrotask(callback)
+			return {} as NodeJS.Timeout
+		}) as typeof setTimeout)
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false)).run("Retry Responses server error", () => {})
+
+		assert.equal(result.status, "completed", result.error)
+		assert.equal(createMessage.mock.calls.length, 2)
+	})
+
+	it.each([
+		"ECONNRESET",
+		"UND_ERR_CONNECT_TIMEOUT",
+		"UND_ERR_HEADERS_TIMEOUT",
+		"UND_ERR_BODY_TIMEOUT",
+		"UND_ERR_SOCKET",
+	])("retries nested network cause code %s before the first chunk", async (causeCode) => {
+		const createMessage = vi.fn()
+		createMessage.mockImplementationOnce(async function* () {
+			yield* []
+			throw Object.assign(new TypeError("fetch failed"), { cause: { code: causeCode } })
+		})
+		createMessage.mockImplementationOnce(async function* () {
+			yield {
+				type: "tool_calls",
+				function_id: "network-cause-complete",
+				tool_call: { function: { name: ClineDefaultTool.ATTEMPT, arguments: JSON.stringify({ result: "done" }) } },
+			}
+		})
+		vi.spyOn(global, "setTimeout").mockImplementation(((callback: (...args: unknown[]) => void) => {
+			queueMicrotask(callback)
+			return {} as NodeJS.Timeout
+		}) as typeof setTimeout)
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false)).run("Retry nested network error", () => {})
+
+		assert.equal(result.status, "completed", result.error)
+		assert.equal(createMessage.mock.calls.length, 2)
 	})
 
 	it("observes initial stream retries as attempts of one logical request and attaches final exact usage", async () => {
@@ -1451,6 +1702,46 @@ describe("SubagentRunner", () => {
 		const result = await runner.run("Run task", () => {})
 		assert.equal(result.status, "completed")
 		assert.equal(createMessage.mock.calls.length, 1)
+	})
+
+	it("uses request-frozen skill toggles instead of changed live toggle maps", async () => {
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			yield {
+				type: "tool_calls",
+				function_id: "frozen-skill-toggle",
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.ATTEMPT,
+						arguments: JSON.stringify({ result: "done" }),
+					},
+				},
+			}
+		})
+		stubSystemPrompt(false)
+		vi.spyOn(SubagentBuilder.prototype, "getConfiguredSkills").mockReturnValue(undefined)
+		vi.spyOn(skills, "discoverAvailableSkills").mockImplementation(async (_cwd, toggles) => {
+			assert.ok(toggles)
+			assert.deepEqual(toggles.globalSkillsToggles, { frozen: true })
+			assert.deepEqual(toggles.localSkillsToggles, { frozen: true })
+			assert.deepEqual(toggles.remoteSkillsToggles, { frozen: true })
+			return []
+		})
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+		const runner = new SubagentRunner(
+			createTaskConfig(false, {
+				globalSkillsToggles: { live: false },
+				localSkillsToggles: { live: false },
+				remoteSkillsToggles: { live: false },
+				taskGlobalSkillsToggles: { frozen: true },
+				taskLocalSkillsToggles: { frozen: true },
+				taskRemoteSkillsToggles: { frozen: true },
+			}),
+		)
+
+		const result = await runner.run("Use frozen skill toggles", () => {})
+
+		assert.equal(result.status, "completed", result.error)
 	})
 
 	it("uses all available skills when subagent skills are not configured", async () => {

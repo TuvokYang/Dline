@@ -13,10 +13,10 @@ export function createCompactionConversationRange(
 		throw new Error("Completed compaction requires a valid pre-compaction API end index")
 	}
 
-	const sourceRanges = state.sourceCanonicalRanges ?? []
+	const sourceRanges = state.sourceSnapshot.canonicalRanges
 	const coveredRanges = state.turns
 		.slice(0, state.coveredTurnCount)
-		.flatMap((turn) => sourceRanges.slice(turn.startIndex, turn.endIndex + 1))
+		.flatMap((turn) => sourceRanges.slice(turn.startMessageIndex, turn.endMessageIndex + 1))
 		.filter((range): range is readonly [number, number] => range !== undefined)
 	if (coveredRanges.length === 0) {
 		throw new Error("Completed compaction has no canonical source range")

@@ -1,6 +1,6 @@
-import { mkdir, writeFile } from "node:fs/promises"
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises"
 import * as path from "node:path"
-import { expect, type Frame, type Locator, type TestInfo } from "@playwright/test"
+import { expect, type Frame, type Locator, type Page, type TestInfo } from "@playwright/test"
 import type { MockApiConsumption } from "./fixtures/server"
 import { E2E_PROFILE_NAMES } from "./utils/api-profile"
 import { E2ETestHelper, e2e } from "./utils/helpers"
@@ -13,7 +13,7 @@ async function sendTask(sidebar: Frame, text: string): Promise<void> {
 	await expect(sidebar.getByText(text, { exact: true }).first()).toBeVisible()
 }
 
-async function writeResponsesSubagent(workspaceDir: string, name: string, description: string): Promise<void> {
+async function writeSubagent(workspaceDir: string, name: string, description: string, profile: string): Promise<void> {
 	const directory = path.join(workspaceDir, ".agents", "subagents")
 	await mkdir(directory, { recursive: true })
 	await writeFile(
@@ -24,12 +24,51 @@ description: ${description}
 tools:
   - read_file
   - attempt_completion
-profile: ${E2E_PROFILE_NAMES.mockOpenAiResponses}
+profile: ${profile}
 ---
 
 Preserve useful findings and finish only through attempt_completion.`,
 		"utf8",
 	)
+}
+
+async function writeResponsesSubagent(workspaceDir: string, name: string, description: string): Promise<void> {
+	await writeSubagent(workspaceDir, name, description, E2E_PROFILE_NAMES.mockOpenAiResponses)
+}
+
+async function closeCurrentTask(sidebar: Frame): Promise<void> {
+	const closeButton = sidebar.getByRole("button", { name: "Close Task", exact: true })
+	await expect(closeButton).toBeVisible({ timeout: 30_000 })
+	await closeButton.click()
+	await expect(sidebar.getByTestId("chat-input")).toBeVisible({ timeout: 30_000 })
+	await E2ETestHelper.dismissWhatsNewModal(sidebar)
+}
+
+async function reopenTask(page: Page, sidebar: Frame, taskText: string): Promise<void> {
+	await page.getByRole("button", { name: "History", exact: true }).click()
+	await E2ETestHelper.dismissWhatsNewModal(sidebar)
+	const historyTask = sidebar.locator(".history-item").filter({ hasText: taskText })
+	await expect(historyTask).toHaveCount(1)
+	await historyTask.click()
+	await expect(sidebar.getByRole("button", { name: "Close Task", exact: true })).toBeVisible({ timeout: 30_000 })
+	await expect(sidebar.getByText(taskText, { exact: true }).first()).toBeVisible({ timeout: 30_000 })
+}
+
+async function onlyTaskId(dlineDocsDir: string): Promise<string> {
+	return E2ETestHelper.waitForValue(async () => {
+		const entries = await readdir(path.join(dlineDocsDir, "tasks"), { withFileTypes: true }).catch(() => [])
+		const taskIds = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+		return taskIds.length === 1 ? taskIds[0] : undefined
+	})
+}
+
+async function readSubagentActivity(dlineDocsDir: string, taskId: string): Promise<Record<string, unknown>> {
+	return E2ETestHelper.waitForValue(async () => {
+		const persisted = JSON.parse(await readFile(path.join(dlineDocsDir, "tasks", taskId, "activities.json"), "utf8")) as {
+			activities?: Array<Record<string, unknown>>
+		}
+		return persisted.activities?.find((activity) => activity.kind === "subagent")
+	})
 }
 
 async function attachLocatorScreenshot(locator: Locator, testInfo: TestInfo, name: string): Promise<void> {
@@ -56,7 +95,11 @@ e2e(
 	async ({ helper, server, sidebar, userDataDir, workspaceDir }, testInfo) => {
 		e2e.setTimeout(240_000)
 		const agentName = "e2e-recoverable-finish"
-		const childTask = "E2E_SUBAGENT_FINISH_TASK"
+		const taskMarker = "E2E_SUBAGENT_FINISH_TASK"
+		const childTask = [
+			taskMarker,
+			...Array.from({ length: 48 }, (_, index) => `E2E_SUBAGENT_LONG_TASK_LINE_${index + 1}`),
+		].join("\n")
 		const childResult = "E2E_SUBAGENT_FINISH_CHILD_DONE"
 		const evidenceFileName = "e2e-subagent-finish-evidence.txt"
 		const evidenceMarker = "E2E_SUBAGENT_FINISH_TOOL_RESULT"
@@ -74,7 +117,7 @@ e2e(
 				arguments: {
 					agent_name: agentName,
 					task: childTask,
-					context: "Keep the current findings and wait for the user to request Finish.",
+					context: "E2E_SUBAGENT_FINISH_CONTEXT\nKeep the current findings and wait for the user to request Finish.",
 					timeout: 120,
 				},
 			},
@@ -119,7 +162,7 @@ e2e(
 
 		await sendTask(sidebar, "Start a subagent, then preserve its findings when Finish is requested.")
 
-		const taskHeading = sidebar.getByRole("heading", { name: childTask, exact: true }).last()
+		const taskHeading = sidebar.getByRole("heading", { name: new RegExp(taskMarker) }).last()
 		await expect(taskHeading).toBeVisible({ timeout: 60_000 })
 		await expect
 			.poll(() => server.getRequestCount("openai-compatible-responses"), { timeout: 60_000 })
@@ -158,6 +201,8 @@ e2e(
 				bodyOverflowY: getComputedStyle(body).overflowY,
 				taskOverflowY: getComputedStyle(taskScroll).overflowY,
 				toolsOverflowY: getComputedStyle(toolsScroll).overflowY,
+				taskClientHeight: taskScroll.clientHeight,
+				taskScrollHeight: taskScroll.scrollHeight,
 				toolsClientHeight: toolsScroll.clientHeight,
 				toolsScrollHeight: toolsScroll.scrollHeight,
 			}
@@ -166,6 +211,12 @@ e2e(
 		expect(workLayout.overflow).toBe("hidden")
 		expect(workLayout.bodyOverflowY).toBe("hidden")
 		expect(workLayout.taskOverflowY).toBe("auto")
+		expect(workLayout.taskScrollHeight).toBeGreaterThan(workLayout.taskClientHeight)
+		expect(await workTaskScroll.evaluate((element) => element.scrollTop)).toBe(0)
+		await workTaskScroll.evaluate((element) => {
+			element.scrollTop = element.scrollHeight
+		})
+		await expect.poll(() => workTaskScroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
 		expect(workLayout.toolsOverflowY).toBe("auto")
 		expect(workLayout.toolsScrollHeight).toBeGreaterThan(workLayout.toolsClientHeight)
 		await attachLocatorScreenshot(subagentCard, testInfo, "subagent-finish-work-card")
@@ -208,6 +259,9 @@ e2e(
 		await expect(activityMetrics).toContainText(/\$/)
 		expect(await activityCancel.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgb(196, 43, 43)")
 		await activity.getByTestId("activity-toggle").click()
+		await expect(activity.getByTestId("subagent-activity-task")).toContainText(taskMarker)
+		await expect(activity.getByTestId("subagent-activity-context")).toContainText("E2E_SUBAGENT_FINISH_CONTEXT")
+		await expect(activity.getByText(/<task>|<context>/)).toHaveCount(0)
 		const activityToolSteps = activity.getByTestId("subagent-tool-step")
 		await expect(activityToolSteps).toHaveCount(readToolCount)
 		const activityToolButton = activityToolSteps.first().getByRole("button")
@@ -272,8 +326,81 @@ e2e(
 )
 
 e2e(
-	"Subagent recovery controls - retryable exhaustion renders Retry and injects the recovered result once",
-	async ({ helper, server, sidebar, userDataDir, workspaceDir }, testInfo) => {
+	"Subagent recovery controls - usage-first provider failure remains replayable before semantic output",
+	async ({ helper, server, sidebar, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(180_000)
+		const agentName = "e2e-usage-first-retry"
+		const childResult = "E2E_SUBAGENT_USAGE_FIRST_RECOVERED"
+		const diagnostic = "E2E_USAGE_FIRST_TRANSIENT_FAILURE"
+		await writeSubagent(workspaceDir, agentName, "E2E usage-first retry agent", E2E_PROFILE_NAMES.mockAnthropic)
+
+		await helper.signin(sidebar)
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				id: "call_usage_first_subagent",
+				name: "use_subagent",
+				arguments: {
+					agent_name: agentName,
+					task: "E2E_SUBAGENT_USAGE_FIRST_TASK",
+					context: "Recover from a usage-only prefix followed by a transient stream error.",
+					timeout: 120,
+				},
+			},
+			{
+				type: "tool",
+				id: "call_usage_first_parent_complete",
+				name: "attempt_completion",
+				arguments: { result: "E2E_SUBAGENT_USAGE_FIRST_PARENT_DONE" },
+				expectedToolResults: [
+					{
+						callId: "call_usage_first_subagent",
+						contentIncludes: childResult,
+					},
+				],
+			},
+		)
+		server.enqueueResponses(
+			"anthropic-messages",
+			{
+				type: "usage-then-error",
+				status: 503,
+				code: "service_unavailable",
+				message: diagnostic,
+				requestId: "req_usage_first_1",
+				usage: { inputTokens: 442_700, outputTokens: 0 },
+			},
+			{
+				type: "tool",
+				id: "call_usage_first_child_complete",
+				name: "attempt_completion",
+				arguments: { result: childResult },
+			},
+		)
+
+		await sendTask(sidebar, "Start a subagent that must retry after a usage-only Provider prefix.")
+		await expect(sidebar.getByText(childResult, { exact: false }).last()).toBeVisible({ timeout: 120_000 })
+		await expect(sidebar.getByText("E2E_SUBAGENT_USAGE_FIRST_PARENT_DONE", { exact: false }).last()).toBeVisible({
+			timeout: 120_000,
+		})
+		await expect.poll(() => server.getRequestCount("anthropic-messages"), { timeout: 120_000 }).toBe(2)
+		const childConsumptions = server.getMockConsumptions("anthropic-messages")
+		expect(childConsumptions[0]).toMatchObject({
+			responseType: "usage-then-error",
+			status: 503,
+			usage: { inputTokens: 442_700, outputTokens: 0 },
+		})
+		expect(childConsumptions[1]).toMatchObject({ responseType: "tool", toolName: "attempt_completion" })
+		expect(childConsumptions.every((entry) => entry.contractError === undefined)).toBe(true)
+		await expect(sidebar.getByText(diagnostic, { exact: false })).toHaveCount(0)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir, [new RegExp(diagnostic)])
+	},
+)
+
+e2e(
+	"Subagent recovery controls - Task reopen restores Retry recipe and injects the recovered result once",
+	async ({ dlineDocsDir, helper, page, server, sidebar, userDataDir, workspaceDir }, testInfo) => {
 		e2e.setTimeout(360_000)
 		const agentName = "e2e-recoverable-retry"
 		const childTask = "E2E_SUBAGENT_RETRY_TASK"
@@ -387,15 +514,39 @@ e2e(
 		await expect(activityRetryTimeline).toContainText("total 55s")
 		await attachLocatorScreenshot(activity, testInfo, "subagent-retry-activity-card")
 
-		await activityRetry.click()
-		await expect(activity).toHaveAttribute("data-activity-status", "running", { timeout: 30_000 })
-		await expect(activity.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0)
-		await expect(activity.getByRole("button", { name: "Finish", exact: true })).toBeVisible()
-		await attachLocatorScreenshot(activity, testInfo, "subagent-retry-running-activity-card")
+		const taskId = await onlyTaskId(dlineDocsDir)
+		const failedActivity = await readSubagentActivity(dlineDocsDir, taskId)
+		expect(failedActivity).toMatchObject({
+			status: "failed",
+			currentAttempt: 1,
+			retryRecipe: { kind: "subagent", schemaVersion: 1, retryable: true },
+		})
+
+		await sidebar.getByRole("tab", { name: "Work", exact: true }).click()
+		const parentTaskText = "Start a subagent that must expose Retry after bounded provider failures."
+		await closeCurrentTask(sidebar)
+		await reopenTask(page, sidebar, parentTaskText)
+		const reopenedCard = sidebar.getByTestId("subagent-item").filter({ hasText: agentName })
+		await expect(reopenedCard.getByRole("button", { name: "Retry", exact: true })).toBeVisible({ timeout: 30_000 })
+		await sidebar.getByRole("tab", { name: /^Activities(?: \d+)?$/ }).click()
+		await sidebar.getByRole("button", { name: "All", exact: true }).first().click()
+		const reopenedActivity = sidebar.getByTestId("activity-item").filter({ hasText: agentName })
+		await expect(reopenedActivity).toHaveAttribute("data-activity-status", "failed")
+		const reopenedRetry = reopenedActivity.getByRole("button", { name: "Retry", exact: true })
+		await expect(reopenedRetry).toBeVisible()
+
+		await reopenedRetry.click()
+		await expect(reopenedActivity).toHaveAttribute("data-activity-status", "running", { timeout: 30_000 })
+		await expect(reopenedActivity.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0)
+		await expect(reopenedActivity.getByRole("button", { name: "Finish", exact: true })).toBeVisible()
+		await attachLocatorScreenshot(reopenedActivity, testInfo, "subagent-retry-running-activity-card")
 		await expect.poll(() => server.getRequestCount("openai-compatible-responses"), { timeout: 60_000 }).toBe(7)
-		await expect(activity).toHaveAttribute("data-activity-status", "completed", { timeout: 60_000 })
-		await expect(activity.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0)
-		await expect(activity.getByRole("button", { name: "Finish", exact: true })).toHaveCount(0)
+		await expect(reopenedActivity).toHaveAttribute("data-activity-status", "completed", { timeout: 60_000 })
+		await expect(reopenedActivity.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0)
+		await expect(reopenedActivity.getByRole("button", { name: "Finish", exact: true })).toHaveCount(0)
+		await expect
+			.poll(async () => Number((await readSubagentActivity(dlineDocsDir, taskId)).currentAttempt), { timeout: 30_000 })
+			.toBe(2)
 
 		await sidebar.getByRole("tab", { name: "Work", exact: true }).click()
 		const input = sidebar.getByTestId("chat-input")

@@ -9,6 +9,8 @@ import type { ExplicitInstructionRequestScope } from "@core/task/explicit-instru
 import type { ProviderRequestRoundAdmission } from "@core/task/performance/provider-request-round-port"
 import { ClineDefaultTool } from "@shared/tools"
 import cloneDeep from "clone-deep"
+import type { InternalCompactionProviderTiming } from "./compaction-phase-timing"
+import { elapsedCompactionMs } from "./compaction-phase-timing"
 import type { CompactionRetryPolicy } from "./compaction-retry-policy"
 import { isRetryableCompactionError } from "./compaction-retryability"
 import type { CompactionPassIdentity } from "./target-window-fitting"
@@ -29,6 +31,7 @@ export interface InternalCompactionSettlement {
 export interface InternalCompactionPassResult {
 	summary: string
 	usage?: InternalCompactionUsage
+	timing: InternalCompactionProviderTiming
 	/** Provider stream settlement that may finish after the summary is safe to checkpoint. */
 	settlement?: Promise<InternalCompactionSettlement>
 }
@@ -131,6 +134,8 @@ class CompactionPresentationQueue {
 export async function runInternalCompactionPass(input: RunInternalCompactionPassInput): Promise<InternalCompactionPassResult> {
 	input.explicitInstructions.beginProviderAttempt(input.attemptId)
 	const consumePort = input.explicitInstructions.createConsumePort()
+	const providerStartedAtMs = performance.now()
+	let firstChunkAtMs: number | undefined
 	const providerStream = input.api.createMessage(
 		input.providerInput.systemPrompt,
 		input.providerInput.messages,
@@ -138,6 +143,7 @@ export async function runInternalCompactionPass(input: RunInternalCompactionPass
 		{
 			serverTools: input.providerInput.serverTools,
 			taskNamespace: input.taskNamespace,
+			retryOwner: "compaction",
 			...(input.providerInput.providerOutputCap === undefined
 				? {}
 				: {
@@ -242,6 +248,7 @@ export async function runInternalCompactionPass(input: RunInternalCompactionPass
 	const pumpStream = async (): Promise<InternalCompactionSettlement> => {
 		try {
 			for await (const chunk of stream) {
+				firstChunkAtMs ??= performance.now()
 				processChunk(chunk, completedSummary === undefined)
 			}
 			await presentationQueue.flush()
@@ -279,9 +286,14 @@ export async function runInternalCompactionPass(input: RunInternalCompactionPass
 	if (!consumed.ok) {
 		throw new Error(`Internal compaction summarize_task authorization failed: ${consumed.code}`)
 	}
+	const summaryCompletedAtMs = performance.now()
 	return {
 		summary,
 		...(usage && usage.totalTokens > 0 ? { usage } : {}),
+		timing: {
+			providerTtfbMs: elapsedCompactionMs(providerStartedAtMs, firstChunkAtMs ?? summaryCompletedAtMs),
+			streamMs: elapsedCompactionMs(firstChunkAtMs ?? providerStartedAtMs, summaryCompletedAtMs),
+		},
 		settlement,
 	}
 }

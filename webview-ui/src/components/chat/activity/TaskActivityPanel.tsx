@@ -22,6 +22,7 @@ import { SubagentMetrics } from "./SubagentMetrics"
 import { SubagentRetryTimeline } from "./SubagentRetryTimeline"
 import { SubagentRuntimeConfig } from "./SubagentRuntimeConfig"
 import { SubagentToolTimeline } from "./SubagentToolTimeline"
+import { buildSubagentActivityPresentation, parseSubagentActivityDetail } from "./subagent-activity-model"
 import { useActivityControlGuard } from "./useActivityControlGuard"
 import { cancelTaskActivities, finishTaskActivities, retryTaskActivities, useTaskActivities } from "./useTaskActivities"
 
@@ -215,6 +216,10 @@ export function TaskActivityPanel({
 					const isExpanded = expanded[activity.activityId] === true
 					const isActive = ACTIVE_STATUSES.has(activity.status)
 					const isSubagent = activity.kind === "subagent"
+					const subagentPresentation = isSubagent
+						? buildSubagentActivityPresentation(activity.events, activity.currentAttempt)
+						: undefined
+					const subagentDetail = isSubagent ? parseSubagentActivityDetail(activity.detail) : undefined
 					const ExecutionModeIcon = activity.executionMode === "background" ? SendToBackIcon : BringToFrontIcon
 					const environmentLabel = activity.kind === "command" ? getCommandEnvironmentLabel(activity.output) : undefined
 					const activitySummary =
@@ -310,7 +315,7 @@ export function TaskActivityPanel({
 													inputTokens={activity.metrics?.inputTokens}
 													outputTokens={activity.metrics?.outputTokens}
 													startedAt={activity.createdAt}
-													toolCalls={activity.metrics?.toolCalls}
+													toolCalls={subagentPresentation?.toolCount ?? 0}
 													totalCost={activity.metrics?.totalCost}
 												/>
 											) : (
@@ -417,8 +422,41 @@ export function TaskActivityPanel({
 										</>
 									) : (
 										<div className="space-y-2 px-3 py-2" data-testid="subagent-activity-body">
-											<SubagentRetryTimeline events={activity.events} />
-											<SubagentToolTimeline events={activity.events} />
+											{(subagentDetail?.task || subagentDetail?.context) && (
+												<div
+													className="space-y-2 rounded-xs border border-editor-widget-border/25 bg-code/40 px-2.5 py-2"
+													data-testid="subagent-activity-detail">
+													{subagentDetail.task && (
+														<div data-testid="subagent-activity-task">
+															<div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-description">
+																Task
+															</div>
+															<div className="whitespace-pre-wrap break-words text-foreground">
+																{subagentDetail.task}
+															</div>
+														</div>
+													)}
+													{subagentDetail.context && (
+														<div data-testid="subagent-activity-context">
+															<div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-description">
+																Context
+															</div>
+															<div className="whitespace-pre-wrap break-words text-foreground/80">
+																{subagentDetail.context}
+															</div>
+														</div>
+													)}
+												</div>
+											)}
+											{activity.retryUnavailableReason && (
+												<div
+													className="whitespace-pre-wrap break-words text-warning"
+													data-testid="subagent-retry-unavailable-reason">
+													{activity.retryUnavailableReason}
+												</div>
+											)}
+											<SubagentRetryTimeline attempts={subagentPresentation?.retryAttempts} />
+											<SubagentToolTimeline steps={subagentPresentation?.toolSteps} />
 											{activity.result && (
 												<div className="max-h-[240px] overflow-y-auto whitespace-pre-wrap break-words border-t border-editor-widget-border/25 pt-2">
 													{activity.result}

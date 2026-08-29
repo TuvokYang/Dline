@@ -231,15 +231,24 @@ export async function* handleResponsesApiStreamResponse(
 			}
 
 			if (chunk.type === "response.failed") {
-				// A failed response carries the provider's real error. Surface it
-				// instead of silently ending the stream: an empty generator would be
-				// mistaken for a successful first chunk upstream and crash on
-				// "Cannot read properties of undefined (reading 'type')".
+				// Preserve the provider envelope so upper retry and diagnostics layers
+				// can classify the failure without parsing a flattened message string.
 				const failure = chunk.response?.error
 				const failureMessage = failure
 					? `${failure.code ?? "unknown"}: ${failure.message}`
 					: "response.failed without error details"
-				throw new Error(`Responses API request failed: ${failureMessage}`)
+				const responseError = new Error(`Responses API request failed: ${failureMessage}`) as Error & {
+					code?: string
+					request_id?: string
+					response_id?: string
+					details?: unknown
+				}
+				responseError.name = "ResponsesApiError"
+				responseError.code = failure?.code ?? undefined
+				responseError.request_id = stream._request_id ?? undefined
+				responseError.response_id = chunk.response?.id
+				responseError.details = failure
+				throw responseError
 			}
 
 			if (chunk.type === "response.completed") {

@@ -45,6 +45,7 @@ export type TaskActivityToolStatus = "started" | "completed" | "failed"
 interface TaskActivityEventBase {
 	sequence: number
 	timestamp: number
+	attempt: number
 }
 
 export type TaskActivityEvent =
@@ -96,14 +97,25 @@ export type TaskActivityEventInput = TaskActivityEvent extends infer Event
 		: never
 	: never
 
-export interface TaskActivityRecord {
+export interface SubagentRetryRecipe {
+	kind: "subagent"
 	schemaVersion: 1
+	subagentName?: string
+	task: string
+	prompt: string
+	timeoutSeconds: number
+	retryable: boolean
+}
+
+export interface TaskActivityRecord {
+	schemaVersion: 2
 	activityId: string
 	taskId: string
 	kind: TaskActivityKind
 	executionMode: TaskActivityExecutionMode
 	cancellationOwner: TaskActivityCancellationOwner
 	status: TaskActivityStatus
+	currentAttempt: number
 	createdAt: number
 	updatedAt: number
 	finishedAt?: number
@@ -118,6 +130,8 @@ export interface TaskActivityRecord {
 	parentActivityId?: string
 	runtime?: TaskActivityRuntimeConfig
 	metrics?: TaskActivityMetrics
+	retryRecipe?: SubagentRetryRecipe
+	retryUnavailableReason?: string
 	events: TaskActivityEvent[]
 }
 

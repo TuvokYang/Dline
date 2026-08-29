@@ -1,10 +1,12 @@
 import type { TaskActivityEvent } from "@shared/proto/dline/task"
 import { describe, expect, it } from "vitest"
 import {
+	buildSubagentActivityPresentation,
 	buildSubagentRetryAttempts,
 	buildSubagentToolSteps,
 	normalizeSubagentDisplayText,
 	normalizeSubagentToolSummary,
+	parseSubagentActivityDetail,
 } from "./subagent-activity-model"
 
 function event(event: Partial<TaskActivityEvent>): TaskActivityEvent {
@@ -100,6 +102,50 @@ describe("subagent activity presentation model", () => {
 			{ retryAttempt: 2, maxRetries: 5, delayMs: 8_000, cumulativeDelayMs: 13_000, sequence: 2 },
 			{ retryAttempt: 3, maxRetries: 5, delayMs: 11_000, cumulativeDelayMs: 24_000, sequence: 3 },
 		])
+	})
+
+	it("isolates tools and retries to the current attempt while preserving legacy fallback", () => {
+		const events = [
+			event({ sequence: 1, timestamp: 1, attempt: 1, kind: "tool_call", toolCallId: "old", toolName: "old_tool" }),
+			event({
+				sequence: 2,
+				timestamp: 2,
+				attempt: 1,
+				kind: "retry",
+				retryAttempt: 1,
+				maxRetries: 2,
+				delayMs: 10,
+				cumulativeDelayMs: 10,
+			}),
+			event({ sequence: 3, timestamp: 3, attempt: 2, kind: "tool_call", toolCallId: "new", toolName: "new_tool" }),
+			event({
+				sequence: 4,
+				timestamp: 4,
+				attempt: 2,
+				kind: "retry",
+				retryAttempt: 1,
+				maxRetries: 3,
+				delayMs: 20,
+				cumulativeDelayMs: 20,
+			}),
+		]
+
+		expect(buildSubagentActivityPresentation(events, 2)).toMatchObject({
+			toolCount: 1,
+			toolSteps: [{ toolCallId: "new", toolName: "new_tool" }],
+			retryAttempts: [{ maxRetries: 3, sequence: 4 }],
+		})
+		expect(buildSubagentToolSteps(events)).toHaveLength(2)
+		expect(buildSubagentRetryAttempts(events)).toHaveLength(2)
+	})
+
+	it("parses normalized Task and Context without exposing malformed detail", () => {
+		expect(
+			parseSubagentActivityDetail(
+				"<task>\n    Review the implementation\n</task>\n<context>\n      Keep APIs stable\n</context>",
+			),
+		).toEqual({ task: "Review the implementation", context: "Keep APIs stable" })
+		expect(parseSubagentActivityDetail("<task>missing close tag")).toEqual({})
 	})
 
 	it("keeps failed tool details expandable", () => {

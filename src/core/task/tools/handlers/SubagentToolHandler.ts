@@ -209,6 +209,109 @@ function applyProgress(config: TaskConfig, entry: SubagentStatusItem, update: Su
 	updateActivityFromEntry(config, entry)
 }
 
+function statsFromActivity(config: TaskConfig, activityId: string): SubagentRunStats {
+	const metrics = config.activityStore?.get(activityId)?.metrics
+	const contextTokens = metrics?.contextTokens ?? 0
+	const contextWindow = metrics?.contextWindow ?? 0
+	return {
+		toolCalls: metrics?.toolCalls ?? 0,
+		inputTokens: metrics?.inputTokens ?? 0,
+		outputTokens: metrics?.outputTokens ?? 0,
+		cacheWriteTokens: metrics?.cacheWriteTokens ?? 0,
+		cacheReadTokens: metrics?.cacheReadTokens ?? 0,
+		totalCost: metrics?.totalCost ?? 0,
+		currency: metrics?.currency ?? "USD",
+		contextTokens,
+		contextWindow,
+		contextUsagePercentage: contextWindow > 0 ? (contextTokens / contextWindow) * 100 : 0,
+	}
+}
+
+/** Rebind a persisted failed subagent activity to a fresh runner after Task reopen. */
+export async function restoreSubagentActivityRetry(config: TaskConfig, activityId: string): Promise<boolean> {
+	const activityStore = config.activityStore
+	const activity = activityStore?.get(activityId)
+	const recipe = activity?.retryRecipe
+	if (!activity || activity.kind !== "subagent" || activity.status !== "failed" || !recipe) return false
+	if (!recipe.retryable) return false
+
+	const requestedName = recipe.subagentName ?? DEFAULT_SUBAGENT_NAME
+	const usesDefault = isDefaultSubagentName(requestedName)
+	const resolvedSubagent = await resolveAgentConfig(config.cwd, requestedName, getResolveOptions(config))
+	if (!usesDefault && !resolvedSubagent) {
+		activityStore?.setRetryUnavailableReason(
+			activityId,
+			`Retry unavailable: subagent '${requestedName}' is no longer enabled.`,
+		)
+		return false
+	}
+	const effectiveSubagentName = resolvedSubagent?.config.name ?? DEFAULT_SUBAGENT_NAME
+	const runner = new SubagentRunner(config, effectiveSubagentName, resolvedSubagent?.config, {
+		inheritTaskAbort: false,
+	})
+	const entry: SubagentStatusItem = {
+		index: 1,
+		jobId: activityId,
+		subagentName: effectiveSubagentName,
+		task: recipe.task,
+		prompt: recipe.prompt,
+		background: true,
+		backgroundHandoffAvailable: false,
+		timeoutSeconds: recipe.timeoutSeconds,
+		injectionState: "pending",
+		status: "failed",
+		startedAt: activity.createdAt,
+		finishedAt: activity.finishedAt,
+		error: activity.error,
+		...statsFromActivity(config, activityId),
+	}
+	const manager = getSubagentJobManager(config)
+	const bindRetry = (retryable: boolean) => {
+		activityStore?.setRetry(
+			activityId,
+			retryable
+				? async () => {
+						config.activityStore?.setCancel(activityId, () => runner.abort())
+						config.activityStore?.setFinish(activityId, () => runner.requestFinish("user"))
+						return manager.retryJob(activityId)
+					}
+				: undefined,
+		)
+	}
+	manager.retainRetryableJob({
+		jobId: activityId,
+		subagentName: effectiveSubagentName,
+		task: recipe.task,
+		prompt: recipe.prompt,
+		timeoutSeconds: recipe.timeoutSeconds,
+		startedAt: activity.createdAt,
+		result: {
+			status: "failed",
+			error: activity.error ?? "Retryable subagent failure",
+			retryable: true,
+			stats: statsFromActivity(config, activityId),
+		},
+		runner: () =>
+			runSubagent({
+				runner,
+				prompt: recipe.prompt,
+				timeoutSeconds: recipe.timeoutSeconds,
+				onProgress: (update) => applyProgress(config, entry, update),
+			}),
+		onStatusChange: async (jobRecord) => {
+			entry.status = jobRecord.status
+			entry.result = jobRecord.result
+			entry.error = jobRecord.error
+			entry.finishedAt = jobRecord.finishedAt
+			if (jobRecord.stats) applyStats(entry, jobRecord.stats)
+			updateActivityFromEntry(config, entry)
+			bindRetry(jobRecord.retryable === true)
+		},
+	})
+	bindRetry(true)
+	return activityStore?.isRetryable(activityId) === true
+}
+
 function createSubagentActivity(
 	config: TaskConfig,
 	entry: SubagentStatusItem,
@@ -228,6 +331,15 @@ function createSubagentActivity(
 		title: entry.subagentName || entry.task || `Subagent ${entry.index}`,
 		detail: entry.prompt,
 		parentActivityId,
+		retryRecipe: {
+			kind: "subagent",
+			schemaVersion: 1,
+			subagentName: entry.subagentName,
+			task: entry.task || entry.prompt,
+			prompt: entry.prompt,
+			timeoutSeconds: entry.timeoutSeconds || 0,
+			retryable: Boolean(retry),
+		},
 		cancel,
 		continueInBackground,
 		finish,
@@ -431,7 +543,7 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 	 * @returns Tool response for the model.
 	 */
 	async execute(config: TaskConfig, block: ToolUse): Promise<ToolResponse> {
-		if (!config.services.stateManager.getGlobalSettingsKey("subagentsEnabled")) {
+		if (!(config.subagentsEnabled ?? config.services.stateManager.getGlobalSettingsKey("subagentsEnabled"))) {
 			return formatResponse.toolError(getPrompt("toolHandlers", "subagentsDisabled"))
 		}
 		let request: ReturnType<typeof parseUseSubagentRequest>
@@ -778,7 +890,7 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 	 * @returns Tool response for the model.
 	 */
 	async execute(config: TaskConfig, block: ToolUse): Promise<ToolResponse> {
-		if (!config.services.stateManager.getGlobalSettingsKey("subagentsEnabled")) {
+		if (!(config.subagentsEnabled ?? config.services.stateManager.getGlobalSettingsKey("subagentsEnabled"))) {
 			await config.callbacks.say(
 				"use_subagents",
 				JSON.stringify({

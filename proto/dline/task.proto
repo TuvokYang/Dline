@@ -498,6 +498,7 @@ message TaskActivityEvent {
   optional int32 max_retries = 15;
   optional int64 delay_ms = 16;
   optional int64 cumulative_delay_ms = 17;
+  optional int32 attempt = 18;
 }
 
 message TaskActivity {
@@ -525,6 +526,8 @@ message TaskActivity {
   bool finishable = 22;
   bool retryable = 23;
   optional TaskActivityRuntimeConfig runtime = 24;
+  optional int32 current_attempt = 25;
+  optional string retry_unavailable_reason = 26;
 }
 
 message TaskActivityUpdate {

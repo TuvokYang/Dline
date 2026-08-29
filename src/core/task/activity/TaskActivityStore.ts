@@ -1,4 +1,5 @@
 import type {
+	SubagentRetryRecipe,
 	TaskActivityCancellationOwner,
 	TaskActivityEvent,
 	TaskActivityEventInput,
@@ -50,6 +51,7 @@ export interface CreateTaskActivityInput {
 	timeoutSeconds?: number
 	parentActivityId?: string
 	status?: TaskActivityStatus
+	retryRecipe?: SubagentRetryRecipe
 	cancel?: CancelActivity
 	finish?: ControlActivity
 	retry?: ControlActivity
@@ -117,29 +119,26 @@ export class TaskActivityStore {
 	}
 
 	create(input: CreateTaskActivityInput): TaskActivityRecord {
-		const existing = this.activities.get(input.activityId)
-		if (existing) {
-			if (input.cancel) this.cancellers.set(input.activityId, input.cancel)
-			if (input.finish) this.finishers.set(input.activityId, input.finish)
-			if (input.retry) this.retriers.set(input.activityId, input.retry)
-			if (input.continueInBackground) this.backgroundMovers.set(input.activityId, input.continueInBackground)
-			return this.clone(existing)
+		if (this.activities.has(input.activityId)) {
+			throw new Error(`Task activity already exists: ${input.activityId}`)
 		}
 		const now = Date.now()
 		const activity: TaskActivityRecord = {
-			schemaVersion: 1,
+			schemaVersion: 2,
 			activityId: input.activityId,
 			taskId: this.taskId,
 			kind: input.kind,
 			executionMode: input.executionMode,
 			cancellationOwner: input.cancellationOwner ?? "task",
 			status: input.status ?? "running",
+			currentAttempt: 1,
 			createdAt: now,
 			updatedAt: now,
 			title: redactSensitiveText(input.title),
 			detail: input.detail === undefined ? undefined : redactSensitiveText(input.detail),
 			timeoutSeconds: input.timeoutSeconds,
 			parentActivityId: input.parentActivityId,
+			retryRecipe: input.kind === "subagent" ? input.retryRecipe : undefined,
 			events: [],
 		}
 		this.activities.set(activity.activityId, activity)
@@ -164,11 +163,27 @@ export class TaskActivityStore {
 	}
 
 	setRetry(activityId: string, retry: ControlActivity | undefined): void {
-		if (!this.activities.has(activityId)) return
+		const activity = this.activities.get(activityId)
+		if (!activity) return
 		const hadRetry = this.retriers.has(activityId)
 		if (retry) this.retriers.set(activityId, retry)
 		else this.retriers.delete(activityId)
-		if (hadRetry !== Boolean(retry)) this.markDirty(activityId, true)
+		if (activity.kind === "subagent" && activity.retryRecipe) {
+			activity.retryRecipe = { ...activity.retryRecipe, retryable: Boolean(retry) }
+			if (retry) activity.retryUnavailableReason = undefined
+			activity.updatedAt = Date.now()
+		}
+		if (hadRetry !== Boolean(retry) || activity.retryRecipe) this.markDirty(activityId, true)
+	}
+
+	setRetryUnavailableReason(activityId: string, reason: string): void {
+		const activity = this.activities.get(activityId)
+		if (!activity || activity.kind !== "subagent") return
+		this.retriers.delete(activityId)
+		if (activity.retryRecipe) activity.retryRecipe = { ...activity.retryRecipe, retryable: false }
+		activity.retryUnavailableReason = redactSensitiveText(reason)
+		activity.updatedAt = Date.now()
+		this.markDirty(activityId, true)
 	}
 
 	isCancellable(activityId: string): boolean {
@@ -181,9 +196,17 @@ export class TaskActivityStore {
 		return activity?.kind === "subagent" && activity.status === "running" && this.finishers.has(activityId)
 	}
 
+	hasLiveRetryControl(activityId: string): boolean {
+		return this.retriers.has(activityId)
+	}
+
 	isRetryable(activityId: string): boolean {
 		const activity = this.activities.get(activityId)
-		return activity?.kind === "subagent" && activity.status === "failed" && this.retriers.has(activityId)
+		return (
+			activity?.kind === "subagent" &&
+			activity.status === "failed" &&
+			(this.hasLiveRetryControl(activityId) || activity.retryRecipe?.retryable === true)
+		)
 	}
 
 	/** Return the newest running foreground activity of the requested kind with a live handoff callback. */
@@ -234,6 +257,8 @@ export class TaskActivityStore {
 				| "result"
 				| "error"
 				| "finishedAt"
+				| "retryRecipe"
+				| "retryUnavailableReason"
 			>
 		> & { metrics?: Partial<TaskActivityMetrics>; runtime?: TaskActivityRuntimeConfig },
 	): void {
@@ -255,6 +280,9 @@ export class TaskActivityStore {
 			...(activityPatch.latestEvent === undefined ? {} : { latestEvent: redactSensitiveText(activityPatch.latestEvent) }),
 			...(activityPatch.result === undefined ? {} : { result: redactSensitiveText(activityPatch.result) }),
 			...(activityPatch.error === undefined ? {} : { error: redactSensitiveText(activityPatch.error) }),
+			...(activityPatch.retryUnavailableReason === undefined
+				? {}
+				: { retryUnavailableReason: redactSensitiveText(activityPatch.retryUnavailableReason) }),
 		}
 		Object.assign(activity, sanitizedPatch, { updatedAt: Date.now() })
 		if (runtime && activity.kind === "subagent") {
@@ -296,7 +324,7 @@ export class TaskActivityStore {
 	appendEvent(activityId: string, input: TaskActivityEventInput, priority = false): TaskActivityEvent | undefined {
 		const activity = this.activities.get(activityId)
 		if (!activity) return undefined
-		const event = this.createEvent(input)
+		const event = this.createEvent(input, activity.currentAttempt)
 		activity.events.push(event)
 		this.trimEvents(activity)
 		activity.updatedAt = event.timestamp
@@ -361,6 +389,7 @@ export class TaskActivityStore {
 			const retry = this.retriers.get(activityId)
 			if (!activity || !retry || activity.kind !== "subagent" || activity.status !== "failed") continue
 			const previousError = activity.error
+			activity.currentAttempt += 1
 			activity.result = undefined
 			activity.error = undefined
 			activity.finishedAt = undefined
@@ -479,11 +508,12 @@ export class TaskActivityStore {
 		}
 	}
 
-	private createEvent(input: TaskActivityEventInput): TaskActivityEvent {
+	private createEvent(input: TaskActivityEventInput, attempt: number): TaskActivityEvent {
 		return this.redactEvent({
 			...input,
 			sequence: ++this.sequence,
 			timestamp: Date.now(),
+			attempt,
 		} as TaskActivityEvent)
 	}
 
@@ -498,6 +528,9 @@ export class TaskActivityStore {
 			error: activity.error === undefined ? undefined : redactSensitiveText(activity.error),
 			runtime: activity.runtime ? { ...activity.runtime } : undefined,
 			metrics: activity.metrics ? { ...activity.metrics } : undefined,
+			retryRecipe: activity.retryRecipe ? { ...activity.retryRecipe } : undefined,
+			retryUnavailableReason:
+				activity.retryUnavailableReason === undefined ? undefined : redactSensitiveText(activity.retryUnavailableReason),
 			events: activity.events.map((event) => this.redactEvent({ ...event })),
 		}
 	}

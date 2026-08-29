@@ -28,6 +28,29 @@ describe("Task context-window final admission guard", () => {
 		expect(persistenceIndex).toBeGreaterThan(finalGuardIndex)
 	})
 
+	it("projects persisted Retry from frozen input without rebuilding dynamic context or re-persisting the user turn", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const builder = extractMethod(
+			source,
+			"private async buildPersistedRequestCandidate(",
+			"/** Project one durable Retry candidate",
+		)
+		const projection = extractMethod(
+			source,
+			"private projectPersistedRequestContextWindow(",
+			"/** Evaluate the complete unsent ordinary candidate",
+		)
+
+		expect(builder).toContain("this.ordinaryRequestInputReplay.get(apiIndex)")
+		expect(projection).toContain("estimateContextWindowCandidate(providerInput,")
+		expect(projection).toContain("resolveContextWindowProjection({")
+		for (const method of [builder, projection]) {
+			expect(method).not.toContain("loadContext(")
+			expect(method).not.toContain("appendBackgroundResults(")
+			expect(method).not.toContain("persistApiRequestUserMessage(")
+		}
+	})
+
 	it("reprojects once after adding high-pressure guidance and caches the exact candidate selected for sending", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const method = extractMethod(
@@ -82,18 +105,34 @@ describe("Task context-window final admission guard", () => {
 		expect(helper).not.toContain("conversationHistoryDeletedRange =")
 	})
 
-	it("enters automatic compaction without rewriting an already-sent provider prefix", async () => {
+	it("enters automatic compaction for fresh or persisted requests without rewriting an already-sent provider prefix", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const requestMethod = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
 		const pressureDecisionIndex = requestMethod.indexOf("this.contextManager.shouldCompactContextWindow(")
-		const compactionRouteIndex = requestMethod.indexOf(
-			"if (!persistedRequest && shouldCompact && !manualCompactionRequested)",
+		const coarseCompactionRouteIndex = requestMethod.indexOf(
+			"if (shouldCompact && !manualCompactionRequested)",
 			pressureDecisionIndex,
+		)
+		const persistedProjectionIndex = requestMethod.indexOf(
+			"projectPersistedRequestContextWindow(",
+			coarseCompactionRouteIndex,
+		)
+		const finalGuardCompactionRouteIndex = requestMethod.indexOf(
+			"await this.runOrdinaryContextCompaction(",
+			persistedProjectionIndex,
 		)
 
 		expect(pressureDecisionIndex).toBeGreaterThanOrEqual(0)
-		expect(compactionRouteIndex).toBeGreaterThan(pressureDecisionIndex)
-		expect(requestMethod.slice(pressureDecisionIndex, compactionRouteIndex)).not.toContain("attemptFileReadOptimization(")
+		expect(coarseCompactionRouteIndex).toBeGreaterThan(pressureDecisionIndex)
+		expect(persistedProjectionIndex).toBeGreaterThan(coarseCompactionRouteIndex)
+		expect(finalGuardCompactionRouteIndex).toBeGreaterThan(persistedProjectionIndex)
+		expect(requestMethod.slice(coarseCompactionRouteIndex, persistedProjectionIndex)).toContain(
+			"persistedRequest ? [] : originalUserContent",
+		)
+		expect(requestMethod.slice(finalGuardCompactionRouteIndex)).toContain("persistedRequest ? [] : originalUserContent")
+		expect(requestMethod.slice(pressureDecisionIndex, coarseCompactionRouteIndex)).not.toContain(
+			"attemptFileReadOptimization(",
+		)
 	})
 
 	it("peeks recently modified files and acknowledges only after an ordinary request reaches a valid first chunk", async () => {
@@ -136,7 +175,11 @@ describe("Task context-window final admission guard", () => {
 
 	it("rebuilds the complete ordinary target candidate with dynamic context after every accepted Pass", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
-		const method = extractMethod(source, "private async reprojectContextCompactionTarget(", "/** Finalize the single durable")
+		const method = extractMethod(
+			source,
+			"private async reprojectContextCompactionTarget(",
+			"/** Finalize the cumulative summary",
+		)
 		const loadContextIndex = method.indexOf("await this.loadContext(")
 		const environmentIndex = method.indexOf("parsedContent.push", loadContextIndex)
 		const backgroundIndex = method.indexOf("await this.appendBackgroundResults(parsedContent", environmentIndex)
@@ -211,7 +254,7 @@ describe("Task context-window final admission guard", () => {
 		expect(sessionSource).not.toContain("compactionRequestReplay")
 	})
 
-	it("commits one durable compaction card without overwriting canonical API history or deleted range", async () => {
+	it("commits the final ranged card through the shared durable helper without rewriting canonical history", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const commit = extractMethod(
 			source,
@@ -220,7 +263,10 @@ describe("Task context-window final admission guard", () => {
 		)
 
 		expect(commit).toContain("createCompactionConversationRange(state")
-		expect(commit).toContain("commitTransientClineMessage(")
+		expect(commit).toContain("this.commitContextCompactionSnapshot(input, snapshot, range)")
+		expect(source).toContain("private async commitContextCompactionSnapshot(")
+		expect(source).toContain("this.messageStateHandler.commitTransientClineMessage(")
+		expect(source).toContain("compactionDurable: partial === false")
 		expect(commit).toContain("this.taskState.targetWindowFittingCommitted = true")
 		expect(commit).not.toContain("overwriteApiConversationHistory(")
 		expect(commit).not.toContain("flushApiConversationHistory(")
@@ -258,6 +304,46 @@ describe("Task context-window final admission guard", () => {
 		expect(requestMethod.match(/if \(result !== "completed"\) return true/g)).toHaveLength(1)
 	})
 
+	it("durably commits the failed card before terminal automatic Retry is presented", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const eventMethod = extractMethod(
+			source,
+			"private async publishContextCompactionEvent(",
+			"/** Publish one transient execution-unit",
+		)
+		const failedBranchIndex = eventMethod.indexOf('case "failed"')
+		const durableCommitIndex = eventMethod.indexOf(
+			"await this.commitContextCompactionSnapshot(input, durableSnapshot)",
+			failedBranchIndex,
+		)
+		const requestMethod = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
+		const terminalRetryIndex = requestMethod.indexOf("await this.presentTerminalCompactionFailure(")
+
+		expect(failedBranchIndex).toBeGreaterThanOrEqual(0)
+		expect(durableCommitIndex).toBeGreaterThan(failedBranchIndex)
+		expect(terminalRetryIndex).toBeGreaterThanOrEqual(0)
+		expect(requestMethod.slice(0, terminalRetryIndex)).toContain("await this.runOrdinaryContextCompaction(")
+	})
+
+	it("durably commits transition failures instead of deleting their transient cards", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const transition = extractMethod(source, "async compactForTransition(", "/** Request one user-triggered compaction")
+		const failureIndex = transition.indexOf("this.contextCompactionPresentation.fail(operationId, reason)")
+		const publishIndex = transition.indexOf(
+			"await this.publishContextCompactionSnapshot(failureInput, snapshot)",
+			failureIndex,
+		)
+		const commitIndex = transition.indexOf(
+			"await this.commitContextCompactionSnapshot(failureInput, durableSnapshot)",
+			publishIndex,
+		)
+
+		expect(failureIndex).toBeGreaterThanOrEqual(0)
+		expect(publishIndex).toBeGreaterThan(failureIndex)
+		expect(commitIndex).toBeGreaterThan(publishIndex)
+		expect(transition).not.toContain("removeTransientClineMessage(")
+	})
+
 	it("does not keep or replay unsent ordinary input outside the Session input", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 
@@ -277,23 +363,30 @@ describe("Task context-window final admission guard", () => {
 		expect(sessionSource).not.toContain("checkpointAcceptedPass")
 	})
 
-	it("routes shared Session events through the per-Pass presentation owner without creating a started row", async () => {
+	it("routes Pass and refit lifecycles through per-unit presentation with durable terminal cards", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const method = extractMethod(source, "private async publishContextCompactionEvent(", "/** Wait for one Pass retry")
+		const preparingBranch = method.slice(method.indexOf('case "pass_preparing"'), method.indexOf('case "pass_started"'))
 		const startedBranch = method.slice(method.indexOf('case "pass_started"'), method.indexOf('case "pass_partial"'))
 
 		expect(source).toContain("private readonly contextCompactionPresentation = new ContextCompactionPresentation()")
+		expect(preparingBranch).toContain(
+			"this.contextCompactionPresentation.preparePass(input.operationId, event.state.passIndex)",
+		)
 		expect(startedBranch).toContain("this.contextCompactionPresentation.startPass(event.passIdentity, event.attempt)")
 		expect(startedBranch).not.toContain("updateContextCompactionStatus")
 		expect(startedBranch).not.toContain("this.say(")
 		expect(method).toContain("this.contextCompactionPresentation.partial(")
 		expect(method).toContain("this.contextCompactionPresentation.retry(")
 		expect(method).toContain("this.contextCompactionPresentation.complete(")
+		expect(method).toContain("this.contextCompactionPresentation.prepareSummaryRefit(")
+		expect(method).toContain("this.contextCompactionPresentation.completeSummaryRefit(")
 		expect(method).toContain("this.contextCompactionPresentation.fail(input.operationId, event.error)")
 		expect(method).toContain("this.publishContextCompactionSnapshot(input, snapshot)")
-		expect(method).toContain("upsertTransientClineMessage(message)")
-		expect(method).toContain("removeTransientClineMessage(snapshot.existingTs)")
-		const highFrequencyReturn = method.indexOf('if (event.kind === "pass_receiving" || event.kind === "pass_partial") return')
+		expect(method).toContain("this.commitContextCompactionSnapshot(input, durableSnapshot)")
+		expect(source).toContain("compactionDurable: partial === false")
+		expect(method).not.toContain("removeTransientClineMessage(")
+		const highFrequencyReturn = method.indexOf('event.kind === "pass_receiving" ||')
 		const fullStatePost = method.indexOf("await this.postStateToWebview()", highFrequencyReturn)
 		expect(highFrequencyReturn).toBeGreaterThanOrEqual(0)
 		expect(fullStatePost).toBeGreaterThan(highFrequencyReturn)
@@ -304,7 +397,7 @@ describe("Task context-window final admission guard", () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const requestMethod = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
 		const consumeIndex = requestMethod.indexOf(
-			"const targetWindowFittingCommitted = !persistedRequest && this.taskState.targetWindowFittingCommitted",
+			"const targetWindowFittingCommitted = this.taskState.targetWindowFittingCommitted",
 		)
 		const resetIndex = requestMethod.indexOf("this.taskState.targetWindowFittingCommitted = false", consumeIndex)
 		const automaticGateIndex = requestMethod.indexOf("(!targetWindowFittingCommitted &&", resetIndex)

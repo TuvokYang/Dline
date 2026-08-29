@@ -20,6 +20,8 @@ export interface CompactionWindowBudget {
 export interface ResolveCompactionWindowBudgetInput {
 	contextWindow: number
 	maxOutputTokens?: number
+	/** Optional output ceiling reserved so this summary can be carried into the next Pass. */
+	summaryOutputLimitTokens?: number
 	systemPrompt: string
 	tools?: readonly unknown[]
 	serverTools?: readonly unknown[]
@@ -72,8 +74,13 @@ function computeBudget(input: ResolveCompactionWindowBudgetInput, messages: Clin
 		typeof input.maxOutputTokens === "number" && Number.isFinite(input.maxOutputTokens) && input.maxOutputTokens > 0
 			? Math.floor(input.maxOutputTokens)
 			: availableRemainder
+	const summaryOutputLimit =
+		input.summaryOutputLimitTokens === undefined
+			? Number.POSITIVE_INFINITY
+			: normalizeNonNegativeInteger(input.summaryOutputLimitTokens)
 	const providerOutputCap = Math.min(
 		modelOutputLimit,
+		summaryOutputLimit,
 		Math.floor(availableRemainder * 0.9),
 		Math.max(0, availableRemainder - closureReserveTokens),
 	)

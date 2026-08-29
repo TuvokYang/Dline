@@ -83,6 +83,7 @@ describe("Task.attemptApiRequest first chunk state", () => {
 		const toolExecutor = {
 			setAllowedNativeToolNames: vi.fn(),
 			setExplicitInstructionConsumePort: vi.fn(),
+			setPromptRuntime: vi.fn(),
 			setWebSearchRoutingPlan: vi.fn(),
 		}
 		const beginIndicator = vi.fn(async () => ({
@@ -159,10 +160,17 @@ describe("Task.attemptApiRequest first chunk state", () => {
 		await expect(buildPromptContext.mock.results[0]?.value).resolves.toMatchObject({
 			clineWebToolsEnabled: true,
 		})
-		expect(toolExecutor.setWebSearchRoutingPlan).toHaveBeenCalledWith(
-			requestScope.webSearchRoutingPlan,
-			requestScope.webToolsEnabled,
+		expect(toolExecutor.setPromptRuntime).toHaveBeenCalledWith(
+			expect.objectContaining({
+				webToolsEnabled: requestScope.webToolsEnabled,
+				webSearchRoutingPlan: expect.objectContaining({
+					mode: requestScope.webSearchRoutingPlan.mode,
+					route: requestScope.webSearchRoutingPlan.route,
+					serverTools: requestScope.webSearchRoutingPlan.serverTools,
+				}),
+			}),
 		)
+		expect(toolExecutor.setWebSearchRoutingPlan).not.toHaveBeenCalled()
 	})
 
 	it("replays the same frozen Provider input after a first-chunk failure and releases it only on success", async () => {
@@ -269,6 +277,7 @@ describe("Task.attemptApiRequest first chunk state", () => {
 			toolExecutor: {
 				setAllowedNativeToolNames: vi.fn(),
 				setExplicitInstructionConsumePort: vi.fn(),
+				setPromptRuntime: vi.fn(),
 				setWebSearchRoutingPlan: vi.fn(),
 			},
 			writePromptMetadataArtifacts: vi.fn(async () => undefined),
@@ -286,6 +295,207 @@ describe("Task.attemptApiRequest first chunk state", () => {
 		expect(api.createMessage).toHaveBeenCalledTimes(2)
 		expect(api.createMessage.mock.calls[1]).toEqual(api.createMessage.mock.calls[0])
 		expect(ordinaryRequestInputReplay.get(0)).toBeUndefined()
+	})
+
+	it("rebuilds tool pairing from canonical history exactly once after a deterministic 400", async () => {
+		const pairingError = new Error("OpenAI API Error 400: No tool output found for function call call_1.")
+		const frozenInput = {
+			systemPrompt: "frozen system prompt",
+			messages: [{ role: "user" as const, content: "stale provider projection" }],
+			tools: [{ name: "frozen_tool", description: "Frozen tool definition", input_schema: { type: "object" as const } }],
+			serverTools: [],
+		}
+		const repairedMessages = [
+			{
+				role: "assistant" as const,
+				content: [{ type: "tool_use" as const, function_id: "call_1", dline_tid: "tid_1", name: "read_file", input: {} }],
+			},
+			{
+				role: "user" as const,
+				content: [{ type: "tool_result" as const, function_id: "call_1", dline_tid: "tid_1", content: "repaired" }],
+			},
+		]
+		const ordinaryRequestInputReplay = new OrdinaryRequestInputReplay()
+		ordinaryRequestInputReplay.freeze(0, frozenInput)
+		const api = {
+			createMessage: vi
+				.fn()
+				.mockImplementationOnce(() => ({
+					[Symbol.asyncIterator]() {
+						return this
+					},
+					next: vi.fn(async () => {
+						throw pairingError
+					}),
+				}))
+				.mockImplementationOnce(() =>
+					(async function* () {
+						yield { type: "text" as const, text: "rebuild succeeded" }
+					})(),
+				),
+		}
+		const requestScope = {
+			api,
+			providerInfo: {
+				providerId: "openai",
+				model: { id: "gpt-5.6-sol", info: {} },
+				mode: "act",
+			},
+			webToolsEnabled: false,
+			webSearchRoutingPlan: resolveWebSearchRoutingPlan({
+				enabled: false,
+				modelInfo: undefined,
+				selectedApiFormat: undefined,
+				localAvailable: true,
+				remoteAdapterAvailable: false,
+			}),
+			explicitInstructions: {
+				beginProviderAttempt: vi.fn(),
+				createConsumePort: vi.fn(() => ({})),
+			},
+		} as unknown as RequestApiScope
+		const projectCanonicalContext = vi.fn(() => repairedMessages)
+		const fakeTask = Object.assign(Object.create(Task.prototype), {
+			taskId: "task-canonical-rebuild",
+			ordinaryRequestInputReplay,
+			taskState: {
+				abort: false,
+				apiRequestCount: 1,
+				autoRetryAttempts: 0,
+				conversationHistoryDeletedRange: undefined,
+				didAutomaticallyRetryFailedApiRequest: false,
+				isWaitingForFirstChunk: false,
+				isInternalContextCompactionRequest: false,
+				isManualContextCompactionRequest: false,
+			},
+			projectCanonicalContext,
+			buildProviderInput: vi.fn(),
+			beginOrdinaryContextWindowIndicator: vi.fn(async (_apiIndex, providerAttempt) => ({
+				kind: "ordinary" as const,
+				requestId: "ordinary:task-canonical-rebuild:0",
+				requestSequence: 1,
+				attemptId: `attempt-${providerAttempt}`,
+			})),
+			receiveOrdinaryContextWindowIndicator: vi.fn(async () => undefined),
+			rollbackOrdinaryContextWindowIndicator: vi.fn(async () => undefined),
+			apiRateMetricsService: {
+				recordRequestStarted: vi.fn(),
+				trackProviderStream: <T>(stream: T) => stream,
+			},
+			admitOrdinaryProviderRequestRound: vi.fn(() => ({
+				bindAttempt: <T>(stream: T) => stream,
+				attachExactUsage: vi.fn(),
+			})),
+			buildThinkingSummary: vi.fn(() => undefined),
+			compactionRequestReplay: { getProviderInput: vi.fn(() => undefined), getHistoryIndex: vi.fn(() => undefined) },
+			messageStateHandler: { apiConversationHistory: repairedMessages, clineMessages: [] },
+			stateManager: {
+				getApiConfiguration: vi.fn(() => ({ actModeProfile: "openai:gpt-5.6-sol" })),
+				getGlobalSettingsKey: vi.fn(() => false),
+			},
+			toolExecutor: {
+				setAllowedNativeToolNames: vi.fn(),
+				setExplicitInstructionConsumePort: vi.fn(),
+				setPromptRuntime: vi.fn(),
+				setWebSearchRoutingPlan: vi.fn(),
+			},
+			writePromptMetadataArtifacts: vi.fn(async () => undefined),
+			endAutoRetrySequence: vi.fn(),
+			clearAutoRetryMessages: vi.fn(async () => undefined),
+			postStateToWebview: vi.fn(async () => undefined),
+		}) as Task
+
+		const result = await fakeTask.attemptApiRequest(-1, requestScope, 0, 0).next()
+
+		expect(result).toMatchObject({ done: false, value: { type: "text", text: "rebuild succeeded" } })
+		expect(projectCanonicalContext).toHaveBeenCalledOnce()
+		expect(api.createMessage).toHaveBeenCalledTimes(2)
+		expect(api.createMessage.mock.calls[0]?.[0]).toBe(frozenInput.systemPrompt)
+		expect(api.createMessage.mock.calls[1]?.[0]).toBe(frozenInput.systemPrompt)
+		expect(api.createMessage.mock.calls[0]?.[2]).toEqual(frozenInput.tools)
+		expect(api.createMessage.mock.calls[1]?.[2]).toEqual(frozenInput.tools)
+		expect(api.createMessage.mock.calls[1]?.[1]).toEqual(repairedMessages)
+		expect(ordinaryRequestInputReplay.get(0)).toBeUndefined()
+	})
+
+	it("does not retry the same deterministic tool-pairing 400 after canonical rebuild is exhausted", async () => {
+		const pairingError = new Error("HTTP 400: No tool output found for function call call_1.")
+		const ordinaryRequestInputReplay = new OrdinaryRequestInputReplay()
+		ordinaryRequestInputReplay.freeze(0, {
+			systemPrompt: "frozen",
+			messages: [{ role: "user", content: "stale" }],
+			serverTools: [],
+		})
+		const api = {
+			createMessage: vi.fn(() => ({
+				[Symbol.asyncIterator]() {
+					return this
+				},
+				next: vi.fn(async () => {
+					throw pairingError
+				}),
+			})),
+		}
+		const requestScope = {
+			api,
+			providerInfo: { providerId: "openai", model: { id: "gpt-5.6-sol", info: {} }, mode: "act" },
+			webToolsEnabled: false,
+			webSearchRoutingPlan: resolveWebSearchRoutingPlan({
+				enabled: false,
+				modelInfo: undefined,
+				selectedApiFormat: undefined,
+				localAvailable: true,
+				remoteAdapterAvailable: false,
+			}),
+			explicitInstructions: { beginProviderAttempt: vi.fn(), createConsumePort: vi.fn(() => ({})) },
+		} as unknown as RequestApiScope
+		const projectCanonicalContext = vi.fn(() => [{ role: "user" as const, content: "repaired" }])
+		const fakeTask = Object.assign(Object.create(Task.prototype), {
+			taskId: "task-canonical-rebuild-exhausted",
+			ordinaryRequestInputReplay,
+			taskState: {
+				abort: false,
+				apiRequestCount: 1,
+				autoRetryAttempts: 0,
+				conversationHistoryDeletedRange: undefined,
+				didAutomaticallyRetryFailedApiRequest: false,
+				isWaitingForFirstChunk: false,
+				isInternalContextCompactionRequest: false,
+				isManualContextCompactionRequest: false,
+			},
+			projectCanonicalContext,
+			beginOrdinaryContextWindowIndicator: vi.fn(async (_apiIndex, providerAttempt) => ({
+				kind: "ordinary" as const,
+				requestId: "ordinary:task-canonical-rebuild-exhausted:0",
+				requestSequence: 1,
+				attemptId: `attempt-${providerAttempt}`,
+			})),
+			receiveOrdinaryContextWindowIndicator: vi.fn(async () => undefined),
+			rollbackOrdinaryContextWindowIndicator: vi.fn(async () => undefined),
+			apiRateMetricsService: { recordRequestStarted: vi.fn(), trackProviderStream: <T>(stream: T) => stream },
+			admitOrdinaryProviderRequestRound: vi.fn(() => ({
+				bindAttempt: <T>(stream: T) => stream,
+				attachExactUsage: vi.fn(),
+			})),
+			buildThinkingSummary: vi.fn(() => undefined),
+			compactionRequestReplay: { getProviderInput: vi.fn(() => undefined), getHistoryIndex: vi.fn(() => undefined) },
+			messageStateHandler: { apiConversationHistory: [{ role: "user" as const, content: "canonical" }], clineMessages: [] },
+			stateManager: {
+				getApiConfiguration: vi.fn(() => ({ actModeProfile: "openai:gpt-5.6-sol" })),
+				getGlobalSettingsKey: vi.fn(() => false),
+			},
+			toolExecutor: {
+				setAllowedNativeToolNames: vi.fn(),
+				setExplicitInstructionConsumePort: vi.fn(),
+				setPromptRuntime: vi.fn(),
+				setWebSearchRoutingPlan: vi.fn(),
+			},
+			writePromptMetadataArtifacts: vi.fn(async () => undefined),
+		}) as Task
+
+		await expect(fakeTask.attemptApiRequest(-1, requestScope, 0, 0).next()).rejects.toBe(pairingError)
+		expect(api.createMessage).toHaveBeenCalledTimes(2)
+		expect(projectCanonicalContext).toHaveBeenCalledOnce()
 	})
 
 	it("fails explicitly when the provider stream ends without yielding any chunk", async () => {
@@ -396,6 +606,7 @@ describe("Task.attemptApiRequest first chunk state", () => {
 			toolExecutor: {
 				setAllowedNativeToolNames: vi.fn(),
 				setExplicitInstructionConsumePort: vi.fn(),
+				setPromptRuntime: vi.fn(),
 				setWebSearchRoutingPlan: vi.fn(),
 			},
 			writePromptMetadataArtifacts: vi.fn(async () => undefined),

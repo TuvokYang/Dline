@@ -87,12 +87,17 @@ export interface ApiGenerationOptions {
 	readonly maxOutputTokens: number
 }
 
+/** Owner responsible for retrying one logical Provider request. */
+export type ApiRetryOwner = "task" | "subagent" | "compaction"
+
 /** Immutable request-level capabilities resolved before entering a provider adapter. */
 export interface ApiRequestOptions {
 	/** Provider-hosted tools selected for this request. Local tools remain in `tools`. */
 	readonly serverTools?: readonly ServerTool[]
 	/** Stable Task identity used to isolate provider-side prompt cache routing. */
 	readonly taskNamespace?: string
+	/** Upper layer that owns retry orchestration; omitted requests use the Provider decorator. */
+	readonly retryOwner?: ApiRetryOwner
 	/** Optional generation policy for internal requests; ordinary requests omit this field. */
 	readonly generation?: ApiGenerationOptions
 }

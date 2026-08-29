@@ -4,10 +4,10 @@ import { ensureTaskDirectoryExists, GlobalFileNames } from "@core/storage/disk"
 import { Logger } from "@shared/services/Logger"
 import type { TaskActivityEvent, TaskActivityRecord } from "@shared/task-activity"
 
-const ACTIVITY_SCHEMA_VERSION = 1
+const ACTIVITY_SCHEMA_VERSION = 2
 
 interface PersistedTaskActivities {
-	schemaVersion: 1
+	schemaVersion: 2
 	taskId: string
 	activities: TaskActivityRecord[]
 }
@@ -19,7 +19,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function sanitizeEvent(value: unknown): TaskActivityEvent | undefined {
 	if (!isRecord(value) || typeof value.kind !== "string") return undefined
 	if (!Number.isSafeInteger(value.sequence) || typeof value.timestamp !== "number") return undefined
-	return value as unknown as TaskActivityEvent
+	return {
+		...value,
+		attempt: Number.isSafeInteger(value.attempt) && Number(value.attempt) > 0 ? Number(value.attempt) : 1,
+	} as unknown as TaskActivityEvent
 }
 
 function sanitizeActivity(value: unknown, taskId: string): TaskActivityRecord | undefined {
@@ -34,10 +37,30 @@ function sanitizeActivity(value: unknown, taskId: string): TaskActivityRecord | 
 	const events = Array.isArray(value.events)
 		? value.events.map(sanitizeEvent).filter((event): event is TaskActivityEvent => Boolean(event))
 		: []
+	const retryRecipe =
+		isRecord(value.retryRecipe) &&
+		value.retryRecipe.kind === "subagent" &&
+		typeof value.retryRecipe.task === "string" &&
+		typeof value.retryRecipe.prompt === "string" &&
+		typeof value.retryRecipe.timeoutSeconds === "number"
+			? {
+					kind: "subagent" as const,
+					schemaVersion: 1 as const,
+					subagentName: typeof value.retryRecipe.subagentName === "string" ? value.retryRecipe.subagentName : undefined,
+					task: value.retryRecipe.task,
+					prompt: value.retryRecipe.prompt,
+					timeoutSeconds: value.retryRecipe.timeoutSeconds,
+					retryable: value.retryRecipe.retryable === true,
+				}
+			: undefined
 	return {
 		...(value as unknown as TaskActivityRecord),
 		schemaVersion: ACTIVITY_SCHEMA_VERSION,
+		currentAttempt:
+			Number.isSafeInteger(value.currentAttempt) && Number(value.currentAttempt) > 0 ? Number(value.currentAttempt) : 1,
 		cancellationOwner: value.cancellationOwner === "explicit" ? "explicit" : "task",
+		retryRecipe,
+		retryUnavailableReason: typeof value.retryUnavailableReason === "string" ? value.retryUnavailableReason : undefined,
 		events,
 	}
 }
@@ -51,7 +74,11 @@ export class TaskActivityPersistence {
 			const taskDirectory = await ensureTaskDirectoryExists(this.taskId)
 			const raw = await fs.readFile(path.join(taskDirectory, GlobalFileNames.taskActivities), "utf8")
 			const parsed: unknown = JSON.parse(raw)
-			if (!isRecord(parsed) || parsed.schemaVersion !== ACTIVITY_SCHEMA_VERSION || parsed.taskId !== this.taskId) {
+			if (
+				!isRecord(parsed) ||
+				(parsed.schemaVersion !== 1 && parsed.schemaVersion !== ACTIVITY_SCHEMA_VERSION) ||
+				parsed.taskId !== this.taskId
+			) {
 				return []
 			}
 			return Array.isArray(parsed.activities)

@@ -31,6 +31,18 @@ describe("OrdinaryRequestInputReplay", () => {
 		expect(replay.get(7)).toBeUndefined()
 	})
 
+	it("allows exactly one canonical rebuild replacement for a deterministic request failure", () => {
+		const replay = new OrdinaryRequestInputReplay()
+		const repaired = providerInput("repaired")
+		replay.freeze(7, providerInput("frozen"))
+
+		expect(replay.prepareCanonicalRebuild(7)).toBe("rebuild")
+		replay.replaceAfterCanonicalRebuild(7, repaired)
+		expect(replay.get(7)).toEqual(repaired)
+		expect(replay.prepareCanonicalRebuild(7)).toBe("exhausted")
+		expect(replay.prepareCanonicalRebuild(8)).toBe("unavailable")
+	})
+
 	it("replaces a stale logical request and clears the current request before canonical changes", () => {
 		const replay = new OrdinaryRequestInputReplay()
 		const second = providerInput("second")

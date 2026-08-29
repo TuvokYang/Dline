@@ -7,6 +7,7 @@ import { ClineDefaultTool } from "@shared/tools"
 import { expect } from "chai"
 import { afterEach, describe, it, vi, expect as vitestExpect } from "vitest"
 // sinon import removed: using vitest globals
+import { TaskActivityStore } from "../../../activity/TaskActivityStore"
 import { TaskState } from "../../../TaskState"
 import * as AgentConfigModule from "../../subagent/AgentConfigLoader"
 import { SubagentRunner, type SubagentRunResult } from "../../subagent/SubagentRunner"
@@ -14,6 +15,7 @@ import type { TaskConfig } from "../../types/TaskConfig"
 import { createUIHelpers } from "../../types/UIHelpers"
 import {
 	buildStatusPayload,
+	restoreSubagentActivityRetry,
 	UseSubagentsToolHandler as UseSubagentsToolHandlerImpl,
 	UseSubagentToolHandler as UseSubagentToolHandlerImpl,
 } from "../SubagentToolHandler"
@@ -932,11 +934,96 @@ describe("SubagentToolHandler", () => {
 			assert.ok(retryRegistration, "retryable failure should register Retry")
 		})
 		const retry = setRetry.mock.calls.find(([, callback]) => typeof callback === "function")?.[1] as () => Promise<boolean>
+		const jobId = config.subagentJobManager?.listJobs()[0]?.jobId
+		assert.ok(jobId)
 		assert.equal(await retry(), true)
-		await vi.waitFor(() => assert.equal(config.subagentJobManager?.getJob("subagent_1")?.status, "completed"))
+		await vi.waitFor(() => assert.equal(config.subagentJobManager?.getJob(jobId)?.status, "completed"))
 		assert.equal(config.subagentJobManager?.listInjectableResults().length, 1)
-		vitestExpect(setCancel).toHaveBeenCalledWith("subagent_1", vitestExpect.any(Function))
-		vitestExpect(setFinish).toHaveBeenCalledWith("subagent_1", vitestExpect.any(Function))
+		vitestExpect(setCancel).toHaveBeenCalledWith(jobId, vitestExpect.any(Function))
+		vitestExpect(setFinish).toHaveBeenCalledWith(jobId, vitestExpect.any(Function))
+	})
+
+	it("restores a persisted retry recipe after Task reopen", async () => {
+		const { config } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
+		config.taskState.abort = true
+		const activityStore = new TaskActivityStore("task-1")
+		activityStore.create({
+			activityId: "subagent-restored",
+			kind: "subagent",
+			executionMode: "background",
+			title: "review",
+			retryRecipe: {
+				kind: "subagent",
+				schemaVersion: 1,
+				subagentName: "default",
+				task: "review",
+				prompt: "<task>review</task><context>ctx</context>",
+				timeoutSeconds: 30,
+				retryable: true,
+			},
+		})
+		activityStore.update("subagent-restored", { status: "failed", error: "temporary provider failure" })
+		config.activityStore = activityStore
+		vi.spyOn(AgentConfigModule, "resolveAgentConfig").mockResolvedValue(undefined)
+		vi.spyOn(SubagentRunner.prototype, "run").mockResolvedValue({
+			status: "completed",
+			result: "recovered after reopen",
+			stats: emptyTestStats(),
+		})
+
+		assert.equal(await restoreSubagentActivityRetry(config, "subagent-restored"), true)
+		assert.equal(activityStore.isRetryable("subagent-restored"), true)
+		assert.deepEqual(await activityStore.retry(["subagent-restored"]), ["subagent-restored"])
+		await vi.waitFor(() => assert.equal(activityStore.get("subagent-restored")?.status, "completed"))
+		assert.equal(activityStore.get("subagent-restored")?.currentAttempt, 2)
+		assert.equal(activityStore.get("subagent-restored")?.result, "recovered after reopen")
+	})
+
+	it("persists why a named subagent retry cannot be restored after Task reopen", async () => {
+		const { config } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
+		const persisted: Array<ReturnType<TaskActivityStore["list"]>> = []
+		const activityStore = new TaskActivityStore("task-1", {
+			load: vi.fn(async () => persisted.at(-1) ?? []),
+			save: vi.fn(async (activities: ReturnType<TaskActivityStore["list"]>) => {
+				persisted.push(activities)
+			}),
+		})
+		activityStore.create({
+			activityId: "subagent-unavailable",
+			kind: "subagent",
+			executionMode: "background",
+			title: "retired reviewer",
+			retryRecipe: {
+				kind: "subagent",
+				schemaVersion: 1,
+				subagentName: "retired-reviewer",
+				task: "review",
+				prompt: "<task>review</task><context>ctx</context>",
+				timeoutSeconds: 30,
+				retryable: true,
+			},
+		})
+		activityStore.update("subagent-unavailable", { status: "failed", error: "temporary provider failure" })
+		config.activityStore = activityStore
+		vi.spyOn(AgentConfigModule, "resolveAgentConfig").mockResolvedValue(undefined)
+
+		assert.equal(await restoreSubagentActivityRetry(config, "subagent-unavailable"), false)
+		await activityStore.waitForPersistence()
+
+		assert.equal(activityStore.isRetryable("subagent-unavailable"), false)
+		assert.equal(activityStore.hasLiveRetryControl("subagent-unavailable"), false)
+		vitestExpect(activityStore.get("subagent-unavailable")).toEqual(
+			vitestExpect.objectContaining({
+				retryUnavailableReason: "Retry unavailable: subagent 'retired-reviewer' is no longer enabled.",
+				retryRecipe: vitestExpect.objectContaining({ retryable: false }),
+			}),
+		)
+		vitestExpect(persisted.at(-1)?.[0]).toEqual(
+			vitestExpect.objectContaining({
+				retryUnavailableReason: "Retry unavailable: subagent 'retired-reviewer' is no longer enabled.",
+				retryRecipe: vitestExpect.objectContaining({ retryable: false }),
+			}),
+		)
 	})
 
 	it("starts stable use_subagent background job", async () => {

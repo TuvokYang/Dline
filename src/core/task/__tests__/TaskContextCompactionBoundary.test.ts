@@ -119,7 +119,7 @@ describe("Task ordinary context compaction boundary", () => {
 
 		const sourceIndex = indexLogicalTurns(boundary.sourceHistory)
 		expect(sourceIndex.turns).toHaveLength(1)
-		expect(sourceIndex.protectedTail).toEqual([])
+		expect(sourceIndex.protectedStartMessageIndex).toBe(boundary.sourceHistory.length)
 		expect(sourceIndex.issues).toEqual([])
 		expect(JSON.stringify(boundary.sourceHistory)).not.toContain("user reply")
 	})
@@ -310,7 +310,7 @@ describe("Task ordinary context compaction boundary", () => {
 
 		expect(indexLogicalTurns(boundary.sourceHistory)).toMatchObject({
 			turns: [expect.any(Object), expect.any(Object)],
-			protectedTail: [],
+			protectedStartMessageIndex: boundary.sourceHistory.length,
 			issues: [],
 		})
 		expect(sourceText).toContain("latest turn")
@@ -413,8 +413,8 @@ describe("Task ordinary context compaction boundary", () => {
 		const boundary = task.getTaskHeaderContextCompactionBoundary()
 
 		expect(indexLogicalTurns(boundary.sourceHistory)).toMatchObject({
-			turns: [{ startIndex: 0, endIndex: 2 }],
-			protectedTail: [],
+			turns: [{ startMessageIndex: 0, endMessageIndex: 2 }],
+			protectedStartMessageIndex: boundary.sourceHistory.length,
 			issues: [],
 		})
 		expect(boundary.targetContinuationHistory).toEqual([canonicalBefore[1]])

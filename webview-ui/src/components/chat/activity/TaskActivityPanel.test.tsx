@@ -542,6 +542,54 @@ describe("TaskActivityPanel", () => {
 		expect(within(scopedOldAgent).getByTestId("subagent-tool-step-details")).toHaveTextContent("executor content")
 	})
 
+	it("shows Task and Context while isolating Activities tools and metrics to the current attempt", () => {
+		extraActivities.push({
+			activityId: "attempt-aware-agent",
+			taskId: "task-1",
+			kind: "subagent",
+			executionMode: "background",
+			status: "failed",
+			createdAt: 300,
+			updatedAt: 400,
+			finishedAt: 400,
+			title: "attempt aware agent",
+			detail: "<task>\n  Review retry recovery\n</task>\n<context>\n    Preserve current-attempt isolation\n</context>",
+			currentAttempt: 2,
+			retryUnavailableReason: "Retry unavailable: subagent 'reviewer' is no longer enabled.",
+			metrics: { toolCalls: 99, inputTokens: 1_000, outputTokens: 100, totalCost: 0.01, currency: "USD" },
+			events: [
+				{ sequence: 1, timestamp: 1, attempt: 1, kind: "tool_call", toolCallId: "old", toolName: "old_tool" },
+				{
+					sequence: 2,
+					timestamp: 2,
+					attempt: 2,
+					kind: "tool_call",
+					toolCallId: "current",
+					toolName: "current_tool",
+					toolStatus: "completed",
+				},
+			],
+		})
+
+		render(<TaskActivityPanel filters={{ status: "all", kind: "subagent" }} taskId="task-1" />)
+		const item = screen
+			.getAllByTestId("activity-item")
+			.find((candidate) => candidate.textContent?.includes("attempt aware agent"))
+		expect(item).toBeDefined()
+		const scopedItem = item as HTMLElement
+		expect(within(scopedItem).getByTestId("subagent-metrics")).toHaveTextContent("1 tool")
+		fireEvent.click(within(scopedItem).getByTestId("activity-toggle"))
+
+		expect(within(scopedItem).getByTestId("subagent-activity-task")).toHaveTextContent("Review retry recovery")
+		expect(within(scopedItem).getByTestId("subagent-activity-context")).toHaveTextContent(
+			"Preserve current-attempt isolation",
+		)
+		expect(within(scopedItem).queryByText(/<task>|<context>/)).not.toBeInTheDocument()
+		expect(within(scopedItem).getByTestId("subagent-retry-unavailable-reason")).toHaveTextContent("no longer enabled")
+		expect(within(scopedItem).queryByText("old_tool")).not.toBeInTheDocument()
+		expect(within(scopedItem).getByText("current_tool")).toBeInTheDocument()
+	})
+
 	it("uses the same runtime configuration and cache metric projection as the chat card", () => {
 		extraActivities.push({
 			activityId: "runtime-agent",

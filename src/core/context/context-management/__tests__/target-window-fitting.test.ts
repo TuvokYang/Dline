@@ -1,11 +1,13 @@
 import type { ClineStorageMessage } from "@shared/messages/content"
 import { describe, expect, it } from "vitest"
+import { createCompactionSourceSnapshot, materializeCompactionSourceRange } from "../compaction-source-snapshot"
 import { indexLogicalTurns } from "../logical-turns"
 import {
 	acceptCompactionPass,
 	applyCompactionPassPlan,
 	buildCompactionPassHistory,
 	buildTargetCandidateHistory,
+	refitCompactionSummary,
 	startTargetWindowFitting,
 	type TargetWindowFittingState,
 	tryStartTargetWindowFitting,
@@ -50,6 +52,16 @@ function serialized(messages: readonly ClineStorageMessage[]): string {
 	return JSON.stringify(messages)
 }
 
+function startFitting(history: readonly ClineStorageMessage[], operationId: string): TargetWindowFittingState {
+	const snapshot = createCompactionSourceSnapshot(history)
+	return startTargetWindowFitting(indexLogicalTurns(snapshot.messages), operationId, snapshot)
+}
+
+function tryStartFitting(history: readonly ClineStorageMessage[], operationId: string): TargetWindowFittingState | undefined {
+	const snapshot = createCompactionSourceSnapshot(history)
+	return tryStartTargetWindowFitting(indexLogicalTurns(snapshot.messages), operationId, snapshot)
+}
+
 function createHistory(): ClineStorageMessage[] {
 	return [
 		{
@@ -66,7 +78,11 @@ function createHistory(): ClineStorageMessage[] {
 	]
 }
 
-function planThrough(state: TargetWindowFittingState, passEndTurnIndex: number): TargetWindowFittingState {
+function planThrough(
+	state: TargetWindowFittingState,
+	passEndTurnIndex: number,
+	nextPassSummaryCarryLimitTokens?: number,
+): TargetWindowFittingState {
 	return applyCompactionPassPlan(state, {
 		operationId: state.operationId,
 		passIndex: state.passIndex,
@@ -77,20 +93,23 @@ function planThrough(state: TargetWindowFittingState, passEndTurnIndex: number):
 		estimatedInputTokens: 100 + (passEndTurnIndex - state.coveredTurnCount + 1) * 100,
 		passInputCeiling: 1_000,
 		passHistoryHash: `sha256:pass-${state.passIndex}-${state.coveredTurnCount}-${passEndTurnIndex}`,
+		...(nextPassSummaryCarryLimitTokens === undefined ? {} : { nextPassSummaryCarryLimitTokens }),
 	})
 }
 
 describe("target window rolling fitting", () => {
 	it("requires an explicit Pass plan and preserves the exact selected turn prefix", () => {
-		const unplanned = startTargetWindowFitting(indexLogicalTurns(createHistory()), "operation-rolling")
+		const unplanned = startFitting(createHistory(), "operation-rolling")
 		expect(() => buildCompactionPassHistory(unplanned)).toThrow("Compaction Pass must be planned before building its history")
 
 		const state = planThrough(unplanned, 1)
 		const passHistory = buildCompactionPassHistory(state)
 		const pass = serialized(passHistory)
-		const selectedTurnPrefix = state.turns
-			.slice(state.passStartTurnIndex, state.passEndTurnIndex + 1)
-			.flatMap((turn) => turn.messages)
+		const selectedTurnPrefix = materializeCompactionSourceRange(
+			state.sourceSnapshot,
+			state.turns[state.passStartTurnIndex].startMessageIndex,
+			state.turns[state.passEndTurnIndex].endMessageIndex,
+		)
 
 		expect(state).toMatchObject({
 			operationId: "operation-rolling",
@@ -107,15 +126,17 @@ describe("target window rolling fitting", () => {
 	})
 
 	it("rolls the previous cumulative summary into the next planned uncovered range", () => {
-		const initial = startTargetWindowFitting(indexLogicalTurns(createHistory()), "operation-rolling")
+		const initial = startFitting(createHistory(), "operation-rolling")
 		const firstPass = planThrough(initial, 0)
 		const afterFirst = acceptCompactionPass(firstPass, "E2E_ROLLING_SUMMARY_ONE").state
 		const secondPlanned = planThrough(afterFirst, 1)
 		const secondPassHistory = buildCompactionPassHistory(secondPlanned)
 		const secondPass = serialized(secondPassHistory)
-		const selectedTurnMessages = secondPlanned.turns
-			.slice(secondPlanned.passStartTurnIndex, secondPlanned.passEndTurnIndex + 1)
-			.flatMap((turn) => turn.messages)
+		const selectedTurnMessages = materializeCompactionSourceRange(
+			secondPlanned.sourceSnapshot,
+			secondPlanned.turns[secondPlanned.passStartTurnIndex].startMessageIndex,
+			secondPlanned.turns[secondPlanned.passEndTurnIndex].endMessageIndex,
+		)
 
 		expect(afterFirst).toMatchObject({
 			operationId: "operation-rolling",
@@ -131,8 +152,40 @@ describe("target window rolling fitting", () => {
 		expect(secondPass).not.toContain("E2E_ROLLING_TURN_A")
 	})
 
+	it("carries the planned next-Pass summary limit into the accepted unplanned state", () => {
+		const initial = startFitting(createHistory(), "operation-carry-limit")
+		const afterFirst = acceptCompactionPass(planThrough(initial, 0, 750), "SUMMARY_WITH_LIMIT").state
+
+		expect(afterFirst).toMatchObject({
+			passIndex: 1,
+			coveredTurnCount: 1,
+			passPlanned: false,
+			nextPassSummaryCarryLimitTokens: 750,
+		})
+	})
+
+	it("refits only the cumulative summary without advancing source coverage", () => {
+		const initial = startFitting(createHistory(), "operation-summary-refit")
+		const afterFirst = acceptCompactionPass(planThrough(initial, 0, 750), "SUMMARY_BEFORE_REFIT").state
+		const refitted = refitCompactionSummary(afterFirst, "SUMMARY_AFTER_REFIT")
+
+		expect(refitted).toMatchObject({
+			operationId: "operation-summary-refit",
+			passIndex: 1,
+			coveredTurnCount: 1,
+			passStartTurnIndex: 1,
+			passEndTurnIndex: 0,
+			cumulativeSummary: "SUMMARY_AFTER_REFIT",
+			nextPassSummaryCarryLimitTokens: 750,
+			passPlanned: false,
+		})
+		expect(refitted.summaryBaselineHash).not.toBe(afterFirst.summaryBaselineHash)
+		expect(refitted.sourceSnapshot).toBe(afterFirst.sourceSnapshot)
+		expect(refitted.turns).toBe(afterFirst.turns)
+	})
+
 	it("builds the ordinary target candidate by concatenating complete message ranges without rewriting content", () => {
-		const initial = startTargetWindowFitting(indexLogicalTurns(createHistory()), "operation-target")
+		const initial = startFitting(createHistory(), "operation-target")
 		const afterFirst = acceptCompactionPass(planThrough(initial, 0), "E2E_ROLLING_SUMMARY_ONE").state
 		const continuation = [
 			qnaAssistant("call-protected", "E2E_ROLLING_PROTECTED_TURN_C"),
@@ -143,8 +196,9 @@ describe("target window rolling fitting", () => {
 		]
 		const targetHistory = buildTargetCandidateHistory(afterFirst, continuation)
 		const expectedMessages = [
-			...afterFirst.turns.slice(afterFirst.coveredTurnCount).flatMap((turn) => turn.messages),
-			...afterFirst.protectedTail,
+			...afterFirst.sourceSnapshot.messages.slice(
+				afterFirst.turns[afterFirst.coveredTurnCount]?.startMessageIndex ?? afterFirst.protectedStartMessageIndex,
+			),
 			...continuation,
 		]
 
@@ -153,22 +207,24 @@ describe("target window rolling fitting", () => {
 	})
 
 	it("keeps one-shot compaction when no complete logical turn is available", () => {
-		const index = indexLogicalTurns([message("user", "<user_message>pending</user_message>")])
+		const history = [message("user", "<user_message>pending</user_message>")]
+		const snapshot = createCompactionSourceSnapshot(history)
+		const index = indexLogicalTurns(snapshot.messages)
 
-		expect(tryStartTargetWindowFitting(index, "operation-one-shot")).toBeUndefined()
-		expect(() => startTargetWindowFitting(index, "operation-one-shot")).toThrow(
+		expect(tryStartTargetWindowFitting(index, "operation-one-shot", snapshot)).toBeUndefined()
+		expect(() => startTargetWindowFitting(index, "operation-one-shot", snapshot)).toThrow(
 			"No complete logical turn is available for compaction",
 		)
 	})
 
 	it("starts rolling fitting when at least one complete logical turn is available", () => {
-		const state = tryStartTargetWindowFitting(indexLogicalTurns(createHistory()), "operation-rolling")
+		const state = tryStartFitting(createHistory(), "operation-rolling")
 
 		expect(state).toMatchObject({ operationId: "operation-rolling", coveredTurnCount: 0, passIndex: 0 })
 	})
 
 	it("rejects an empty summary without advancing coverage", () => {
-		const state = planThrough(startTargetWindowFitting(indexLogicalTurns(createHistory()), "operation-empty-summary"), 0)
+		const state = planThrough(startFitting(createHistory(), "operation-empty-summary"), 0)
 
 		expect(() => acceptCompactionPass(state, "  ")).toThrow("Compaction summary must be non-empty")
 		expect(state.coveredTurnCount).toBe(0)

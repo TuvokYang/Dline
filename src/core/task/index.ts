@@ -12,7 +12,9 @@ import {
 	readCompletedCompactionCards,
 } from "@core/context/context-management/compaction-context-projection"
 import { createCompactionConversationRange } from "@core/context/context-management/compaction-conversation-range"
+import { elapsedCompactionMs } from "@core/context/context-management/compaction-phase-timing"
 import { CompactionRetryPolicy } from "@core/context/context-management/compaction-retry-policy"
+import { isDeterministicToolPairingError } from "@core/context/context-management/compaction-retryability"
 import { resolveCompactionWindowBudget } from "@core/context/context-management/compaction-window-budget"
 import { projectContextCompactionBoundary } from "@core/context/context-management/context-compaction-boundary"
 import { checkContextWindowExceededError } from "@core/context/context-management/context-error-handling"
@@ -43,6 +45,7 @@ import {
 	shouldContinueCompactionFitting,
 	shouldRestoreDeferredTurn,
 } from "@core/context/context-management/current-turn-compaction"
+import { buildSummaryRefitGuidance } from "@core/context/context-management/summary-refit"
 import { decideTargetWindowFitting } from "@core/context/context-management/TargetWindowFittingService"
 import {
 	areCompactionPassIdentitiesEqual,
@@ -78,8 +81,16 @@ import { summarizeTask } from "@core/prompts/contextManagement"
 import { ToolPromptGenerator } from "@core/prompts/generators/ToolPromptGenerator"
 import { PromptProfile } from "@core/prompts/profiles/types"
 import { formatResponse } from "@core/prompts/responses"
+import { type ResolvedPromptRuntime, resolveFrozenPromptRuntime } from "@core/prompts/system-prompt-cache/FrozenPromptRuntime"
 import { parseSlashCommands } from "@core/slash-commands"
-import { ensureRulesDirectoryExists, ensureTaskDirectoryExists, GlobalFileNames } from "@core/storage/disk"
+import {
+	ensureRulesDirectoryExists,
+	ensureTaskDirectoryExists,
+	GlobalFileNames,
+	getSkillsDirectoriesForScan,
+	getSubagentsScanDirectories,
+	getWorkflowsScanDirectories,
+} from "@core/storage/disk"
 import { TaskLegacyStorageCleaner } from "@core/storage/TaskLegacyStorageCleaner"
 import type { FrozenSystemPromptCache, SystemPromptRefreshReason } from "@core/storage/task-context-types"
 import { TaskActivityPersistence } from "@core/task/activity/TaskActivityPersistence"
@@ -169,6 +180,11 @@ import pWaitFor from "p-wait-for"
 import * as path from "path"
 import { ulid } from "ulid"
 import type { SystemPromptContext } from "@/core/prompts/system-prompt"
+import {
+	PromptFreshnessInvalidationCoordinator,
+	type PromptFreshnessInvalidationSource,
+} from "@/core/prompts/system-prompt-cache/PromptFreshnessInvalidationCoordinator"
+import { PromptInputFileWatcher } from "@/core/prompts/system-prompt-cache/PromptInputFileWatcher"
 import { SystemPromptCacheService } from "@/core/prompts/system-prompt-cache/SystemPromptCacheService"
 import { HostProvider } from "@/hosts/host-provider"
 import { FileEditProvider } from "@/integrations/editor/FileEditProvider"
@@ -239,9 +255,10 @@ import { FocusChainManager } from "./focus-chain"
 import { formatFocusChainTaskProgressSection } from "./focus-chain/file-utils"
 import { HistoryResumeMaintenance } from "./history/HistoryResumeMaintenance"
 import { TaskCompletionProjector } from "./history/TaskCompletionProjector"
-import { InputQueue, type QueuedInputEntry } from "./input-queue/InputQueue"
-import { QUEUED_INPUT_GUIDANCE, type QueueDelivery, takeQueueDelivery } from "./input-queue/InputQueueDelivery"
-import { applyInputQueueMutation, type InputQueueMutation, type InputQueueMutationResult } from "./input-queue/InputQueueMutation"
+import type { QueuedInputEntry } from "./input-queue/InputQueue"
+import { InputQueueCoordinator } from "./input-queue/InputQueueCoordinator"
+import { QUEUED_INPUT_GUIDANCE, type QueueDelivery } from "./input-queue/InputQueueDelivery"
+import type { InputQueueMutation, InputQueueMutationResult } from "./input-queue/InputQueueMutation"
 import { hostedWebApprovalApiIndex, requestHostedWebApproval } from "./interaction/HostedWebApproval"
 import type { InteractionKind } from "./interaction/Interaction"
 import { isInteractionCancellationError } from "./interaction/InteractionCancellationError"
@@ -526,18 +543,37 @@ export class Task {
 	private pendingReasoningText?: string
 	private readonly snapshotPersistence: TaskSnapshotPersistence
 	private readonly systemPromptCacheService: SystemPromptCacheService
+	private readonly promptFreshnessInvalidationCoordinator: PromptFreshnessInvalidationCoordinator
+	private promptInputFileWatcher?: PromptInputFileWatcher
+	private promptInputFileWatcherInitialization?: Promise<void>
+	private promptFreshnessDisposed = false
 	private latestTaskSnapshot?: TaskSnapshot
-	/** Retained user input awaiting delivery; owned by the user, not the runtime. */
-	private inputQueue = new InputQueue()
 	/**
-	 * Queue entries appended to the next request but not yet handed over.
+	 * Retained user input awaiting delivery; owned by the user, not the runtime.
 	 *
-	 * Held here rather than passed down the call chain because the point where
-	 * the input becomes durable sits several frames below the point where it is
-	 * staged.
+	 * The queue, its serializer, its persistence bookkeeping and its in-flight
+	 * batch are one state machine, so they live together rather than as
+	 * separate fields here. The task supplies only what the coordinator cannot
+	 * do itself: writing snapshots, publishing the projection, and handing a
+	 * batch to the turn or the round it belongs to.
 	 */
-	private stagedQueueDelivery?: QueueDelivery
+	private readonly inputQueueCoordinator = new InputQueueCoordinator({
+		persistQueue: () => this.persistInputQueue(),
+		publishProjection: () => this.postStateToWebview(),
+		answerTurnEnd: (delivery) => this.answerTurnEndWithQueuedInput(delivery),
+		stageToolRoundInput: (delivery) => this.stageToolRoundQueuedInput(delivery),
+	})
+	/**
+	 * The durable turn-end interaction currently waiting for an answer.
+	 *
+	 * Recorded when the waiter is installed so a queue delivery, which is
+	 * driven by the coordinator rather than by this call site, knows which
+	 * interaction it would be answering.
+	 */
+	private awaitingQueuedInputInteraction?: { turnId: string; interactionId: string }
 	private pendingSystemPromptRefreshReason?: SystemPromptRefreshReason
+	/** Execution projection belonging to the current Provider response; prompt rebuilding never reads this field. */
+	private activeProviderInputRuntime?: ResolvedPromptRuntime
 	private readonly promptCacheHealth: PromptCacheHealthTracker
 	private readonly apiRateMetricsService: TaskApiRateMetricsService
 	private readonly apiRequestRoundLifecycle: ApiRequestRoundLifecycle
@@ -844,7 +880,10 @@ export class Task {
 				this.completeProviderExecutionAtAwaitingUser(turnId, interactionId)
 				// The interaction is durable and its waiter is installed, so retained
 				// input can now answer it as an ordinary user response.
-				void this.deliverQueuedInputAtTurnEnd(turnId, interactionId)
+				// Record which interaction is waiting so the delivery, which is
+				// driven by the coordinator, knows what it would be answering.
+				this.awaitingQueuedInputInteraction = { turnId, interactionId }
+				void this.inputQueueCoordinator.deliverAtTurnEnd()
 			},
 		})
 		this.interactionCoordinator.registerDetachedContinuation((context) => this.continueRestoredInteraction(context))
@@ -852,7 +891,12 @@ export class Task {
 			load: async () => this.loadResumeInput(),
 			presentInteraction: async (result) => this.presentSynthesizedHistoryInteraction(result.snapshot),
 			persist: async (result) => {
-				await this.writeTaskSnapshot(result.snapshot)
+				// Routed through the persistence chain rather than writing
+				// directly: a direct write races every other snapshot write,
+				// and the queue field it carries could overwrite one that a
+				// concurrent transaction had already committed.
+				this.snapshotPersistence.schedule({ ...result.snapshot })
+				await this.snapshotPersistence.flushNow()
 				await this.syncTaskCompletionProjection(result.snapshot)
 			},
 			hydrate: async (result) => {
@@ -864,6 +908,10 @@ export class Task {
 			},
 		})
 		this.systemPromptCacheService = new SystemPromptCacheService({ taskId: this.taskId })
+		this.promptFreshnessInvalidationCoordinator = new PromptFreshnessInvalidationCoordinator({
+			reevaluate: () => this.reevaluatePromptFreshness(),
+			publishState: () => this.postStateToWebview({ immediate: true }),
+		})
 		this.snapshotPersistence = new TaskSnapshotPersistence({
 			writeSnapshot: this.writeTaskSnapshot.bind(this),
 		})
@@ -1344,6 +1392,7 @@ export class Task {
 
 		// Inject controller context for spawn_task to create new webview panels
 		;(this.toolExecutor as any)._controllerContext = this.controller?.context
+		this.promptInputFileWatcherInitialization = this.initializePromptInputFileWatcher()
 	}
 
 	private getEffectiveApiConfiguration(): ApiConfiguration {
@@ -2236,7 +2285,13 @@ export class Task {
 					).passInputCeilingTokens
 				},
 				estimatePassInput: async (input, passHistory) => {
-					const request = await this.buildContextCompactionPassRequest(input, passHistory)
+					const request = await this.buildContextCompactionPassRequest(
+						input,
+						passHistory,
+						undefined,
+						undefined,
+						"estimate",
+					)
 					try {
 						return estimateContextWindowCandidate(request.providerInput, {
 							providerId: input.compactionApi.getProviderId?.() ?? DEFAULT_API_PROVIDER,
@@ -2246,13 +2301,27 @@ export class Task {
 						request.explicitInstructions.cancel()
 					}
 				},
-				buildPassRequest: (input, state, feedback) =>
-					this.buildContextCompactionPassRequest(input, buildCompactionPassHistory(state), feedback),
+				buildPassRequest: (input, state, feedback, passHistory) =>
+					this.buildContextCompactionPassRequest(
+						input,
+						passHistory ?? buildCompactionPassHistory(state),
+						feedback,
+						state.nextPassSummaryCarryLimitTokens,
+					),
+				buildSummaryRefitRequest: (input, state, carryLimitTokens, refitAttempt) => {
+					if (!state.cumulativeSummary) throw new Error("Summary refit requires an existing cumulative summary")
+					return this.buildContextCompactionPassRequest(
+						input,
+						[{ role: "user", content: [{ type: "text", text: state.cumulativeSummary }] }],
+						[{ type: "text", text: buildSummaryRefitGuidance(carryLimitTokens, refitAttempt) }],
+						carryLimitTokens,
+					)
+				},
 				reviewPass: (input, _state, passIdentity, attempt, summary) =>
 					this.reviewContextCompactionPass(input, passIdentity, attempt, summary),
 				reprojectTarget: (input, state) => this.reprojectContextCompactionTarget(input, state),
 				stageAcceptedPass: async (_input, state, projection) => {
-					this.taskState.targetWindowFittingState = cloneDeep(state)
+					this.taskState.targetWindowFittingState = { ...state }
 					this.taskState.targetWindowFittingProjection = {
 						projectedUsageTokens: projection.projectedUsageTokens,
 						targetContextWindow: projection.targetContextWindow,
@@ -2264,6 +2333,9 @@ export class Task {
 				publish: (input, event) => this.publishContextCompactionEvent(input, event),
 				waitForRetry: (_input, retryAttempt, signal) => this.waitForContextCompactionRetry(retryAttempt, signal),
 				recordUsage: (usage) => this.apiRateMetricsService.recordExactUsage(usage),
+				recordTiming: (timing) => {
+					Logger.debug(`[Task ${this.taskId}] Context compaction timing`, timing)
+				},
 				providerRequestRounds: this.createProviderRequestRoundPort(),
 			},
 			{ maxRetryAttempts: MAX_AUTO_RETRY_ATTEMPTS },
@@ -2376,6 +2448,8 @@ export class Task {
 		input: ContextCompactionSessionInput,
 		passHistory: readonly ClineStorageMessage[],
 		feedback?: readonly ClineContent[],
+		summaryOutputLimitTokens?: number,
+		purpose: "send" | "estimate" = "send",
 	) {
 		const requestScope = createRequestApiScope(
 			input.compactionApi,
@@ -2434,12 +2508,19 @@ export class Task {
 			const resolvedBudget = resolveCompactionWindowBudget({
 				contextWindow: policy.hardPassContextWindowTokens,
 				maxOutputTokens: requestScope.providerInfo.model.info.capabilities?.maxTokens,
+				summaryOutputLimitTokens,
 				systemPrompt: providerInput.systemPrompt,
 				tools: providerInput.tools,
 				serverTools: providerInput.serverTools,
 				closureReserveTokens: COMPACTION_CLOSURE_RESERVE_TOKENS,
 				buildMessages: buildCandidateHistory,
 			})
+			if (resolvedBudget.budget.decision !== "ready" && purpose === "send") {
+				throw new Error(
+					`Compaction summary has no available output budget (input ${resolvedBudget.budget.estimatedInputTokens}, ` +
+						`window ${policy.hardPassContextWindowTokens}, carry limit ${summaryOutputLimitTokens ?? "unbounded"}).`,
+				)
+			}
 			return {
 				providerInput: {
 					...providerInput,
@@ -2534,15 +2615,13 @@ export class Task {
 		}
 	}
 
-	/** Finalize the single durable compaction card without rewriting canonical API history. */
+	/** Finalize the cumulative summary card without rewriting canonical API history. */
 	private async commitContextCompaction(input: ContextCompactionSessionInput, state: TargetWindowFittingState): Promise<void> {
 		const snapshot = this.contextCompactionPresentation.finalizeOperation(input.operationId)
 		if (!snapshot?.existingTs) throw new Error("Completed compaction presentation is unavailable for durable commit.")
 		const preCompactionApiEndIndex = this.messageStateHandler.apiConversationHistory.length - 1
 		const range = createCompactionConversationRange(state, preCompactionApiEndIndex)
-		const committed = await this.messageStateHandler.commitTransientClineMessage(
-			this.createContextCompactionMessage(input, snapshot, false, range),
-		)
+		await this.commitContextCompactionSnapshot(input, snapshot, range)
 		this.taskState.targetWindowFittingState = undefined
 		this.taskState.targetWindowFittingProjection = undefined
 		this.taskState.compactionFittingRequired = false
@@ -2551,11 +2630,6 @@ export class Task {
 			this.taskState.manualCompactionCommitted = true
 		}
 		this.pendingSystemPromptRefreshReason = "post_compaction"
-		try {
-			await sendPartialMessageEvent(this.controller, convertClineMessageToProto(committed))
-		} catch (error) {
-			Logger.error(`[Task ${this.taskId}] Failed to publish the durably committed compaction card:`, error)
-		}
 		try {
 			await this.stateManager.flushPendingState()
 		} catch (error) {
@@ -2609,14 +2683,19 @@ export class Task {
 		this.taskState.isManualContextCompactionRequest = isManual
 		this.taskState.isInternalContextCompactionRequest = !isManual
 		let snapshot: ContextCompactionPresentationSnapshot | undefined
+		let commitSnapshot = false
 		switch (event.kind) {
+			case "pass_preparing":
+				snapshot = this.contextCompactionPresentation.preparePass(input.operationId, event.state.passIndex)
+				break
 			case "pass_started":
 				if (input.trigger === "auto_compaction") this.contextCompactionRetryProgress.delete(input.operationId)
-				this.contextCompactionPresentation.startPass(event.passIdentity, event.attempt)
+				snapshot = this.contextCompactionPresentation.startPass(event.passIdentity, event.attempt)
 				await this.beginContextCompactionIndicator(input, event, event.attempt)
 				break
 			case "pass_receiving":
 				await this.receiveContextCompactionIndicator(event)
+				snapshot = this.contextCompactionPresentation.receiving(event.passIdentity, event.attempt)
 				break
 			case "pass_partial":
 				snapshot = this.contextCompactionPresentation.partial(event.passIdentity, event.attempt, event.content)
@@ -2641,6 +2720,45 @@ export class Task {
 				this.contextCompactionRetryProgress.delete(input.operationId)
 				await this.commitContextCompactionIndicator(event)
 				snapshot = this.contextCompactionPresentation.complete(event.passIdentity, event.attempt, event.content)
+				commitSnapshot = event.projection.status !== "complete"
+				break
+			case "summary_refit_preparing":
+				snapshot = this.contextCompactionPresentation.prepareSummaryRefit(event.passIdentity, event.refitAttempt - 1)
+				break
+			case "summary_refit_started":
+				snapshot = this.contextCompactionPresentation.startSummaryRefit(
+					event.passIdentity,
+					event.refitAttempt - 1,
+					event.attempt,
+				)
+				break
+			case "summary_refit_receiving":
+				snapshot = this.contextCompactionPresentation.receivingSummaryRefit(event.passIdentity, event.attempt)
+				break
+			case "summary_refit_partial":
+				snapshot = this.contextCompactionPresentation.partialSummaryRefit(
+					event.passIdentity,
+					event.attempt,
+					event.content,
+				)
+				break
+			case "summary_refit_retry":
+				snapshot = this.contextCompactionPresentation.retrySummaryRefit(
+					event.passIdentity,
+					event.event.failedAttempt,
+					event.event.nextAttempt,
+					event.event.kind === "pass_retry" ? event.event.retryAttempt : undefined,
+					event.event.kind === "pass_retry" ? event.event.maxRetryAttempts : undefined,
+					event.event.error instanceof Error ? event.event.error.message : String(event.event.error),
+				)
+				break
+			case "summary_refit_completed":
+				snapshot = this.contextCompactionPresentation.completeSummaryRefit(
+					event.passIdentity,
+					event.attempt,
+					event.content,
+				)
+				commitSnapshot = true
 				break
 			case "failed":
 				if (input.signal?.aborted) this.contextCompactionRetryProgress.delete(input.operationId)
@@ -2651,24 +2769,60 @@ export class Task {
 				this.taskState.compactionFittingRequired = false
 				this.taskState.targetWindowFittingCommitted = false
 				snapshot = this.contextCompactionPresentation.fail(input.operationId, event.error)
-				if (snapshot?.existingTs) this.messageStateHandler.removeTransientClineMessage(snapshot.existingTs)
-				snapshot = undefined
+				commitSnapshot = true
 				break
 		}
-		if (snapshot) await this.publishContextCompactionSnapshot(input, snapshot)
-		if (event.kind === "pass_receiving" || event.kind === "pass_partial") return
+		if (snapshot) {
+			await this.publishContextCompactionSnapshot(input, snapshot)
+			if (commitSnapshot) {
+				const durableSnapshot = this.contextCompactionPresentation.getUnitSnapshot(
+					snapshot.operationId,
+					snapshot.unitKind,
+					snapshot.unitIndex,
+				)
+				if (!durableSnapshot) throw new Error("Context compaction execution-unit card disappeared before durable commit.")
+				await this.commitContextCompactionSnapshot(input, durableSnapshot)
+			}
+		}
+		if (
+			event.kind === "pass_receiving" ||
+			event.kind === "pass_partial" ||
+			event.kind === "summary_refit_receiving" ||
+			event.kind === "summary_refit_partial"
+		) {
+			return
+		}
 		await this.postStateToWebview()
 	}
 
-	/** Publish one transient operation row; only final commit writes it to JSONL. */
+	/** Publish one transient execution-unit card without marking the durable UI store dirty. */
 	private async publishContextCompactionSnapshot(
 		input: ContextCompactionSessionInput,
 		snapshot: ContextCompactionPresentationSnapshot,
 	): Promise<void> {
 		const message = this.createContextCompactionMessage(input, snapshot, true)
 		const transient = this.messageStateHandler.upsertTransientClineMessage(message)
-		if (snapshot.existingTs === undefined) this.contextCompactionPresentation.bindMessageTs(snapshot.passIdentity, message.ts)
+		if (snapshot.existingTs === undefined) this.contextCompactionPresentation.bindMessageTs(snapshot, message.ts)
 		await sendPartialMessageEvent(this.controller, convertClineMessageToProto(transient))
+	}
+
+	/** Append one terminal execution-unit card to JSONL; only the final cumulative summary receives a canonical range. */
+	private async commitContextCompactionSnapshot(
+		input: ContextCompactionSessionInput,
+		snapshot: ContextCompactionPresentationSnapshot,
+		compactionConversationRange?: ClineMessage["compactionConversationRange"],
+	): Promise<ClineMessage> {
+		if (!snapshot.existingTs) throw new Error("Context compaction card is unavailable for durable commit.")
+		const committed = await this.messageStateHandler.commitTransientClineMessage(
+			this.createContextCompactionMessage(input, snapshot, false, compactionConversationRange),
+		)
+		this.contextCompactionPresentation.markDurable(snapshot)
+		try {
+			await sendPartialMessageEvent(this.controller, convertClineMessageToProto(committed))
+		} catch (error) {
+			Logger.error(`[Task ${this.taskId}] Failed to publish a durably committed compaction card:`, error)
+		}
+		return committed
 	}
 
 	private createContextCompactionMessage(
@@ -2690,10 +2844,13 @@ export class Task {
 				...(snapshot.error ? { error: snapshot.error } : {}),
 				...(snapshot.retryAttempt !== undefined ? { retryAttempt: snapshot.retryAttempt } : {}),
 				...(snapshot.maxRetryAttempts !== undefined ? { maxRetryAttempts: snapshot.maxRetryAttempts } : {}),
-				compactionOperationId: snapshot.passIdentity.operationId,
-				compactionPassIndex: snapshot.passIdentity.passIndex,
-				compactionAttemptIndex: snapshot.attempt.attemptIndex,
-				compactionAttemptId: snapshot.attempt.authorizationAttemptId,
+				compactionOperationId: snapshot.operationId,
+				compactionUnitKind: snapshot.unitKind,
+				compactionUnitIndex: snapshot.unitIndex,
+				compactionDurable: partial === false,
+				...(snapshot.passIdentity ? { compactionPassIndex: snapshot.passIdentity.passIndex } : {}),
+				...(snapshot.attempt ? { compactionAttemptIndex: snapshot.attempt.attemptIndex } : {}),
+				...(snapshot.attempt ? { compactionAttemptId: snapshot.attempt.authorizationAttemptId } : {}),
 			} satisfies ClineSayTool),
 			conversationHistoryIndex: this.messageStateHandler.apiConversationHistory.length - 1,
 			conversationHistoryDeletedRange: this.taskState.conversationHistoryDeletedRange,
@@ -2716,9 +2873,10 @@ export class Task {
 		if (input.trigger !== "task_header" && input.trigger !== "manual_compact_command") {
 			return { action: "accept" }
 		}
-		const snapshot = this.contextCompactionPresentation.getSnapshot()
+		const snapshot = this.contextCompactionPresentation.getUnitSnapshot(input.operationId, "pass", passIdentity.passIndex)
 		const existingTs =
-			snapshot &&
+			snapshot?.passIdentity &&
+			snapshot.attempt &&
 			areCompactionPassIdentitiesEqual(snapshot.passIdentity, passIdentity) &&
 			snapshot.attempt.attemptIndex === attempt.attemptIndex &&
 			snapshot.attempt.authorizationAttemptId === attempt.authorizationAttemptId
@@ -2842,8 +3000,10 @@ export class Task {
 		includeFileDetails: boolean,
 	): Promise<ContextCompactionSessionResult> {
 		if (this.contextCompactionSession.getActiveOperationId()) return "failed"
+		const boundaryProjectionStartedAtMs = performance.now()
 		const { sourceHistory, sourceCanonicalRanges, targetContinuationHistory } =
 			this.getOrdinaryContextCompactionBoundary(ordinaryInput)
+		const boundaryProjectionMs = elapsedCompactionMs(boundaryProjectionStartedAtMs)
 		this.invalidatePreparedProviderInputs()
 		try {
 			return await this.contextCompactionSession.run({
@@ -2859,6 +3019,7 @@ export class Task {
 				targetContinuationContent: cloneDeep(ordinaryInput),
 				ordinaryInput: cloneDeep(ordinaryInput),
 				includeFileDetails,
+				boundaryProjectionMs,
 				signal: this.taskState.operationSignal,
 			})
 		} finally {
@@ -2878,8 +3039,10 @@ export class Task {
 		pendingContent: readonly ClineContent[],
 	): Promise<ContextCompactionSessionResult> {
 		if (this.contextCompactionSession.getActiveOperationId()) return "failed"
+		const boundaryProjectionStartedAtMs = performance.now()
 		const { sourceHistory, sourceCanonicalRanges, targetContinuationHistory } =
 			this.getOrdinaryContextCompactionBoundary(pendingContent)
+		const boundaryProjectionMs = elapsedCompactionMs(boundaryProjectionStartedAtMs)
 		this.invalidatePreparedProviderInputs()
 		try {
 			return await this.contextCompactionSession.run({
@@ -2896,6 +3059,7 @@ export class Task {
 				targetContinuationContent: [],
 				ordinaryInput: [],
 				includeFileDetails,
+				boundaryProjectionMs,
 				signal: this.taskState.operationSignal,
 			})
 		} finally {
@@ -2959,7 +3123,9 @@ export class Task {
 		this.invalidatePreparedProviderInputs()
 		try {
 			const targetContinuationContent = await this.captureContextTransitionContinuation(trigger, targetMode, chatContent)
+			const boundaryProjectionStartedAtMs = performance.now()
 			const source = this.getContextCompactionSourceProjection()
+			const boundaryProjectionMs = elapsedCompactionMs(boundaryProjectionStartedAtMs)
 			const result = await this.contextCompactionSession.run({
 				operationId,
 				trigger,
@@ -2972,6 +3138,7 @@ export class Task {
 				targetContinuationContent,
 				didSwitchFromPlan: trigger === "mode_switch" && this.taskSm.mode === "plan" && targetMode === "act",
 				transition,
+				boundaryProjectionMs,
 				signal: this.taskState.operationSignal,
 			})
 			if (result !== "completed") this.contextCompactionPresentation.clear(operationId)
@@ -2979,7 +3146,23 @@ export class Task {
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error)
 			const snapshot = this.contextCompactionPresentation.fail(operationId, reason)
-			if (snapshot?.existingTs) this.messageStateHandler.removeTransientClineMessage(snapshot.existingTs)
+			if (snapshot) {
+				const failureInput: ContextCompactionSessionInput = {
+					operationId,
+					trigger,
+					compactionApi: targetApi,
+					targetApi,
+					targetMode,
+					sourceHistory: [],
+				}
+				await this.publishContextCompactionSnapshot(failureInput, snapshot)
+				const durableSnapshot = this.contextCompactionPresentation.getUnitSnapshot(
+					snapshot.operationId,
+					snapshot.unitKind,
+					snapshot.unitIndex,
+				)
+				if (durableSnapshot) await this.commitContextCompactionSnapshot(failureInput, durableSnapshot)
+			}
 			this.contextCompactionPresentation.clear(operationId)
 			Logger.warn(`[Task ${this.taskId}] Context compaction failed before transition commit: ${reason}`)
 			return "failed"
@@ -3546,15 +3729,74 @@ export class Task {
 	 */
 	private async writeTaskSnapshot(snapshot: TaskSnapshot): Promise<void> {
 		this.latestTaskSnapshot = snapshot
-		const taskDir = await ensureTaskDirectoryExists(this.taskId)
-		const snapshotPath = path.join(taskDir, GlobalFileNames.taskSnapshot)
-		const tmpPath = `${snapshotPath}.tmp.${Date.now()}`
 		// The queue is user-owned input, not runtime state: it is attached here
 		// rather than in createSnapshot so the runtime round-trip contract
 		// (hydrate(create(state)) === state) stays exact.
-		const persisted: TaskSnapshot = { ...snapshot, inputQueue: this.inputQueue.serialize() }
+		//
+		// The committed projection is used instead of reading the queue live,
+		// because an unrelated runtime snapshot can be written while a queue
+		// section is mid-transaction. Persisting that intermediate state would
+		// survive a rollback and leave the file contradicting memory.
+		//
+		// Before the queue is known, the value already on the snapshot is kept:
+		// this write is about runtime state and has no business deciding that
+		// the user's retained input is gone.
+		//
+		// Resolved before the first await: a write that yields here would
+		// otherwise pick up a projection published by a transaction that has
+		// not finished, and a later rollback could not take it back off disk.
+		const decision = this.inputQueueCoordinator.resolveSnapshotWrite(snapshot.inputQueue)
+		const taskDir = await ensureTaskDirectoryExists(this.taskId)
+		const snapshotPath = path.join(taskDir, GlobalFileNames.taskSnapshot)
+		const tmpPath = `${snapshotPath}.tmp.${Date.now()}`
+		let persisted: TaskSnapshot
+		if (decision.kind === "write") {
+			persisted = { ...snapshot, inputQueue: decision.entries }
+		} else {
+			const existing = await this.readPersistedInputQueue(snapshotPath)
+			if (!existing.readable) {
+				// Still unreadable, so what the file holds is still unknown.
+				// Replacing it now would delete input on the strength of a read
+				// that never succeeded, which is exactly what preserving is for.
+				// The runtime part of this snapshot is recoverable; the user's
+				// text is not.
+				Logger.error("[inputQueue] Snapshot write skipped: the queue on disk could not be read back")
+				this.inputQueueCoordinator.recordSnapshotWriteOutcome("failed")
+				return
+			}
+			persisted = { ...snapshot, inputQueue: existing.entries }
+		}
 		await fs.writeFile(tmpPath, JSON.stringify(persisted, null, 2), "utf8")
 		await renameTaskSnapshotWithRetry(tmpPath, snapshotPath)
+		// A preserve keeps the queue that was already on disk, so the change the
+		// ticket carries is not there. Saying "written" would let a delivery
+		// treat a missing in-flight mark as a durable one.
+		this.inputQueueCoordinator.recordSnapshotWriteOutcome(decision.kind === "write" ? "written" : "preserved")
+	}
+
+	/**
+	 * Re-read only the queue field from the snapshot that is being replaced.
+	 *
+	 * Used when this task could not load the queue: the file may still hold
+	 * input, and rewriting the snapshot without it would delete input the user
+	 * never removed. A second failure leaves the field out, which is no worse
+	 * than the write that was already going to happen.
+	 */
+	private async readPersistedInputQueue(
+		snapshotPath: string,
+	): Promise<{ readable: true; entries: QueuedInputEntry[] | undefined } | { readable: false }> {
+		try {
+			const raw = await fs.readFile(snapshotPath, "utf8")
+			const existing = normalizeLegacyTaskSnapshot(JSON.parse(raw))
+			return { readable: true, entries: existing.inputQueue }
+		} catch (error) {
+			// A missing file holds nothing to protect, so the write may proceed
+			// with no queue. Any other failure leaves the contents unknown.
+			if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+				return { readable: true, entries: undefined }
+			}
+			return { readable: false }
+		}
 	}
 
 	/**
@@ -3562,30 +3804,39 @@ export class Task {
 	 * @returns The parsed task snapshot, or undefined when absent or invalid.
 	 */
 	private async loadTaskSnapshot(): Promise<TaskSnapshot | undefined> {
-		try {
-			const taskDir = await ensureTaskDirectoryExists(this.taskId)
-			const snapshotPath = path.join(taskDir, GlobalFileNames.taskSnapshot)
-			const raw = await fs.readFile(snapshotPath, "utf8")
-			const snapshot = normalizeLegacyTaskSnapshot(JSON.parse(raw))
-			this.latestTaskSnapshot = snapshot
-			// Restore retained input so a resumed task keeps everything the user
-			// queued before the task was paused, cancelled or reloaded.
-			this.inputQueue = InputQueue.fromSerialized(snapshot.inputQueue)
-			if (this.inputQueue.droppedInFlightCount > 0) {
-				// The user will not see this input again, so the reason has to be
-				// recoverable rather than silent.
-				Logger.warn(
-					`[inputQueue] Dropped ${this.inputQueue.droppedInFlightCount} queued input(s) that were mid-delivery when the task stopped; they may already have reached the model`,
-				)
+		// Reading and applying run as one section. A reload can reach a task
+		// that is already running, and a read taken before a concurrent change
+		// would otherwise be applied after it, silently undoing input the user
+		// has already been told was saved.
+		return this.inputQueueCoordinator.runExclusive(async () => {
+			try {
+				const taskDir = await ensureTaskDirectoryExists(this.taskId)
+				const snapshotPath = path.join(taskDir, GlobalFileNames.taskSnapshot)
+				const raw = await fs.readFile(snapshotPath, "utf8")
+				const snapshot = normalizeLegacyTaskSnapshot(JSON.parse(raw))
+				this.latestTaskSnapshot = snapshot
+				// Restore retained input so a resumed task keeps everything the
+				// user queued before the task was paused, cancelled or reloaded.
+				this.inputQueueCoordinator.adoptPersisted(snapshot.inputQueue)
+				if (this.inputQueueCoordinator.droppedInFlightCount > 0) {
+					// The user will not see this input again, so the reason has
+					// to be recoverable rather than silent.
+					Logger.warn(
+						`[inputQueue] Dropped ${this.inputQueueCoordinator.droppedInFlightCount} queued input(s) that were mid-delivery when the task stopped; they may already have reached the model`,
+					)
+				}
+				return snapshot
+			} catch (error) {
+				const code = (error as NodeJS.ErrnoException | undefined)?.code
+				if (code === "ENOENT") {
+					this.inputQueueCoordinator.markQueueAbsent()
+				} else {
+					this.inputQueueCoordinator.markQueueUnreadable()
+					Logger.error("[loadTaskSnapshot] Failed to read task snapshot:", error)
+				}
+				return undefined
 			}
-			return snapshot
-		} catch (error) {
-			const code = (error as NodeJS.ErrnoException | undefined)?.code
-			if (code !== "ENOENT") {
-				Logger.error("[loadTaskSnapshot] Failed to read task snapshot:", error)
-			}
-			return undefined
-		}
+		})
 	}
 
 	/**
@@ -3595,7 +3846,7 @@ export class Task {
 	 * already claimed for delivery must not be offered for editing or removal.
 	 */
 	public getInputQueueSnapshot(): QueuedInputEntry[] {
-		return [...this.inputQueue.list()]
+		return this.inputQueueCoordinator.snapshot()
 	}
 
 	/**
@@ -3607,22 +3858,7 @@ export class Task {
 	 * that a reload would drop.
 	 */
 	public async mutateInputQueue(mutation: InputQueueMutation): Promise<InputQueueMutationResult> {
-		// Taken before the change so a failed write can put the queue back to
-		// what the file still says. Publishing a change that is not on disk
-		// would be a lie the next reload contradicts, and for a removal it would
-		// be worse than a lie: the entry would come back and could still be sent.
-		const checkpoint = this.inputQueue.checkpoint()
-		const result = applyInputQueueMutation(this.inputQueue, mutation)
-		if (!result.accepted) {
-			return result
-		}
-		if (!(await this.persistInputQueue())) {
-			this.inputQueue.rollback(checkpoint)
-			await this.postStateToWebview()
-			return { accepted: false, result: "persist_failed" }
-		}
-		await this.postStateToWebview()
-		return result
+		return this.inputQueueCoordinator.mutate(mutation)
 	}
 
 	/**
@@ -3633,134 +3869,63 @@ export class Task {
 	 * into that tool call's result, so the queued text arrives paired with the
 	 * call it answers instead of as an orphaned block.
 	 */
-	private async deliverQueuedInputAtTurnEnd(turnId: string, interactionId: string): Promise<void> {
-		const claimed = takeQueueDelivery(this.inputQueue, "turn-end")
-		if (!claimed) {
-			return
+	private async answerTurnEndWithQueuedInput(delivery: QueueDelivery): Promise<boolean> {
+		const awaiting = this.awaitingQueuedInputInteraction
+		if (!awaiting) {
+			// Nothing is waiting for an answer, so this batch has nowhere to go.
+			// Reporting it as undelivered returns it to the queue.
+			return false
 		}
-		// Record the in-flight mark before handing anything over. A crash after
-		// this point must not restore the entry as deliverable, because the
-		// model may already have received it. If that record cannot be written,
-		// delivering anyway would forfeit at-most-once: a later crash would
-		// resend the entry. Keeping it queued is the recoverable outcome.
-		if (!(await this.persistInputQueue())) {
-			Logger.error("[inputQueue] Turn-end delivery skipped: the in-flight mark could not be persisted")
-			await this.restoreUndeliveredQueueInput(claimed)
-			return
-		}
-		// A removal may have landed while the claim was being written.
-		const delivery = claimed.withoutCancelled()
-		if (!delivery) {
-			await this.postStateToWebview()
-			return
-		}
-		try {
-			const result = await this.dispatchRuntime({
-				type: "INTERACTION_RESPONDED",
-				response: {
-					taskId: this.taskId,
-					turnId,
-					interactionId,
-					actionId: "reply",
-					stateRevision: this.taskRuntime.getState().revision,
-					draft: {
-						text: delivery.text,
-						images: [...delivery.images],
-						files: [...delivery.files],
-					},
+		const result = await this.dispatchRuntime({
+			type: "INTERACTION_RESPONDED",
+			response: {
+				taskId: this.taskId,
+				turnId: awaiting.turnId,
+				interactionId: awaiting.interactionId,
+				actionId: "reply",
+				stateRevision: this.taskRuntime.getState().revision,
+				draft: {
+					text: delivery.text,
+					images: [...delivery.images],
+					files: [...delivery.files],
 				},
-			})
-			if (!result.accepted) {
-				// The user answered first, so the entry was never delivered. Put it
-				// back and republish, otherwise the composer would keep showing the
-				// projection taken while the entry was momentarily claimed.
-				await this.restoreUndeliveredQueueInput(delivery)
-				Logger.warn(`[inputQueue] Turn-end delivery rejected: ${result.error?.code ?? "unknown"}`)
-				return
-			}
-		} catch (error) {
-			await this.restoreUndeliveredQueueInput(delivery)
-			Logger.error("[inputQueue] Turn-end delivery failed:", error)
-			return
+			},
+		})
+		if (!result.accepted) {
+			Logger.warn(`[inputQueue] Turn-end delivery rejected: ${result.error?.code ?? "unknown"}`)
 		}
-		// Only now is the input actually gone from the user's queue; discarding it
-		// before the dispatch was accepted would lose it on a rejection.
-		delivery.commit()
-		if (!(await this.persistInputQueue())) {
-			// The entry stays on disk marked as in flight. A reload drops it
-			// rather than sending it again, which is the safe direction.
-			Logger.error("[inputQueue] Delivered input could not be cleared from the queue file")
-		}
-	}
-
-	/** Return a claimed batch to the queue and republish the corrected projection. */
-	private async restoreUndeliveredQueueInput(delivery: QueueDelivery): Promise<void> {
-		delivery.restore()
-		if (!(await this.persistInputQueue())) {
-			// The entry is back in memory but the file write failed. Say so: the
-			// user is about to see it in the composer again, and a reload would
-			// then contradict that.
-			Logger.error("[inputQueue] Restored input could not be persisted; a reload may not show it")
-		}
-		await this.postStateToWebview()
+		return result.accepted
 	}
 
 	/**
-	 * Append any steering input owed to the round that is about to start.
+	 * Add a claimed batch to the request being assembled.
 	 *
-	 * The task is not waiting for the user here, so the text is added to the next
-	 * request as its own user message rather than as a tool result.
-	 *
-	 * The claimed batch is retained in {@link stagedQueueDelivery} rather than
-	 * committed here: appending to `userMessageContent` only stages the input,
-	 * and the request that carries it has not been sent yet. It is settled by
-	 * {@link settleStagedQueueDelivery}, which runs once the input has actually
-	 * entered the durable conversation.
+	 * The task is not waiting for the user here, so the text is added to the
+	 * next request as its own user message rather than as a tool result.
 	 */
-	private async deliverQueuedInputAtToolRound(): Promise<void> {
-		const claimed = takeQueueDelivery(this.inputQueue, "tool-round")
-		if (!claimed) {
-			return
+	private async stageToolRoundQueuedInput(delivery: QueueDelivery): Promise<void> {
+		// Built in full before anything is appended. Pushing as we go would
+		// leave the guidance and the first blocks in the request if a later
+		// step threw: the entry would then be sent with this round and put
+		// back in the queue to be sent again.
+		const staged: ClineContent[] = []
+		// Each entry becomes its own block, preceded once by the shared
+		// guidance. Passing the batch through buildUserFeedbackContent would
+		// merge it into a single message and lose the per-entry boundaries.
+		staged.push({ type: "text", text: QUEUED_INPUT_GUIDANCE })
+		for (const block of delivery.blocks) {
+			staged.push({ type: "text", text: block })
 		}
-		if (!(await this.persistInputQueue())) {
-			Logger.error("[inputQueue] Tool-round delivery skipped: the in-flight mark could not be persisted")
-			await this.restoreUndeliveredQueueInput(claimed)
-			return
+		if (delivery.images.length > 0) {
+			staged.push(...formatResponse.imageBlocks([...delivery.images]))
 		}
-		// A removal may have landed while the claim was being written. This is
-		// the last point at which it can still take effect: past here the text
-		// is part of the request being assembled and cannot be recalled.
-		const delivery = claimed.withoutCancelled()
-		if (!delivery) {
-			await this.postStateToWebview()
-			return
-		}
-		try {
-			// Each entry becomes its own block, preceded once by the shared
-			// guidance. Passing the batch through buildUserFeedbackContent would
-			// merge it into a single message and lose the per-entry boundaries.
-			this.taskState.userMessageContent.push({ type: "text", text: QUEUED_INPUT_GUIDANCE })
-			for (const block of delivery.blocks) {
-				this.taskState.userMessageContent.push({ type: "text", text: block })
+		if (delivery.files.length > 0) {
+			const fileContent = await processFilesIntoText([...delivery.files])
+			if (fileContent) {
+				staged.push({ type: "text", text: fileContent })
 			}
-			if (delivery.images.length > 0) {
-				this.taskState.userMessageContent.push(...formatResponse.imageBlocks([...delivery.images]))
-			}
-			if (delivery.files.length > 0) {
-				const fileContent = await processFilesIntoText([...delivery.files])
-				if (fileContent) {
-					this.taskState.userMessageContent.push({ type: "text", text: fileContent })
-				}
-			}
-		} catch (error) {
-			await this.restoreUndeliveredQueueInput(delivery)
-			Logger.error("[inputQueue] Tool-round delivery failed:", error)
-			return
 		}
-		this.stagedQueueDelivery = delivery
-		// Publish the projection now so the composer stops offering an entry that
-		// is already staged, but keep the claim open until the round settles.
-		await this.postStateToWebview()
+		this.taskState.userMessageContent.push(...staged)
 	}
 
 	/**
@@ -3771,19 +3936,7 @@ export class Task {
 	 * to the queue instead of being silently consumed.
 	 */
 	private async settleStagedQueueDelivery(delivered: boolean): Promise<void> {
-		const delivery = this.stagedQueueDelivery
-		if (!delivery) {
-			return
-		}
-		this.stagedQueueDelivery = undefined
-		if (!delivered) {
-			await this.restoreUndeliveredQueueInput(delivery)
-			return
-		}
-		delivery.commit()
-		if (!(await this.persistInputQueue())) {
-			Logger.error("[inputQueue] Delivered input could not be cleared from the queue file")
-		}
+		await this.inputQueueCoordinator.settleStagedDelivery(delivered)
 	}
 
 	/**
@@ -3803,22 +3956,17 @@ export class Task {
 	 * Writing directly would let a queue change carrying an older cached runtime
 	 * snapshot land after a newer runtime write and roll the file back.
 	 *
-	 * @returns whether the queue is now on disk.
+	 * Rejects when the write fails; the coordinator decides what that means for
+	 * the change it was carrying.
 	 */
-	private async persistInputQueue(): Promise<boolean> {
+	private async persistInputQueue(): Promise<void> {
 		// A fresh object per call, never the cached instance. The persistence
 		// chain clears its pending slot by identity, so scheduling the same
 		// object twice would let the first write erase the second request and
 		// leave the newer queue unwritten.
 		const snapshot: TaskSnapshot = { ...(this.latestTaskSnapshot ?? createSnapshot(this.taskRuntime.getState())) }
-		try {
-			this.snapshotPersistence.schedule(snapshot)
-			await this.snapshotPersistence.flushNow()
-			return true
-		} catch (error) {
-			Logger.error("[persistInputQueue] Failed to persist the input queue:", error)
-			return false
-		}
+		this.snapshotPersistence.schedule(snapshot)
+		await this.snapshotPersistence.flushNow()
 	}
 
 	/**
@@ -4128,9 +4276,13 @@ export class Task {
 	 * 1. User has enabled it in settings, OR
 	 * 2. The current model/provider supports native tool calling and handles parallel tools well
 	 */
-	private isParallelToolCallingEnabled(providerInfo = this.getCurrentProviderInfo()): boolean {
+	private resolveParallelToolCallingEnabled(providerInfo = this.getCurrentProviderInfo()): boolean {
 		const enableParallelSetting = this.stateManager.getGlobalSettingsKey("enableParallelToolCalling")
 		return isParallelToolCallingEnabled(enableParallelSetting, providerInfo)
+	}
+
+	private isParallelToolCallingEnabled(providerInfo = this.getCurrentProviderInfo()): boolean {
+		return this.activeProviderInputRuntime?.parallelToolsEnabled ?? this.resolveParallelToolCallingEnabled(providerInfo)
 	}
 
 	private async switchToActModeCallback(): Promise<boolean> {
@@ -5056,6 +5208,8 @@ export class Task {
 
 	async terminate(options?: { preserveCompletedState?: boolean }) {
 		this.stopContextWindowEnvironmentRefresh()
+		this.promptFreshnessDisposed = true
+		this.promptFreshnessInvalidationCoordinator.dispose()
 		const cancellationGeneration = this.interactionCoordinator.cancelPending("task_terminated")
 		const initialRuntimeState = this.taskRuntime.getState()
 		const preserveCompletedState =
@@ -5234,6 +5388,7 @@ export class Task {
 				withTerminateTimeout(this.browserSession.dispose(), 5_000, "browserSession.dispose"),
 				withTerminateTimeout(this.diffViewProvider.revertChanges(), 5_000, "diffViewProvider.revertChanges"),
 				withTerminateTimeout(this.presentationScheduler.dispose(), 3_000, "presentationScheduler.dispose"),
+				withTerminateTimeout(this.disposePromptInputFileWatcher(), 3_000, "promptInputFileWatcher.dispose"),
 			]
 
 			// Run sync cleanups immediately (they are non-blocking)
@@ -5319,6 +5474,11 @@ export class Task {
 		return this.commandExecutor.cancelBackgroundCommand()
 	}
 
+	/** Rebind one persisted failed subagent before an Activity Retry action. */
+	public restoreSubagentActivityRetry(activityId: string): Promise<boolean> {
+		return this.toolExecutor.restoreSubagentRetry(activityId)
+	}
+
 	/** Return the foreground command or subagent currently eligible for manual background handoff. */
 	public getReadyBackgroundHandoffActivityId(): string | undefined {
 		return (
@@ -5360,6 +5520,16 @@ export class Task {
 		await this.postStateToWebview({ immediate: true })
 	}
 
+	/** Schedule a debounced re-evaluation after prompt-visible file inputs change. */
+	invalidatePromptFreshness(source: PromptFreshnessInvalidationSource): void {
+		this.promptFreshnessInvalidationCoordinator.invalidate(source)
+	}
+
+	/** Re-evaluate freshness at a durable mutation boundary and publish the result. */
+	async flushPromptFreshnessInvalidation(source: PromptFreshnessInvalidationSource): Promise<void> {
+		await this.promptFreshnessInvalidationCoordinator.flush(source)
+	}
+
 	/** Re-evaluate the active frozen prompt against current prompt inputs without refreshing it. */
 	async reevaluatePromptFreshness(): Promise<void> {
 		const providerInfo = this.getCurrentProviderInfo()
@@ -5367,6 +5537,32 @@ export class Task {
 		const webSearchRoutingPlan = resolveRequestWebSearchRoutingPlan(this.api, webToolsEnabled)
 		const promptContext = await this.buildPromptContext(providerInfo, webToolsEnabled, webSearchRoutingPlan)
 		await this.systemPromptCacheService.reevaluateFreshness({ promptContext })
+	}
+
+	private async initializePromptInputFileWatcher(): Promise<void> {
+		try {
+			const globalRulesDirectory = await ensureRulesDirectoryExists()
+			if (this.promptFreshnessDisposed) return
+			const watcher = new PromptInputFileWatcher({
+				cwd: this.cwd,
+				globalRulesDirectory,
+				workflowDirectories: getWorkflowsScanDirectories(this.cwd).map((directory) => directory.path),
+				skillDirectories: getSkillsDirectoriesForScan(this.cwd).map((directory) => directory.path),
+				subagentDirectories: getSubagentsScanDirectories(this.cwd).map((directory) => directory.path),
+				invalidate: () => this.invalidatePromptFreshness("prompt_input_file"),
+			})
+			this.promptInputFileWatcher = watcher
+			await watcher.start()
+			if (this.promptFreshnessDisposed) await watcher.dispose()
+		} catch (error) {
+			Logger.error(`[Task ${this.taskId}] Failed to initialize prompt input file watcher:`, error)
+		}
+	}
+
+	private async disposePromptInputFileWatcher(): Promise<void> {
+		await this.promptInputFileWatcherInitialization?.catch(() => undefined)
+		await this.promptInputFileWatcher?.dispose()
+		this.promptInputFileWatcher = undefined
 	}
 
 	/**
@@ -6048,6 +6244,8 @@ export class Task {
 			remoteSkillsToggles: taskCapabilityToggles.remoteSkillsToggles,
 			workflowToggles: taskCapabilityToggles.localWorkflowToggles,
 			globalWorkflowToggles: taskCapabilityToggles.globalWorkflowToggles,
+			remoteWorkflowEntries: remoteConfigSettings.remoteGlobalWorkflows ?? [],
+			remoteWorkflowToggles: taskCapabilityToggles.remoteWorkflowToggles,
 			subagentToggles: taskCapabilityToggles.localSubagentsToggles,
 			globalSubagentToggles: taskCapabilityToggles.globalSubagentsToggles,
 		}
@@ -6076,12 +6274,15 @@ export class Task {
 			ide,
 			providerInfo,
 			supportsBrowserUse,
-			mcpHub: {
-				getServers: () =>
-					this.mcpHub
-						.getServersForOwner(this.controller.mcpOwnerId)
-						.filter((server) => taskCapabilityToggles.mcpServers[server.name] === true),
-			},
+			mcpHub:
+				this.stateManager.getGlobalSettingsKey("mcpEnabled") === true
+					? {
+							getServers: () =>
+								this.mcpHub
+									.getServersForOwner(this.controller.mcpOwnerId)
+									.filter((server) => taskCapabilityToggles.mcpServers[server.name] === true),
+						}
+					: undefined,
 			skills: availableSkills,
 			focusChainSettings: this.stateManager.getGlobalSettingsKey("focusChainSettings"),
 			globalClineRulesFileInstructions,
@@ -6102,7 +6303,7 @@ export class Task {
 			isSubagentRun: false,
 			isCliEnvironment,
 			enableNativeToolCalls: this.shouldUseNativeToolCalls(providerInfo),
-			enableParallelToolCalling: this.isParallelToolCallingEnabled(providerInfo),
+			enableParallelToolCalling: this.resolveParallelToolCallingEnabled(providerInfo),
 			terminalExecutionMode: this.terminalExecutionMode,
 			defaultTerminalProfile: this.stateManager.getGlobalSettingsKey("defaultTerminalProfile") ?? "default",
 			terminalCommandTimeoutSeconds:
@@ -6110,6 +6311,7 @@ export class Task {
 				DEFAULT_TERMINAL_COMMAND_TIMEOUT_SECONDS,
 			disableTools,
 			capabilityToggleState,
+			taskCapabilityToggles,
 		}
 
 		return promptContext
@@ -6152,6 +6354,7 @@ export class Task {
 		}
 
 		const systemPrompt = frozenPrompt.text
+		const runtime = resolveFrozenPromptRuntime(frozenPrompt, promptContext)
 		const toolPromptGenerator = new ToolPromptGenerator()
 		const selectedTools = toolPromptGenerator.generateToolsForRequest(
 			promptContext.promptProfile,
@@ -6192,9 +6395,9 @@ export class Task {
 		}
 
 		const messages = ensureApiMessages(managedMessages, apiConversationHistory)
-		const serverTools = requestScope.webSearchRoutingPlan.serverTools
+		const serverTools = runtime.webSearchRoutingPlan.serverTools
 
-		return { systemPrompt, messages, tools, serverTools, providerOutputCap: undefined }
+		return { systemPrompt, messages, tools, serverTools, runtime, providerOutputCap: undefined }
 	}
 
 	/** Build the exact ordinary candidate used by the final admission projection. */
@@ -6248,7 +6451,8 @@ export class Task {
 			}
 		}
 
-		const { systemPrompt, messages: apiConversationMessages, tools, serverTools, providerOutputCap } = providerInput
+		const { systemPrompt, messages: apiConversationMessages, tools, serverTools, runtime, providerOutputCap } = providerInput
+		this.activeProviderInputRuntime = runtime
 		this.toolExecutor.setAllowedNativeToolNames(getAdvertisedNativeToolNames(tools))
 		requestScope.explicitInstructions.beginProviderAttempt(providerAttempt === 0 ? undefined : `attempt-${providerAttempt}`)
 		if (this.taskState.isInternalContextCompactionRequest && this.taskState.targetWindowFittingState) {
@@ -6259,7 +6463,11 @@ export class Task {
 			this.compactionRequestReplay.beginAttempt(apiIndex, authorization.attemptId)
 		}
 		this.toolExecutor.setExplicitInstructionConsumePort(requestScope.explicitInstructions.createConsumePort())
-		this.toolExecutor.setWebSearchRoutingPlan(requestScope.webSearchRoutingPlan, requestScope.webToolsEnabled)
+		if (runtime) {
+			this.toolExecutor.setPromptRuntime(runtime)
+		} else {
+			this.toolExecutor.setWebSearchRoutingPlan(requestScope.webSearchRoutingPlan, requestScope.webToolsEnabled)
+		}
 		Logger.debug(
 			`[Task ${this.taskId}] attemptApiRequest: after systemPrompt +${Math.round(performance.now() - apiReqStart)}ms`,
 		)
@@ -6372,6 +6580,7 @@ export class Task {
 				api.createMessage(systemPrompt, apiConversationMessages, tools, {
 					serverTools,
 					taskNamespace: this.taskId,
+					retryOwner: "task",
 					...(providerOutputCap === undefined
 						? {}
 						: { generation: { purpose: "compaction", maxOutputTokens: providerOutputCap } as const }),
@@ -6425,6 +6634,21 @@ export class Task {
 			if (this.taskState.abort) {
 				Logger.debug(`[Task ${this.taskId}] API request stopped after task cancellation`)
 				throw new Error("Dline instance aborted")
+			}
+			if (isOrdinaryIndicatorRequest && isDeterministicToolPairingError(error)) {
+				const rebuildDecision = this.ordinaryRequestInputReplay.prepareCanonicalRebuild(apiIndex)
+				if (rebuildDecision === "rebuild") {
+					const frozenInput = this.ordinaryRequestInputReplay.get(apiIndex)
+					if (!frozenInput) throw new Error(`Frozen ordinary request is unavailable for apiIndex=${apiIndex}`)
+					this.ordinaryRequestInputReplay.replaceAfterCanonicalRebuild(apiIndex, {
+						...frozenInput,
+						messages: this.projectCanonicalContext(),
+					})
+					Logger.warn(`[Task ${this.taskId}] Replaying one canonical tool-pairing rebuild`, { apiIndex })
+					yield* this.attemptApiRequest(previousApiReqIndex, requestScope, apiIndex, providerAttempt + 1)
+					return
+				}
+				if (rebuildDecision === "exhausted") throw error
 			}
 			const openAiMaxOutputReplayDecision = this.taskState.isInternalContextCompactionRequest
 				? this.compactionRequestReplay.prepareOpenAiMaxOutputReplay(apiIndex, error)
@@ -7209,14 +7433,18 @@ export class Task {
 		const webSearchAutoApproved = this.toolExecutor.isAutoApproved(ClineDefaultTool.WEB_SEARCH)
 		const hostedApprovalLeased = this.taskState.hostedWebApprovalLeaseVersion === settingsVersion
 		const hostedApprovalSatisfied = webSearchAutoApproved || hostedApprovalLeased
-		if (requestScope.webSearchRoutingPlan.route === "hosted" && !hostedApprovalSatisfied) {
+		const routingPlan =
+			this.ordinaryRequestInputReplay.get(apiIndex)?.runtime?.webSearchRoutingPlan ??
+			this.compactionRequestReplay.getProviderInput(apiIndex)?.runtime?.webSearchRoutingPlan ??
+			requestScope.webSearchRoutingPlan
+		if (routingPlan.route === "hosted" && !hostedApprovalSatisfied) {
 			await this.interactionCoordinator.releaseApiContinuationForRequestGate()
 		}
 		const approval = await requestHostedWebApproval(this.interactionCoordinator, {
 			taskId: this.taskId,
 			apiIndex,
 			providerId: requestScope.providerInfo.providerId,
-			routingPlan: requestScope.webSearchRoutingPlan,
+			routingPlan,
 			autoApproved: hostedApprovalSatisfied,
 		})
 		if (!approval.approved) {
@@ -7273,6 +7501,46 @@ export class Task {
 			return
 		}
 		environmentBlock.text = environmentBlock.text.replace("</environment_details>", `\n\n${warning}\n</environment_details>`)
+	}
+
+	/** Build one durable Retry candidate without repeating request preprocessing or persistence. */
+	private async buildPersistedRequestCandidate(
+		previousApiReqIndex: number,
+		requestScope: RequestApiScope,
+		apiIndex: number,
+		persistedRequestApiIndex: number,
+	): Promise<CompactionProviderInput> {
+		const frozen = this.ordinaryRequestInputReplay.get(apiIndex)
+		if (frozen) return frozen
+		if (persistedRequestApiIndex !== this.messageStateHandler.apiConversationHistory.length - 1) {
+			throw new Error(`Persisted API request is not the active history tail at historyIndex=${persistedRequestApiIndex}`)
+		}
+		return this.buildOrdinaryProviderInput(
+			previousApiReqIndex,
+			requestScope,
+			cloneDeep(this.messageStateHandler.apiConversationHistory),
+		)
+	}
+
+	/** Project one durable Retry candidate without rebuilding dynamic request context. */
+	private projectPersistedRequestContextWindow(
+		providerInput: CompactionProviderInput,
+		requestScope: RequestApiScope,
+		apiIndex: number,
+	): { projection: ContextWindowProjection; candidateEstimatedTokens: number } {
+		const candidateEstimatedTokens = estimateContextWindowCandidate(providerInput, {
+			providerId: requestScope.providerInfo.providerId,
+			modelId: requestScope.providerInfo.model.id,
+		})
+		const { contextWindow } = getContextWindowInfo(requestScope.api)
+		const projection = resolveContextWindowProjection({
+			requestInfos: this.getContextWindowRequestPressures(),
+			candidateEstimatedTokens,
+			contextWindow,
+			triggerTokens: computeCompactTrigger(contextWindow, computeSummarizeBudget(), this.getAutoCondenseTriggerOptions()),
+		})
+		this.ordinaryRequestInputReplay.freeze(apiIndex, providerInput)
+		return { projection, candidateEstimatedTokens }
 	}
 
 	/** Evaluate the complete unsent ordinary candidate and freeze the exact admitted provider input. */
@@ -7341,16 +7609,23 @@ export class Task {
 			content: userContent,
 			ts: Date.now(),
 		})
-		await this.messageStateHandler.flushApiConversationHistory()
-		// The queued input is now part of the durable conversation, which is the
-		// point at which it has actually been handed over. Settling here rather
-		// than on the recursion's return value matters because that value only
-		// says whether the loop ended: several paths return normally without
-		// ever sending a request, and treating those as delivered would consume
-		// the input for nothing.
-		if (this.stagedQueueDelivery) {
+		// The queued input is now part of the conversation, which is the point
+		// at which it has actually been handed over. Settling here rather than
+		// on the recursion's return value matters because that value only says
+		// whether the loop ended: several paths return normally without ever
+		// sending a request, and treating those as delivered would consume the
+		// input for nothing.
+		//
+		// This runs before the flush on purpose. The append is what puts the
+		// text into the conversation; if the flush then fails, releasing the
+		// claim would put the entry back in the queue while the round still
+		// carries it, and it would be sent a second time. An entry that is
+		// dropped here is at least visibly gone, and the user still has what
+		// they typed.
+		if (this.inputQueueCoordinator.hasStagedDelivery) {
 			await this.settleStagedQueueDelivery(true)
 		}
+		await this.messageStateHandler.flushApiConversationHistory()
 		return this.completeApiRequestGate(requestScope, apiIndex, beforeApiRequestStarted)
 	}
 
@@ -7533,10 +7808,10 @@ export class Task {
 		let shouldCompact = false
 		const useAutoCondense = this.stateManager.getGlobalSettingsKey("useAutoCondense")
 		const autoCondenseTriggerOptions = this.getAutoCondenseTriggerOptions()
-		const targetWindowFittingCommitted = !persistedRequest && this.taskState.targetWindowFittingCommitted
+		const targetWindowFittingCommitted = this.taskState.targetWindowFittingCommitted
 		this.taskState.targetWindowFittingCommitted = false
 		const forceFinalGuardCompact = transaction.forceCompaction === true
-		const canCompactBeforeAdmission = !persistedRequest && transaction.beforeApiRequestStarted === undefined
+		const canCompactBeforeAdmission = transaction.beforeApiRequestStarted === undefined
 		const manualCompactionRequested =
 			!persistedRequest && hasManualCompactionIntent(userContent, (block) => this.isTrustedUserFeedbackResult(block))
 		const manualCompactionCommitted = !persistedRequest && this.taskState.manualCompactionCommitted
@@ -7583,14 +7858,14 @@ export class Task {
 					))
 		}
 
-		if (!persistedRequest && shouldCompact && !manualCompactionRequested) {
+		if (shouldCompact && !manualCompactionRequested) {
 			this.ordinaryRequestInputReplay.clear()
 			requestScope.explicitInstructions.cancel()
 			const operationId = `auto-compaction:${this.taskId}:${apiIndex}:${this.genMessageTs()}`
 			const result = await this.runOrdinaryContextCompaction(
 				operationId,
 				requestScope,
-				originalUserContent,
+				persistedRequest ? [] : originalUserContent,
 				includeFileDetails,
 			)
 			if (result === "failed") {
@@ -7752,16 +8027,23 @@ export class Task {
 
 		let finalProjection: ContextWindowProjection | undefined
 		let candidateEstimatedTokens: number | undefined
-		if (!persistedRequest && !shouldCompact) {
-			const finalGuard = await this.evaluateFinalContextWindowGuard(
-				userContent,
-				previousApiReqIndex,
-				requestScope,
-				apiIndex,
-			)
+		if (!shouldCompact) {
+			const finalGuard = persistedRequest
+				? this.projectPersistedRequestContextWindow(
+						await this.buildPersistedRequestCandidate(
+							previousApiReqIndex,
+							requestScope,
+							apiIndex,
+							persistedRequestApiIndex,
+						),
+						requestScope,
+						apiIndex,
+					)
+				: await this.evaluateFinalContextWindowGuard(userContent, previousApiReqIndex, requestScope, apiIndex)
 			finalProjection = finalGuard.projection
 			candidateEstimatedTokens = finalGuard.candidateEstimatedTokens
 			if (
+				canCompactBeforeAdmission &&
 				useAutoCondense &&
 				finalProjection.shouldCompact &&
 				!targetWindowFittingCommitted &&
@@ -7776,7 +8058,7 @@ export class Task {
 				const result = await this.runOrdinaryContextCompaction(
 					operationId,
 					requestScope,
-					originalUserContent,
+					persistedRequest ? [] : originalUserContent,
 					includeFileDetails,
 				)
 				if (result === "failed") {
@@ -8773,7 +9055,7 @@ export class Task {
 				if (phaseBeforeContinuation === TaskPhase.COMPLETED) return true
 				// Added before the staged estimate so the indicator accounts for the
 				// queued text that is about to be sent with this round.
-				await this.deliverQueuedInputAtToolRound()
+				await this.inputQueueCoordinator.deliverAtToolRound()
 				await this.refreshOrdinaryIndicatorStaged()
 
 				let recDidEndLoop: boolean

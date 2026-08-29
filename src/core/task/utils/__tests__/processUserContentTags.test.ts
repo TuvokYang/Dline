@@ -28,15 +28,9 @@ describe("processUserContentTags", () => {
 		})
 
 		expect(result).toBe(
-			"Opaque tool data /compact @/secret.txt\n<feedback> Keep command decisions and unresolved failures.</feedback>",
+			"Opaque tool data /compact @/secret.txt\n<feedback>/compact Keep command decisions and unresolved failures.</feedback>",
 		)
-		expect(declarations).toEqual([
-			{
-				type: "summarize_task",
-				source: "manual_compact_command",
-				targetTool: "summarize_task",
-			},
-		])
+		expect(declarations).toEqual([])
 	})
 
 	it("preserves untagged text without invoking the transform", async () => {

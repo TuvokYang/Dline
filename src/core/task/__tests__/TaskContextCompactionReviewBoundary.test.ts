@@ -17,7 +17,7 @@ function createTask(interaction: { status: "awaiting" } | undefined) {
 	const interrupt = vi.fn(async () => ({ actionId: "confirm_utility" as const }))
 	const task = {
 		getRuntimeState: () => ({ interaction }),
-		contextCompactionPresentation: { getSnapshot: () => undefined },
+		contextCompactionPresentation: { getUnitSnapshot: () => undefined },
 		interactionCoordinator: { open, interrupt },
 	} as unknown as Task
 	return { task, open, interrupt }

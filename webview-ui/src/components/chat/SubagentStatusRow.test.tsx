@@ -452,8 +452,7 @@ describe("SubagentStatusRow", () => {
 		const contextContent = screen.getByTestId("subagent-context-content")
 		expect(name).toHaveTextContent("reviewer")
 		expect(screen.getAllByText("reviewer")).toHaveLength(1)
-		expect(taskScroll).toHaveClass("overflow-x-hidden")
-		expect(taskScroll).not.toHaveClass("min-h-0", "flex-1", "overflow-y-auto")
+		expect(taskScroll).toHaveClass("overflow-x-hidden", "min-h-0", "flex-1", "overflow-y-auto")
 		expect(taskScroll).toContainElement(task)
 		expect(task).toHaveClass("whitespace-pre-wrap", "break-words", "[overflow-wrap:anywhere]")
 		expect(context).toHaveClass("w-full", "min-w-0", "max-w-full", "overflow-hidden")
@@ -845,7 +844,7 @@ describe("SubagentStatusRow", () => {
 		expect(metrics).not.toHaveTextContent("CN")
 	})
 
-	it("keeps Task natural while independently constraining scrollable Tools and Output", () => {
+	it("independently scrolls long Task, Tools, and Output within the bounded Work card", () => {
 		taskActivities.push({
 			activityId: "job-section-layout",
 			taskId: "task-1",
@@ -924,14 +923,11 @@ describe("SubagentStatusRow", () => {
 		const toolsScroll = within(item).getByTestId("subagent-tools-scroll")
 		const taskSection = taskScroll.parentElement
 		const toolsSection = toolsScroll.parentElement
-		expect(item).toHaveClass("max-h-[30vh]")
-		expect(item).not.toHaveClass("h-[30vh]")
-		expect(taskSection).toHaveClass("flex", "min-h-[24px]", "shrink-0")
-		expect(taskSection).not.toHaveClass("flex-1", "basis-0")
-		expect(toolsSection).toHaveClass("flex", "min-h-[24px]", "flex-[1_1_auto]", "overflow-hidden")
-		expect(toolsSection).not.toHaveClass("basis-0")
-		expect(taskScroll).toHaveClass("overflow-x-hidden")
-		expect(taskScroll).not.toHaveClass("min-h-0", "flex-1", "overflow-y-auto")
+		expect(item).toHaveClass("max-h-[30vh]", "h-[30vh]")
+		expect(taskSection).toHaveClass("flex", "min-h-[24px]", "flex-1", "basis-0", "overflow-hidden")
+		expect(taskSection).not.toHaveClass("shrink-0")
+		expect(toolsSection).toHaveClass("flex", "min-h-[24px]", "flex-1", "basis-0", "overflow-hidden")
+		expect(taskScroll).toHaveClass("overflow-x-hidden", "min-h-0", "flex-1", "overflow-y-auto")
 		expect(toolsScroll).toHaveClass("min-h-0", "overflow-y-auto")
 		expect(within(item).queryByTestId("subagent-output-scroll")).not.toBeInTheDocument()
 
@@ -951,11 +947,10 @@ describe("SubagentStatusRow", () => {
 		fireEvent.click(within(item).getByRole("button", { name: "Show subagent output" }))
 		const outputScroll = within(item).getByTestId("subagent-output-scroll")
 		const restoredTaskSection = within(item).getByTestId("subagent-task-scroll").parentElement
-		expect(item).not.toHaveClass("h-[30vh]")
-		expect(restoredTaskSection).toHaveClass("shrink-0")
-		expect(restoredTaskSection).not.toHaveClass("flex-1", "basis-0")
-		expect(outputScroll.parentElement).toHaveClass("flex-[1_1_auto]")
-		expect(outputScroll.parentElement).not.toHaveClass("basis-0")
+		expect(item).toHaveClass("h-[30vh]")
+		expect(restoredTaskSection).toHaveClass("flex-1", "basis-0")
+		expect(restoredTaskSection).not.toHaveClass("shrink-0")
+		expect(outputScroll.parentElement).toHaveClass("flex-1", "basis-0")
 		expect(outputScroll).toHaveClass("min-h-0", "overflow-y-auto")
 		expect(outputScroll).toHaveTextContent("Automatic retries")
 		expect(outputScroll).toHaveTextContent("Retry 1/5")
@@ -970,15 +965,102 @@ describe("SubagentStatusRow", () => {
 		fireEvent.click(within(item).getByRole("button", { name: "Expand subagent tools" }))
 		const sharedToolsScroll = within(item).getByTestId("subagent-tools-scroll")
 		expect(item).toHaveClass("h-[30vh]")
-		expect(restoredTaskSection).toHaveClass("shrink-0")
-		expect(restoredTaskSection).not.toHaveClass("flex-1", "basis-0")
+		expect(restoredTaskSection).toHaveClass("flex-1", "basis-0")
 		expect(sharedToolsScroll.parentElement).toHaveClass("flex-1", "basis-0")
 		expect(outputScroll.parentElement).toHaveClass("flex-1", "basis-0")
 
 		fireEvent.click(within(item).getByRole("button", { name: "Hide subagent output" }))
 		expect(within(item).queryByTestId("subagent-output-scroll")).not.toBeInTheDocument()
-		expect(item).not.toHaveClass("h-[30vh]")
+		expect(item).toHaveClass("h-[30vh]")
 		expect(within(item).getByTestId("subagent-task-scroll")).toBeInTheDocument()
+	})
+
+	it("uses the current attempt as the single source for Work tools, retries, metrics, and unavailable reason", () => {
+		taskActivities.push({
+			activityId: "job-attempt-aware",
+			taskId: "task-1",
+			kind: "subagent",
+			executionMode: "background",
+			status: "failed",
+			cancellable: false,
+			finishable: false,
+			retryable: false,
+			retryUnavailableReason: "Retry unavailable: subagent 'reviewer' is no longer enabled.",
+			currentAttempt: 2,
+			createdAt: 1,
+			updatedAt: 4,
+			finishedAt: 4,
+			title: "reviewer",
+			metrics: { toolCalls: 99, inputTokens: 10, outputTokens: 5, totalCost: 0, currency: "USD" },
+			events: [
+				{ sequence: 1, timestamp: 1, attempt: 1, kind: "tool_call", toolCallId: "old", toolName: "old_tool" },
+				{
+					sequence: 2,
+					timestamp: 2,
+					attempt: 1,
+					kind: "retry",
+					retryAttempt: 1,
+					maxRetries: 5,
+					delayMs: 5_000,
+					cumulativeDelayMs: 5_000,
+				},
+				{
+					sequence: 3,
+					timestamp: 3,
+					attempt: 2,
+					kind: "tool_call",
+					toolCallId: "current",
+					toolName: "current_tool",
+					toolStatus: "completed",
+				},
+				{
+					sequence: 4,
+					timestamp: 4,
+					attempt: 2,
+					kind: "retry",
+					retryAttempt: 1,
+					maxRetries: 2,
+					delayMs: 8_000,
+					cumulativeDelayMs: 8_000,
+				},
+			],
+		})
+		const msg = makeMsg({
+			say: "subagent",
+			text: JSON.stringify({
+				status: "failed",
+				items: [
+					{
+						index: 1,
+						jobId: "job-attempt-aware",
+						prompt: "review",
+						status: "failed",
+						error: "provider failed",
+						toolCalls: 99,
+						inputTokens: 10,
+						outputTokens: 5,
+						totalCost: 0,
+						currency: "USD",
+						contextTokens: 15,
+						contextWindow: 200_000,
+						contextUsagePercentage: 0.01,
+					},
+				],
+			}),
+		})
+
+		render(<SubagentStatusRow isLast={true} message={msg} />)
+		const item = screen.getByTestId("subagent-item")
+		expect(within(item).getByTestId("subagent-metrics")).toHaveTextContent("1 tool")
+		expect(within(item).getByTestId("subagent-retry-unavailable-reason")).toHaveTextContent("no longer enabled")
+		expect(within(item).queryByText("old_tool")).not.toBeInTheDocument()
+		expect(within(item).getByText("current_tool")).toBeInTheDocument()
+
+		fireEvent.click(within(item).getByRole("button", { name: "Show subagent output" }))
+		const retryTimeline = within(item).getByTestId("subagent-retry-timeline")
+		expect(retryTimeline).toHaveTextContent("Automatic retries (1)")
+		expect(retryTimeline).toHaveTextContent("Retry 1/2")
+		expect(retryTimeline).not.toHaveTextContent("Retry 1/5")
 	})
 
 	it("bounds and independently collapses each Work card while keeping controls available", async () => {

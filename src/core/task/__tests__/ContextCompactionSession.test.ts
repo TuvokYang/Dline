@@ -63,11 +63,29 @@ function createPorts(): ContextCompactionSessionPorts {
 				initialAttemptId: `attempt-${state.passIndex}`,
 			}
 		}),
+		buildSummaryRefitRequest: vi.fn(async (_input, state, carryLimitTokens, refitAttempt) => {
+			const explicitInstructions = new ExplicitInstructionRequestScope(new ExplicitInstructionRegistry(), {
+				requestId: `refit-request-${state.passIndex}-${refitAttempt}`,
+				attemptId: `refit-attempt-${state.passIndex}-${refitAttempt}`,
+			})
+			explicitInstructions.register({
+				type: "summarize_task",
+				source: "auto_compaction",
+				targetTool: ClineDefaultTool.SUMMARIZE_TASK,
+				operationId: state.operationId,
+			})
+			return {
+				providerInput: { providerOutputCap: carryLimitTokens } as CompactionProviderInput,
+				explicitInstructions,
+				initialAttemptId: `refit-attempt-${state.passIndex}-${refitAttempt}`,
+			}
+		}),
 		reprojectTarget: vi.fn(async () => decision("complete")),
 		stageAcceptedPass: vi.fn(async () => undefined),
 		commit: vi.fn(async () => undefined),
 		publish: vi.fn(async () => undefined),
 		waitForRetry: vi.fn(async () => undefined),
+		recordTiming: vi.fn(),
 	}
 }
 
@@ -251,6 +269,136 @@ describe("ContextCompactionSession", () => {
 		expect(sentMessages).toContain("SECOND_LARGE_TOOL_RESULT")
 	})
 
+	it("continues an approximately 800K source after a 600K first projection by refitting summary carry", async () => {
+		const createTurn = (marker: string, payload: string): ClineStorageMessage[] => [
+			{ role: "user", content: [{ type: "text", text: marker }] },
+			{ role: "assistant", content: [{ type: "text", text: payload }] },
+		]
+		const createProviderInput = (messages: readonly ClineStorageMessage[]): CompactionProviderInput => ({
+			systemPrompt: "stable 472K compaction system prompt",
+			messages: [
+				...messages,
+				{ role: "user", content: [{ type: "text", text: "Summarize the selected complete turns." }] },
+			],
+			tools: [],
+			serverTools: [],
+			providerOutputCap: 30_000,
+		})
+		const targetTurnTokens = 395_000
+		const emptyTurnTokens = estimateContextWindowCandidate(createProviderInput(createTurn("TURN_A", "")))
+		const payload = "x".repeat(Math.max(0, (targetTurnTokens - emptyTurnTokens) * 4))
+		const sourceHistory = [...createTurn("TURN_A", payload), ...createTurn("TURN_B", payload)]
+		const sourceInputTokens = estimateContextWindowCandidate(createProviderInput(sourceHistory))
+		const passInputCeiling = resolveCompactTriggerPolicy(472_000, computeSummarizeBudget(), {
+			triggerPercent: 95,
+			minReserveTokens: 5_000,
+			maxReserveTokens: 30_000,
+			maxContextTokens: 0,
+		}).passInputCeilingTokens
+		const ports = createPorts()
+		ports.getPassInputCeiling = () => passInputCeiling
+		ports.estimatePassInput = async (_input, history) => estimateContextWindowCandidate(createProviderInput(history))
+		ports.buildPassRequest = vi.fn(async (_input, state, _feedback, passHistory) => {
+			const explicitInstructions = new ExplicitInstructionRequestScope(new ExplicitInstructionRegistry(), {
+				requestId: `large-request-${state.passIndex}`,
+				attemptId: `large-attempt-${state.passIndex}`,
+			})
+			explicitInstructions.register({
+				type: "summarize_task",
+				source: "auto_compaction",
+				targetTool: ClineDefaultTool.SUMMARIZE_TASK,
+				operationId: state.operationId,
+			})
+			return {
+				providerInput: createProviderInput(passHistory ?? buildCompactionPassHistory(state)),
+				explicitInstructions,
+				initialAttemptId: `large-attempt-${state.passIndex}`,
+			}
+		})
+		ports.buildSummaryRefitRequest = vi.fn(async (_input, state, carryLimitTokens, refitAttempt) => {
+			const explicitInstructions = new ExplicitInstructionRequestScope(new ExplicitInstructionRegistry(), {
+				requestId: `large-refit-request-${refitAttempt}`,
+				attemptId: `large-refit-attempt-${refitAttempt}`,
+			})
+			explicitInstructions.register({
+				type: "summarize_task",
+				source: "auto_compaction",
+				targetTool: ClineDefaultTool.SUMMARIZE_TASK,
+				operationId: state.operationId,
+			})
+			return {
+				providerInput: {
+					systemPrompt: "stable refit system prompt",
+					messages: [{ role: "user", content: [{ type: "text", text: state.cumulativeSummary ?? "" }] }],
+					tools: [],
+					serverTools: [],
+					providerOutputCap: carryLimitTokens,
+				} satisfies CompactionProviderInput,
+				explicitInstructions,
+				initialAttemptId: `large-refit-attempt-${refitAttempt}`,
+			}
+		})
+		ports.reprojectTarget = vi
+			.fn()
+			.mockResolvedValueOnce({
+				...decision("continue"),
+				projectedUsageTokens: 600_000,
+				targetContextWindow: 472_000,
+				effectiveContextLimit: 472_000,
+				fittingExitTarget: 377_600,
+			})
+			.mockResolvedValueOnce({
+				...decision("complete"),
+				projectedUsageTokens: 435_000,
+				targetContextWindow: 472_000,
+				effectiveContextLimit: 472_000,
+				fittingExitTarget: 377_600,
+			})
+		const summaries = ["S".repeat(800_000), "R".repeat(160_000), "FINAL_800K_ROLLING_SUMMARY"]
+		let providerCall = 0
+		const api = {
+			createMessage: vi.fn(async function* () {
+				const summary = summaries[providerCall++]
+				yield {
+					type: "tool_calls",
+					function_id: `large-summary-${providerCall}`,
+					tool_index: 0,
+					tool_call: {
+						function: { name: "summarize_task", arguments: JSON.stringify({ context: summary }) },
+					},
+				}
+			}),
+		} as unknown as ApiHandler
+		const session = new ContextCompactionSession(ports, { maxRetryAttempts: 1 })
+
+		const result = await session.run({
+			operationId: "operation-800k-multi-pass",
+			trigger: "auto_compaction",
+			compactionApi: api,
+			targetApi: api,
+			targetMode: "act",
+			sourceHistory,
+		})
+
+		expect(sourceInputTokens).toBeGreaterThan(780_000)
+		expect(sourceInputTokens).toBeLessThan(820_000)
+		expect(result).toBe("completed")
+		expect(api.createMessage).toHaveBeenCalledTimes(3)
+		expect(ports.buildSummaryRefitRequest).toHaveBeenCalledOnce()
+		const carryLimitTokens = vi.mocked(ports.buildSummaryRefitRequest).mock.calls[0]?.[2]
+		expect(carryLimitTokens).toBeGreaterThan(40_000)
+		expect(carryLimitTokens).toBeLessThan(100_000)
+		expect(ports.reprojectTarget).toHaveBeenNthCalledWith(
+			1,
+			expect.objectContaining({ operationId: "operation-800k-multi-pass" }),
+			expect.objectContaining({ passIndex: 1, coveredTurnCount: 1, cumulativeSummary: summaries[0] }),
+		)
+		expect(ports.commit).toHaveBeenCalledWith(
+			expect.objectContaining({ operationId: "operation-800k-multi-pass" }),
+			expect.objectContaining({ passIndex: 2, coveredTurnCount: 2, cumulativeSummary: "FINAL_800K_ROLLING_SUMMARY" }),
+		)
+	})
+
 	it.each([
 		["ordinary failure", new Error("manual compaction failed")],
 		["OpenAI max-output termination", new OutputLimitExceededError("openai_responses", "max_output_tokens")],
@@ -317,13 +465,23 @@ describe("ContextCompactionSession", () => {
 			targetApi: API,
 			targetMode: "act",
 			sourceHistory: HISTORY,
+			boundaryProjectionMs: 7,
 		})
 
 		expect(result).toBe("completed")
 		const publish = vi.mocked(ports.publish)
 		const events = publish.mock.calls.map(([, event]) => event)
-		expect(vi.mocked(ports.buildPassRequest).mock.invocationCallOrder[0]).toBeLessThan(publish.mock.invocationCallOrder[0])
+		expect(publish.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(ports.buildPassRequest).mock.invocationCallOrder[0])
+		expect(vi.mocked(ports.buildPassRequest).mock.invocationCallOrder[0]).toBeLessThan(publish.mock.invocationCallOrder[1])
+		expect(ports.buildPassRequest).toHaveBeenNthCalledWith(
+			1,
+			expect.objectContaining({ operationId: "operation-1" }),
+			expect.objectContaining({ passIndex: 0, coveredTurnCount: 0 }),
+			[],
+			HISTORY,
+		)
 		expect(events.map((event) => event.kind)).toEqual([
+			"pass_preparing",
 			"pass_started",
 			"pass_receiving",
 			"pass_partial",
@@ -331,27 +489,31 @@ describe("ContextCompactionSession", () => {
 			"pass_completed",
 		])
 		expect(events[0]).toMatchObject({
+			kind: "pass_preparing",
+			state: { operationId: "operation-1", passIndex: 0, coveredTurnCount: 0 },
+		})
+		expect(events[1]).toMatchObject({
 			kind: "pass_started",
 			passIdentity: { operationId: "operation-1", passIndex: 0 },
 			attempt: { attemptIndex: 0, authorizationAttemptId: "attempt-0" },
 		})
-		expect(events[1]).toMatchObject({
+		expect(events[2]).toMatchObject({
 			kind: "pass_receiving",
 			passIdentity: { operationId: "operation-1", passIndex: 0 },
 			attempt: { attemptIndex: 0, authorizationAttemptId: "attempt-0" },
 			chunk: { type: "tool_calls" },
 		})
-		expect(events[1]).not.toHaveProperty("state")
-		expect(events[2]).toMatchObject({
+		expect(events[2]).not.toHaveProperty("state")
+		expect(events[3]).toMatchObject({
 			kind: "pass_partial",
 			passIdentity: { operationId: "operation-1", passIndex: 0 },
 			attempt: { attemptIndex: 0, authorizationAttemptId: "attempt-0" },
 			content: "summary",
 		})
-		expect(events[2]).not.toHaveProperty("state")
-		expect(events[3]).toMatchObject({ kind: "pass_receiving", chunk: { type: "usage", outputTokens: 5 } })
 		expect(events[3]).not.toHaveProperty("state")
-		expect(events[4]).toMatchObject({
+		expect(events[4]).toMatchObject({ kind: "pass_receiving", chunk: { type: "usage", outputTokens: 5 } })
+		expect(events[4]).not.toHaveProperty("state")
+		expect(events[5]).toMatchObject({
 			kind: "pass_completed",
 			state: { passIndex: 1, coveredTurnCount: 2, cumulativeSummary: "summary" },
 			passIdentity: { operationId: "operation-1", passIndex: 0 },
@@ -370,8 +532,20 @@ describe("ContextCompactionSession", () => {
 		expect(vi.mocked(ports.reprojectTarget).mock.invocationCallOrder[0]).toBeLessThan(
 			vi.mocked(ports.stageAcceptedPass).mock.invocationCallOrder[0],
 		)
-		expect(vi.mocked(ports.stageAcceptedPass).mock.invocationCallOrder[0]).toBeLessThan(publish.mock.invocationCallOrder[4])
-		expect(publish.mock.invocationCallOrder[4]).toBeLessThan(vi.mocked(ports.commit).mock.invocationCallOrder[0])
+		expect(ports.recordTiming).toHaveBeenCalledWith({
+			operationId: "operation-1",
+			passIndex: 0,
+			boundaryProjectionMs: 7,
+			logicalTurnIndexMs: expect.any(Number),
+			plannerMs: expect.any(Number),
+			candidateEstimateCount: expect.any(Number),
+			requestBuildMs: expect.any(Number),
+			providerTtfbMs: expect.any(Number),
+			streamMs: expect.any(Number),
+			reprojectionMs: expect.any(Number),
+		})
+		expect(vi.mocked(ports.stageAcceptedPass).mock.invocationCallOrder[0]).toBeLessThan(publish.mock.invocationCallOrder[5])
+		expect(publish.mock.invocationCallOrder[5]).toBeLessThan(vi.mocked(ports.commit).mock.invocationCallOrder[0])
 	})
 
 	it("commits an accepted projection without waiting for tail settlement", async () => {
@@ -537,6 +711,7 @@ describe("ContextCompactionSession", () => {
 			expect.objectContaining({ operationId: "operation-manual-review" }),
 			expect.objectContaining({ passIndex: 0, coveredTurnCount: 0 }),
 			[{ type: "text", text: "preserve constraints" }],
+			HISTORY,
 		)
 		const events = vi.mocked(ports.publish).mock.calls.map(([, event]) => event)
 		expect(events.filter((event) => event.kind === "pass_started")).toHaveLength(1)
@@ -554,6 +729,164 @@ describe("ContextCompactionSession", () => {
 			kind: "pass_completed",
 			attempt: { attemptIndex: 1, authorizationAttemptId: "manual-attempt-1" },
 			content: "confirmed summary",
+		})
+	})
+
+	it("refits an oversized cumulative summary before replanning the same uncovered turn", async () => {
+		const ports = createPorts()
+		ports.getPassInputCeiling = () => 5_000
+		ports.estimatePassInput = vi.fn(async (_input, history) => {
+			const serialized = JSON.stringify(history)
+			if (history.length === 0) return 100
+			const hasTurnOne = serialized.includes("turn one")
+			const hasTurnTwo = serialized.includes("turn two")
+			const hasLargeSummary = serialized.includes("LARGE_CUMULATIVE_SUMMARY")
+			const hasRefittedSummary = serialized.includes("REFITTED_SUMMARY")
+			if (hasLargeSummary && hasTurnTwo) return 5_300
+			if (hasLargeSummary) return 4_300
+			if (hasRefittedSummary && hasTurnTwo) return 1_900
+			if (hasRefittedSummary) return 1_000
+			if (hasTurnOne && hasTurnTwo) return 6_000
+			if (hasTurnOne) return 2_500
+			if (hasTurnTwo) return 1_100
+			throw new Error(`Unexpected compaction estimate candidate: ${serialized}`)
+		})
+		ports.reprojectTarget = vi.fn().mockResolvedValueOnce(decision("continue")).mockResolvedValueOnce(decision("complete"))
+		const summaries = ["LARGE_CUMULATIVE_SUMMARY_".repeat(80), "REFITTED_SUMMARY", "FINAL_ROLLING_SUMMARY"]
+		let providerCall = 0
+		const api = {
+			createMessage: vi.fn(async function* () {
+				const summary = summaries[providerCall++]
+				yield {
+					type: "tool_calls",
+					function_id: `summary-${providerCall}`,
+					tool_index: 0,
+					tool_call: {
+						function: { name: "summarize_task", arguments: JSON.stringify({ context: summary }) },
+					},
+				}
+				yield { type: "usage", inputTokens: 100, outputTokens: 50, cacheWriteTokens: 0, cacheReadTokens: 0 }
+			}),
+		} as unknown as ApiHandler
+		const session = new ContextCompactionSession(ports, { maxRetryAttempts: 1 })
+
+		const result = await session.run({
+			operationId: "operation-summary-refit",
+			trigger: "auto_compaction",
+			compactionApi: api,
+			targetApi: api,
+			targetMode: "act",
+			sourceHistory: HISTORY,
+		})
+
+		expect(result).toBe("completed")
+		expect(api.createMessage).toHaveBeenCalledTimes(3)
+		expect(ports.buildSummaryRefitRequest).toHaveBeenCalledOnce()
+		expect(ports.buildSummaryRefitRequest).toHaveBeenCalledWith(
+			expect.objectContaining({ operationId: "operation-summary-refit" }),
+			expect.objectContaining({ passIndex: 1, coveredTurnCount: 1, cumulativeSummary: summaries[0] }),
+			1_900,
+			1,
+		)
+		expect(ports.reprojectTarget).toHaveBeenCalledTimes(2)
+		expect(ports.stageAcceptedPass).toHaveBeenCalledTimes(2)
+		expect(ports.commit).toHaveBeenCalledWith(
+			expect.objectContaining({ operationId: "operation-summary-refit" }),
+			expect.objectContaining({ passIndex: 2, coveredTurnCount: 2, cumulativeSummary: "FINAL_ROLLING_SUMMARY" }),
+		)
+		const events = vi.mocked(ports.publish).mock.calls.map(([, event]) => event)
+		expect(events.filter((event) => event.kind === "pass_started")).toHaveLength(2)
+		expect(events.filter((event) => event.kind === "pass_completed")).toHaveLength(2)
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				kind: "summary_refit_started",
+				state: expect.objectContaining({ passIndex: 1, coveredTurnCount: 1 }),
+				refitAttempt: 1,
+				carryLimitTokens: 1_900,
+			}),
+		)
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				kind: "summary_refit_completed",
+				state: expect.objectContaining({
+					passIndex: 1,
+					coveredTurnCount: 1,
+					cumulativeSummary: "REFITTED_SUMMARY",
+				}),
+			}),
+		)
+		expect(events.some((event) => event.kind === "failed")).toBe(false)
+	})
+
+	it("fails with carry diagnostics after two shrinking refits still cannot admit the same uncovered turn", async () => {
+		const ports = createPorts()
+		ports.getPassInputCeiling = () => 5_000
+		ports.estimatePassInput = vi.fn(async (_input, history) => {
+			const serialized = JSON.stringify(history)
+			if (history.length === 0) return 100
+			const hasTurnOne = serialized.includes("turn one")
+			const hasTurnTwo = serialized.includes("turn two")
+			const hasLargeSummary = serialized.includes("LARGE_CARRY_SUMMARY")
+			const hasRefitOne = serialized.includes("REFIT_ONE_STILL_LARGE")
+			const hasRefitTwo = serialized.includes("REFIT_TWO_STILL_LARGE")
+			if (hasLargeSummary && hasTurnTwo) return 5_300
+			if (hasLargeSummary) return 4_300
+			if (hasRefitOne && hasTurnTwo) return 5_200
+			if (hasRefitOne) return 4_200
+			if (hasRefitTwo && hasTurnTwo) return 5_100
+			if (hasRefitTwo) return 4_100
+			if (hasTurnOne && hasTurnTwo) return 6_000
+			if (hasTurnOne) return 2_500
+			if (hasTurnTwo) return 1_100
+			throw new Error(`Unexpected compaction estimate candidate: ${serialized}`)
+		})
+		ports.reprojectTarget = vi.fn(async () => decision("continue"))
+		const summaries = [
+			"LARGE_CARRY_SUMMARY_".repeat(80),
+			"REFIT_ONE_STILL_LARGE_".repeat(40),
+			"REFIT_TWO_STILL_LARGE_".repeat(20),
+		]
+		let providerCall = 0
+		const api = {
+			createMessage: vi.fn(async function* () {
+				const summary = summaries[providerCall++]
+				yield {
+					type: "tool_calls",
+					function_id: `summary-exhausted-${providerCall}`,
+					tool_index: 0,
+					tool_call: {
+						function: { name: "summarize_task", arguments: JSON.stringify({ context: summary }) },
+					},
+				}
+			}),
+		} as unknown as ApiHandler
+		const session = new ContextCompactionSession(ports, { maxRetryAttempts: 1 })
+
+		const result = await session.run({
+			operationId: "operation-summary-refit-exhausted",
+			trigger: "auto_compaction",
+			compactionApi: api,
+			targetApi: api,
+			targetMode: "act",
+			sourceHistory: HISTORY,
+		})
+
+		expect(result).toBe("failed")
+		expect(api.createMessage).toHaveBeenCalledTimes(3)
+		expect(ports.buildSummaryRefitRequest).toHaveBeenCalledTimes(2)
+		expect(ports.reprojectTarget).toHaveBeenCalledOnce()
+		expect(ports.stageAcceptedPass).toHaveBeenCalledOnce()
+		expect(ports.commit).not.toHaveBeenCalled()
+		const events = vi.mocked(ports.publish).mock.calls.map(([, event]) => event)
+		expect(events.filter((event) => event.kind === "summary_refit_completed")).toHaveLength(2)
+		expect(events.at(-1)).toMatchObject({
+			kind: "failed",
+			state: {
+				passIndex: 1,
+				coveredTurnCount: 1,
+				cumulativeSummary: summaries[2],
+			},
+			error: "Cumulative summary refit exhausted after 2 attempt(s) before Pass 2: target carry budget 1900, current carry 4000, request envelope 100, logical turn 1000, combined 5100, Pass ceiling 5000.",
 		})
 	})
 
@@ -661,6 +994,7 @@ describe("ContextCompactionSession", () => {
 		expect(ports.commit).not.toHaveBeenCalled()
 		const events = vi.mocked(ports.publish).mock.calls.map(([, event]) => event)
 		expect(events.map((event) => event.kind)).toEqual([
+			"pass_preparing",
 			"pass_started",
 			"pass_receiving",
 			"pass_partial",
@@ -696,6 +1030,7 @@ describe("ContextCompactionSession", () => {
 		expect(ports.commit).not.toHaveBeenCalled()
 		const events = vi.mocked(ports.publish).mock.calls.map(([, event]) => event)
 		expect(events.map((event) => event.kind)).toEqual([
+			"pass_preparing",
 			"pass_started",
 			"pass_receiving",
 			"pass_partial",

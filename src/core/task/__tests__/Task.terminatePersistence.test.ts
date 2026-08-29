@@ -33,6 +33,8 @@ describe("Task termination persistence", () => {
 		const updateTaskHistory = vi.fn(async () => {})
 		const terminationRuntime = createTerminationRuntime(TaskPhase.CANCELLING)
 		const fakeTask = {
+			promptFreshnessInvalidationCoordinator: { dispose: vi.fn() },
+			disposePromptInputFileWatcher: vi.fn(async () => {}),
 			invalidatePreparedProviderInputs: vi.fn(),
 			cancelPendingAutoRetry: vi.fn(),
 			modeSwitchCompaction: { abort: vi.fn() },
@@ -114,6 +116,8 @@ describe("Task termination persistence", () => {
 			},
 		}
 		const fakeTask = {
+			promptFreshnessInvalidationCoordinator: { dispose: vi.fn() },
+			disposePromptInputFileWatcher: vi.fn(async () => {}),
 			invalidatePreparedProviderInputs: vi.fn(),
 			cancelPendingAutoRetry: vi.fn(),
 			modeSwitchCompaction: { abort: vi.fn() },
@@ -182,6 +186,8 @@ describe("Task termination persistence", () => {
 		const syncRetainedMachines = vi.fn()
 		const terminationRuntime = createTerminationRuntime(TaskPhase.EXECUTING)
 		const fakeTask = {
+			promptFreshnessInvalidationCoordinator: { dispose: vi.fn() },
+			disposePromptInputFileWatcher: vi.fn(async () => {}),
 			invalidatePreparedProviderInputs: vi.fn(),
 			cancelPendingAutoRetry: vi.fn(),
 			modeSwitchCompaction: { abort: vi.fn() },

@@ -83,6 +83,21 @@ describe("compaction window budget", () => {
 		expect(rendered).toContain("Preserve user feedback exactly.")
 	})
 
+	it("caps the summary response at the next-Pass carry limit", () => {
+		const result = resolveCompactionWindowBudget({
+			contextWindow: 64_000,
+			maxOutputTokens: 32_000,
+			summaryOutputLimitTokens: 1_250,
+			systemPrompt: "system",
+			buildMessages: compactionMessages,
+		})
+
+		expect(result.budget.providerOutputCap).toBe(1_250)
+		expect(result.budget.outputHardLimit).toBe(1_250)
+		expect(result.budget.recommendedMax).toBeLessThanOrEqual(1_250)
+		expect(JSON.stringify(result.messages)).toContain("Hard limit for the complete response: 1250 tokens")
+	})
+
 	it("caps the summary response at the model output limit without exceeding context remainder", () => {
 		const common = {
 			contextWindow: 64_000,
@@ -103,6 +118,19 @@ describe("compaction window budget", () => {
 			Math.min(500_000, Math.floor(large.budget.availableRemainder * 0.9), large.budget.availableRemainder - 3_000),
 		)
 		expect(small.budget.providerOutputCap).toBeLessThan(missing.budget.providerOutputCap)
+	})
+
+	it("rejects a zero next-Pass carry limit instead of generating an uncarryable summary", () => {
+		const result = resolveCompactionWindowBudget({
+			contextWindow: 64_000,
+			maxOutputTokens: 32_000,
+			summaryOutputLimitTokens: 0,
+			systemPrompt: "system",
+			buildMessages: compactionMessages,
+		})
+
+		expect(result.budget.providerOutputCap).toBe(0)
+		expect(result.budget.decision).toBe("needs_smaller_input")
 	})
 
 	it("requests a smaller input instead of inventing an output cap when no remainder exists", () => {

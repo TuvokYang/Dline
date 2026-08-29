@@ -220,7 +220,7 @@ describe("responses_api_support hosted tools", () => {
 		])
 	})
 
-	it("throws the provider error for a response.failed event instead of ending the stream silently", async () => {
+	it("preserves structured provider error details for a response.failed event", async () => {
 		// A gateway or proxy can end a Responses stream with only
 		// codex.rate_limits / codex.response.metadata / response.failed events.
 		// Previously the generator ended without yielding anything, and
@@ -229,23 +229,39 @@ describe("responses_api_support hosted tools", () => {
 		// (reading 'type')".
 		let caught: unknown
 		try {
-			await collectChunks([
+			const stream = createAsyncIterable([
 				{ type: "codex.rate_limits", sequence_number: 1 },
 				{ type: "codex.response.metadata", sequence_number: 2 },
 				{
 					type: "response.failed",
 					sequence_number: 3,
 					response: {
+						id: "resp_failed_1",
 						status: "failed",
-						error: { code: "server_error", message: "upstream exploded" },
+						error: { code: "server_error", message: "upstream exploded", param: "input" },
 					},
 				},
 			])
+			stream._request_id = "req_failed_1"
+			for await (const _ of handleResponsesApiStreamResponse(stream, { id: "test-model" }, async () => 0)) {
+				// The failed event must throw before yielding a successful terminal value.
+			}
 		} catch (error) {
 			caught = error
 		}
 		expect(caught).to.be.instanceOf(Error)
+		expect(caught).to.include({
+			name: "ResponsesApiError",
+			code: "server_error",
+			request_id: "req_failed_1",
+			response_id: "resp_failed_1",
+		})
 		expect((caught as Error).message).to.include("server_error: upstream exploded")
+		expect((caught as { details?: unknown }).details).to.deep.equal({
+			code: "server_error",
+			message: "upstream exploded",
+			param: "input",
+		})
 	})
 
 	it("does not append completed argument snapshots after streaming function-call deltas", async () => {

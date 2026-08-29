@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import type { SubagentExecResult } from "./SubagentExecutor"
 
 export type SubagentJobStatus = "running" | "completed" | "failed" | "timeout" | "cancelled"
@@ -80,8 +81,6 @@ export class SubagentJobManager {
 	private batches = new Map<string, SubagentBatchRecord>()
 	private runners = new Map<string, SubagentJobRunner>()
 	private listeners = new Map<string, SubagentJobListener>()
-	private nextJobNumber = 1
-	private nextBatchNumber = 1
 
 	/**
 	 * Start one background subagent job.
@@ -439,13 +438,13 @@ export class SubagentJobManager {
 		return order[next] === order[current] + 1
 	}
 
-	/** Build a stable job id. */
+	/** Build a process-independent job id. */
 	private nextJobId(): string {
-		return `subagent_${this.nextJobNumber++}`
+		return `subagent_${randomUUID()}`
 	}
 
-	/** Build a stable batch id. */
+	/** Build a process-independent batch id. */
 	private nextBatchId(): string {
-		return `subagent_batch_${this.nextBatchNumber++}`
+		return `subagent_batch_${randomUUID()}`
 	}
 }

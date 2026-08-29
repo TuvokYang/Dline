@@ -10,30 +10,27 @@ export interface LogicalTurnIssue {
 	functionId: string
 }
 
-export interface LogicalTurn {
-	id: string
-	startIndex: number
-	endIndex: number
-	messages: ClineStorageMessage[]
-	functionIds: string[]
+export interface LogicalTurnSpan {
+	readonly id: string
+	readonly startMessageIndex: number
+	readonly endMessageIndex: number
+	readonly functionIds: readonly string[]
 }
 
 export interface LogicalTurnIndex {
-	turns: LogicalTurn[]
-	protectedStartIndex: number
-	protectedTail: ClineStorageMessage[]
-	issues: LogicalTurnIssue[]
+	readonly turns: readonly LogicalTurnSpan[]
+	readonly protectedStartMessageIndex: number
+	readonly issues: readonly LogicalTurnIssue[]
 }
 
 /** Index canonical messages into pairing-safe complete turns and an uncommittable protected tail. */
 export function indexLogicalTurns(history: readonly ClineStorageMessage[]): LogicalTurnIndex {
-	const turns: LogicalTurn[] = []
+	const turns: LogicalTurnSpan[] = []
 	const issues: LogicalTurnIssue[] = []
 	let turnStart: number | undefined
 	let protectedStartIndex = history.length
 	let boundaryBeforeNext = false
 	let hasAssistantResponse = false
-	let terminalTaggedFeedback = false
 	let hasCompletedToolResult = false
 	const openToolUses = new Map<string, { messageIndex: number; toolName: string }>()
 	const turnFunctionIds: string[] = []
@@ -42,7 +39,6 @@ export function indexLogicalTurns(history: readonly ClineStorageMessage[]): Logi
 		turnStart = start
 		boundaryBeforeNext = false
 		hasAssistantResponse = false
-		terminalTaggedFeedback = false
 		hasCompletedToolResult = false
 		openToolUses.clear()
 		turnFunctionIds.length = 0
@@ -51,10 +47,9 @@ export function indexLogicalTurns(history: readonly ClineStorageMessage[]): Logi
 	const finalizeTurn = (endIndex: number): void => {
 		if (turnStart === undefined || endIndex < turnStart) return
 		turns.push({
-			id: `turn-${turnStart}-${endIndex}`,
-			startIndex: turnStart,
-			endIndex,
-			messages: history.slice(turnStart, endIndex + 1),
+			id: createLogicalTurnId(turnStart, endIndex, turnFunctionIds),
+			startMessageIndex: turnStart,
+			endMessageIndex: endIndex,
 			functionIds: [...turnFunctionIds],
 		})
 		resetTurn(undefined)
@@ -125,7 +120,6 @@ export function indexLogicalTurns(history: readonly ClineStorageMessage[]): Logi
 			openToolUses.delete(taggedResult.function_id)
 			boundaryBeforeNext = false
 			hasAssistantResponse = false
-			terminalTaggedFeedback = true
 			continue
 		}
 
@@ -136,13 +130,12 @@ export function indexLogicalTurns(history: readonly ClineStorageMessage[]): Logi
 				}
 				issues.push({ kind: "orphan_tool_result", messageIndex, functionId: result.function_id })
 				protectedStartIndex = turnStart ?? messageIndex
-				return buildIndex(history, turns, protectedStartIndex, issues)
+				return buildIndex(turns, protectedStartIndex, issues)
 			}
 			openToolUses.delete(result.function_id)
 			hasCompletedToolResult = true
 		}
 
-		terminalTaggedFeedback = false
 		if (openToolUses.size === 0) {
 			boundaryBeforeNext = false
 		}
@@ -168,21 +161,19 @@ export function indexLogicalTurns(history: readonly ClineStorageMessage[]): Logi
 		}
 	}
 
-	return buildIndex(history, turns, protectedStartIndex, issues)
+	return buildIndex(turns, protectedStartIndex, issues)
 }
 
-function buildIndex(
-	history: readonly ClineStorageMessage[],
-	turns: LogicalTurn[],
-	protectedStartIndex: number,
-	issues: LogicalTurnIssue[],
-): LogicalTurnIndex {
+function buildIndex(turns: LogicalTurnSpan[], protectedStartIndex: number, issues: LogicalTurnIssue[]): LogicalTurnIndex {
 	return {
 		turns,
-		protectedStartIndex,
-		protectedTail: history.slice(protectedStartIndex),
+		protectedStartMessageIndex: protectedStartIndex,
 		issues,
 	}
+}
+
+function createLogicalTurnId(startMessageIndex: number, endMessageIndex: number, functionIds: readonly string[]): string {
+	return `logical-turn:${startMessageIndex}:${endMessageIndex}:${functionIds.join(",")}`
 }
 
 function getToolUses(message: ClineStorageMessage): ClineAssistantToolUseBlock[] {

@@ -131,6 +131,22 @@ describe("context window projection", () => {
 		expect(projection.remainingRatio).toBeCloseTo(12_660 / 272_000)
 	})
 
+	it("crosses the 472k admission boundary when a 442.7k provider baseline gains the current candidate", () => {
+		const projection = resolveContextWindowProjection({
+			requestInfos: [{ contextTokens: 442_700, estimatedContextTokens: 442_700, contextTokensSource: "provider" }],
+			candidateEstimatedTokens: 443_200,
+			contextWindow: 472_000,
+			triggerTokens: 444_900,
+		})
+
+		expect(projection).toMatchObject({
+			baselineTokens: 442_700,
+			candidateDeltaTokens: 500,
+			projectedUsageTokens: 443_200,
+			shouldCompact: true,
+		})
+	})
+
 	it("estimates the complete provider candidate including system prompt, tools, server tools, and messages", () => {
 		const small = estimateContextWindowCandidate({
 			systemPrompt: "system",

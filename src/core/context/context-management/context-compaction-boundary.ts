@@ -60,16 +60,16 @@ export function projectContextCompactionBoundary(
 	)
 	const pendingCompletesProtectedTurn =
 		activeIndex.turns.length > 0 &&
-		activeIndex.protectedStartIndex < activeBoundaryHistory.length &&
+		activeIndex.protectedStartMessageIndex < activeBoundaryHistory.length &&
 		activeIndex.issues.some((issue) => issue.kind === "unpaired_tool_use" && pendingResultFunctionIds.has(issue.functionId))
 	const pendingStartsProtectedRound =
-		pendingMessage !== undefined && boundaryIndex.protectedStartIndex === activeBoundaryHistory.length
+		pendingMessage !== undefined && boundaryIndex.protectedStartMessageIndex === activeBoundaryHistory.length
 	// The logical-turn index identifies tagged user feedback as a new protected round.
 	// Ordinary tool results close the current turn at the end of the boundary view.
 	const sourceEndIndex =
 		pendingCompletesProtectedTurn && pendingStartsProtectedRound
-			? activeIndex.protectedStartIndex
-			: Math.min(boundaryIndex.protectedStartIndex, boundaryHistory.length)
+			? activeIndex.protectedStartMessageIndex
+			: Math.min(boundaryIndex.protectedStartMessageIndex, boundaryHistory.length)
 	const sourceHistory = boundaryHistory.slice(0, sourceEndIndex)
 	const boundaryCanonicalRanges = pendingMessage
 		? [...activeBoundary.canonicalRanges, undefined]
@@ -82,7 +82,7 @@ export function projectContextCompactionBoundary(
 	const sourcePairingEvidence = [...collectToolResults(activeBoundaryHistory.slice(sourceEndIndex)), ...pendingBlocks]
 
 	const naturalContinuationStart = pendingCompletesProtectedTurn
-		? activeIndex.protectedStartIndex
+		? activeIndex.protectedStartMessageIndex
 		: Math.min(sourceEndIndex, activeHistory.length)
 	const targetContinuationHistory = activeHistory.filter(
 		(message, messageIndex) =>

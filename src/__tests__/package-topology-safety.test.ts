@@ -73,11 +73,11 @@ describe("package topology safety", () => {
 		const publishMarketplace = await readProjectFile("scripts/publish-marketplace.mjs")
 		expect(publishMarketplace).toContain('"--no-dependencies"')
 
-		for (const workflowPath of [
-			".github/workflows/publish.yml",
-			".github/workflows/release.yml",
-			".github/workflows/release-draft.yml",
-		]) {
+		const workflowNames = (await fs.readdir(path.join(PROJECT_ROOT, ".github", "workflows")))
+			.filter((name) => name.endsWith(".yml") || name.endsWith(".yaml"))
+			.sort()
+		for (const workflowName of workflowNames) {
+			const workflowPath = `.github/workflows/${workflowName}`
 			expectDirectVsceCommandsToDisableDependencyScanning(await readProjectFile(workflowPath), workflowPath)
 		}
 	})

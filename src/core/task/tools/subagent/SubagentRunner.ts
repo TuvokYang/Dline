@@ -3,6 +3,7 @@ import type { ApiHandler, buildApiHandler } from "@core/api"
 import { recordProviderAdapterInput, recordProviderAdapterOutput } from "@core/api/debug/api-conversation-log"
 import type { WebSearchRoutingPlan } from "@core/api/server-tools"
 import { createIdentityFactory } from "@core/api/transform/block-identity"
+import type { ApiProviderStreamChunk } from "@core/api/transform/stream"
 import { createStreamNormalizer, normalizeApiStream } from "@core/api/transform/stream-identity-normalizer"
 import { ApiUsageAccumulator } from "@core/api/transform/usage-accumulator"
 import { parseAssistantMessageV2, ToolUse } from "@core/assistant-message"
@@ -57,6 +58,11 @@ const INITIAL_STREAM_RETRY_DELAYS_MS = [5_000, 8_000, 11_000, 14_000, 17_000] as
 const MAX_INITIAL_STREAM_ATTEMPTS = INITIAL_STREAM_RETRY_DELAYS_MS.length + 1
 const SUBAGENT_COMPLETION_CALL_EXAMPLE =
 	'Call attempt_completion with a non-empty result, for example: attempt_completion(result="...").'
+
+export interface SubagentRunnerOptions {
+	/** Keep ordinary subagents coupled to parent Task cancellation unless an explicit Activity owns their lifecycle. */
+	inheritTaskAbort?: boolean
+}
 
 class ProviderExecutionCompletion {
 	private toolCount = 0
@@ -349,6 +355,7 @@ export class SubagentRunner {
 		private baseConfig: TaskConfig,
 		subagentName = "subagent",
 		agentConfig?: AgentBaseConfig,
+		private readonly options: SubagentRunnerOptions = {},
 	) {
 		this.agent = new SubagentBuilder(baseConfig, subagentName, agentConfig)
 		this.apiHandler = this.agent.getApiHandler()
@@ -388,7 +395,7 @@ export class SubagentRunner {
 	}
 
 	private shouldAbort(): boolean {
-		return this.abortRequested || this.baseConfig.taskState.abort
+		return this.abortRequested || (this.options.inheritTaskAbort !== false && this.baseConfig.taskState.abort)
 	}
 
 	private async getWorkspaceMetadataEnvironmentBlock(): Promise<string | null> {
@@ -458,7 +465,9 @@ export class SubagentRunner {
 				mode,
 				customPrompt: this.baseConfig.services.stateManager.getGlobalSettingsKey("customPrompt"),
 			}
-			const webToolsEnabled = this.baseConfig.services.stateManager.getGlobalSettingsKey("clineWebToolsEnabled") === true
+			const webToolsEnabled =
+				this.baseConfig.webToolsEnabled ??
+				this.baseConfig.services.stateManager.getGlobalSettingsKey("clineWebToolsEnabled") === true
 			const webSearchAllowed = this.allowedTools.includes(ClineDefaultTool.WEB_SEARCH)
 			const webSearchRoutingPlan = resolveRequestWebSearchRoutingPlan(api, webToolsEnabled && webSearchAllowed)
 			const completionWebSearchRoutingPlan = resolveRequestWebSearchRoutingPlan(api, false)
@@ -489,9 +498,9 @@ export class SubagentRunner {
 			const remoteSkillEntries = this.baseConfig.services.stateManager.getRemoteConfigSettings().remoteGlobalSkills || []
 			const availableSkills = await discoverAvailableSkills(this.baseConfig.cwd, {
 				remoteSkillEntries,
-				globalSkillsToggles: this.baseConfig.services.stateManager.getGlobalSettingsKey("globalSkillsToggles") ?? {},
-				localSkillsToggles: this.baseConfig.services.stateManager.getWorkspaceStateKey("localSkillsToggles") ?? {},
-				remoteSkillsToggles: this.baseConfig.services.stateManager.getGlobalStateKey("remoteSkillsToggles") ?? {},
+				globalSkillsToggles: this.baseConfig.capabilityToggles.globalSkillsToggles,
+				localSkillsToggles: this.baseConfig.capabilityToggles.localSkillsToggles,
+				remoteSkillsToggles: this.baseConfig.capabilityToggles.remoteSkillsToggles,
 			})
 			const configuredSkillNames = this.agent.getConfiguredSkills()
 			const skills =
@@ -1171,18 +1180,50 @@ export class SubagentRunner {
 						}
 					})()
 				: undefined
-		const errorRecord = raw ?? messageRecord
+		const asRecord = (value: unknown): Record<string, unknown> | undefined =>
+			value !== null && typeof value === "object" ? (value as Record<string, unknown>) : undefined
+		const rawError = asRecord(raw?.error)
+		const rawNestedError = asRecord(rawError?.error)
+		const messageError = asRecord(messageRecord?.error)
+		const messageNestedError = asRecord(messageError?.error)
+		const parsedError = ClineError.transform(error, modelId, providerId)
 		const status =
-			errorRecord?.status ??
-			errorRecord?.statusCode ??
-			(errorRecord?.response as Record<string, unknown> | undefined)?.status
-		const code = errorRecord?.code ?? (errorRecord?.error as Record<string, unknown> | undefined)?.code
+			raw?.status ??
+			raw?.statusCode ??
+			asRecord(raw?.response)?.status ??
+			rawError?.status ??
+			rawNestedError?.status ??
+			messageRecord?.status ??
+			messageRecord?.statusCode ??
+			asRecord(messageRecord?.response)?.status ??
+			messageError?.status ??
+			messageNestedError?.status ??
+			parsedError._error.status
+		const code =
+			raw?.code ??
+			rawError?.code ??
+			rawNestedError?.code ??
+			rawNestedError?.type ??
+			rawError?.type ??
+			raw?.type ??
+			asRecord(raw?.cause)?.code ??
+			messageRecord?.code ??
+			messageError?.code ??
+			messageNestedError?.code ??
+			messageNestedError?.type ??
+			messageError?.type ??
+			messageRecord?.type ??
+			asRecord(messageRecord?.cause)?.code ??
+			parsedError._error.code
 		const numericStatus = typeof status === "number" ? status : Number(status)
 		const isRetryableStatus =
 			Number.isFinite(numericStatus) &&
-			(numericStatus === 408 || numericStatus === 409 || numericStatus === 429 || numericStatus >= 500)
-		const parsedError = ClineError.transform(error, modelId, providerId)
-		const isRetryableRequestStatus = numericStatus === 408 || numericStatus === 409
+			(numericStatus === 408 ||
+				numericStatus === 409 ||
+				numericStatus === 425 ||
+				numericStatus === 429 ||
+				numericStatus >= 500)
+		const isRetryableRequestStatus = numericStatus === 408 || numericStatus === 409 || numericStatus === 425
 		const isNonRetryableError =
 			parsedError.isErrorType(ClineErrorType.Balance) ||
 			parsedError.isErrorType(ClineErrorType.SpendLimit) ||
@@ -1190,14 +1231,22 @@ export class SubagentRunner {
 			(parsedError.isErrorType(ClineErrorType.Auth) && !isRetryableRequestStatus)
 		if (isNonRetryableError) return false
 
+		const normalizedCode = typeof code === "string" ? code.toLowerCase() : undefined
 		const isNetworkError =
-			code === "ECONNRESET" ||
-			code === "ECONNREFUSED" ||
-			code === "ETIMEDOUT" ||
-			code === "ENETUNREACH" ||
+			normalizedCode === "econnreset" ||
+			normalizedCode === "econnrefused" ||
+			normalizedCode === "etimedout" ||
+			normalizedCode === "enetunreach" ||
+			normalizedCode === "und_err_connect_timeout" ||
+			normalizedCode === "und_err_headers_timeout" ||
+			normalizedCode === "und_err_body_timeout" ||
+			normalizedCode === "und_err_socket" ||
+			normalizedCode === "server_error" ||
+			normalizedCode === "internal_error" ||
+			normalizedCode === "service_unavailable" ||
 			parsedError.isErrorType(ClineErrorType.RateLimit)
 		const isStreamInitializationFailure =
-			code === "stream_initialization_failed" ||
+			normalizedCode === "stream_initialization_failed" ||
 			(error instanceof Error && error.message.includes("stream_initialization_failed"))
 
 		return isRetryableStatus || isNetworkError || isStreamInitializationFailure
@@ -1323,27 +1372,38 @@ export class SubagentRunner {
 				roundContext,
 				api.createMessage(systemPrompt, truncatedConversation, nativeTools, {
 					serverTools: webSearchRoutingPlan.serverTools,
+					retryOwner: "subagent",
 				}),
 			)
 			const stream = providerRequestRound?.bindAttempt(providerStream, attempt - 1) ?? providerStream
 			const iterator = stream[Symbol.asyncIterator]()
-			let didYieldChunk = false
+			const bufferedUsageChunks: Array<Extract<ApiProviderStreamChunk, { type: "usage" }>> = []
+			let didYieldSemanticChunk = false
 
 			try {
-				const firstChunk = await iterator.next()
-				if (!firstChunk.done) {
-					didYieldChunk = true
-					yield firstChunk.value
-				}
+				while (true) {
+					const nextChunk = await iterator.next()
+					if (nextChunk.done) {
+						for (const usageChunk of bufferedUsageChunks) yield usageChunk
+						return
+					}
+					if (nextChunk.value.type === "usage") {
+						bufferedUsageChunks.push(nextChunk.value)
+						continue
+					}
 
-				yield* { [Symbol.asyncIterator]: () => iterator }
-				return
+					didYieldSemanticChunk = true
+					for (const usageChunk of bufferedUsageChunks) yield usageChunk
+					yield nextChunk.value
+					yield* { [Symbol.asyncIterator]: () => iterator }
+					return
+				}
 			} catch (error) {
 				if (this.finishRequested && !this.shouldAbort()) return
 
-				// Once the caller has observed any response content, replaying the request
-				// would duplicate streamed text and hosted/native tool lifecycles.
-				if (didYieldChunk) {
+				// Usage-only prefixes are attempt-local accounting and remain replayable.
+				// Once semantic output is observable, replay would duplicate content or tool lifecycles.
+				if (didYieldSemanticChunk) {
 					throw error
 				}
 

@@ -1,6 +1,6 @@
-import { readFile, writeFile } from "node:fs/promises"
+import { readdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
-import { expect, type Frame, type Locator } from "@playwright/test"
+import { expect, type Frame, type Locator, type Page } from "@playwright/test"
 import type { ElectronApplication } from "playwright"
 import { E2E_PROFILE_NAMES } from "./utils/api-profile"
 import { E2ETestHelper, e2e } from "./utils/helpers"
@@ -325,7 +325,6 @@ function expectCompactionBudgetFormula(requestBody: unknown): ParsedCompactionBu
 	expect(requestText).toContain("The recommended range is guidance, not a quota or a minimum output requirement")
 	expect(requestText).toContain("Do not expand the analysis or summary merely to fill the available range")
 	expect(requestText).toContain("Preserve all information required to continue the task accurately and completely")
-	expect(requestText).not.toContain("<compaction_window_budget />")
 	expect(requestText).not.toMatch(/estimated (?:compaction request )?input/i)
 	return budget
 }
@@ -346,6 +345,92 @@ async function sendTask(sidebar: Frame, text: string): Promise<void> {
 	await input.press("Enter")
 	await expect(input).toHaveValue("")
 	await expect(sidebar.getByText(text, { exact: true }).last()).toBeVisible()
+}
+
+async function closeCurrentTask(sidebar: Frame): Promise<void> {
+	const closeButton = sidebar.getByRole("button", { name: "Close Task", exact: true })
+	await expect(closeButton).toBeVisible({ timeout: 30_000 })
+	await closeButton.click()
+	await expect(sidebar.getByTestId("chat-input")).toBeVisible({ timeout: 30_000 })
+	await E2ETestHelper.dismissWhatsNewModal(sidebar)
+}
+
+async function reopenTask(page: Page, sidebar: Frame, taskText: string): Promise<void> {
+	await page.getByRole("button", { name: "History", exact: true }).click()
+	await E2ETestHelper.dismissWhatsNewModal(sidebar)
+	const historyTask = sidebar.locator(".history-item").filter({ hasText: taskText })
+	await expect(historyTask).toHaveCount(1)
+	await historyTask.click()
+	await expect(sidebar.getByRole("button", { name: "Close Task", exact: true })).toBeVisible({ timeout: 30_000 })
+	await expect(sidebar.getByText(taskText, { exact: true }).first()).toBeVisible({ timeout: 30_000 })
+}
+
+async function onlyTaskId(dlineDocsDir: string): Promise<string> {
+	const entries = await readdir(path.join(dlineDocsDir, "tasks"), { withFileTypes: true })
+	const taskIds = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+	if (taskIds.length !== 1 || !taskIds[0]) throw new Error(`Expected exactly one persisted task, found ${taskIds.length}`)
+	return taskIds[0]
+}
+
+async function seedLargeCompactionHistory(
+	dlineDocsDir: string,
+	taskId: string,
+	turns: readonly { user: string; assistant: string }[],
+): Promise<number> {
+	const taskDirectory = path.join(dlineDocsDir, "tasks", taskId)
+	const now = Date.now()
+	const history = turns.flatMap((turn, index) => [
+		{ role: "user", content: [{ type: "text", text: turn.user }], ts: now + index * 2 },
+		{ role: "assistant", content: [{ type: "text", text: turn.assistant }], ts: now + index * 2 + 1 },
+	])
+	await writeFile(
+		path.join(taskDirectory, "api_conversation_history.jsonl"),
+		`${history.map((message) => JSON.stringify(message)).join("\n")}\n`,
+		"utf8",
+	)
+
+	const snapshotPath = path.join(taskDirectory, "snapshot.json")
+	const snapshot = JSON.parse(await readFile(snapshotPath, "utf8")) as Record<string, unknown>
+	const assistantApiIndex = history.length - 1
+	const turnId = `turn:e2e-bug011-large:${taskId}`
+	snapshot.phase = "between_turns"
+	snapshot.apiIndex = assistantApiIndex
+	snapshot.revision = typeof snapshot.revision === "number" ? snapshot.revision + 1 : 1
+	snapshot.anchor = { apiIndex: assistantApiIndex, turnId }
+	snapshot.turn = { turnId, assistantApiIndex, mode: "serial", blocks: [] }
+	for (const key of [
+		"interaction",
+		"interruptedInteraction",
+		"cancellation",
+		"completion",
+		"runtimeError",
+		"error",
+		"awaiting",
+		"approval",
+		"execution",
+		"resume",
+	]) {
+		delete snapshot[key]
+	}
+	await writeFile(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8")
+	return estimateTokens({ systemPrompt: "", messages: history, tools: [], serverTools: [] })
+}
+
+async function readPersistedCompactionCards(dlineDocsDir: string, taskId: string): Promise<Array<Record<string, unknown>>> {
+	const raw = await readFile(path.join(dlineDocsDir, "tasks", taskId, "ui_messages.jsonl"), "utf8")
+	return raw
+		.split(/\r?\n/)
+		.filter(Boolean)
+		.flatMap((line) => {
+			const message = JSON.parse(line) as { say?: string; text?: string; partial?: boolean }
+			if (message.say !== "tool" || !message.text || message.partial === true) return []
+			try {
+				const tool = JSON.parse(message.text) as Record<string, unknown>
+				return tool.tool === "summarizeTask" ? [tool] : []
+			} catch {
+				return []
+			}
+		})
 }
 
 async function pastePngWithTrailingBytes(input: Locator, trailingBytes: number): Promise<void> {
@@ -397,7 +482,7 @@ e2e(
 					"Hard limit for the complete response:",
 					"Recommended total response range:",
 				],
-				expectedRequestExcludes: ["<compaction_window_budget />", "E2E_CHAT_COMPACTION_CONTINUE"],
+				expectedRequestExcludes: ["E2E_CHAT_COMPACTION_CONTINUE"],
 			},
 			{
 				type: "tool",
@@ -488,7 +573,6 @@ e2e(
 			expect(summaryRequestText).toMatch(/Estimated available context-window remainder: [1-9][0-9]* tokens/)
 			expect(summaryRequestText).toMatch(/Hard limit for the complete response: [1-9][0-9]* tokens/)
 			expect(summaryRequestText).toMatch(/Recommended total response range: [0-9]+[–-][1-9][0-9]* tokens/)
-			expect(summaryRequestText).not.toContain("<compaction_window_budget />")
 
 			const finalBody = requests[2].requestBody as {
 				messages?: Array<{ role?: string; tool_call_id?: string; content?: unknown }>
@@ -562,6 +646,64 @@ e2e(
 			expect(imageRequest).toContain("image/png")
 			expect(imageRequest).toContain(ONE_PIXEL_PNG_BASE64_PREFIX)
 			expect(imageRequest.length).toBeGreaterThan(800_000)
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app.close()
+		}
+	},
+)
+
+e2e(
+	"OpenAI compaction - a 442.7K Provider baseline admits the current candidate only after automatic compaction",
+	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(180_000)
+		await configureTriggerBoundary(dlineDir, 472_000, 0, 5_000, 30_000, 95)
+		const continuationMarker = `E2E_442_7K_FINAL_ADMISSION:${"x".repeat(4_000)}`
+		const summaryMarker = "E2E_442_7K_SUMMARY"
+		server.enqueueResponses(
+			"openai-compatible-responses",
+			{
+				type: "tool",
+				id: "call_442_7k_ready",
+				name: "qna_respond",
+				arguments: { response: "E2E_442_7K_READY" },
+				usage: { inputTokens: 442_600, outputTokens: 100 },
+				matchRequestContract: true,
+			},
+			{
+				type: "tool",
+				id: "call_442_7k_summary",
+				name: "summarize_task",
+				arguments: { context: `${summaryMarker} preserves the complete prior turn.` },
+				expectedRequestIncludes: ["The current conversation is rapidly running out of context", "E2E_442_7K_TASK"],
+				expectedRequestExcludes: [continuationMarker],
+				matchRequestContract: true,
+			},
+			{
+				type: "tool",
+				id: "call_442_7k_complete",
+				name: "attempt_completion",
+				arguments: { result: "E2E_442_7K_OK" },
+				expectedRequestIncludes: [summaryMarker, continuationMarker],
+				expectedRequestExcludes: ["The current conversation is rapidly running out of context"],
+				matchRequestContract: true,
+			},
+		)
+
+		const app = await openVSCode(workspaceDir)
+		try {
+			const sidebar = await openSidebar(app, helper)
+			await sendTask(sidebar, "E2E_442_7K_TASK")
+			await expect(sidebar.getByText("E2E_442_7K_READY", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+			await sendTask(sidebar, continuationMarker)
+			await expect(sidebar.getByText("E2E_442_7K_OK", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(3)
+			const requests = server.getMockConsumptions("openai-compatible-responses")
+			expect(requests[0]).toMatchObject({ usage: { inputTokens: 442_600, outputTokens: 100 } })
+			expect(requests[1]).toMatchObject({ responseType: "tool", toolName: "summarize_task" })
+			expect(requests[2]).toMatchObject({ responseType: "tool", toolName: "attempt_completion" })
+			expect(requests.every((request) => request.contractError === undefined)).toBe(true)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
 			await app.close()
@@ -1105,6 +1247,166 @@ e2e(
 	},
 )
 
+e2e(
+	"BUG-011 compaction - approximately 800K source refits a 600K first projection and completes Pass 2",
+	async ({ dlineDir, dlineDocsDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(360_000)
+		await configureTriggerBoundary(dlineDir, 472_000, 0, 5_000, 30_000, 95)
+		const taskText = "E2E_BUG011_800K_TASK"
+		const turnAMarker = "E2E_BUG011_800K_TURN_A"
+		const turnBMarker = "E2E_BUG011_800K_TURN_B"
+		const continuationMarker = "E2E_BUG011_800K_CONTINUE"
+		const firstSummaryMarker = "E2E_BUG011_800K_SUMMARY_ONE"
+		const refitSummaryMarker = "E2E_BUG011_800K_REFITTED"
+		const finalSummary = "E2E_BUG011_800K_FINAL_SUMMARY preserves both complete logical turns."
+		const firstSummary = `${firstSummaryMarker}:${"S".repeat(800_000)}`
+		const refittedSummary = `${refitSummaryMarker}:${"R".repeat(160_000)}`
+		const turnPayload = "x".repeat(1_570_000)
+
+		server.enqueueResponses(
+			"openai-compatible-responses",
+			{
+				type: "tool",
+				id: "call_bug011_800k_setup",
+				name: "qna_respond",
+				arguments: { response: "E2E_BUG011_800K_SETUP_READY" },
+				usage: { inputTokens: 1_000, outputTokens: 100 },
+			},
+			{
+				type: "tool",
+				id: "call_bug011_800k_pass_1",
+				name: "summarize_task",
+				arguments: { context: firstSummary },
+				expectedRequestIncludes: ["The current conversation is rapidly running out of context", turnAMarker],
+				expectedRequestExcludes: [turnBMarker, continuationMarker, "# Summary Refit"],
+				matchRequestContract: true,
+			},
+			{
+				type: "tool",
+				id: "call_bug011_800k_refit",
+				name: "summarize_task",
+				arguments: { context: refittedSummary },
+				expectedRequestIncludes: ["# Summary Refit", firstSummaryMarker],
+				expectedRequestExcludes: [turnAMarker, turnBMarker, continuationMarker],
+				matchRequestContract: true,
+			},
+			{
+				type: "tool",
+				id: "call_bug011_800k_pass_2",
+				name: "summarize_task",
+				arguments: { context: finalSummary },
+				expectedRequestIncludes: [
+					"The current conversation is rapidly running out of context",
+					refitSummaryMarker,
+					turnBMarker,
+				],
+				expectedRequestExcludes: [turnAMarker, firstSummaryMarker, continuationMarker, "# Summary Refit"],
+				matchRequestContract: true,
+			},
+			{
+				type: "tool",
+				id: "call_bug011_800k_complete",
+				name: "attempt_completion",
+				arguments: { result: "E2E_BUG011_800K_OK" },
+				expectedRequestIncludes: [finalSummary, continuationMarker],
+				expectedRequestExcludes: [turnAMarker, turnBMarker, firstSummaryMarker, refitSummaryMarker],
+				matchRequestContract: true,
+			},
+		)
+
+		let firstApp: ElectronApplication | undefined
+		let resumedApp: ElectronApplication | undefined
+		try {
+			firstApp = await openVSCode(workspaceDir)
+			const first = await openSidebar(firstApp, helper)
+			await sendTask(first, taskText)
+			await expect(first.getByText("E2E_BUG011_800K_SETUP_READY", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+			await closeCurrentTask(first)
+			await firstApp.close()
+			firstApp = undefined
+			helper.clearCachedFrame()
+
+			const taskId = await onlyTaskId(dlineDocsDir)
+			const seededTokens = await seedLargeCompactionHistory(dlineDocsDir, taskId, [
+				{ user: `${turnAMarker}_USER`, assistant: `${turnAMarker}:${turnPayload}` },
+				{ user: `${turnBMarker}_USER`, assistant: `${turnBMarker}:${turnPayload}` },
+			])
+			expect(seededTokens).toBeGreaterThan(780_000)
+			expect(seededTokens).toBeLessThan(820_000)
+
+			resumedApp = await openVSCode(workspaceDir)
+			const page = await resumedApp.firstWindow()
+			await E2ETestHelper.openClineSidebar(page)
+			const sidebar = await helper.getSidebar(page)
+			await E2ETestHelper.dismissWhatsNewModal(sidebar)
+			await helper.signin(sidebar)
+			await reopenTask(page, sidebar, taskText)
+			await sendTask(sidebar, continuationMarker)
+			await expect(sidebar.getByText("E2E_BUG011_800K_OK", { exact: false }).last()).toBeVisible({ timeout: 180_000 })
+
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses"), { timeout: 180_000 }).toBe(5)
+			const requests = server.getMockConsumptions("openai-compatible-responses")
+			expect(requests.slice(1).map((request) => request.toolName)).toEqual([
+				"summarize_task",
+				"summarize_task",
+				"summarize_task",
+				"attempt_completion",
+			])
+			const firstProjectionTokens = estimateTokens({
+				systemPrompt: "",
+				messages: [
+					{ role: "user", content: [{ type: "text", text: firstSummary }] },
+					{ role: "user", content: [{ type: "text", text: `${turnBMarker}_USER` }] },
+					{ role: "assistant", content: [{ type: "text", text: `${turnBMarker}:${turnPayload}` }] },
+				],
+				tools: [],
+				serverTools: [],
+			})
+			expect(firstProjectionTokens).toBeGreaterThan(570_000)
+			expect(firstProjectionTokens).toBeLessThan(630_000)
+			expect(requests.every((request) => request.contractError === undefined)).toBe(true)
+
+			const pass0 = sidebar.locator(
+				'[data-testid="compaction-pass"][data-compaction-unit-kind="pass"][data-compaction-unit-index="0"]',
+			)
+			const refit0 = sidebar.locator(
+				'[data-testid="compaction-pass"][data-compaction-unit-kind="summary_refit"][data-compaction-unit-index="0"]',
+			)
+			const pass1 = sidebar.locator(
+				'[data-testid="compaction-pass"][data-compaction-unit-kind="pass"][data-compaction-unit-index="1"]',
+			)
+			await expect(pass0).toHaveAttribute("data-compaction-status", "completed")
+			await expect(refit0).toHaveAttribute("data-compaction-status", "completed")
+			await expect(pass1).toHaveAttribute("data-compaction-status", "completed")
+			await expect(pass0).toContainText(firstSummaryMarker)
+			await expect(refit0).toContainText(refitSummaryMarker)
+			await expect(pass1).toContainText("E2E_BUG011_800K_FINAL_SUMMARY")
+
+			const persistedCards = await E2ETestHelper.waitForValue(async () => {
+				const cards = await readPersistedCompactionCards(dlineDocsDir, taskId)
+				return cards.length >= 3 ? cards : undefined
+			}, 30_000)
+			expect(
+				persistedCards.map((card) => ({
+					kind: card.compactionUnitKind,
+					index: card.compactionUnitIndex,
+					status: card.compactionStatus,
+				})),
+			).toEqual(
+				expect.arrayContaining([
+					{ kind: "pass", index: 0, status: "completed" },
+					{ kind: "summary_refit", index: 0, status: "completed" },
+					{ kind: "pass", index: 1, status: "completed" },
+				]),
+			)
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await firstApp?.close()
+			await resumedApp?.close()
+		}
+	},
+)
+
 for (const providerCase of ROLLING_MERGE_PROVIDER_CASES) {
 	e2e(
 		`Context compaction - ${providerCase.label} rolling merge preserves complete logical-turn request content`,
@@ -1425,7 +1727,6 @@ e2e(
 					"The current conversation is rapidly running out of context",
 					"Hard limit for the complete response:",
 				],
-				expectedRequestExcludes: ["<compaction_window_budget />"],
 			},
 			{
 				type: "message",
@@ -1435,7 +1736,7 @@ e2e(
 					"The current conversation is rapidly running out of context",
 					"Hard limit for the complete response:",
 				],
-				expectedRequestExcludes: [TRUNCATED_SUMMARY_MARKER, "<compaction_window_budget />"],
+				expectedRequestExcludes: [TRUNCATED_SUMMARY_MARKER],
 			},
 			{
 				type: "tool",

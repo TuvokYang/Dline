@@ -1,18 +1,28 @@
 import type { ApiHandler } from "@core/api"
 import type { CanonicalMessageRange } from "@core/context/context-management/compaction-context-projection"
 import { planNextCompactionPass } from "@core/context/context-management/compaction-pass-planner"
+import { type ContextCompactionPhaseTiming, elapsedCompactionMs } from "@core/context/context-management/compaction-phase-timing"
 import { CompactionRetryPolicy } from "@core/context/context-management/compaction-retry-policy"
+import { createCompactionSourceSnapshot } from "@core/context/context-management/compaction-source-snapshot"
 import {
 	type InternalCompactionAttemptIdentity,
 	type InternalCompactionPassRetryEvent,
 	runInternalCompactionPassWithRetry,
 } from "@core/context/context-management/internal-compaction-pass"
 import { indexLogicalTurns } from "@core/context/context-management/logical-turns"
+import {
+	createSummaryRefitIdentity,
+	formatSummaryRefitFailure,
+	MAX_SUMMARY_REFIT_ATTEMPTS,
+	resolveSummaryRefitCarryLimit,
+	type SummaryCarryOverflow,
+} from "@core/context/context-management/summary-refit"
 import type { TargetWindowFittingDecision } from "@core/context/context-management/TargetWindowFittingService"
 import {
 	acceptCompactionPass,
 	applyCompactionPassPlan,
 	getCompactionPassIdentity,
+	refitCompactionSummary,
 	type TargetWindowFittingState,
 	tryStartTargetWindowFitting,
 } from "@core/context/context-management/target-window-fitting"
@@ -76,6 +86,8 @@ export interface ContextCompactionSessionInput {
 	includeFileDetails?: boolean
 	didSwitchFromPlan?: boolean
 	transition?: ContextCompactionTransitionState
+	/** Time already spent projecting the trigger-specific source before Session admission. */
+	boundaryProjectionMs?: number
 	signal?: AbortSignal
 }
 
@@ -112,6 +124,10 @@ export type ContextCompactionReprojection = TargetWindowFittingDecision & {
 
 export type ContextCompactionSessionEvent =
 	| {
+			kind: "pass_preparing"
+			state: TargetWindowFittingState
+	  }
+	| {
 			kind: "pass_started"
 			state: TargetWindowFittingState
 			passIdentity: ReturnType<typeof getCompactionPassIdentity>
@@ -145,6 +161,50 @@ export type ContextCompactionSessionEvent =
 			projection: ContextCompactionReprojection
 			content: string
 	  }
+	| {
+			kind: "summary_refit_preparing"
+			state: TargetWindowFittingState
+			passIdentity: ReturnType<typeof createSummaryRefitIdentity>
+			refitAttempt: number
+			carryLimitTokens: number
+	  }
+	| {
+			kind: "summary_refit_started"
+			state: TargetWindowFittingState
+			passIdentity: ReturnType<typeof createSummaryRefitIdentity>
+			attempt: InternalCompactionAttemptIdentity
+			providerInput: CompactionProviderInput
+			refitAttempt: number
+			carryLimitTokens: number
+	  }
+	| {
+			kind: "summary_refit_receiving"
+			passIdentity: ReturnType<typeof createSummaryRefitIdentity>
+			attempt: InternalCompactionAttemptIdentity
+			chunk: unknown
+	  }
+	| {
+			kind: "summary_refit_partial"
+			passIdentity: ReturnType<typeof createSummaryRefitIdentity>
+			attempt: InternalCompactionAttemptIdentity
+			content: string
+	  }
+	| {
+			kind: "summary_refit_retry"
+			state: TargetWindowFittingState
+			passIdentity: ReturnType<typeof createSummaryRefitIdentity>
+			providerInput: CompactionProviderInput
+			event: InternalCompactionPassRetryEvent
+	  }
+	| {
+			kind: "summary_refit_completed"
+			state: TargetWindowFittingState
+			passIdentity: ReturnType<typeof createSummaryRefitIdentity>
+			attempt: InternalCompactionAttemptIdentity
+			content: string
+			refitAttempt: number
+			carryLimitTokens: number
+	  }
 	| { kind: "failed"; state?: TargetWindowFittingState; error: string }
 
 export interface ContextCompactionSessionPorts {
@@ -154,6 +214,13 @@ export interface ContextCompactionSessionPorts {
 		input: ContextCompactionSessionInput,
 		state: TargetWindowFittingState,
 		feedback?: readonly ClineContent[],
+		passHistory?: readonly ClineStorageMessage[],
+	): Promise<ContextCompactionPassRequest>
+	buildSummaryRefitRequest(
+		input: ContextCompactionSessionInput,
+		state: TargetWindowFittingState,
+		carryLimitTokens: number,
+		refitAttempt: number,
 	): Promise<ContextCompactionPassRequest>
 	reviewPass?(
 		input: ContextCompactionSessionInput,
@@ -172,6 +239,7 @@ export interface ContextCompactionSessionPorts {
 	publish(input: ContextCompactionSessionInput, event: ContextCompactionSessionEvent): Promise<void>
 	waitForRetry(input: ContextCompactionSessionInput, retryAttempt: number, signal: AbortSignal): Promise<void>
 	recordUsage?(usage: { inputTokens: number; outputTokens: number; cacheWriteTokens: number; cacheReadTokens: number }): void
+	recordTiming?(timing: ContextCompactionPhaseTiming): void
 	providerRequestRounds?: ProviderRequestRoundPort
 }
 
@@ -210,11 +278,11 @@ export class ContextCompactionSession {
 			settle: () => settleActive?.(),
 		}
 		const signal = combineSignals(input.signal, abortController.signal)
-		let state = tryStartTargetWindowFitting(
-			indexLogicalTurns(cloneDeep(input.sourceHistory)),
-			input.operationId,
-			input.sourceCanonicalRanges,
-		)
+		const sourceSnapshot = createCompactionSourceSnapshot(input.sourceHistory, input.sourceCanonicalRanges)
+		const logicalTurnIndexStartedAtMs = performance.now()
+		const logicalTurnIndex = indexLogicalTurns(sourceSnapshot.messages)
+		const logicalTurnIndexMs = elapsedCompactionMs(logicalTurnIndexStartedAtMs)
+		let state = tryStartTargetWindowFitting(logicalTurnIndex, input.operationId, sourceSnapshot)
 		if (!state) {
 			const reason = "No complete logical turn is available for context compaction."
 			await this.ports.publish(input, { kind: "failed", error: reason })
@@ -222,30 +290,53 @@ export class ContextCompactionSession {
 			this.active = undefined
 			return "failed"
 		}
-		this.active.state = cloneDeep(state)
+		this.active.state = snapshotFittingState(state)
 
+		let consecutiveSummaryRefitAttempts = 0
 		try {
 			while (true) {
 				try {
 					this.assertCurrent(input.operationId, signal)
+					await this.ports.publish(input, {
+						kind: "pass_preparing",
+						state: snapshotFittingState(state),
+					})
+					const plannerStartedAtMs = performance.now()
 					const planResult = await planNextCompactionPass({
 						state,
 						passInputCeiling: this.ports.getPassInputCeiling(input),
 						estimateInputTokens: (passHistory) => this.ports.estimatePassInput(input, passHistory),
 					})
+					const plannerMs = elapsedCompactionMs(plannerStartedAtMs)
 					this.assertCurrent(input.operationId, signal)
-					if (planResult.kind === "needs_smaller_input") {
-						throw new Error(
-							`Logical turn ${planResult.turnIndex} requires ${planResult.estimatedInputTokens} input tokens, exceeding the compaction Pass ceiling ${planResult.passInputCeiling}.`,
-						)
+					if (planResult.kind === "summary_carry_overflow" && state.cumulativeSummary) {
+						if (consecutiveSummaryRefitAttempts >= MAX_SUMMARY_REFIT_ATTEMPTS) {
+							throw new Error(
+								formatSummaryRefitFailure(
+									planResult,
+									consecutiveSummaryRefitAttempts,
+									resolveSummaryRefitCarryLimit(planResult),
+								),
+							)
+						}
+						consecutiveSummaryRefitAttempts += 1
+						state = await this.runSummaryRefit(input, state, planResult, consecutiveSummaryRefitAttempts, signal)
+						if (this.active?.operationId === input.operationId) this.active.state = snapshotFittingState(state)
+						continue
+					}
+					if (planResult.kind !== "planned") {
+						throw new Error(formatCompactionPlanningFailure(planResult))
 					}
 					state = applyCompactionPassPlan(state, planResult.plan)
-					if (this.active?.operationId === input.operationId) this.active.state = cloneDeep(state)
+					const plannedState = state
+					if (this.active?.operationId === input.operationId) this.active.state = snapshotFittingState(state)
 
-					let passGuidance = cloneDeep(input.passGuidance ?? [])
-					let request = await this.ports.buildPassRequest(input, state, passGuidance)
-					this.assertCurrent(input.operationId, signal)
 					const passIdentity = getCompactionPassIdentity(state)
+					let passGuidance = cloneDeep(input.passGuidance ?? [])
+					const requestBuildStartedAtMs = performance.now()
+					let request = await this.ports.buildPassRequest(input, state, passGuidance, planResult.passHistory)
+					const requestBuildMs = elapsedCompactionMs(requestBuildStartedAtMs)
+					this.assertCurrent(input.operationId, signal)
 					let attemptIndex = 0
 					const initialAttempt: InternalCompactionAttemptIdentity = {
 						attemptIndex,
@@ -253,7 +344,7 @@ export class ContextCompactionSession {
 					}
 					await this.ports.publish(input, {
 						kind: "pass_started",
-						state: cloneDeep(state),
+						state: snapshotFittingState(state),
 						passIdentity,
 						attempt: initialAttempt,
 						providerInput: request.providerInput,
@@ -288,7 +379,7 @@ export class ContextCompactionSession {
 									this.assertCurrent(input.operationId, signal)
 									await this.ports.publish(input, {
 										kind: "pass_retry",
-										state: cloneDeep(state as TargetWindowFittingState),
+										state: snapshotFittingState(plannedState),
 										passIdentity,
 										providerInput: request.providerInput,
 										event,
@@ -325,14 +416,19 @@ export class ContextCompactionSession {
 							this.assertCurrent(input.operationId, signal)
 							if (review.action === "regenerate") {
 								request.explicitInstructions.close()
-								const nextRequest = await this.ports.buildPassRequest(input, state, review.feedback)
+								const nextRequest = await this.ports.buildPassRequest(
+									input,
+									state,
+									review.feedback,
+									planResult.passHistory,
+								)
 								const nextAttempt: InternalCompactionAttemptIdentity = {
 									attemptIndex: result.attemptIndex + 1,
 									authorizationAttemptId: nextRequest.initialAttemptId,
 								}
 								await this.ports.publish(input, {
 									kind: "pass_retry",
-									state: cloneDeep(state),
+									state: snapshotFittingState(state),
 									passIdentity,
 									providerInput: nextRequest.providerInput,
 									event: {
@@ -349,21 +445,36 @@ export class ContextCompactionSession {
 							}
 
 							const nextState = acceptCompactionPass(state, result.summary).state
-							projection = await this.ports.reprojectTarget(input, cloneDeep(nextState))
+							const reprojectionStartedAtMs = performance.now()
+							projection = await this.ports.reprojectTarget(input, snapshotFittingState(nextState))
+							const reprojectionMs = elapsedCompactionMs(reprojectionStartedAtMs)
 							this.assertCurrent(input.operationId, signal)
 							await this.ports.stageAcceptedPass(input, nextState, projection)
 							this.assertCurrent(input.operationId, signal)
 							state = nextState
-							if (this.active?.operationId === input.operationId) this.active.state = cloneDeep(state)
+							consecutiveSummaryRefitAttempts = 0
+							if (this.active?.operationId === input.operationId) this.active.state = snapshotFittingState(state)
 							await this.ports.publish(input, {
 								kind: "pass_completed",
-								state: cloneDeep(state),
+								state: snapshotFittingState(state),
 								passIdentity,
 								attempt: completedAttempt,
 								projection,
 								content: result.summary,
 							})
 							this.recordAcceptedPassUsage(result)
+							this.ports.recordTiming?.({
+								operationId: input.operationId,
+								passIndex: passIdentity.passIndex,
+								boundaryProjectionMs: input.boundaryProjectionMs ?? 0,
+								logicalTurnIndexMs,
+								plannerMs,
+								candidateEstimateCount: planResult.plan.candidateEstimateCount,
+								requestBuildMs,
+								providerTtfbMs: result.timing.providerTtfbMs,
+								streamMs: result.timing.streamMs,
+								reprojectionMs,
+							})
 							request.explicitInstructions.close()
 							break
 						}
@@ -390,7 +501,7 @@ export class ContextCompactionSession {
 			}
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error)
-			await this.ports.publish(input, { kind: "failed", state: cloneDeep(state), error: reason })
+			await this.ports.publish(input, { kind: "failed", state: snapshotFittingState(state), error: reason })
 			return signal.aborted ? "cancelled" : "failed"
 		} finally {
 			const active = this.active?.operationId === input.operationId ? this.active : undefined
@@ -408,6 +519,122 @@ export class ContextCompactionSession {
 
 	getActiveOperationId(): string | undefined {
 		return this.active?.operationId
+	}
+
+	private async runSummaryRefit(
+		input: ContextCompactionSessionInput,
+		state: TargetWindowFittingState,
+		overflow: SummaryCarryOverflow,
+		refitAttempt: number,
+		signal: AbortSignal,
+	): Promise<TargetWindowFittingState> {
+		const carryLimitTokens = resolveSummaryRefitCarryLimit(overflow)
+		if (carryLimitTokens <= 0) {
+			throw new Error(formatSummaryRefitFailure(overflow, refitAttempt - 1, carryLimitTokens))
+		}
+		const passIdentity = createSummaryRefitIdentity(state, refitAttempt - 1)
+		await this.ports.publish(input, {
+			kind: "summary_refit_preparing",
+			state: snapshotFittingState(state),
+			passIdentity,
+			refitAttempt,
+			carryLimitTokens,
+		})
+		const request = await this.ports.buildSummaryRefitRequest(input, state, carryLimitTokens, refitAttempt)
+		const initialAttempt: InternalCompactionAttemptIdentity = {
+			attemptIndex: 0,
+			authorizationAttemptId: request.initialAttemptId,
+		}
+		await this.ports.publish(input, {
+			kind: "summary_refit_started",
+			state: snapshotFittingState(state),
+			passIdentity,
+			attempt: initialAttempt,
+			providerInput: request.providerInput,
+			refitAttempt,
+			carryLimitTokens,
+		})
+		try {
+			const providerRequestRound = this.ports.providerRequestRounds?.admit({ source: "compaction" })
+			const automaticReplayAllowed = !isManualTrigger(input.trigger)
+			const result = await runInternalCompactionPassWithRetry({
+				api: input.compactionApi,
+				providerInput: request.providerInput,
+				explicitInstructions: request.explicitInstructions,
+				taskNamespace: input.taskNamespace,
+				providerRequestRound,
+				passIdentity,
+				retryPolicy: new CompactionRetryPolicy(automaticReplayAllowed ? this.options.maxRetryAttempts : 0),
+				allowOpenAiMaxOutputReplay: automaticReplayAllowed,
+				attemptIdFactory: (attemptIndex) =>
+					attemptIndex === 0
+						? request.initialAttemptId
+						: `fitting:${input.operationId}:refit:${refitAttempt}:attempt:${attemptIndex}`,
+				waitForRetry: async (retryAttempt) => {
+					this.assertCurrent(input.operationId, signal)
+					await this.ports.waitForRetry(input, retryAttempt, signal)
+				},
+				onRetry: async (event) => {
+					this.assertCurrent(input.operationId, signal)
+					await this.ports.publish(input, {
+						kind: "summary_refit_retry",
+						state: snapshotFittingState(state),
+						passIdentity,
+						providerInput: request.providerInput,
+						event,
+					})
+				},
+				onChunk: async (chunk, attempt) => {
+					this.assertCurrent(input.operationId, signal)
+					await this.ports.publish(input, {
+						kind: "summary_refit_receiving",
+						passIdentity,
+						attempt,
+						chunk: cloneDeep(chunk),
+					})
+				},
+				onSummaryUpdate: async (content, attempt) => {
+					this.assertCurrent(input.operationId, signal)
+					await this.ports.publish(input, {
+						kind: "summary_refit_partial",
+						passIdentity,
+						attempt,
+						content,
+					})
+				},
+			})
+			this.completeProviderExecution(result, providerRequestRound)
+			this.assertCurrent(input.operationId, signal)
+			let nextState: TargetWindowFittingState
+			try {
+				nextState = refitCompactionSummary(state, result.summary)
+			} catch (error) {
+				const reason = error instanceof Error ? error.message : String(error)
+				throw new Error(
+					`${formatSummaryRefitFailure(overflow, refitAttempt, carryLimitTokens)} ` +
+						`Refit output was rejected: ${reason}`,
+				)
+			}
+			const completedAttempt: InternalCompactionAttemptIdentity = {
+				attemptIndex: result.attemptIndex,
+				authorizationAttemptId: result.authorizationAttemptId,
+			}
+			await this.ports.publish(input, {
+				kind: "summary_refit_completed",
+				state: snapshotFittingState(nextState),
+				passIdentity,
+				attempt: completedAttempt,
+				content: result.summary,
+				refitAttempt,
+				carryLimitTokens,
+			})
+			this.recordAcceptedPassUsage(result)
+			request.explicitInstructions.close()
+			return nextState
+		} catch (error) {
+			request.explicitInstructions.cancel()
+			throw error
+		}
 	}
 
 	private completeProviderExecution(
@@ -438,6 +665,22 @@ export class ContextCompactionSession {
 		if (signal.aborted) throw signal.reason ?? new Error("Context compaction cancelled.")
 		if (this.active?.operationId !== operationId) throw new Error("Context compaction operation became stale.")
 	}
+}
+
+function snapshotFittingState(state: TargetWindowFittingState): TargetWindowFittingState {
+	return { ...state }
+}
+
+function formatCompactionPlanningFailure(
+	result: Exclude<Awaited<ReturnType<typeof planNextCompactionPass>>, { kind: "planned" }>,
+): string {
+	const breakdown =
+		`request envelope ${result.requestEnvelopeTokens}, summary carry ${result.summaryCarryTokens}, ` +
+		`logical turn ${result.turnTokens}, combined ${result.combinedEstimatedInputTokens}, ` +
+		`Pass ceiling ${result.passInputCeiling}`
+	return result.kind === "summary_carry_overflow"
+		? `The cumulative compaction summary cannot be carried into Pass ${result.turnIndex + 1} (${breakdown}).`
+		: `Logical turn ${result.turnIndex + 1} cannot fit in one compaction Pass without content truncation (${breakdown}).`
 }
 
 function isManualTrigger(trigger: ContextCompactionTriggerKind): boolean {

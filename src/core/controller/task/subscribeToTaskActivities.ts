@@ -70,6 +70,8 @@ function toProtoActivity(
 		finishable,
 		retryable,
 		schemaVersion: activity.schemaVersion,
+		currentAttempt: activity.currentAttempt,
+		retryUnavailableReason: activity.retryUnavailableReason,
 		metrics: toProtoMetrics(activity.metrics),
 		runtime: toProtoRuntime(activity.runtime),
 		events: activity.events.map((event) =>
@@ -77,6 +79,7 @@ function toProtoActivity(
 				sequence: event.sequence,
 				timestamp: event.timestamp,
 				kind: event.kind,
+				attempt: event.attempt,
 				phase: "phase" in event ? event.phase : undefined,
 				text: "text" in event ? event.text : undefined,
 				toolCallId: "toolCallId" in event ? event.toolCallId : undefined,

@@ -1,6 +1,6 @@
 import type { TaskActivityEvent } from "@shared/proto/dline/task"
 import { useMemo } from "react"
-import { buildSubagentRetryAttempts } from "./subagent-activity-model"
+import { buildSubagentRetryAttempts, type SubagentRetryAttempt } from "./subagent-activity-model"
 
 function formatRetryDuration(milliseconds: number): string {
 	const seconds = Math.max(0, Math.round(milliseconds / 1000))
@@ -10,15 +10,26 @@ function formatRetryDuration(milliseconds: number): string {
 	return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`
 }
 
-export function SubagentRetryTimeline({ events }: { events: TaskActivityEvent[] | undefined }) {
-	const attempts = useMemo(() => buildSubagentRetryAttempts(events), [events])
-	if (attempts.length === 0) return null
+export function SubagentRetryTimeline({
+	events,
+	attempts,
+	currentAttempt,
+}: {
+	events?: TaskActivityEvent[]
+	attempts?: readonly SubagentRetryAttempt[]
+	currentAttempt?: number
+}) {
+	const projectedAttempts = useMemo(
+		() => attempts ?? buildSubagentRetryAttempts(events, currentAttempt),
+		[attempts, events, currentAttempt],
+	)
+	if (projectedAttempts.length === 0) return null
 
 	return (
 		<div className="min-w-0 text-[11px] text-description" data-testid="subagent-retry-timeline">
-			<div className="mb-1 font-semibold uppercase tracking-wide">Automatic retries ({attempts.length})</div>
+			<div className="mb-1 font-semibold uppercase tracking-wide">Automatic retries ({projectedAttempts.length})</div>
 			<ol className="m-0 space-y-0.5 p-0 list-none">
-				{attempts.map((attempt) => (
+				{projectedAttempts.map((attempt) => (
 					<li
 						className="flex min-w-0 flex-wrap items-center gap-x-1.5 font-mono"
 						data-testid="subagent-retry-attempt"

@@ -1,9 +1,22 @@
 import { describe, expect, it } from "vitest"
 import { createCompactionConversationRange } from "../compaction-conversation-range"
+import { createCompactionSourceSnapshot } from "../compaction-source-snapshot"
 import type { TargetWindowFittingState } from "../target-window-fitting"
 
 describe("createCompactionConversationRange", () => {
 	it("aggregates canonical messages and superseded card ranges across covered turns", () => {
+		const sourceSnapshot = createCompactionSourceSnapshot(
+			[
+				{ role: "user", content: "old summary" },
+				{ role: "user", content: "new question" },
+				{ role: "assistant", content: "new answer" },
+			],
+			[
+				[2, 5],
+				[6, 6],
+				[7, 7],
+			],
+		)
 		const state = {
 			operationId: "operation-1",
 			passIndex: 2,
@@ -11,21 +24,13 @@ describe("createCompactionConversationRange", () => {
 			passEndTurnIndex: 1,
 			coveredTurnCount: 2,
 			summaryBaselineHash: "summary",
-			sourceHistory: [
-				{ role: "user", content: "old summary" },
-				{ role: "user", content: "new question" },
-				{ role: "assistant", content: "new answer" },
-			],
-			sourceCanonicalRanges: [
-				[2, 5],
-				[6, 6],
-				[7, 7],
-			],
+			sourceHistoryHash: sourceSnapshot.sourceHistoryHash,
+			sourceSnapshot,
 			turns: [
-				{ id: "turn-0", startIndex: 0, endIndex: 0, messages: [], functionIds: [] },
-				{ id: "turn-1", startIndex: 1, endIndex: 2, messages: [], functionIds: [] },
+				{ id: "turn-0", startMessageIndex: 0, endMessageIndex: 0, functionIds: [] },
+				{ id: "turn-1", startMessageIndex: 1, endMessageIndex: 2, functionIds: [] },
 			],
-			protectedTail: [],
+			protectedStartMessageIndex: 3,
 			cumulativeSummary: "cumulative summary",
 			passPlanned: false,
 		} satisfies TargetWindowFittingState

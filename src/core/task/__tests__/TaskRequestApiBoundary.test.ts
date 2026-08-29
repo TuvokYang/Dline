@@ -40,18 +40,24 @@ describe("Task request API boundary", () => {
 		expect(method).toContain("!manualCompactionRequested")
 	})
 
-	it("does not start a compaction Session for a restored durable request", async () => {
+	it("runs final admission and may start compaction for a restored durable request without preprocessing it again", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
 		const compactionCapability = method.indexOf(
-			"const canCompactBeforeAdmission = !persistedRequest && transaction.beforeApiRequestStarted === undefined",
+			"const canCompactBeforeAdmission = transaction.beforeApiRequestStarted === undefined",
 		)
-		const automaticSession = method.indexOf("if (!persistedRequest && shouldCompact && !manualCompactionRequested)")
+		const coarseAutomaticSession = method.indexOf("if (shouldCompact && !manualCompactionRequested)", compactionCapability)
 		const manualSession = method.indexOf("if (manualCompactionRequested && this.taskState.isManualContextCompactionRequest)")
+		const persistedCandidate = method.indexOf("buildPersistedRequestCandidate(", manualSession)
+		const finalGuard = method.indexOf("await this.evaluateFinalContextWindowGuard(", persistedCandidate)
+		const finalAutomaticSession = method.indexOf("await this.runOrdinaryContextCompaction(", finalGuard)
 
 		expect(compactionCapability).toBeGreaterThanOrEqual(0)
-		expect(automaticSession).toBeGreaterThan(compactionCapability)
-		expect(manualSession).toBeGreaterThan(automaticSession)
+		expect(coarseAutomaticSession).toBeGreaterThan(compactionCapability)
+		expect(manualSession).toBeGreaterThan(coarseAutomaticSession)
+		expect(persistedCandidate).toBeGreaterThan(manualSession)
+		expect(finalGuard).toBeGreaterThan(persistedCandidate)
+		expect(finalAutomaticSession).toBeGreaterThan(finalGuard)
 		expect(method.slice(compactionCapability, manualSession)).not.toContain("deferCurrentTurn(")
 	})
 
@@ -102,6 +108,8 @@ describe("Task request API boundary", () => {
 		expect(ordinaryPersistence).toBeGreaterThan(retryAdmission)
 		expect(method).toContain("if (persistedRequest) {\n\t\t\tparsedUserContent = userContent")
 		expect(method).toContain("if (!persistedRequest && !shouldCompact)")
+		expect(method).toContain("buildPersistedRequestCandidate(")
+		expect(method).toContain("persistedRequestApiIndex")
 	})
 
 	it("does not mutate the current ordinary turn before handing compaction to the Session", async () => {
@@ -168,8 +176,18 @@ describe("Task request API boundary", () => {
 			"private async buildProviderInput(",
 			"/** Build the exact ordinary candidate",
 		)
+		const sessionFactory = extractMethod(
+			source,
+			"private createContextCompactionSession(): ContextCompactionSession",
+			"private async settleContextCompactionIndicator",
+		)
 
+		expect(sessionFactory).toContain("state.nextPassSummaryCarryLimitTokens")
+		expect(sessionFactory).toContain('"estimate"')
+		expect(passBuilder).toContain('purpose: "send" | "estimate" = "send"')
 		expect(passBuilder).toContain("resolveCompactionWindowBudget({")
+		expect(passBuilder).toContain("summaryOutputLimitTokens,")
+		expect(passBuilder).toContain('if (resolvedBudget.budget.decision !== "ready" && purpose === "send")')
 		expect(passBuilder).toContain("providerOutputCap: resolvedBudget.budget.providerOutputCap")
 		expect(ordinaryBuilder).not.toContain("resolveCompactionWindowBudget({")
 		expect(ordinaryBuilder).toContain("providerOutputCap: undefined")
@@ -490,11 +508,30 @@ describe("Task request API boundary", () => {
 		const builder = extractMethod(source, "private async buildProviderInput(", "/** Build the exact ordinary candidate")
 		const request = extractMethod(source, "async *attemptApiRequest(", "// Block identity is now assigned")
 
-		expect(builder).toContain("const serverTools = requestScope.webSearchRoutingPlan.serverTools")
+		expect(builder).toContain("const runtime = resolveFrozenPromptRuntime(frozenPrompt, promptContext)")
+		expect(builder).toContain("const serverTools = runtime.webSearchRoutingPlan.serverTools")
+		expect(builder).toContain("return { systemPrompt, messages, tools, serverTools, runtime, providerOutputCap: undefined }")
 		expect(request).toContain("api.createMessage(systemPrompt, apiConversationMessages, tools, {")
 		expect(request).toContain("serverTools,")
 		expect(request).toContain('{ generation: { purpose: "compaction", maxOutputTokens: providerOutputCap } as const }')
 		expect(request).not.toContain("requestToolIds")
+	})
+
+	it("uses live parallel-tool settings for prompt projection and the selected runtime for response execution", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const promptMethod = extractMethod(source, "private async buildPromptContext(", "private async buildProviderInput(")
+		const parallelMethod = extractMethod(
+			source,
+			"private resolveParallelToolCallingEnabled(",
+			"private async switchToActModeCallback(",
+		)
+		const requestMethod = extractMethod(source, "async *attemptApiRequest(", "// Block identity is now assigned")
+
+		expect(promptMethod).toContain("enableParallelToolCalling: this.resolveParallelToolCallingEnabled(providerInfo)")
+		expect(parallelMethod).toContain(
+			"return this.activeProviderInputRuntime?.parallelToolsEnabled ?? this.resolveParallelToolCallingEnabled(providerInfo)",
+		)
+		expect(requestMethod).toContain("this.activeProviderInputRuntime = runtime")
 	})
 
 	it("uses the request-frozen Web Tools switch for the prompt and ToolExecutor", async () => {
@@ -508,10 +545,29 @@ describe("Task request API boundary", () => {
 		expect(builderMethod).toMatch(
 			/this\.buildPromptContext\(\s*providerInfo,\s*requestScope\.webToolsEnabled,\s*requestScope\.webSearchRoutingPlan,?\s*\)/,
 		)
+		expect(requestMethod).toContain("this.toolExecutor.setPromptRuntime(runtime)")
 		expect(requestMethod).toContain(
 			"this.toolExecutor.setWebSearchRoutingPlan(requestScope.webSearchRoutingPlan, requestScope.webToolsEnabled)",
 		)
+		expect(requestMethod.indexOf("this.toolExecutor.setPromptRuntime(runtime)")).toBeLessThan(
+			requestMethod.indexOf("this.toolExecutor.setWebSearchRoutingPlan(requestScope.webSearchRoutingPlan"),
+		)
 		expect(requestMethod).not.toContain("requestToolIds")
+	})
+
+	it("uses replay-frozen hosted routing for request approval before falling back to the live request scope", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const method = extractMethod(source, "private async completeApiRequestGate(", "private isTrustedUserFeedbackResult(")
+
+		const ordinaryReplayIndex = method.indexOf("this.ordinaryRequestInputReplay.get(apiIndex)?.runtime?.webSearchRoutingPlan")
+		const compactionReplayIndex = method.indexOf(
+			"this.compactionRequestReplay.getProviderInput(apiIndex)?.runtime?.webSearchRoutingPlan",
+		)
+		const requestScopeIndex = method.indexOf("requestScope.webSearchRoutingPlan")
+		expect(ordinaryReplayIndex).toBeGreaterThanOrEqual(0)
+		expect(compactionReplayIndex).toBeGreaterThan(ordinaryReplayIndex)
+		expect(requestScopeIndex).toBeGreaterThan(compactionReplayIndex)
+		expect(method).toContain("routingPlan,")
 	})
 
 	it("uses the dedicated browser capability before the legacy image fallback", async () => {

@@ -542,6 +542,7 @@ describe("Task restored turn-end continuation", () => {
 		).persistApiRequestUserMessage
 		const content = [{ type: "tool_result", function_id: "function-restored", dline_tid: "restored-interaction" }]
 		const fakeTask = {
+			inputQueueCoordinator: { hasStagedDelivery: false },
 			messageStateHandler: {
 				addToApiConversationHistory: vi.fn(async () => {
 					sequence.push("user-message-appended")

@@ -161,6 +161,14 @@ export type OpenAiMockResponse =
 			results: readonly MockHostedWebSearchResult[]
 			followupTools?: readonly MockToolCall[]
 	  } & MockResponseOptions)
+	| ({
+			type: "usage-then-error"
+			status: number
+			message: string
+			code?: string
+			requestId?: string
+			details?: Readonly<Record<string, string | number | boolean>>
+	  } & MockResponseOptions)
 	| {
 			type: "error"
 			status: number
@@ -672,7 +680,7 @@ export class ClineApiServerMock {
 		}
 		const thinking = getRequestThinking(requestBody)
 		const contractFailure =
-			scriptedResponse.type === "error"
+			scriptedResponse.type === "error" || scriptedResponse.type === "usage-then-error"
 				? undefined
 				: validateMockRequestContract(scriptedResponse, requestText, requestToolResults, requestToolPairing)
 		const contractError = contractFailure?.message
@@ -685,7 +693,10 @@ export class ClineApiServerMock {
 					message: contractFailure.message,
 				}
 			: scriptedResponse
-		const scriptedToolCall = scriptedResponse.type === "error" ? undefined : getResponseToolCalls(scriptedResponse)[0]
+		const scriptedToolCall =
+			scriptedResponse.type === "error" || scriptedResponse.type === "usage-then-error"
+				? undefined
+				: getResponseToolCalls(scriptedResponse)[0]
 		log(
 			"Mock provider consumption:",
 			JSON.stringify({
@@ -727,7 +738,8 @@ export class ClineApiServerMock {
 				}),
 			)
 		}
-		const responseToolCalls = response.type === "error" ? [] : getResponseToolCalls(response)
+		const responseToolCalls =
+			response.type === "error" || response.type === "usage-then-error" ? [] : getResponseToolCalls(response)
 		const consumption: MockApiConsumption = {
 			receivedAtMs,
 			...(authorization ? { authorization } : {}),
@@ -752,10 +764,13 @@ export class ClineApiServerMock {
 						})),
 					}
 				: {}),
-			...(response.type === "error" ? { status: response.status } : {}),
+			...(response.type === "error" || response.type === "usage-then-error" ? { status: response.status } : {}),
 			...(contractError ? { contractError } : {}),
 			...(thinking ? { thinking } : {}),
-			...(route.protocol !== "openai-chat" && response.type !== "error" && response.reasoning
+			...(route.protocol !== "openai-chat" &&
+			response.type !== "error" &&
+			response.type !== "usage-then-error" &&
+			response.reasoning
 				? { responseReasoning: response.reasoning }
 				: {}),
 			...(usage ? { usage } : {}),
@@ -1095,6 +1110,9 @@ export class ClineApiServerMock {
 					}
 
 					if (!usage) throw new Error(`Successful ${target} response is missing usage`)
+					if (scriptedResponse.type === "usage-then-error" && protocol !== "anthropic-messages") {
+						throw new Error(`usage-then-error is only supported for anthropic-messages, received ${protocol}`)
+					}
 					const openAiUsage = toOpenAiUsage(usage)
 					const chatUsage =
 						protocol === "deepseek-chat"
@@ -1663,6 +1681,19 @@ export class ClineApiServerMock {
 						},
 						"message_start",
 					)
+					if (scriptedResponse.type === "usage-then-error") {
+						const code = scriptedResponse.code ?? `http_${scriptedResponse.status}`
+						writeSse(
+							{
+								type: "error",
+								error: { type: code, message: scriptedResponse.message, ...scriptedResponse.details },
+								...(scriptedResponse.requestId ? { request_id: scriptedResponse.requestId } : {}),
+							},
+							"error",
+						)
+						res.end()
+						return
+					}
 					if (thinkingBlock) {
 						writeSse(
 							{

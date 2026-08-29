@@ -10,6 +10,11 @@ export async function retryTaskActivities(
 	if (!task || task.taskId !== request.taskId) {
 		return RetryTaskActivitiesResponse.create({ retriedActivityIds: [] })
 	}
+	for (const activityId of request.activityIds) {
+		if (!task.activityStore.hasLiveRetryControl(activityId) && task.activityStore.isRetryable(activityId)) {
+			await task.restoreSubagentActivityRetry(activityId)
+		}
+	}
 	const retriedActivityIds = await task.activityStore.retry(request.activityIds)
 	return RetryTaskActivitiesResponse.create({ retriedActivityIds })
 }

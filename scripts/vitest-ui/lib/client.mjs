@@ -394,17 +394,16 @@ export async function waitForIdle(client, { timeoutMs = 180_000, pollMs = 1_500,
 }
 
 export async function rerunWithScope(client, options = {}) {
-	const files = await client.getFiles()
 	const scope = options.scope || "all"
 	const startedAt = Date.now()
 
 	if (scope === "all") {
-		await client.rerun(
-			files.map((file) => file.filepath),
-			true,
-		)
-		return { scope, startedAt, targets: files.map((file) => file.filepath) }
+		const paths = await client.getPaths()
+		await client.rerun(paths, true)
+		return { scope, startedAt, targets: paths }
 	}
+
+	const files = await client.getFiles()
 
 	if (scope === "failed" || scope === "fail") {
 		const failedFiles = filterFiles(files, "fail")

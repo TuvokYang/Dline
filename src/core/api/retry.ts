@@ -16,10 +16,18 @@ const DEFAULT_OPTIONS: Required<RetryOptions> = {
 	retryAllErrors: false,
 }
 
-function isCompactionGenerationRequest(args: readonly unknown[]): boolean {
+function requestDelegatesRetry(args: readonly unknown[]): boolean {
 	const options = args[3]
 	if (typeof options !== "object" || options === null) return false
-	const generation = (options as { generation?: unknown }).generation
+	const requestOptions = options as { retryOwner?: unknown; generation?: unknown }
+	if (
+		requestOptions.retryOwner === "task" ||
+		requestOptions.retryOwner === "subagent" ||
+		requestOptions.retryOwner === "compaction"
+	) {
+		return true
+	}
+	const generation = requestOptions.generation
 	return typeof generation === "object" && generation !== null && (generation as { purpose?: unknown }).purpose === "compaction"
 }
 
@@ -28,29 +36,30 @@ interface RetryOwnershipContext {
 	run<T>(store: boolean, callback: () => T): T
 }
 
-let taskOwnedRetryContextPromise: Promise<RetryOwnershipContext> | undefined
+let delegatedRetryContextPromise: Promise<RetryOwnershipContext> | undefined
 
-async function getTaskOwnedRetryContext(): Promise<RetryOwnershipContext> {
-	taskOwnedRetryContextPromise ??= import("node:async_hooks").then(({ AsyncLocalStorage }) => new AsyncLocalStorage<boolean>())
-	return taskOwnedRetryContextPromise
+async function getDelegatedRetryContext(): Promise<RetryOwnershipContext> {
+	delegatedRetryContextPromise ??= import("node:async_hooks").then(({ AsyncLocalStorage }) => new AsyncLocalStorage<boolean>())
+	return delegatedRetryContextPromise
 }
 
 function bindRetryOwnership<T>(
 	context: RetryOwnershipContext,
 	iterable: AsyncIterable<T>,
-	taskOwnsRetry: boolean,
+	callerOwnsRetry: boolean,
 ): AsyncIterable<T> {
 	return {
 		[Symbol.asyncIterator](): AsyncIterator<T> {
 			const iterator = iterable[Symbol.asyncIterator]()
 			return {
-				next: (value?: unknown) => context.run(taskOwnsRetry, () => iterator.next(value as never)),
+				next: (value?: unknown) => context.run(callerOwnsRetry, () => iterator.next(value as never)),
 				return: iterator.return
 					? (value?: unknown) =>
-							context.run(taskOwnsRetry, () => iterator.return?.(value as never) as Promise<IteratorResult<T>>)
+							context.run(callerOwnsRetry, () => iterator.return?.(value as never) as Promise<IteratorResult<T>>)
 					: undefined,
 				throw: iterator.throw
-					? (error?: unknown) => context.run(taskOwnsRetry, () => iterator.throw?.(error) as Promise<IteratorResult<T>>)
+					? (error?: unknown) =>
+							context.run(callerOwnsRetry, () => iterator.throw?.(error) as Promise<IteratorResult<T>>)
 					: undefined,
 			}
 		},
@@ -93,15 +102,15 @@ export function withRetry(options: RetryOptions = {}) {
 		const originalMethod = descriptor.value
 
 		descriptor.value = async function* (...args: any[]) {
-			const retryOwnershipContext = await getTaskOwnedRetryContext()
-			const taskOwnsRetry = retryOwnershipContext.getStore() === true || isCompactionGenerationRequest(args)
+			const retryOwnershipContext = await getDelegatedRetryContext()
+			const callerOwnsRetry = retryOwnershipContext.getStore() === true || requestDelegatesRetry(args)
 			for (let attempt = 0; attempt < maxRetries; attempt++) {
 				try {
 					const iterable = originalMethod.apply(this, args) as AsyncIterable<unknown>
-					yield* bindRetryOwnership(retryOwnershipContext, iterable, taskOwnsRetry)
+					yield* bindRetryOwnership(retryOwnershipContext, iterable, callerOwnsRetry)
 					return
 				} catch (error: any) {
-					if (taskOwnsRetry || isOutputLimitExceededError(error)) {
+					if (callerOwnsRetry || isOutputLimitExceededError(error)) {
 						throw error
 					}
 					const isRateLimit = error?.status === 429 || error instanceof RetriableError

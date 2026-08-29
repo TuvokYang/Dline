@@ -751,47 +751,84 @@ export const ChatRowContent = memo(
 					const status = tool.compactionStatus ?? (message.partial ? "running" : "completed")
 					const content = status === "failed" ? "" : typeof tool.content === "string" ? tool.content : ""
 					if (status === "running" && !content) return null
+					const isSummaryRefit = tool.compactionUnitKind === "summary_refit"
+					const durabilityLabel =
+						tool.compactionDurable === true ? "Durable" : tool.compactionDurable === false ? "Live" : undefined
 					const title =
-						status === "retrying"
-							? "Compaction was interrupted; retrying:"
-							: status === "failed"
-								? "Conversation compaction failed:"
-								: "Dline is condensing the conversation:"
+						status === "preparing"
+							? isSummaryRefit
+								? "Preparing the cumulative summary for refit:"
+								: "Preparing a context-safe summary:"
+							: status === "waiting"
+								? isSummaryRefit
+									? "Waiting for the model to refit the summary:"
+									: "Waiting for the model to begin compaction:"
+								: status === "retrying"
+									? isSummaryRefit
+										? "Summary refit was interrupted; retrying:"
+										: "Compaction was interrupted; retrying:"
+									: status === "failed"
+										? "Conversation compaction failed:"
+										: status === "completed" && isSummaryRefit
+											? "Cumulative summary refit completed:"
+											: status === "receiving" && isSummaryRefit
+												? "Dline is refitting the cumulative summary:"
+												: "Dline is condensing the conversation:"
 					const contentLabel =
 						status === "completed"
-							? "Summary:"
+							? isSummaryRefit
+								? "Refitted summary:"
+								: "Summary:"
 							: status === "retrying"
 								? "Partial summary (not applied):"
 								: "Partial summary:"
 					return (
 						<div
+							className="bg-code overflow-hidden border border-editor-group-border rounded-[3px]"
 							data-compaction-attempt-id={tool.compactionAttemptId}
 							data-compaction-attempt-index={tool.compactionAttemptIndex}
+							data-compaction-durable={tool.compactionDurable}
 							data-compaction-operation-id={tool.compactionOperationId}
 							data-compaction-pass-index={tool.compactionPassIndex}
 							data-compaction-status={status}
+							data-compaction-unit-index={tool.compactionUnitIndex}
+							data-compaction-unit-kind={tool.compactionUnitKind}
 							data-testid="compaction-pass">
-							<div className={HEADER_CLASSNAMES}>
+							<div className="flex items-center gap-2.5 px-2.5 py-2">
 								<FoldVerticalIcon className="size-2" />
-								<span className="font-bold">{title}</span>
+								<span className="min-w-0 flex-1 font-bold">{title}</span>
+								{durabilityLabel ? (
+									<span
+										className={cn(
+											"shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide",
+											tool.compactionDurable
+												? "border-success/40 bg-success/10 text-success"
+												: "border-editor-group-border text-description",
+										)}
+										data-testid="compaction-durability">
+										{durabilityLabel}
+									</span>
+								) : null}
 							</div>
 							{status === "failed" && tool.error && (
-								<ApiErrorBox
-									error={tool.error}
-									testId="compaction-error-box"
-									title="Conversation Compaction Failed"
-								/>
+								<div className="px-2.5 pb-2.5">
+									<ApiErrorBox
+										error={tool.error}
+										testId="compaction-error-box"
+										title="Conversation Compaction Failed"
+									/>
+								</div>
 							)}
 							{status === "retrying" && tool.retryAttempt !== undefined && tool.maxRetryAttempts !== undefined && (
-								<div className="text-description mb-2">
+								<div className="px-2.5 pb-2 text-description">
 									Attempt {tool.retryAttempt} of {tool.maxRetryAttempts}
 								</div>
 							)}
 							{content ? (
-								<div className="bg-code overflow-hidden border border-editor-group-border rounded-[3px]">
+								<div className="px-2.5 pb-2.5" data-testid="compaction-summary-content">
 									<div
 										aria-label={isExpanded ? "Collapse summary" : "Expand summary"}
-										className="text-description py-2 px-2.5 cursor-pointer select-none"
+										className="text-description cursor-pointer select-none"
 										onClick={handleToggle}
 										onKeyDown={(e) => {
 											if (e.key === "Enter" || e.key === " ") {

@@ -12,6 +12,31 @@ async function flushJobs(): Promise<void> {
 }
 
 describe("SubagentJobManager", () => {
+	it("allocates unique job identities across manager instances", () => {
+		const runner = async () => ({
+			status: "completed" as const,
+			result: "done",
+			stats: {
+				toolCalls: 0,
+				inputTokens: 0,
+				outputTokens: 0,
+				cacheWriteTokens: 0,
+				cacheReadTokens: 0,
+				totalCost: 0,
+				currency: "USD",
+				contextTokens: 0,
+				contextWindow: 1,
+				contextUsagePercentage: 0,
+			},
+		})
+		const first = new SubagentJobManager().startJob({ task: "first", prompt: "first", timeoutSeconds: 30, runner })
+		const second = new SubagentJobManager().startJob({ task: "second", prompt: "second", timeoutSeconds: 30, runner })
+
+		assert.match(first.jobId, /^subagent_[0-9a-f-]{36}$/i)
+		assert.match(second.jobId, /^subagent_[0-9a-f-]{36}$/i)
+		assert.notEqual(first.jobId, second.jobId)
+	})
+
 	it("lists a completed batch as one injectable batch result", async () => {
 		const manager = new SubagentJobManager()
 		const batch = manager.startBatch({
@@ -221,7 +246,8 @@ describe("SubagentJobManager", () => {
 		await flushJobs()
 
 		assert.equal(createdBeforeRun, true)
-		assert.deepEqual(createdJobIds, ["subagent_1"])
+		assert.equal(createdJobIds.length, 1)
+		assert.match(createdJobIds[0] ?? "", /^subagent_[0-9a-f-]{36}$/i)
 	})
 
 	it("marks an all-cancelled background batch as cancelled", async () => {

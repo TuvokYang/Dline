@@ -1,8 +1,12 @@
 import type { ClineStorageMessage } from "@shared/messages/content"
 import cloneDeep from "clone-deep"
-import type { CanonicalMessageRange } from "./compaction-context-projection"
 import { hashCompactionSummary, hashCompactionValue } from "./compaction-hash"
-import type { LogicalTurn, LogicalTurnIndex } from "./logical-turns"
+import {
+	type CompactionSourceSnapshot,
+	materializeCompactionSourceRange,
+	materializeCompactionSourceSuffix,
+} from "./compaction-source-snapshot"
+import type { LogicalTurnIndex, LogicalTurnSpan } from "./logical-turns"
 
 export interface CompactionPassIdentity {
 	operationId: string
@@ -25,20 +29,31 @@ export interface CompactionPassSelection extends CompactionPassIdentity {
 	estimatedInputTokens: number
 	passInputCeiling: number
 	passHistoryHash: string
+	requestEnvelopeTokens?: number
+	summaryCarryTokens?: number
+	turnTokens?: number
+	combinedEstimatedInputTokens?: number
+	candidateEstimateCount?: number
+	nextPassSummaryCarryLimitTokens?: number
 }
 
 export interface TargetWindowFittingState extends CompactionPassIdentity {
-	sourceHistoryHash?: string
+	sourceHistoryHash: string
 	passStartMessageIndex?: number
 	passEndMessageIndex?: number
-	sourceHistory: ClineStorageMessage[]
-	sourceCanonicalRanges?: Array<CanonicalMessageRange | undefined>
-	turns: LogicalTurn[]
-	protectedTail: ClineStorageMessage[]
+	readonly sourceSnapshot: CompactionSourceSnapshot
+	readonly turns: readonly LogicalTurnSpan[]
+	readonly protectedStartMessageIndex: number
 	cumulativeSummary?: string
 	estimatedInputTokens?: number
 	passInputCeiling?: number
 	passHistoryHash?: string
+	requestEnvelopeTokens?: number
+	summaryCarryTokens?: number
+	turnTokens?: number
+	combinedEstimatedInputTokens?: number
+	candidateEstimateCount?: number
+	nextPassSummaryCarryLimitTokens?: number
 	passPlanned: boolean
 }
 
@@ -52,16 +67,16 @@ export interface AcceptedCompactionPass {
 export function tryStartTargetWindowFitting(
 	index: LogicalTurnIndex,
 	operationId: string,
-	sourceCanonicalRanges: readonly (CanonicalMessageRange | undefined)[] = [],
+	sourceSnapshot: CompactionSourceSnapshot,
 ): TargetWindowFittingState | undefined {
-	return index.turns.length === 0 ? undefined : startTargetWindowFitting(index, operationId, sourceCanonicalRanges)
+	return index.turns.length === 0 ? undefined : startTargetWindowFitting(index, operationId, sourceSnapshot)
 }
 
 /** Start fitting from the earliest complete logical turn. */
 export function startTargetWindowFitting(
 	index: LogicalTurnIndex,
 	operationId: string,
-	sourceCanonicalRanges: readonly (CanonicalMessageRange | undefined)[] = [],
+	sourceSnapshot: CompactionSourceSnapshot,
 ): TargetWindowFittingState {
 	if (index.turns.length === 0) {
 		throw new Error("No complete logical turn is available for compaction")
@@ -69,20 +84,17 @@ export function startTargetWindowFitting(
 	if (!operationId.trim()) {
 		throw new Error("Compaction operation ID must be non-empty")
 	}
-	const sourceHistory = [...index.turns.flatMap((turn) => cloneDeep(turn.messages)), ...cloneDeep(index.protectedTail)]
-	if (sourceCanonicalRanges.length > 0 && sourceCanonicalRanges.length !== sourceHistory.length) {
-		throw new Error("Compaction source canonical range mapping must align with source history")
+	if (index.protectedStartMessageIndex > sourceSnapshot.messages.length) {
+		throw new Error("Compaction logical-turn index exceeds the source snapshot")
 	}
 	return {
 		operationId,
 		passIndex: 0,
 		summaryBaselineHash: hashSummaryBaseline(""),
-		sourceHistoryHash: hashJsonValue(sourceHistory),
-		sourceHistory,
-		sourceCanonicalRanges:
-			sourceCanonicalRanges.length > 0 ? cloneDeep([...sourceCanonicalRanges]) : sourceHistory.map(() => undefined),
-		turns: cloneDeep(index.turns),
-		protectedTail: cloneDeep(index.protectedTail),
+		sourceHistoryHash: sourceSnapshot.sourceHistoryHash,
+		sourceSnapshot,
+		turns: index.turns,
+		protectedStartMessageIndex: index.protectedStartMessageIndex,
 		coveredTurnCount: 0,
 		passStartTurnIndex: 0,
 		passEndTurnIndex: -1,
@@ -126,10 +138,6 @@ export function applyCompactionPassPlan(
 	}
 	return {
 		...state,
-		sourceHistory: cloneDeep(state.sourceHistory),
-		sourceCanonicalRanges: cloneDeep(state.sourceCanonicalRanges ?? []),
-		turns: cloneDeep(state.turns),
-		protectedTail: cloneDeep(state.protectedTail),
 		passStartTurnIndex: plan.passStartTurnIndex,
 		passEndTurnIndex: plan.passEndTurnIndex,
 		passStartMessageIndex: rangeIdentity.passStartMessageIndex,
@@ -138,12 +146,18 @@ export function applyCompactionPassPlan(
 		estimatedInputTokens: plan.estimatedInputTokens,
 		passInputCeiling: plan.passInputCeiling,
 		passHistoryHash: plan.passHistoryHash,
+		requestEnvelopeTokens: plan.requestEnvelopeTokens ?? state.requestEnvelopeTokens,
+		summaryCarryTokens: plan.summaryCarryTokens,
+		turnTokens: plan.turnTokens,
+		combinedEstimatedInputTokens: plan.combinedEstimatedInputTokens ?? plan.estimatedInputTokens,
+		candidateEstimateCount: plan.candidateEstimateCount,
+		nextPassSummaryCarryLimitTokens: plan.nextPassSummaryCarryLimitTokens,
 		passPlanned: true,
 	}
 }
 
-/** Build the exact canonical history included in one candidate hidden compaction Pass range. */
-export function buildCompactionPassHistoryForRange(
+/** Build only the selected complete turns, excluding the cumulative summary carry. */
+export function buildCompactionTurnHistoryForRange(
 	state: TargetWindowFittingState,
 	passStartTurnIndex: number,
 	passEndTurnIndex: number,
@@ -152,9 +166,22 @@ export function buildCompactionPassHistoryForRange(
 	if (passTurns.length === 0) {
 		throw new Error("Compaction Pass has no uncovered logical turn")
 	}
+	return materializeCompactionSourceRange(
+		state.sourceSnapshot,
+		passTurns[0].startMessageIndex,
+		passTurns[passTurns.length - 1].endMessageIndex,
+	)
+}
+
+/** Build the exact canonical history included in one candidate hidden compaction Pass range. */
+export function buildCompactionPassHistoryForRange(
+	state: TargetWindowFittingState,
+	passStartTurnIndex: number,
+	passEndTurnIndex: number,
+): ClineStorageMessage[] {
 	return [
 		...(state.cumulativeSummary ? [summaryMessage(state.cumulativeSummary)] : []),
-		...cloneCompactionPassMessages(passTurns),
+		...buildCompactionTurnHistoryForRange(state, passStartTurnIndex, passEndTurnIndex),
 	]
 }
 
@@ -163,19 +190,7 @@ export function buildCompactionPassHistory(state: TargetWindowFittingState): Cli
 	if (!state.passPlanned) {
 		throw new Error("Compaction Pass must be planned before building its history")
 	}
-	const passTurns = state.turns.slice(state.passStartTurnIndex, state.passEndTurnIndex + 1)
-	if (passTurns.length === 0) {
-		throw new Error("Compaction Pass has no uncovered logical turn")
-	}
-	return [
-		...(state.cumulativeSummary ? [summaryMessage(state.cumulativeSummary)] : []),
-		...cloneCompactionPassMessages(passTurns),
-	]
-}
-
-/** Preserve every selected logical turn verbatim; cumulative summaries are prepended separately. */
-function cloneCompactionPassMessages(passTurns: readonly LogicalTurn[]): ClineStorageMessage[] {
-	return cloneDeep(passTurns.flatMap((turn) => turn.messages))
+	return buildCompactionPassHistoryForRange(state, state.passStartTurnIndex, state.passEndTurnIndex)
 }
 
 /** Accept one valid cumulative summary and advance coverage to the next complete turn. */
@@ -199,22 +214,51 @@ export function acceptCompactionPass(state: TargetWindowFittingState, summary: s
 			...state,
 			passIndex: state.passIndex + 1,
 			summaryBaselineHash: hashSummaryBaseline(cumulativeSummary),
-			sourceHistory: cloneDeep(state.sourceHistory),
-			sourceCanonicalRanges: cloneDeep(state.sourceCanonicalRanges ?? []),
-			turns: cloneDeep(state.turns),
-			protectedTail: cloneDeep(state.protectedTail),
 			coveredTurnCount,
 			passStartTurnIndex: coveredTurnCount,
 			passEndTurnIndex: coveredTurnCount - 1,
-			passStartMessageIndex: state.turns[coveredTurnCount]?.startIndex ?? state.sourceHistory.length,
-			passEndMessageIndex: (state.turns[coveredTurnCount]?.startIndex ?? state.sourceHistory.length) - 1,
+			passStartMessageIndex: state.turns[coveredTurnCount]?.startMessageIndex ?? state.protectedStartMessageIndex,
+			passEndMessageIndex: (state.turns[coveredTurnCount]?.startMessageIndex ?? state.protectedStartMessageIndex) - 1,
 			rangeHash: undefined,
 			cumulativeSummary,
 			estimatedInputTokens: undefined,
 			passInputCeiling: undefined,
 			passHistoryHash: undefined,
+			summaryCarryTokens: undefined,
+			turnTokens: undefined,
+			combinedEstimatedInputTokens: undefined,
+			candidateEstimateCount: undefined,
+			nextPassSummaryCarryLimitTokens: state.nextPassSummaryCarryLimitTokens,
 			passPlanned: false,
 		},
+	}
+}
+
+/** Replace only the cumulative summary after a bounded refit without advancing logical-turn coverage. */
+export function refitCompactionSummary(state: TargetWindowFittingState, summary: string): TargetWindowFittingState {
+	if (!state.cumulativeSummary) {
+		throw new Error("Compaction summary refit requires an existing cumulative summary")
+	}
+	const cumulativeSummary = summary.trim()
+	if (!cumulativeSummary) {
+		throw new Error("Refitted compaction summary must be non-empty")
+	}
+	if (Buffer.byteLength(cumulativeSummary, "utf8") >= Buffer.byteLength(state.cumulativeSummary, "utf8")) {
+		throw new Error("Refitted compaction summary must be strictly smaller than the previous summary")
+	}
+	return {
+		...state,
+		summaryBaselineHash: hashSummaryBaseline(cumulativeSummary),
+		cumulativeSummary,
+		estimatedInputTokens: undefined,
+		passInputCeiling: undefined,
+		passHistoryHash: undefined,
+		requestEnvelopeTokens: undefined,
+		summaryCarryTokens: undefined,
+		turnTokens: undefined,
+		combinedEstimatedInputTokens: undefined,
+		candidateEstimateCount: undefined,
+		passPlanned: false,
 	}
 }
 
@@ -263,16 +307,16 @@ export function createCompactionPassRangeIdentity(
 	if (!firstTurn || !lastTurn || passEndTurnIndex < passStartTurnIndex) {
 		throw new Error("Compaction Pass has an invalid logical-turn range")
 	}
-	const passStartMessageIndex = firstTurn.startIndex
-	const passEndMessageIndex = lastTurn.endIndex
-	const sourceHistoryHash = state.sourceHistoryHash ?? hashJsonValue(state.sourceHistory)
+	const passStartMessageIndex = firstTurn.startMessageIndex
+	const passEndMessageIndex = lastTurn.endMessageIndex
+	const sourceHistoryHash = state.sourceHistoryHash
 	const rangeValue = {
 		sourceHistoryHash,
 		passStartTurnIndex,
 		passEndTurnIndex,
 		passStartMessageIndex,
 		passEndMessageIndex,
-		messages: state.sourceHistory.slice(passStartMessageIndex, passEndMessageIndex + 1),
+		messages: state.sourceSnapshot.messages.slice(passStartMessageIndex, passEndMessageIndex + 1),
 	}
 	return {
 		sourceHistoryHash,
@@ -284,7 +328,7 @@ export function createCompactionPassRangeIdentity(
 
 /** Return the immutable canonical baseline restored after each hidden Pass. */
 export function buildFittingSourceHistory(state: TargetWindowFittingState): ClineStorageMessage[] {
-	return cloneDeep(state.sourceHistory)
+	return materializeCompactionSourceSuffix(state.sourceSnapshot, 0)
 }
 
 /** Build the staged ordinary target history without inspecting or rewriting message content. */
@@ -292,10 +336,10 @@ export function buildTargetCandidateHistory(
 	state: TargetWindowFittingState,
 	continuation: readonly ClineStorageMessage[],
 ): ClineStorageMessage[] {
+	const uncoveredStartMessageIndex = state.turns[state.coveredTurnCount]?.startMessageIndex ?? state.protectedStartMessageIndex
 	return [
 		...(state.cumulativeSummary ? [summaryMessage(state.cumulativeSummary)] : []),
-		...cloneDeep(state.turns.slice(state.coveredTurnCount).flatMap((turn) => turn.messages)),
-		...cloneDeep(state.protectedTail),
+		...materializeCompactionSourceSuffix(state.sourceSnapshot, uncoveredStartMessageIndex),
 		...cloneDeep(continuation),
 	]
 }

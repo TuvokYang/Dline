@@ -86,6 +86,102 @@ describe("ChatRow summarizeTask rendering", () => {
 		expect(screen.getByTestId("compaction-pass")).toHaveAttribute("data-compaction-attempt-id", "attempt-2")
 	})
 
+	it.each([
+		["preparing", "Preparing a context-safe summary:"],
+		["waiting", "Waiting for the model to begin compaction:"],
+		["receiving", "Dline is condensing the conversation:"],
+	] as const)("renders an explicit %s lifecycle card before summary content", (compactionStatus, expectedTitle) => {
+		render(
+			<ChatRowContent
+				{...baseProps}
+				isExpanded={true}
+				message={{
+					ts: 11,
+					type: "say",
+					say: "tool",
+					partial: true,
+					text: JSON.stringify({
+						tool: "summarizeTask",
+						content: "",
+						compactionStatus,
+						compactionOperationId: "operation-lifecycle",
+						compactionUnitKind: "pass",
+						compactionUnitIndex: 2,
+						compactionDurable: false,
+					}),
+				}}
+			/>,
+		)
+
+		const card = screen.getByTestId("compaction-pass")
+		expect(card).toHaveAttribute("data-compaction-status", compactionStatus)
+		expect(card).toHaveAttribute("data-compaction-unit-kind", "pass")
+		expect(card).toHaveAttribute("data-compaction-unit-index", "2")
+		expect(card).toHaveAttribute("data-compaction-durable", "false")
+		expect(screen.getByText("Live")).toBeInTheDocument()
+		expect(screen.getByText(expectedTitle)).toBeInTheDocument()
+	})
+
+	it("renders summary refit as an independent execution-unit card", () => {
+		render(
+			<ChatRowContent
+				{...baseProps}
+				isExpanded={true}
+				message={{
+					ts: 12,
+					type: "say",
+					say: "tool",
+					partial: true,
+					text: JSON.stringify({
+						tool: "summarizeTask",
+						content: "strictly smaller cumulative summary",
+						compactionStatus: "receiving",
+						compactionOperationId: "operation-refit",
+						compactionUnitKind: "summary_refit",
+						compactionUnitIndex: 0,
+					}),
+				}}
+			/>,
+		)
+
+		const card = screen.getByTestId("compaction-pass")
+		expect(card).toHaveAttribute("data-compaction-unit-kind", "summary_refit")
+		expect(card).toHaveAttribute("data-compaction-unit-index", "0")
+		expect(screen.getByText("Dline is refitting the cumulative summary:")).toBeInTheDocument()
+		expect(screen.getByText("strictly smaller cumulative summary")).toBeInTheDocument()
+	})
+
+	it("renders explicit durable state and a single visual card surface", () => {
+		render(
+			<ChatRowContent
+				{...baseProps}
+				isExpanded={true}
+				message={{
+					ts: 15,
+					type: "say",
+					say: "tool",
+					partial: false,
+					text: JSON.stringify({
+						tool: "summarizeTask",
+						content: "durably committed summary",
+						compactionStatus: "completed",
+						compactionOperationId: "operation-durable",
+						compactionUnitKind: "pass",
+						compactionUnitIndex: 1,
+						compactionDurable: true,
+					}),
+				}}
+			/>,
+		)
+
+		const card = screen.getByTestId("compaction-pass")
+		expect(card).toHaveAttribute("data-compaction-durable", "true")
+		expect(card).toHaveClass("bg-code", "border", "border-editor-group-border", "rounded-[3px]")
+		expect(screen.getByText("Durable")).toBeInTheDocument()
+		const summaryContent = screen.getByTestId("compaction-summary-content")
+		expect(summaryContent).not.toHaveClass("bg-code", "border", "border-editor-group-border", "rounded-[3px]")
+	})
+
 	it("does not render a historical empty running compaction payload", () => {
 		const { container } = render(
 			<ChatRowContent

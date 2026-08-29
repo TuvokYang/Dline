@@ -497,8 +497,14 @@ export interface ClineSayTool {
 	activityId?: string
 	diff?: string
 	content?: string | string[]
-	/** Lifecycle for the stable conversation-compaction chat row. */
-	compactionStatus?: "running" | "retrying" | "failed" | "completed"
+	/** Lifecycle for one conversation-compaction execution-unit card. */
+	compactionStatus?: "preparing" | "waiting" | "receiving" | "running" | "retrying" | "failed" | "completed"
+	/** Distinguishes an ordinary rolling Pass from a cumulative-summary refit. */
+	compactionUnitKind?: "pass" | "summary_refit" | "failure"
+	/** Stable zero-based index within the unit kind for one operation. */
+	compactionUnitIndex?: number
+	/** True only after this execution-unit card has been committed to durable message history. */
+	compactionDurable?: boolean
 	/** Actionable compaction failure detail. */
 	error?: string
 	/** One-based retry attempt currently scheduled. */

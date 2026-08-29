@@ -1,6 +1,6 @@
 import type { ClineStorageMessage } from "@shared/messages/content"
 import { describe, expect, it } from "vitest"
-import { indexLogicalTurns } from "../logical-turns"
+import { indexLogicalTurns, type LogicalTurnSpan } from "../logical-turns"
 
 function textMessage(role: "user" | "assistant", text: string): ClineStorageMessage {
 	return { role, content: [{ type: "text", text }] }
@@ -39,6 +39,10 @@ function serialized(messages: readonly ClineStorageMessage[]): string {
 	return JSON.stringify(messages)
 }
 
+function spanMessages(history: readonly ClineStorageMessage[], span: LogicalTurnSpan): readonly ClineStorageMessage[] {
+	return history.slice(span.startMessageIndex, span.endMessageIndex + 1)
+}
+
 describe("logical turn indexing", () => {
 	it("indexes ordinary user and assistant exchanges as stable complete turns", () => {
 		const history = [
@@ -50,11 +54,13 @@ describe("logical turn indexing", () => {
 
 		const result = indexLogicalTurns(history)
 
-		expect(result.turns.map(({ startIndex, endIndex }) => [startIndex, endIndex])).toEqual([
+		expect(result.turns.map(({ startMessageIndex, endMessageIndex }) => [startMessageIndex, endMessageIndex])).toEqual([
 			[0, 1],
 			[2, 3],
 		])
-		expect(result.protectedTail).toEqual([])
+		expect(result.protectedStartMessageIndex).toBe(history.length)
+		expect(result).not.toHaveProperty("protectedTail")
+		expect(result.turns[0]).not.toHaveProperty("messages")
 		expect(result.issues).toEqual([])
 	})
 
@@ -69,9 +75,14 @@ describe("logical turn indexing", () => {
 		const result = indexLogicalTurns(history)
 
 		expect(result.turns).toHaveLength(1)
-		expect(result.turns[0]).toMatchObject({ startIndex: 0, endIndex: 3, functionIds: ["call-read"] })
-		expect(serialized(result.turns[0].messages)).toContain("File contents")
-		expect(result.protectedTail).toEqual([])
+		expect(result.turns[0]).toMatchObject({
+			startMessageIndex: 0,
+			endMessageIndex: 3,
+			functionIds: ["call-read"],
+		})
+		expect(serialized(spanMessages(history, result.turns[0]))).toContain("File contents")
+		expect(result.protectedStartMessageIndex).toBe(history.length)
+		expect(result.turns[0]).not.toHaveProperty("messages")
 	})
 
 	it("starts tagged Q&A feedback as the protected next round", () => {
@@ -85,15 +96,21 @@ describe("logical turn indexing", () => {
 
 		const result = indexLogicalTurns(history)
 
-		expect(result.turns.map(({ startIndex, endIndex, functionIds }) => ({ startIndex, endIndex, functionIds }))).toEqual([
-			{ startIndex: 0, endIndex: 1, functionIds: ["call-a"] },
-			{ startIndex: 2, endIndex: 3, functionIds: ["call-a", "call-b"] },
+		expect(
+			result.turns.map(({ startMessageIndex, endMessageIndex, functionIds }) => ({
+				startMessageIndex,
+				endMessageIndex,
+				functionIds,
+			})),
+		).toEqual([
+			{ startMessageIndex: 0, endMessageIndex: 1, functionIds: ["call-a"] },
+			{ startMessageIndex: 2, endMessageIndex: 3, functionIds: ["call-a", "call-b"] },
 		])
-		expect(result.protectedStartIndex).toBe(4)
-		expect(result.protectedTail).toEqual([history[4]])
-		expect(serialized(result.turns[0].messages)).not.toContain("Turn B request")
-		expect(serialized(result.turns[1].messages)).toContain("Turn B request")
-		expect(serialized(result.protectedTail)).toContain("Turn C request")
+		expect(result.protectedStartMessageIndex).toBe(4)
+		expect(serialized(spanMessages(history, result.turns[0]))).not.toContain("Turn B request")
+		expect(serialized(spanMessages(history, result.turns[1]))).toContain("Turn B request")
+		expect(serialized(history.slice(result.protectedStartMessageIndex))).toContain("Turn C request")
+		expect(result).not.toHaveProperty("protectedTail")
 	})
 
 	it("keeps parallel ordinary tool results atomic when their payload contains user-content tags", () => {
@@ -141,11 +158,11 @@ describe("logical turn indexing", () => {
 
 		expect(result.turns).toHaveLength(1)
 		expect(result.turns[0]).toMatchObject({
-			startIndex: 0,
-			endIndex: 2,
+			startMessageIndex: 0,
+			endMessageIndex: 2,
 			functionIds: ["call-read-a", "call-read-b"],
 		})
-		expect(result.protectedTail).toEqual([])
+		expect(result.protectedStartMessageIndex).toBe(history.length)
 		expect(result.issues).toEqual([])
 	})
 
@@ -156,11 +173,12 @@ describe("logical turn indexing", () => {
 			toolUse("call-pending", "write_to_file"),
 		]
 
-		const result = indexLogicalTurns([...completeTurn, ...incompleteTail])
+		const history = [...completeTurn, ...incompleteTail]
+		const result = indexLogicalTurns(history)
 
 		expect(result.turns).toHaveLength(1)
-		expect(result.protectedStartIndex).toBe(2)
-		expect(result.protectedTail).toEqual(incompleteTail)
+		expect(result.protectedStartMessageIndex).toBe(2)
+		expect(history.slice(result.protectedStartMessageIndex)).toEqual(incompleteTail)
 		expect(result.issues).toEqual([{ kind: "unpaired_tool_use", messageIndex: 3, functionId: "call-pending" }])
 	})
 
@@ -173,9 +191,11 @@ describe("logical turn indexing", () => {
 
 		const result = indexLogicalTurns(history)
 
-		expect(result.turns.map(({ startIndex, endIndex }) => [startIndex, endIndex])).toEqual([[0, 2]])
+		expect(result.turns.map(({ startMessageIndex, endMessageIndex }) => [startMessageIndex, endMessageIndex])).toEqual([
+			[0, 2],
+		])
 		expect(result.turns[0]).toMatchObject({ functionIds: ["call-a"] })
-		expect(result.protectedTail).toEqual([])
+		expect(result.protectedStartMessageIndex).toBe(history.length)
 		expect(result.issues).toEqual([])
 	})
 
@@ -189,9 +209,11 @@ describe("logical turn indexing", () => {
 
 		const result = indexLogicalTurns(history)
 
-		expect(result.turns.map(({ startIndex, endIndex }) => [startIndex, endIndex])).toEqual([[0, 2]])
-		expect(result.protectedStartIndex).toBe(3)
-		expect(result.protectedTail).toEqual([history[3]])
+		expect(result.turns.map(({ startMessageIndex, endMessageIndex }) => [startMessageIndex, endMessageIndex])).toEqual([
+			[0, 2],
+		])
+		expect(result.protectedStartMessageIndex).toBe(3)
+		expect(history.slice(result.protectedStartMessageIndex)).toEqual([history[3]])
 		expect(result.issues).toEqual([{ kind: "unpaired_tool_use", messageIndex: 3, functionId: "call-protected" }])
 	})
 
@@ -205,8 +227,10 @@ describe("logical turn indexing", () => {
 
 		const result = indexLogicalTurns(history)
 
-		expect(result.turns.map(({ startIndex, endIndex }) => [startIndex, endIndex])).toEqual([[0, 3]])
-		expect(result.protectedTail).toEqual([])
+		expect(result.turns.map(({ startMessageIndex, endMessageIndex }) => [startMessageIndex, endMessageIndex])).toEqual([
+			[0, 3],
+		])
+		expect(result.protectedStartMessageIndex).toBe(history.length)
 		expect(result.issues).toEqual([])
 	})
 
@@ -221,7 +245,7 @@ describe("logical turn indexing", () => {
 		const result = indexLogicalTurns(history)
 
 		expect(result.turns).toHaveLength(1)
-		expect(result.protectedTail).toEqual([orphan])
+		expect(history.slice(result.protectedStartMessageIndex)).toEqual([orphan])
 		expect(result.issues).toEqual([{ kind: "orphan_tool_result", messageIndex: 2, functionId: "call-orphan" }])
 	})
 
@@ -240,10 +264,10 @@ describe("logical turn indexing", () => {
 
 		const result = indexLogicalTurns(history)
 
-		expect(result.turns.map(({ startIndex, endIndex }) => [startIndex, endIndex])).toEqual([
+		expect(result.turns.map(({ startMessageIndex, endMessageIndex }) => [startMessageIndex, endMessageIndex])).toEqual([
 			[0, 1],
 			[2, 3],
 		])
-		expect(result.protectedTail).toEqual([])
+		expect(result.protectedStartMessageIndex).toBe(history.length)
 	})
 })

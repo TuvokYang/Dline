@@ -96,7 +96,7 @@ describe("Task API rate metrics boundary", () => {
 
 	it("flushes and disposes metrics within the bounded Task termination cleanup", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
-		const terminate = extractMethod(source, "async terminate()", "/** Close idle task terminals")
+		const terminate = extractMethod(source, "async terminate(", "/** Close idle task terminals")
 
 		expect(terminate).toContain(
 			'withTerminateTimeout(this.apiRateMetricsService.dispose(), 5_000, "apiRateMetricsService.dispose")',

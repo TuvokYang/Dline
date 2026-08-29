@@ -133,6 +133,35 @@ describe("Retry Decorator", () => {
 			callCount.should.equal(1)
 		})
 
+		it.each([
+			"task",
+			"subagent",
+			"compaction",
+		] as const)("delegates errors to the explicit %s retry owner", async (retryOwner) => {
+			let callCount = 0
+			class TestClass {
+				@withRetry({ maxRetries: 3, baseDelay: 1, retryAllErrors: true })
+				async *failMethod(_system: string, _messages: unknown[], _tools: unknown, _options: unknown) {
+					callCount++
+					const error = new Error("Rate limit exceeded") as Error & { status: number }
+					error.status = 429
+					throw error
+				}
+			}
+
+			let caught: unknown
+			try {
+				for await (const _ of new TestClass().failMethod("system", [], undefined, { retryOwner })) {
+					// The declared upper layer owns replay and cleanup.
+				}
+			} catch (error) {
+				caught = error
+			}
+
+			;(caught instanceof Error).should.equal(true)
+			callCount.should.equal(1)
+		})
+
 		it("propagates Task-owned retry through nested decorated provider adapters", async () => {
 			let innerCallCount = 0
 			class TestClass {

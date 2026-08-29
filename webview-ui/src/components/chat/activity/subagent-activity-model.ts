@@ -21,6 +21,17 @@ export interface SubagentRetryAttempt {
 	sequence: number
 }
 
+export interface SubagentActivityDetail {
+	task?: string
+	context?: string
+}
+
+export interface SubagentActivityPresentationModel {
+	toolSteps: SubagentToolStep[]
+	retryAttempts: SubagentRetryAttempt[]
+	toolCount: number
+}
+
 /** Normalize user-facing multiline text without changing relative indentation. */
 export function normalizeSubagentDisplayText(value: string): string {
 	const lines = value.replace(/\r\n?/g, "\n").split("\n")
@@ -70,11 +81,29 @@ function isNonNegativeFinite(value: number | undefined): value is number {
 	return Number.isFinite(value) && (value as number) >= 0
 }
 
+function filterCurrentAttempt(events: TaskActivityEvent[], currentAttempt: number | undefined): TaskActivityEvent[] {
+	return currentAttempt === undefined ? events : events.filter((event) => event.attempt === currentAttempt)
+}
+
+/** Parse the persisted Subagent prompt without exposing raw XML-like tags. */
+export function parseSubagentActivityDetail(detail: string | undefined): SubagentActivityDetail {
+	if (!detail?.trim()) return {}
+	const extract = (tag: "task" | "context") => {
+		const match = detail.match(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i"))
+		const normalized = match ? normalizeSubagentDisplayText(match[1]) : ""
+		return normalized || undefined
+	}
+	return { task: extract("task"), context: extract("context") }
+}
+
 /** Project structured provider retry events into display attempts. */
-export function buildSubagentRetryAttempts(events: TaskActivityEvent[] | undefined): SubagentRetryAttempt[] {
+export function buildSubagentRetryAttempts(
+	events: TaskActivityEvent[] | undefined,
+	currentAttempt?: number,
+): SubagentRetryAttempt[] {
 	if (!events?.length) return []
 
-	return [...events]
+	return filterCurrentAttempt([...events], currentAttempt)
 		.sort(compareEvents)
 		.filter(
 			(event) =>
@@ -94,11 +123,11 @@ export function buildSubagentRetryAttempts(events: TaskActivityEvent[] | undefin
 }
 
 /** Merge low-level activity events into one expandable row per tool call. */
-export function buildSubagentToolSteps(events: TaskActivityEvent[] | undefined): SubagentToolStep[] {
+export function buildSubagentToolSteps(events: TaskActivityEvent[] | undefined, currentAttempt?: number): SubagentToolStep[] {
 	if (!events?.length) return []
 
 	const steps = new Map<string, SubagentToolStep>()
-	for (const event of [...events].sort(compareEvents)) {
+	for (const event of filterCurrentAttempt([...events], currentAttempt).sort(compareEvents)) {
 		if (event.kind !== "tool_call" && event.kind !== "tool_result") continue
 
 		const toolCallId = event.toolCallId || createFallbackToolCallId(event)
@@ -135,4 +164,17 @@ export function buildSubagentToolSteps(events: TaskActivityEvent[] | undefined):
 	}
 
 	return [...steps.values()].sort((left, right) => left.sequence - right.sequence)
+}
+
+/** Build the single attempt-aware model consumed by header metrics and timelines. */
+export function buildSubagentActivityPresentation(
+	events: TaskActivityEvent[] | undefined,
+	currentAttempt?: number,
+): SubagentActivityPresentationModel {
+	const toolSteps = buildSubagentToolSteps(events, currentAttempt)
+	return {
+		toolSteps,
+		retryAttempts: buildSubagentRetryAttempts(events, currentAttempt),
+		toolCount: toolSteps.length,
+	}
 }

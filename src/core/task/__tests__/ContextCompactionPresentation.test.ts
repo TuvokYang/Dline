@@ -19,24 +19,24 @@ const attempt1 = { attemptIndex: 1, authorizationAttemptId: "attempt-1" }
 
 /** Lock per-Pass card identity independently from Task message persistence. */
 describe("ContextCompactionPresentation", () => {
-	it("creates no card until the first real partial and keeps retry on the same Pass card", () => {
+	it("creates a waiting card before the first partial and keeps retry on the same Pass card", () => {
 		const presentation = new ContextCompactionPresentation()
 		const firstPass = pass(0)
 
-		expect(presentation.startPass(firstPass, attempt0)).toBe(true)
+		expect(presentation.startPass(firstPass, attempt0)).toMatchObject({ status: "waiting", attempt: attempt0 })
 		const firstPartial = presentation.partial(firstPass, attempt0, "partial zero")
 		expect(firstPartial).toMatchObject({
-			existingTs: undefined,
 			content: "partial zero",
-			status: "running",
+			status: "receiving",
 			attempt: attempt0,
 		})
+		expect(firstPartial).not.toHaveProperty("existingTs")
 		expect(presentation.bindMessageTs(firstPass, 101)).toBe(true)
 
 		const retry = presentation.retry(firstPass, attempt0, attempt1, 1, 3, "network failure")
 		expect(retry).toMatchObject({ existingTs: 101, content: "partial zero", status: "retrying", attempt: attempt1 })
 		const retriedPartial = presentation.partial(firstPass, attempt1, "partial one")
-		expect(retriedPartial).toMatchObject({ existingTs: 101, content: "partial one", status: "running", attempt: attempt1 })
+		expect(retriedPartial).toMatchObject({ existingTs: 101, content: "partial one", status: "receiving", attempt: attempt1 })
 	})
 
 	it("keeps the Pass row identity when publishing terminal failure after rollback", () => {
@@ -55,7 +55,7 @@ describe("ContextCompactionPresentation", () => {
 		})
 	})
 
-	it("turns an accepted Pass card into terminal failure when target fitting remains exhausted", () => {
+	it("preserves an accepted Pass card and creates a separate terminal failure card", () => {
 		const presentation = new ContextCompactionPresentation()
 		const firstPass = pass(0)
 
@@ -65,10 +65,15 @@ describe("ContextCompactionPresentation", () => {
 		presentation.complete(firstPass, attempt0, "accepted summary")
 
 		expect(presentation.fail("operation-1", "The rebuilt target remains above the strict exit target.")).toMatchObject({
-			existingTs: 101,
+			unitKind: "failure",
 			content: "",
 			status: "failed",
 			error: "The rebuilt target remains above the strict exit target.",
+		})
+		expect(presentation.getUnitSnapshot("operation-1", "pass", 0)).toMatchObject({
+			existingTs: 101,
+			content: "accepted summary",
+			status: "completed",
 		})
 	})
 
@@ -89,7 +94,7 @@ describe("ContextCompactionPresentation", () => {
 		})
 	})
 
-	it("reuses one operation row across Passes and rejects stale Pass or attempt updates", () => {
+	it("allocates a separate row for each Pass and rejects stale Pass or attempt updates", () => {
 		const presentation = new ContextCompactionPresentation()
 		const firstPass = pass(0)
 		const secondPass = pass(1)
@@ -99,25 +104,34 @@ describe("ContextCompactionPresentation", () => {
 		presentation.bindMessageTs(firstPass, 101)
 		expect(presentation.complete(firstPass, attempt0, "completed first")).toMatchObject({
 			existingTs: 101,
-			status: "running",
+			content: "completed first",
+			status: "completed",
 		})
 
-		expect(presentation.startPass(secondPass, attempt0)).toBe(true)
-		expect(presentation.partial(secondPass, attempt0, "second")).toMatchObject({ existingTs: 101, status: "running" })
+		expect(presentation.startPass(secondPass, attempt0)).toMatchObject({ content: "", status: "waiting" })
+		expect(presentation.getSnapshot()).toMatchObject({ content: "", status: "waiting" })
+		expect(presentation.getSnapshot()).not.toHaveProperty("existingTs")
+		expect(presentation.partial(secondPass, attempt0, "second")).toMatchObject({ status: "receiving" })
+		expect(presentation.getSnapshot()).not.toHaveProperty("existingTs")
+		expect(presentation.bindMessageTs(secondPass, 202)).toBe(true)
 		expect(presentation.partial(firstPass, attempt0, "late first")).toBeUndefined()
 		expect(presentation.partial(secondPass, attempt1, "unannounced retry")).toBeUndefined()
+		expect(presentation.complete(secondPass, attempt0, "second")).toMatchObject({ status: "completed" })
 		expect(presentation.finalizeOperation("operation-1")).toMatchObject({
-			existingTs: 101,
+			existingTs: 202,
 			content: "second",
 			status: "completed",
 		})
 		expect(presentation.fail("operation-1", "Terminal compaction failure")).toMatchObject({
-			existingTs: 101,
+			unitKind: "failure",
 			content: "",
 			status: "failed",
 			error: "Terminal compaction failure",
-			passIdentity: secondPass,
-			attempt: attempt0,
+		})
+		expect(presentation.getUnitSnapshot("operation-1", "pass", 1)).toMatchObject({
+			existingTs: 202,
+			content: "second",
+			status: "completed",
 		})
 	})
 })

@@ -2,9 +2,7 @@
 
 const prompts: Record<string, string> = {
 	summarizeMain: `<explicit_instructions type="summarize_task">
-@COMPACTION_WINDOW_BUDGET@
-
-The current conversation is rapidly running out of context. Now, your urgent task is to create a comprehensive detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.
+@COMPACTION_WINDOW_BUDGET@The current conversation is rapidly running out of context. Now, your urgent task is to create a comprehensive detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.
 This summary should be thorough in capturing technical details, code patterns, and architectural decisions that would be essential for continuing development work without losing context.
 
 @SUMMARY_DECISION@

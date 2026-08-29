@@ -28,11 +28,7 @@ import { SubagentRetryTimeline } from "./activity/SubagentRetryTimeline"
 import { SubagentRuntimeConfig } from "./activity/SubagentRuntimeConfig"
 import { SubagentToolTimeline } from "./activity/SubagentToolTimeline"
 import { SubagentWorkSection } from "./activity/SubagentWorkSection"
-import {
-	buildSubagentRetryAttempts,
-	buildSubagentToolSteps,
-	normalizeSubagentDisplayText,
-} from "./activity/subagent-activity-model"
+import { buildSubagentActivityPresentation, normalizeSubagentDisplayText } from "./activity/subagent-activity-model"
 import { useActivityControlGuard } from "./activity/useActivityControlGuard"
 import { cancelTaskActivities, finishTaskActivities, retryTaskActivities, useTaskActivities } from "./activity/useTaskActivities"
 
@@ -59,9 +55,11 @@ interface SubagentPromptTextProps {
 
 interface SubagentDisplayItem extends SubagentStatusItem {
 	activityEvents?: TaskActivityEvent[]
+	currentAttempt?: number
 	runtime?: TaskActivityRuntimeConfig
 	finishable?: boolean
 	retryable?: boolean
+	retryUnavailableReason?: string
 }
 
 const statusIcon = (status: DisplayStatus) => {
@@ -285,9 +283,11 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 				contextTokens: activity.metrics?.contextTokens ?? entry.contextTokens,
 				contextWindow: activity.metrics?.contextWindow ?? entry.contextWindow,
 				activityEvents: activity.events,
+				currentAttempt: activity.currentAttempt,
 				runtime: activity.runtime,
 				finishable: activity.finishable,
 				retryable: activity.retryable,
+				retryUnavailableReason: activity.retryUnavailableReason,
 			}
 		})
 		const statuses = items.map((entry) => entry.status)
@@ -387,8 +387,8 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 						const displayStatus: DisplayStatus = entry.status
 						const itemKey = entry.jobId ?? String(entry.index)
 						const isItemCollapsed = collapsedItems[itemKey] === true
-						const retryAttempts = buildSubagentRetryAttempts(entry.activityEvents)
-						const toolSteps = buildSubagentToolSteps(entry.activityEvents)
+						const activityPresentation = buildSubagentActivityPresentation(entry.activityEvents, entry.currentAttempt)
+						const { retryAttempts, toolSteps, toolCount } = activityPresentation
 						const hasOutput = Boolean(
 							retryAttempts.length > 0 ||
 								(entry.result && entry.status === "completed") ||
@@ -405,7 +405,9 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 						const showToolsSection = !isStreamingPromptUnderConstruction && toolSteps.length > 0
 						const showOutputSection = !isStreamingPromptUnderConstruction && hasOutput
 						const expandedScrollableSectionCount =
-							Number(showToolsSection && toolsExpanded) + Number(showOutputSection && outputExpanded)
+							Number(taskExpanded) +
+							Number(showToolsSection && toolsExpanded) +
+							Number(showOutputSection && outputExpanded)
 						const shareAvailableHeight = expandedScrollableSectionCount > 1
 						const isBackground = entry.background === true
 						const ExecutionModeIcon = isBackground ? SendToBackIcon : BringToFrontIcon
@@ -506,10 +508,17 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 										inputTokens={entry.inputTokens}
 										outputTokens={entry.outputTokens}
 										startedAt={entry.startedAt}
-										toolCalls={entry.toolCalls}
+										toolCalls={toolCount}
 										totalCost={entry.totalCost}
 									/>
 									<SubagentRuntimeConfig className="basis-full pl-8" runtime={entry.runtime} />
+									{entry.retryUnavailableReason && (
+										<div
+											className="basis-full pl-8 text-[11px] text-warning whitespace-pre-wrap break-words"
+											data-testid="subagent-retry-unavailable-reason">
+											{entry.retryUnavailableReason}
+										</div>
+									)}
 								</div>
 								{!isItemCollapsed && (
 									<div
@@ -519,9 +528,8 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 											ariaLabel={`${taskExpanded ? "Collapse" : "Expand"} subagent task`}
 											expanded={taskExpanded}
 											onToggle={() => toggleSection(itemKey, "task")}
-											scrollable={false}
 											scrollTestId="subagent-task-scroll"
-											shareAvailableHeight={false}
+											shareAvailableHeight={shareAvailableHeight}
 											title="Task">
 											<div className="min-w-0 max-w-full space-y-1.5">
 												{hasStructuredPrompt ? (
@@ -553,8 +561,8 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 												<SubagentToolTimeline
 													compact
 													detailsMode="none"
-													events={entry.activityEvents}
 													showHeader={false}
+													steps={toolSteps}
 												/>
 											</SubagentWorkSection>
 										)}
@@ -567,7 +575,7 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 												scrollTestId="subagent-output-scroll"
 												shareAvailableHeight={shareAvailableHeight}
 												title="Output">
-												<SubagentRetryTimeline events={entry.activityEvents} />
+												<SubagentRetryTimeline attempts={retryAttempts} />
 												{entry.result && entry.status === "completed" && (
 													<div className="opacity-80 wrap-anywhere" data-testid="subagent-output">
 														<MarkdownBlock markdown={entry.result} />

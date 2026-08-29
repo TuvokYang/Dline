@@ -85,30 +85,34 @@ function ToolStep({
 
 export function SubagentToolTimeline({
 	events,
+	steps,
+	currentAttempt,
 	compact = false,
 	className,
 	detailsMode = "inline",
 	showHeader = true,
 }: {
-	events: TaskActivityEvent[] | undefined
+	events?: TaskActivityEvent[]
+	steps?: readonly SubagentToolStep[]
+	currentAttempt?: number
 	compact?: boolean
 	className?: string
 	detailsMode?: SubagentToolDetailsMode
 	showHeader?: boolean
 }) {
-	const steps = useMemo(() => buildSubagentToolSteps(events), [events])
-	if (steps.length === 0) return null
+	const projectedSteps = useMemo(() => steps ?? buildSubagentToolSteps(events, currentAttempt), [steps, events, currentAttempt])
+	if (projectedSteps.length === 0) return null
 
 	return (
 		<div className={cn("min-w-0", className)} data-testid="subagent-tool-timeline">
 			{showHeader && (
 				<div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-description">
 					<span>Tools</span>
-					<span className="font-normal normal-case">({steps.length})</span>
+					<span className="font-normal normal-case">({projectedSteps.length})</span>
 				</div>
 			)}
 			<ol className={cn("m-0 list-none p-0", !compact && "space-y-0.5")}>
-				{steps.map((step, index) => (
+				{projectedSteps.map((step, index) => (
 					<ToolStep compact={compact} detailsMode={detailsMode} index={index} key={step.toolCallId} step={step} />
 				))}
 			</ol>

@@ -38,7 +38,7 @@ export const summarizeTask = (
 			FOCUS_CHAIN_USAGE: focusChainUsage,
 			FOCUS_CHAIN_EXAMPLE: focusChainExample,
 			SUMMARY_DECISION: summaryDecision,
-			COMPACTION_WINDOW_BUDGET: compactionWindowBudget,
+			COMPACTION_WINDOW_BUDGET: compactionWindowBudget ? `${compactionWindowBudget}\n\n` : "",
 		}).text
 	}\n`
 }
