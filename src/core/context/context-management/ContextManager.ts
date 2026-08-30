@@ -629,8 +629,18 @@ export class ContextManager {
 			const toolResultMap = new Map<string, ClineUserToolResultContentBlock>()
 			let hasDuplicates = false
 			let normalizedIdentity = false
+			// Providers require the answering tool_results to lead the user message.
+			// Persisted histories can violate this when a tool pushed its own block
+			// (e.g. read_file pushing an image) before its result was recorded.
+			let hasMisorderedResult = false
+			let sawNonResultBlock = false
 
 			for (const block of nextMessage.content) {
+				if (block.type !== "tool_result") {
+					sawNonResultBlock = true
+				} else if (sawNonResultBlock) {
+					hasMisorderedResult = true
+				}
 				if (block.type === "tool_result") {
 					const functionId = this.getResultFunctionId(block)
 					const storedResult = block as ClineUserToolResultContentBlock
@@ -705,7 +715,7 @@ export class ContextManager {
 			// Without this, duplicate tool_results for the same function_id are
 			// passed through to the API and produce "Messages with role 'tool'
 			// must be a response to a preceding message with 'tool_calls'".
-			if (!needsUpdate && !hasDuplicates) {
+			if (!needsUpdate && !hasDuplicates && !hasMisorderedResult) {
 				continue
 			}
 

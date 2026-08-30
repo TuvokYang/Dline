@@ -122,6 +122,29 @@ export class ToolResultUtils {
 	}
 
 	/**
+	 * Resolve where a new tool_result must be inserted in the pending user message.
+	 *
+	 * Providers require every tool_result answering an assistant tool_use batch to
+	 * appear before any other block of that user message. Tools may push their own
+	 * blocks first (for example read_file pushing an image block, or a hook pushing
+	 * context text), so appending blindly would leave the tool_result behind a
+	 * non-result block and make Anthropic reject the request with
+	 * "`tool_use` ids were found without `tool_result` blocks immediately after".
+	 *
+	 * @param userMessageContent Mutable next-user-message content list.
+	 * @returns Index directly after the last existing tool_result, otherwise 0.
+	 */
+	private static findToolResultInsertIndex(userMessageContent: any[]): number {
+		let insertIndex = 0
+		for (let i = 0; i < userMessageContent.length; i++) {
+			if (userMessageContent[i]?.type === "tool_result") {
+				insertIndex = i + 1
+			}
+		}
+		return insertIndex
+	}
+
+	/**
 	 * Create a canonical native tool result without consulting runtime maps.
 	 *
 	 * @param content Tool result content.
@@ -162,7 +185,9 @@ export class ToolResultUtils {
 				Logger.warn(`ToolResultUtils: Replaced existing tool_result for function_id ${block.function_id}`)
 				return result
 			}
-			userMessageContent.push(result)
+			// Keep every tool_result ahead of images, hook context and feedback text
+			// so the provider pairing contract holds for the whole tool batch.
+			userMessageContent.splice(ToolResultUtils.findToolResultInsertIndex(userMessageContent), 0, result)
 			return result
 		}
 
