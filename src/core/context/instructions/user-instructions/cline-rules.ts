@@ -9,7 +9,7 @@ import {
 import { formatResponse } from "@core/prompts/responses"
 import { ensureRulesDirectoryExists, GlobalFileNames } from "@core/storage/disk"
 import { StateManager } from "@core/storage/StateManager"
-import { reconcileGlobalCapabilities } from "@core/storage/settings/global-capability-settings"
+import { resolveCapabilityToggles } from "@core/storage/settings/capability-toggle-store"
 import { ClineRulesToggles } from "@shared/cline-rules"
 import { fileExistsAtPath, isDirectory, readDirectory } from "@utils/fs"
 import fs from "fs/promises"
@@ -152,21 +152,19 @@ export async function refreshClineRulesToggles(
 	globalToggles: ClineRulesToggles
 	localToggles: ClineRulesToggles
 }> {
-	// Global toggles
+	// Discovery is read-only: scan the rule directories and resolve the effective
+	// state against the stored preferences in memory. Persisting a preference is
+	// reserved for explicit user toggles, so this stays off the storage write path
+	// and never contends for the cross-process settings lock.
 	const globalClineRulesFilePath = await ensureRulesDirectoryExists()
 	const discoveredGlobalToggles = await synchronizeRuleToggles(globalClineRulesFilePath, {})
-	const updatedGlobalToggles = await reconcileGlobalCapabilities(
-		controller.stateManager,
-		"globalClineRulesToggles",
-		discoveredGlobalToggles,
-	)
+	const updatedGlobalToggles = resolveCapabilityToggles(controller.stateManager, "rules", discoveredGlobalToggles)
 
 	// Local toggles
-	const localClineRulesToggles = controller.stateManager.getWorkspaceStateKey("localClineRulesToggles")
 	const localClineRulesFilePath = path.resolve(workingDirectory, GlobalFileNames.dlineRulesDir)
 	// .dline/rules/ only contains rule files — no subdirectories to exclude
-	const updatedLocalToggles = await synchronizeRuleToggles(localClineRulesFilePath, localClineRulesToggles)
-	controller.stateManager.setWorkspaceState("localClineRulesToggles", updatedLocalToggles)
+	const discoveredLocalToggles = await synchronizeRuleToggles(localClineRulesFilePath, {})
+	const updatedLocalToggles = resolveCapabilityToggles(controller.stateManager, "rules", discoveredLocalToggles)
 
 	return {
 		globalToggles: updatedGlobalToggles,

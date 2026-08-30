@@ -1,6 +1,6 @@
 import { synchronizeRuleToggles } from "@core/context/instructions/user-instructions/rule-helpers"
 import { getWorkflowsScanDirectories } from "@core/storage/disk"
-import { reconcileGlobalCapabilities } from "@core/storage/settings/global-capability-settings"
+import { resolveCapabilityToggles } from "@core/storage/settings/capability-toggle-store"
 import { ClineRulesToggles } from "@shared/cline-rules"
 import { Controller } from "@/core/controller"
 
@@ -9,6 +9,11 @@ import { Controller } from "@/core/controller"
  * Scans multiple directories:
  *   - Project: .agents/workflows/ (new) + .clinerules/workflows/ (legacy compat)
  *   - Global:  ~/Documents/dline/workflows/
+ *
+ * Discovery is read-only: it reports what exists on disk and resolves the
+ * effective state against stored preferences in memory. Persisting a preference
+ * is reserved for explicit user toggles, so this stays off the storage write
+ * path and never contends for the cross-process settings lock.
  */
 export async function refreshWorkflowToggles(
 	controller: Controller,
@@ -19,7 +24,6 @@ export async function refreshWorkflowToggles(
 }> {
 	const scanDirs = getWorkflowsScanDirectories(workingDirectory)
 
-	const currentLocal = controller.stateManager.getWorkspaceStateKey("workflowToggles") || {}
 	const discoveredGlobal: ClineRulesToggles = {}
 	const discoveredLocal: ClineRulesToggles = {}
 
@@ -32,13 +36,10 @@ export async function refreshWorkflowToggles(
 		else Object.assign(discoveredLocal, discovered)
 	}
 
-	const globalToggles = await reconcileGlobalCapabilities(controller.stateManager, "globalWorkflowToggles", discoveredGlobal)
-	const localToggles: ClineRulesToggles = {}
-	for (const [workflowPath, defaultEnabled] of Object.entries(discoveredLocal)) {
-		localToggles[workflowPath] = currentLocal[workflowPath] ?? defaultEnabled
-	}
-
-	controller.stateManager.setWorkspaceState("workflowToggles", localToggles)
+	// Global entries resolve through the same scope chain as project entries, so a
+	// workspace or task override applies to both.
+	const globalToggles = resolveCapabilityToggles(controller.stateManager, "workflows", discoveredGlobal)
+	const localToggles = resolveCapabilityToggles(controller.stateManager, "workflows", discoveredLocal)
 
 	return {
 		globalWorkflowToggles: globalToggles,

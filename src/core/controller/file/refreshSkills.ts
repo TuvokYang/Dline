@@ -1,5 +1,5 @@
 import { parseRemoteSkillEntries } from "@core/context/instructions/user-instructions/skills"
-import { reconcileGlobalCapabilities } from "@core/storage/settings/global-capability-settings"
+import { resolveCapabilityToggles } from "@core/storage/settings/capability-toggle-store"
 import { RefreshedSkills, SkillInfo } from "@shared/proto/dline/file"
 import fs from "fs/promises"
 import path from "path"
@@ -64,7 +64,12 @@ async function scanSkillsDirectory(dirPath: string): Promise<SkillInfo[]> {
 }
 
 /**
- * Refreshes all skill toggles (discovers skills and their enabled state)
+ * Refreshes all skill toggles (discovers skills and their enabled state).
+ *
+ * Discovery is read-only: it reports what exists on disk and resolves the
+ * effective state against stored preferences in memory. Persisting a preference
+ * is reserved for explicit user toggles, so this stays off the storage write
+ * path and never contends for the cross-process settings lock.
  */
 export async function refreshSkills(controller: Controller): Promise<RefreshedSkills> {
 	// Get workspace paths for local skills
@@ -93,14 +98,10 @@ export async function refreshSkills(controller: Controller): Promise<RefreshedSk
 		}
 	}
 
-	// Reconcile disk-backed toggle maps with the latest committed Settings snapshot.
-	// Remote entries use a separate name-keyed map and are handled below.
+	// Resolve the discovered skills against the stored preferences without writing
+	// them back. Remote entries use a separate name-keyed map and are handled below.
 	const discoveredGlobalToggles = Object.fromEntries(globalSkills.map((skill) => [skill.path, true]))
-	const globalToggles = await reconcileGlobalCapabilities(
-		controller.stateManager,
-		"globalSkillsToggles",
-		discoveredGlobalToggles,
-	)
+	const globalToggles = resolveCapabilityToggles(controller.stateManager, "skills", discoveredGlobalToggles)
 	for (const skill of globalSkills) {
 		skill.enabled = globalToggles[skill.path] !== false
 	}
@@ -127,18 +128,14 @@ export async function refreshSkills(controller: Controller): Promise<RefreshedSk
 		)
 	}
 
-	// Get local toggles and apply them
-	const localToggles = controller.stateManager.getWorkspaceStateKey("localSkillsToggles") || {}
-	const localPaths = new Set(localSkills.map((skill) => skill.path))
-	for (const togglePath of Object.keys(localToggles)) {
-		if (!localPaths.has(togglePath)) delete localToggles[togglePath]
-	}
+	// Resolve the workspace-level preferences the same way. Stale entries for
+	// capabilities that no longer exist on disk are ignored here rather than
+	// rewritten, which keeps discovery free of persistence side effects.
+	const discoveredLocalToggles = Object.fromEntries(localSkills.map((skill) => [skill.path, true]))
+	const localToggles = resolveCapabilityToggles(controller.stateManager, "skills", discoveredLocalToggles)
 	for (const skill of localSkills) {
-		if (!(skill.path in localToggles)) localToggles[skill.path] = true
 		skill.enabled = localToggles[skill.path] !== false
 	}
-
-	controller.stateManager.setWorkspaceState("localSkillsToggles", localToggles)
 
 	return RefreshedSkills.create({
 		globalSkills,

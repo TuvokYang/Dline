@@ -49,18 +49,16 @@ describe("refreshSubagents", () => {
 			"utf8",
 		)
 
-		const globalToggles = { [path.join(globalDir, "code-reviewer.yaml")]: false }
+		// Sparse overrides per scope. Discovery only reads these maps.
+		const storedToggles: Record<string, Record<string, boolean>> = {
+			globalSubagentsToggles: { [path.join(globalDir, "code-reviewer.yaml")]: false },
+			workspaceSubagentsToggles: { [path.join(localDir, "code-reviewer.yaml")]: true },
+		}
+		const mutateScopedCapabilityToggles = vi.fn()
 		const controller = {
 			stateManager: {
-				getGlobalSettingsKey: (key: string) => (key === "globalSubagentsToggles" ? globalToggles : undefined),
-				mutateGlobalSettingsKey: vi.fn(
-					async (_key: string, mutate: (current: Record<string, boolean>) => Record<string, boolean>) =>
-						mutate(globalToggles),
-				),
-				getWorkspaceStateKey: (key: string) =>
-					key === "localSubagentsToggles" ? { [path.join(localDir, "code-reviewer.yaml")]: true } : undefined,
-				setGlobalState: vi.fn(),
-				setWorkspaceState: vi.fn(),
+				getScopedCapabilityToggles: (_scope: string, key: string) => storedToggles[key] ?? {},
+				mutateScopedCapabilityToggles,
 			},
 		} as any
 
@@ -71,5 +69,7 @@ describe("refreshSubagents", () => {
 		expect(response.localSubagents[0].name).toBe("code-reviewer")
 		expect(response.localSubagents[0].description).toBe("Local reviewer")
 		expect(response.localSubagents[0].enabled).toBe(true)
+		// Discovery must never persist a preference.
+		expect(mutateScopedCapabilityToggles).not.toHaveBeenCalled()
 	})
 })

@@ -5144,7 +5144,16 @@ export class Task {
 		const firstTurnStartedAt = performance.now()
 		let firstTurnReported = false
 		while (!this.taskState.abort) {
-			const didEndLoop = await this.recursivelyMakeClineRequests(nextUserContent, includeFileDetails)
+			let didEndLoop: boolean
+			try {
+				didEndLoop = await this.recursivelyMakeClineRequests(nextUserContent, includeFileDetails)
+			} catch (error) {
+				// An exception raised between two provider requests must not unwind this
+				// loop silently. Surface it, let the recovery interaction own the
+				// continuation, then leave the loop like every other recovery call site.
+				await this.recoverTaskLoopFailure(error)
+				break
+			}
 			if (!firstTurnReported) {
 				firstTurnReported = true
 				Logger.debug(
@@ -5174,6 +5183,48 @@ export class Task {
 				},
 			]
 			this.taskState.consecutiveMistakeCount++
+		}
+	}
+
+	/**
+	 * Turn a task-loop failure that escaped one turn into a visible, actionable state.
+	 *
+	 * Without this boundary an exception raised between two provider requests (for
+	 * example while loading context) leaves no trace: no error message is written,
+	 * no phase transition is committed and no view state is published, so the task
+	 * stays parked in a working phase that the user can neither cancel nor retry.
+	 */
+	private async recoverTaskLoopFailure(error: unknown): Promise<void> {
+		if (this.taskState.abort || isInteractionCancellationError(error)) {
+			return
+		}
+
+		const presentation = error instanceof Error ? error.message : String(error)
+		Logger.error(`[Task ${this.taskId}] Task loop failed between requests:`, error)
+
+		try {
+			await this.say("error", presentation)
+		} catch (sayError) {
+			Logger.error(`[Task ${this.taskId}] Failed to surface task loop failure:`, sayError)
+		}
+
+		const interactionId = `task-loop-failure:${this.taskId}:${this.getRuntimeState().revision}`
+		try {
+			await this.recoverApiFailure({
+				turnId: interactionId,
+				interactionId,
+				apiIndex: this.messageStateHandler.apiConversationHistory.length - 1,
+				presentation,
+				persistedRequest: true,
+			})
+		} catch (recoveryError) {
+			if (!isInteractionCancellationError(recoveryError)) {
+				Logger.error(`[Task ${this.taskId}] Failed to present task loop recovery:`, recoveryError)
+			}
+		} finally {
+			await this.postStateToWebview({ immediate: true }).catch((publishError) => {
+				Logger.error(`[Task ${this.taskId}] Failed to publish task loop failure state:`, publishError)
+			})
 		}
 	}
 

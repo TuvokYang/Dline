@@ -40,6 +40,7 @@ import {
 	setFirebaseAccountId,
 	setWandbApiKey,
 } from "./secrets"
+import type { CapabilityScope } from "./settings/capability-toggle-scopes"
 import { SettingsRepository } from "./settings/SettingsRepository"
 import type { SettingsCommit, SettingsSnapshot } from "./settings/settings-types"
 import { TaskHistory } from "./TaskHistory"
@@ -105,6 +106,14 @@ export class StateManager {
 	private settingsRepository?: SettingsRepository
 	private settingsRepositoryUnsubscribe?: () => void
 	private appliedSettingsRevision = 0
+	/**
+	 * Workspace-scoped preference document (workspaces/<hash>/settings.json).
+	 *
+	 * Kept separate from `workspaceState` so a workspace-level preference is
+	 * committed with the same strong consistency as global settings instead of the
+	 * delayed batch used for workspace state.
+	 */
+	private workspaceSettingsRepository?: SettingsRepository
 	private isInitialized = false
 
 	// Cache TTL: 1 hour - long enough to prevent duplicate fetches, short enough to see new models
@@ -300,6 +309,12 @@ export class StateManager {
 
 		await repository.initialize()
 		instance.applySettingsSnapshot(repository.readSnapshot())
+
+		// Workspace preferences live in their own document and are read on demand,
+		// so they are never merged into the global settings cache.
+		const workspaceRepository = new SettingsRepository({ filePath: storage.workspaceSettingsFilePath })
+		instance.workspaceSettingsRepository = workspaceRepository
+		await workspaceRepository.initialize()
 
 		const existingValues = repository.readSnapshot().values as Record<string, unknown>
 		const existingSentinel = existingValues[SETTINGS_MIGRATION_VERSION_KEY]
@@ -1153,6 +1168,51 @@ export class StateManager {
 		return this.getCanonicalSettingsKey(key)
 	}
 
+	/**
+	 * Read one capability toggle map from an explicit preference scope.
+	 *
+	 * Returns a sparse override map, not an effective state: callers resolve the
+	 * effective value through `resolveToggles` so an absent path keeps inheriting
+	 * from the scope above.
+	 */
+	getScopedCapabilityToggles<K extends SettingsKey>(scope: CapabilityScope, key: K): Settings[K] {
+		if (!this.isInitialized) {
+			throw new Error(STATE_MANAGER_NOT_INITIALIZED)
+		}
+		if (scope === "workspace") {
+			const values = this.workspaceSettingsRepository?.readSnapshot().values
+			return (values?.[key] ?? getDefaultValue(key)) as Settings[K]
+		}
+		// Global and task both resolve through the settings cache, which already
+		// prefers the active task document when one is bound.
+		return this.getGlobalSettingsKey(key)
+	}
+
+	/**
+	 * Atomically mutate one capability toggle map in an explicit preference scope.
+	 *
+	 * Only explicit user toggles reach this path; discovery stays read-only.
+	 */
+	async mutateScopedCapabilityToggles<K extends SettingsKey>(
+		scope: CapabilityScope,
+		key: K,
+		resolveValue: (currentValue: Settings[K]) => Settings[K],
+	): Promise<Settings[K]> {
+		if (scope !== "workspace") {
+			return this.mutateGlobalSettingsKey(key, resolveValue)
+		}
+
+		this.ensureMutationAllowed()
+		const repository = this.workspaceSettingsRepository
+		if (!repository) throw new Error("Workspace settings repository is not initialized")
+
+		const commit = await repository.mutateResolved((values) => {
+			const currentValue = (values[key] ?? getDefaultValue(key)) as Settings[K]
+			return { [key]: resolveValue(currentValue) } as Partial<Settings>
+		})
+		return (commit.snapshot.values[key] ?? getDefaultValue(key)) as Settings[K]
+	}
+
 	/** Atomically merge Auto-Approve changes against the latest cross-process Settings snapshot. */
 	async updateAutoApprovalSettings(patch: {
 		version?: number
@@ -1266,7 +1326,9 @@ export class StateManager {
 		this.settingsRepositoryUnsubscribe = undefined
 		const settingsRepository = this.settingsRepository
 		this.settingsRepository = undefined
-		await settingsRepository?.dispose()
+		const workspaceSettingsRepository = this.workspaceSettingsRepository
+		this.workspaceSettingsRepository = undefined
+		await Promise.all([settingsRepository?.dispose(), workspaceSettingsRepository?.dispose()])
 
 		this.globalStateCache = {} as GlobalStateAndSettings
 		this.settingsCache = {} as Settings

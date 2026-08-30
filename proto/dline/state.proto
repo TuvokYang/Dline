@@ -200,6 +200,14 @@ message Settings {
   optional string plan_mode_service_tier_override_tier = 213;
   optional string act_mode_service_tier_override_kind = 214;
   optional string act_mode_service_tier_override_tier = 215;
+  optional string workspace_rules_toggles = 216;
+  optional string workspace_workflow_toggles = 217;
+  optional string workspace_skills_toggles = 218;
+  optional string workspace_subagents_toggles = 219;
+  optional string task_rules_toggles = 220;
+  optional string task_workflow_toggles = 221;
+  optional string task_skills_toggles = 222;
+  optional string task_subagents_toggles = 223;
 }
 
 // Account usage quota for rate-limited providers (e.g., Codex, Copilot)

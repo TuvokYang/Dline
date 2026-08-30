@@ -1,5 +1,5 @@
 import { getSubagentsScanDirectories } from "@core/storage/disk"
-import { reconcileGlobalCapabilities } from "@core/storage/settings/global-capability-settings"
+import { resolveCapabilityToggles } from "@core/storage/settings/capability-toggle-store"
 import { parseAgentConfigFromYaml } from "@core/task/tools/subagent/AgentConfigLoader"
 import { RefreshedSubagents, SubagentInfo } from "@shared/proto/dline/file"
 import fs from "fs/promises"
@@ -98,32 +98,23 @@ export async function refreshSubagents(controller: Controller): Promise<Refreshe
 			}
 		}
 
-		// Reconcile toggle maps with the current filesystem snapshot. This keeps
-		// deleted files from leaving inert entries in settings and gives newly
-		// discovered files the same default as the existing capability pickers.
+		// Resolve the filesystem snapshot against the stored preferences in memory.
+		// Newly discovered files get the same default as the existing capability
+		// pickers, and entries for deleted files are ignored rather than rewritten,
+		// which keeps discovery off the storage write path.
 		const localNames = new Set(localSubagents.map((agent) => agent.name))
 		const visibleGlobalSubagents = globalSubagents.filter((agent) => !localNames.has(agent.name))
 		const discoveredGlobalToggles = Object.fromEntries(globalSubagents.map((agent) => [agent.path, true]))
-		const globalToggles = await reconcileGlobalCapabilities(
-			controller.stateManager,
-			"globalSubagentsToggles",
-			discoveredGlobalToggles,
-		)
+		const globalToggles = resolveCapabilityToggles(controller.stateManager, "subagents", discoveredGlobalToggles)
 		for (const agent of visibleGlobalSubagents) {
 			agent.enabled = globalToggles[agent.path] !== false
 		}
 
-		const localToggles = controller.stateManager.getWorkspaceStateKey("localSubagentsToggles") || {}
-		const localPaths = new Set(localSubagents.map((agent) => agent.path))
-		for (const togglePath of Object.keys(localToggles)) {
-			if (!localPaths.has(togglePath)) delete localToggles[togglePath]
-		}
+		const discoveredLocalToggles = Object.fromEntries(localSubagents.map((agent) => [agent.path, true]))
+		const localToggles = resolveCapabilityToggles(controller.stateManager, "subagents", discoveredLocalToggles)
 		for (const agent of localSubagents) {
-			if (!(agent.path in localToggles)) localToggles[agent.path] = true
 			agent.enabled = localToggles[agent.path] !== false
 		}
-
-		controller.stateManager.setWorkspaceState("localSubagentsToggles", localToggles)
 
 		return RefreshedSubagents.create({
 			globalSubagents: visibleGlobalSubagents,

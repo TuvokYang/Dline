@@ -1,6 +1,14 @@
 import type { StateManager } from "@core/storage/StateManager"
 import type { Settings } from "@shared/storage/state-keys"
 
+/**
+ * Global capability preference keys.
+ *
+ * These maps hold explicit user preferences only. Capability discovery never
+ * writes to them: it scans the filesystem and resolves the effective state in
+ * memory through `capability-toggle-scopes`, so an absent path means "inherit
+ * the discovered default", not "disabled".
+ */
 export type GlobalCapabilitySettingsKey =
 	| "globalClineRulesToggles"
 	| "globalWorkflowToggles"
@@ -28,19 +36,5 @@ export async function removeGlobalCapability(
 	return stateManager.mutateGlobalSettingsKey(key, (current) => {
 		const { [resourcePath]: _removed, ...remaining } = current
 		return remaining
-	}) as Promise<Settings[GlobalCapabilitySettingsKey]>
-}
-
-export async function reconcileGlobalCapabilities(
-	stateManager: StateManager,
-	key: GlobalCapabilitySettingsKey,
-	discovered: Readonly<Record<string, boolean>>,
-): Promise<ToggleMap> {
-	return stateManager.mutateGlobalSettingsKey(key, (current) => {
-		const next = { ...current }
-		for (const [resourcePath, defaultEnabled] of Object.entries(discovered)) {
-			if (!(resourcePath in next)) next[resourcePath] = defaultEnabled
-		}
-		return next
 	}) as Promise<Settings[GlobalCapabilitySettingsKey]>
 }
