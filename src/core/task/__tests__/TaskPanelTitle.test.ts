@@ -32,7 +32,6 @@ describe("formatTaskPanelTitle", () => {
 			formatTaskPanelTitle({
 				taskTitle: "任务标题",
 				checklist: checklist("completed", "completed", "completed", "completed", "completed", "pending", "pending"),
-				currentItemIndex: 5,
 			}),
 		).toBe("任务标题 (5/7)")
 	})
@@ -56,5 +55,18 @@ describe("formatTaskPanelTitle", () => {
 
 	it("removes an empty progress suffix from a panel entry point", () => {
 		expect(normalizeTaskPanelTitle("任务标题 (0/0)")).toBe("任务标题")
+	})
+
+	// Regression: a panel entry point must not drop the progress suffix by
+	// re-normalizing an already formatted title (previously the raw task text
+	// was re-sent after init and overwrote "修一下api con (1/5)").
+	it("keeps the progress suffix stable when re-normalizing a formatted title", () => {
+		const formatted = formatTaskPanelTitle({
+			taskTitle: "修一下api config中的 profile 列表",
+			checklist: checklist("completed", "pending", "pending", "pending", "pending"),
+		})
+
+		expect(formatted).toBe("修一下api con (1/5)")
+		expect(normalizeTaskPanelTitle(formatted)).toBe(formatted)
 	})
 })

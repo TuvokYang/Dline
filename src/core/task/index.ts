@@ -413,6 +413,8 @@ export class Task {
 	// Core task variables
 	readonly taskId: string
 	readonly ulid: string
+	/** Task text captured at construction; used before the "task" message exists. */
+	private readonly initialTaskTitle?: string
 	private taskIsFavorited?: boolean
 	private cwd: string
 	private taskInitializationStartTime: number
@@ -935,6 +937,7 @@ export class Task {
 		} else {
 			throw new Error("Either historyItem or task/images must be provided")
 		}
+		this.initialTaskTitle = task ?? historyItem?.task
 
 		this.messageStateHandler = new MessageStateHandler({
 			taskId: this.taskId,
@@ -4372,19 +4375,29 @@ export class Task {
 	}
 
 	/**
+	 * Canonical editor-panel title for this task.
+	 *
+	 * This is the single source of truth for panel titles: it always combines the
+	 * task description with the current focus chain progress, so no caller can
+	 * drop the progress suffix by passing raw task text.
+	 *
+	 * @returns Formatted title such as `改进编辑面板任务标题 (1/5)`
+	 */
+	getPanelTitle(): string {
+		const taskMessage = this.messageStateHandler.clineMessages.find((message) => message.say === "task")
+		return formatTaskPanelTitle({
+			taskTitle: taskMessage?.text || this.initialTaskTitle,
+			checklist: this.taskState.currentFocusChainChecklist,
+		})
+	}
+
+	/**
 	 * Syncs the editor tab title based on current task state.
 	 * Uses the task description and focus chain progress for the title.
 	 */
 	private syncPanelTitleFromState(): void {
 		try {
-			const taskMessage = this.messageStateHandler.clineMessages.find((message) => message.say === "task")
-			const title = formatTaskPanelTitle({
-				taskTitle: taskMessage?.text,
-				checklist: this.taskState.currentFocusChainChecklist,
-				currentItemIndex: this.taskState.currentInProgressItemIndex,
-			})
-
-			void this.controller.syncPanelTitle(title)
+			void this.controller.syncPanelTitle()
 		} catch {
 			// Non-critical; silently skip
 		}

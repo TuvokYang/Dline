@@ -24,9 +24,10 @@ export async function openTaskInNewWindow(controller: Controller, request: Strin
 	try {
 		// Dynamically import to avoid circular deps at module load time
 		const { VscodeWebviewPanelProvider } = await import("@/hosts/vscode/VscodeWebviewPanelProvider")
-		// Get the task from history to extract its title
+		// Get the task from history to extract its title.
+		// Truncation is owned by normalizeTaskPanelTitle in the panel entry points.
 		const taskWithId = await controller.getTaskWithId(taskId)
-		const title = taskWithId.historyItem.task?.substring(0, 50) || "Dline"
+		const title = taskWithId.historyItem.task || "Dline"
 
 		// Try to reuse an existing idle panel (has controller but no active task)
 		let panelProvider: any

@@ -685,7 +685,7 @@ export class Controller {
 		if (this.task !== taskInstance) {
 			return initializedTaskId
 		}
-		void this.syncPanelTitle(task || historyItem?.task || "Dline")
+		void this.syncPanelTitle()
 		void this.persistPanelStateIfNeeded(initializedTaskId)
 
 		return initializedTaskId
@@ -1082,20 +1082,22 @@ export class Controller {
 	 * Syncs the editor tab title for the panel hosting this controller's task.
 	 * Called when task description or focus chain progress changes.
 	 *
-	 * @param title - New title text (will be truncated to 16 chars)
+	 * The title is always derived from {@link Task.getPanelTitle} so the focus
+	 * chain progress suffix can never be dropped by a caller passing raw text.
 	 */
-	async syncPanelTitle(title: string): Promise<void> {
+	async syncPanelTitle(): Promise<void> {
 		if (this.uiDetached || this.disposed || !this.task) {
 			return
 		}
+		const resolvedTitle = this.task.getPanelTitle()
 		try {
 			const { WebviewProviderRegistry } = await import("@/core/webview/WebviewProviderRegistry")
 			const { VscodeWebviewPanelProvider } = await import("@/hosts/vscode/VscodeWebviewPanelProvider")
 			const panels = WebviewProviderRegistry.getPanels()
 			for (const provider of panels) {
 				if (provider instanceof VscodeWebviewPanelProvider && provider.hasController() && provider.controller === this) {
-					provider.updateTitle(title)
-					Logger.debug(`[Controller] Panel title synced: ${title.slice(0, 64)}`)
+					provider.updateTitle(resolvedTitle)
+					Logger.debug(`[Controller] Panel title synced: ${resolvedTitle.slice(0, 64)}`)
 					break
 				}
 			}

@@ -9,7 +9,6 @@ const HAN_CHARACTER_PATTERN = /\p{Script=Han}/u
 export interface TaskPanelTitleOptions {
 	taskTitle?: string | null
 	checklist?: string | null
-	currentItemIndex?: number | null
 }
 
 function truncateTitle(title: string): string {
