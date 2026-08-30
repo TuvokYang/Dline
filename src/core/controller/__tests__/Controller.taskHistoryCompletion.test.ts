@@ -22,7 +22,8 @@ function fakeController(history: HistoryItem[], completionResult?: HistoryItem) 
 	})
 	const stateManager = {
 		taskHistory: {
-			upsertTaskHistory: vi.fn(async (_item: HistoryItem): Promise<void> => undefined),
+			// The durable store owns the completion projection and returns the row it staged.
+			upsertTaskHistory: vi.fn(async (staged: HistoryItem): Promise<HistoryItem> => staged),
 			setCompletionState: vi.fn(async () => completionResult),
 		},
 		getGlobalStateKey: vi.fn(() => cache),
@@ -78,7 +79,10 @@ describe("Controller task history completion projection", () => {
 			[item({ isCompleted: true, completionStateRevision: 7 })],
 			updated,
 		)
-		stateManager.taskHistory.upsertTaskHistory.mockImplementationOnce(async () => await metadataRelease)
+		stateManager.taskHistory.upsertTaskHistory.mockImplementationOnce(async (staged: HistoryItem) => {
+			await metadataRelease
+			return staged
+		})
 
 		const metadataUpdate = controller.updateTaskHistory(item({ tokensIn: 50 }))
 		await vi.waitFor(() => expect(stateManager.taskHistory.upsertTaskHistory).toHaveBeenCalledOnce())

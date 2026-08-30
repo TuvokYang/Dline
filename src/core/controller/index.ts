@@ -53,6 +53,11 @@ import Mutex from "p-mutex"
 import * as path from "path"
 import { ClineEnv } from "@/config"
 import { getDlineDocumentsPath, getDlineDocumentsPathSync } from "@/core/storage/disk"
+import {
+	readPersistedTaskCompletion,
+	TASK_COMPLETION_BACKFILL_DELAY_MS,
+	TaskCompletionBackfill,
+} from "@/core/storage/TaskCompletionBackfill"
 import { HostProvider } from "@/hosts/host-provider"
 import { ExtensionRegistryInfo } from "@/registry"
 import { AuthService } from "@/services/auth/AuthService"
@@ -356,7 +361,51 @@ export class Controller {
 
 		// Start account usage polling. Network requests are deduplicated process-wide.
 		this.startAccountUsagePolling()
+		this.scheduleTaskCompletionBackfill()
 		Logger.log("[Controller] ClineProvider instantiated")
+	}
+
+	/**
+	 * Repair completion projections lost by earlier versions, once, off the startup path.
+	 *
+	 * A defect used to clear the projection every time a finished Task was
+	 * reopened, and such a row cannot heal itself while nobody opens that Task.
+	 * The scan reads each Task's canonical snapshot, so it is deferred well past
+	 * activation and guarded by a durable marker to run at most once.
+	 */
+	private scheduleTaskCompletionBackfill(): void {
+		if (this.stateManager.getGlobalStateKey("taskCompletionBackfillCompleted")) return
+
+		const timer = setTimeout(() => {
+			void this.runTaskCompletionBackfill().catch((error) =>
+				Logger.debug(`[Controller] Task completion backfill skipped: ${error}`),
+			)
+		}, TASK_COMPLETION_BACKFILL_DELAY_MS)
+		timer.unref?.()
+	}
+
+	private async runTaskCompletionBackfill(): Promise<void> {
+		if (this.disposed) return
+
+		const backfill = new TaskCompletionBackfill({
+			listTasks: () => this.stateManager.taskHistory.getDeduplicated(),
+			readCompletion: (taskId) => readPersistedTaskCompletion(taskId),
+			persist: (taskId, isCompleted, revision) => this.persistTaskCompletionState(taskId, isCompleted, revision),
+			onRepaired: async () => {
+				await this.postStateToWebview()
+			},
+		})
+
+		const result = await backfill.run()
+		// Mark the migration done even when some rows failed: a failed row keeps
+		// its current projection and is repaired when its Task is next opened, so
+		// rescanning the whole history on every launch would buy nothing.
+		this.stateManager.setGlobalState("taskCompletionBackfillCompleted", true)
+		if (result.repaired > 0 || result.failed > 0) {
+			Logger.info(
+				`[Controller] Task completion backfill: scanned=${result.scanned}, repaired=${result.repaired}, failed=${result.failed}`,
+			)
+		}
 	}
 
 	/** Apply the latest global configuration snapshot to every registered runtime component. */
@@ -2044,11 +2093,16 @@ export class Controller {
 			}
 
 			// Persist ordinary metadata through the buffered task-history path.
-			await this.stateManager.taskHistory.upsertTaskHistory(mergedItem)
+			// The durable store owns the completion projection, so its merged row is
+			// authoritative: the controller cache can be older than a completion that
+			// this or another window already wrote.
+			// Fall back to the locally merged row so a store that reports nothing can
+			// never blank an entry in the cache.
+			const persisted = (await this.stateManager.taskHistory.upsertTaskHistory(mergedItem)) ?? mergedItem
 			if (existingItemIndex !== -1) {
-				history[existingItemIndex] = mergedItem
+				history[existingItemIndex] = persisted
 			} else {
-				history.push(mergedItem)
+				history.push(persisted)
 			}
 			this.stateManager.setGlobalState("taskHistory", history)
 			return history

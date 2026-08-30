@@ -61,9 +61,18 @@ const HistoryView = ({ onDone }: HistoryViewProps) => {
 					searchQuery: searchQuery || undefined,
 					sortBy: sortOption,
 					currentWorkspaceOnly: showCurrentWorkspaceOnly,
+					includeCompletionStatus: true,
 				}),
 			)
-			setTasks(response.tasks || [])
+			// The service already resolves the canonical projection, so a returned
+			// `isCompleted` is authoritative; mark it as revisioned for the shared
+			// completion rule used by every history list.
+			setTasks(
+				(response.tasks || []).map((task) => ({
+					...task,
+					completionStateRevision: task.isCompleted ? 1 : undefined,
+				})),
+			)
 		} catch (error) {
 			console.error("Error loading task history:", error)
 		}

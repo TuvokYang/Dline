@@ -72,6 +72,38 @@ describe("TaskCompletionProjector", () => {
 		expect(persist).toHaveBeenCalledTimes(2)
 	})
 
+	it("keeps a completed projection while a reopened task walks its startup phases", async () => {
+		const persist = vi.fn(async () => true)
+		const projector = new TaskCompletionProjector({
+			taskId: "task-1",
+			initial: { isCompleted: true, revision: 12 },
+			persist,
+		})
+
+		// A reopened task restarts its runtime revisions from zero and passes
+		// through startup phases before its canonical state is hydrated.
+		await expect(projector.sync(runtimeState(TaskPhase.IDLE, 0))).resolves.toBe(false)
+		await expect(projector.sync(runtimeState(TaskPhase.INITIALIZING, 1))).resolves.toBe(false)
+		await expect(projector.sync(runtimeState(TaskPhase.RESUMING, 2))).resolves.toBe(false)
+		await expect(projector.sync(runtimeState(TaskPhase.COMPLETED, 3, "completion-1"))).resolves.toBe(false)
+
+		expect(persist).not.toHaveBeenCalled()
+	})
+
+	it("lifts a restarted runtime revision above the durable watermark", async () => {
+		const persist = vi.fn(async () => true)
+		const projector = new TaskCompletionProjector({
+			taskId: "task-1",
+			initial: { isCompleted: true, revision: 12 },
+			persist,
+		})
+
+		await expect(projector.sync(runtimeState(TaskPhase.STREAMING, 2))).resolves.toBe(true)
+
+		// A revision of 2 would be rejected as stale by the durable store.
+		expect(persist).toHaveBeenCalledExactlyOnceWith({ taskId: "task-1", isCompleted: false, revision: 13 })
+	})
+
 	it("does not advance the local projection when storage rejects a stale update", async () => {
 		const persist = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true)
 		const projector = new TaskCompletionProjector({ taskId: "task-1", persist })

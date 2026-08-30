@@ -10,14 +10,36 @@ export interface TaskCompletionStateUpdate {
 	revision: number
 }
 
+/** Canonical completion projection of one Task. */
+interface CompletionProjection {
+	isCompleted: boolean
+	revision: number
+}
+
+/** Read the canonical completion projection carried by a persisted row. */
+function readCompletionProjection(item: HistoryItem | undefined): CompletionProjection | undefined {
+	if (!item || item.completionStateRevision === undefined) return undefined
+	return { isCompleted: item.isCompleted === true, revision: item.completionStateRevision }
+}
+
+/** Select the projection produced by the newer revision. */
+function newerProjection(
+	left: CompletionProjection | undefined,
+	right: CompletionProjection | undefined,
+): CompletionProjection | undefined {
+	if (!left) return right
+	if (!right) return left
+	return right.revision > left.revision ? right : left
+}
+
 /** Preserve the canonical completion projection while merging ordinary metadata. */
-function mergeCompletionProjection(existing: HistoryItem | undefined, incoming: HistoryItem): HistoryItem {
+function mergeCompletionProjection(projection: CompletionProjection | undefined, incoming: HistoryItem): HistoryItem {
 	const merged = { ...incoming }
 	delete merged.isCompleted
 	delete merged.completionStateRevision
-	if (existing?.completionStateRevision !== undefined) {
-		merged.isCompleted = existing.isCompleted
-		merged.completionStateRevision = existing.completionStateRevision
+	if (projection) {
+		merged.isCompleted = projection.isCompleted
+		merged.completionStateRevision = projection.revision
 	}
 	return merged
 }
@@ -43,6 +65,15 @@ const RELOAD_COALESCE_DELAY_MS = 250
 export class TaskHistory {
 	private store: BufferedUnifyStore<HistoryItem>
 	private readonly completionWriteMutex = new Mutex()
+	/**
+	 * Last completion projection this process observed per Task.
+	 *
+	 * The buffered store serves metadata updates from an in-memory list that can
+	 * lag behind a durable completion write performed by this or another window.
+	 * Without this watermark a stale row would silently drop the checkmark on the
+	 * next ordinary metadata flush.
+	 */
+	private readonly knownProjections = new Map<string, CompletionProjection>()
 	private _watcher: FSWatcher | null = null
 	private _onChangeCallbacks: Array<() => void | Promise<void>> = []
 	private _reloadTimer: NodeJS.Timeout | null = null
@@ -127,9 +158,15 @@ export class TaskHistory {
 			await this.store.mutate((items) => {
 				const existingIdx = items.findIndex((d) => (d as HistoryItem).id === item.id)
 				if (existingIdx >= 0) {
-					items[existingIdx] = mergeCompletionProjection(items[existingIdx], item) as unknown as (typeof items)[0]
+					const projection = newerProjection(
+						readCompletionProjection(items[existingIdx]),
+						this.knownProjections.get(item.id),
+					)
+					this.rememberProjection(item.id, projection)
+					items[existingIdx] = mergeCompletionProjection(projection, item) as unknown as (typeof items)[0]
 				} else {
-					items.push(mergeCompletionProjection(undefined, item) as unknown as (typeof items)[0])
+					const projection = this.knownProjections.get(item.id)
+					items.push(mergeCompletionProjection(projection, item) as unknown as (typeof items)[0])
 				}
 				return items
 			})
@@ -202,11 +239,9 @@ export class TaskHistory {
 
 				const existing = items[existingIndex]
 				if (!existing) return items
-				const existingRevision = existing.completionStateRevision
-				if (
-					(existingRevision !== undefined && existingRevision >= update.revision) ||
-					(existingRevision !== undefined && existing.isCompleted === update.isCompleted)
-				) {
+				const current = newerProjection(readCompletionProjection(existing), this.knownProjections.get(update.taskId))
+				if (current && (current.revision >= update.revision || current.isCompleted === update.isCompleted)) {
+					this.rememberProjection(update.taskId, current)
 					return items
 				}
 
@@ -218,8 +253,21 @@ export class TaskHistory {
 				items[existingIndex] = updated
 				return items
 			})
+			if (updated) {
+				this.rememberProjection(update.taskId, {
+					isCompleted: update.isCompleted,
+					revision: update.revision,
+				})
+			}
 			return updated
 		})
+	}
+
+	/** Record the newest completion projection observed for one Task. */
+	private rememberProjection(taskId: string, projection: CompletionProjection | undefined): void {
+		if (!projection) return
+		const merged = newerProjection(this.knownProjections.get(taskId), projection)
+		if (merged) this.knownProjections.set(taskId, merged)
 	}
 
 	/**
@@ -243,9 +291,10 @@ export class TaskHistory {
 	 * Staged in memory; the buffered store flushes through the JSONL backend.
 	 *
 	 * @param item The history item to upsert
+	 * @returns The staged row, carrying the canonical completion projection.
 	 */
-	async upsertTaskHistory(item: HistoryItem): Promise<void> {
-		await this.completionWriteMutex.withLock(() => {
+	async upsertTaskHistory(item: HistoryItem): Promise<HistoryItem> {
+		return await this.completionWriteMutex.withLock(() => {
 			// No reload here: `reload()` without `force` is a no-op, and a forced one
 			// would take the cross-process lock to re-read the whole file on a UI hot
 			// path. Cross-process writes arrive through the watcher instead.
@@ -254,19 +303,30 @@ export class TaskHistory {
 
 			if (existingIndex >= 0) {
 				// Replace in-place (memory-level + markDirty) without overwriting the canonical completion projection.
-				this.trackStage(this.store.stageUpdateAt(existingIndex, mergeCompletionProjection(all[existingIndex], item)))
-			} else {
-				// Find insertion position by ts (ascending order)
-				let insertIndex = all.length
-				for (let i = 0; i < all.length; i++) {
-					if (all[i].ts > item.ts) {
-						insertIndex = i
-						break
-					}
-				}
-				// Insert at correct position (memory-level + markDirty)
-				this.trackStage(this.store.stageInsertAt(insertIndex, mergeCompletionProjection(undefined, item)))
+				// The buffered row can be older than a completion already written by
+				// this or another window, so the remembered projection wins on revision.
+				const projection = newerProjection(
+					readCompletionProjection(all[existingIndex]),
+					this.knownProjections.get(item.id),
+				)
+				this.rememberProjection(item.id, projection)
+				const staged = mergeCompletionProjection(projection, item)
+				this.trackStage(this.store.stageUpdateAt(existingIndex, staged))
+				return staged
 			}
+
+			// Find insertion position by ts (ascending order)
+			let insertIndex = all.length
+			for (let i = 0; i < all.length; i++) {
+				if (all[i].ts > item.ts) {
+					insertIndex = i
+					break
+				}
+			}
+			// Insert at correct position (memory-level + markDirty)
+			const staged = mergeCompletionProjection(this.knownProjections.get(item.id), item)
+			this.trackStage(this.store.stageInsertAt(insertIndex, staged))
+			return staged
 		})
 	}
 

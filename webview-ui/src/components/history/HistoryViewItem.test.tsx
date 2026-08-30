@@ -224,7 +224,12 @@ describe("HistoryPreview", () => {
 
 	it("shows a completion check with a completion tooltip", async () => {
 		const user = userEvent.setup()
-		const completed = historyItem("completed", 1, { isCompleted: true, completionStateRevision: 1 })
+		const completed = historyItem("completed", 1, {
+			isCompleted: true,
+			completionStateRevision: 1,
+			totalCost: 22.588,
+			currency: "USD",
+		})
 		extensionState.taskHistory = [completed]
 		vi.mocked(TaskServiceClient.getTaskHistory).mockResolvedValue({ tasks: [completed], totalCount: 1 })
 
@@ -232,7 +237,7 @@ describe("HistoryPreview", () => {
 
 		const completionStatus = await screen.findByLabelText("Completed")
 		const metadataRow = completionStatus.closest(".history-meta-row")
-		const cost = screen.getByText("$0.00")
+		const cost = screen.getByText("$22.59")
 		expect(metadataRow).toContainElement(cost)
 		expect(metadataRow).toContainElement(completionStatus)
 		expect(cost.compareDocumentPosition(completionStatus) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
@@ -275,5 +280,26 @@ describe("HistoryPreview", () => {
 
 	it("formats the last-edit timestamp with seconds", () => {
 		expect(formatHistoryTimestamp(new Date(2026, 0, 1, 2, 3, 4).getTime())).toBe("2026/01/01 02:03:04")
+	})
+
+	it("shows consumed tokens instead of a zero cost", async () => {
+		const free = historyItem("free", 1, { totalCost: 0, tokensIn: 900, tokensOut: 400 })
+		extensionState.taskHistory = [free]
+		vi.mocked(TaskServiceClient.getTaskHistory).mockResolvedValue({ tasks: [free], totalCount: 1 })
+
+		render(<HistoryPreview showHistoryView={vi.fn()} />)
+
+		expect(await screen.findByText("1.3k tokens")).toBeInTheDocument()
+		expect(screen.queryByText("$0.00")).not.toBeInTheDocument()
+	})
+
+	it("keeps a completion returned by the filtered request", async () => {
+		const completed = historyItem("completed", 1, { isCompleted: true })
+		extensionState.taskHistory = []
+		vi.mocked(TaskServiceClient.getTaskHistory).mockResolvedValue({ tasks: [completed], totalCount: 1 })
+
+		render(<HistoryPreview showHistoryView={vi.fn()} />)
+
+		expect(await screen.findByLabelText("Completed")).toBeInTheDocument()
 	})
 })

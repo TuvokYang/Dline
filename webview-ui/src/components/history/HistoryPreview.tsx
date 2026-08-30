@@ -1,11 +1,12 @@
 import type { HistoryItem } from "@shared/HistoryItem"
 import { StringRequest } from "@shared/proto/dline/common"
 import { GetTaskHistoryRequest } from "@shared/proto/dline/task"
-import { CheckIcon, ExternalLinkIcon } from "lucide-react"
+import { ExternalLinkIcon } from "lucide-react"
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { TaskServiceClient } from "@/services/grpc-client"
-import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip"
+import { TaskCompletionBadge } from "./TaskCompletionBadge"
+import { getTaskUsageLabel, isTaskCompleted } from "./task-metrics"
 
 type HistoryPreviewProps = {
 	showHistoryView: () => void
@@ -14,7 +15,12 @@ type HistoryPreviewProps = {
 export type HistoryPreviewFilter = "workspace" | "favorite" | "all"
 
 type PreviewTask = Pick<HistoryItem, "id" | "task" | "ts"> &
-	Partial<Pick<HistoryItem, "currency" | "isCompleted" | "isFavorited" | "totalCost">>
+	Partial<
+		Pick<
+			HistoryItem,
+			"cacheReads" | "cacheWrites" | "currency" | "isCompleted" | "isFavorited" | "tokensIn" | "tokensOut" | "totalCost"
+		>
+	>
 
 export const HISTORY_PREVIEW_LIMIT = 10
 export const HISTORY_PREVIEW_ROW_HEIGHT_PX = 64
@@ -62,10 +68,65 @@ export function filterHistoryPreview(
 		})
 		.sort((a, b) => b.ts - a.ts)
 		.slice(0, HISTORY_PREVIEW_LIMIT)
-		.map((item) => ({
-			...item,
-			isCompleted: item.completionStateRevision !== undefined && item.isCompleted === true,
-		}))
+		.map((item) => ({ ...item, isCompleted: isTaskCompleted(item) }))
+}
+
+/** One Recent-list row: task text, timestamp, usage badge and completion state. */
+function HistoryPreviewRow({ item, onSelect }: { item: PreviewTask; onSelect: (id: string) => void }) {
+	const usage = getTaskUsageLabel(item)
+	const timestamp = formatHistoryTimestamp(item.ts)
+
+	return (
+		<div className="history-preview-item" onClick={() => onSelect(item.id)} onContextMenu={(event) => event.preventDefault()}>
+			<div className="history-task-content">
+				{item.isFavorited && (
+					<span
+						aria-label="Favorited"
+						className="codicon codicon-star-full"
+						style={{ color: "var(--vscode-button-background)", flexShrink: 0 }}
+					/>
+				)}
+				<div className="history-task-description ph-no-capture">{item.task}</div>
+			</div>
+			<div className="history-preview-btns">
+				<button
+					onClick={(event) => {
+						event.stopPropagation()
+						TaskServiceClient.openTaskInNewWindow(StringRequest.create({ value: item.id })).catch((error) =>
+							console.error("Failed to open task in new window:", error),
+						)
+					}}
+					style={{
+						background: "none",
+						border: "none",
+						cursor: "pointer",
+						padding: "2px",
+						color: "var(--vscode-descriptionForeground)",
+						display: "flex",
+						alignItems: "center",
+					}}
+					title="Open in New Window"
+					type="button">
+					<ExternalLinkIcon size={14} />
+				</button>
+			</div>
+			<div className="history-meta-stack">
+				<span className="history-date" title={`Last edited ${timestamp}`}>
+					{timestamp}
+				</span>
+				{(usage || item.isCompleted) && (
+					<div className="history-meta-row">
+						{usage && (
+							<span className="history-cost-chip" title={usage.title}>
+								{usage.text}
+							</span>
+						)}
+						{item.isCompleted && <TaskCompletionBadge side="left" />}
+					</div>
+				)}
+			</div>
+		</div>
+	)
 }
 
 const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
@@ -102,7 +163,15 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 					}),
 				)
 				if (!cancelled) {
-					setLoadedTasks({ requestKey, tasks: response.tasks.slice(0, HISTORY_PREVIEW_LIMIT) })
+					// The service resolves the canonical projection, so a returned
+					// `isCompleted` is already authoritative for this list.
+					setLoadedTasks({
+						requestKey,
+						tasks: response.tasks.slice(0, HISTORY_PREVIEW_LIMIT).map((task) => ({
+							...task,
+							completionStateRevision: task.isCompleted ? 1 : undefined,
+						})),
+					})
 				}
 			} catch (error) {
 				if (cancelled) return
@@ -140,8 +209,6 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 			console.error("Error showing task:", error),
 		)
 	}
-
-	const getCostSymbol = (currency?: string) => (currency === "CNY" ? "￥" : "$")
 
 	return (
 		<div className="history-preview">
@@ -322,70 +389,7 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 
 			<div className="px-4 history-preview-list" ref={listRef}>
 				{tasks.length > 0 ? (
-					visibleTasks.map((item) => (
-						<div
-							className="history-preview-item"
-							key={item.id}
-							onClick={() => handleHistorySelect(item.id)}
-							onContextMenu={(e) => e.preventDefault()}>
-							<div className="history-task-content">
-								{item.isFavorited && (
-									<span
-										aria-label="Favorited"
-										className="codicon codicon-star-full"
-										style={{ color: "var(--vscode-button-background)", flexShrink: 0 }}
-									/>
-								)}
-								<div className="history-task-description ph-no-capture">{item.task}</div>
-							</div>
-							<div className="history-preview-btns">
-								<button
-									onClick={(e) => {
-										e.stopPropagation()
-										TaskServiceClient.openTaskInNewWindow(StringRequest.create({ value: item.id })).catch(
-											(err) => console.error("Failed to open task in new window:", err),
-										)
-									}}
-									style={{
-										background: "none",
-										border: "none",
-										cursor: "pointer",
-										padding: "2px",
-										color: "var(--vscode-descriptionForeground)",
-										display: "flex",
-										alignItems: "center",
-									}}
-									title="Open in New Window">
-									<ExternalLinkIcon size={14} />
-								</button>
-							</div>
-							<div className="history-meta-stack">
-								<span className="history-date" title={`Last edited ${formatHistoryTimestamp(item.ts)}`}>
-									{formatHistoryTimestamp(item.ts)}
-								</span>
-								{(item.totalCost != null || item.isCompleted) && (
-									<div className="history-meta-row">
-										{item.totalCost != null && (
-											<span className="history-cost-chip">
-												{getCostSymbol(item.currency)}
-												{item.totalCost.toFixed(2)}
-											</span>
-										)}
-										{item.isCompleted && (
-											<Tooltip>
-												<TooltipTrigger asChild>
-													<span aria-label="Completed" className="history-completion-status" role="img">
-														<CheckIcon aria-hidden="true" size={14} strokeWidth={2.4} />
-													</span>
-												</TooltipTrigger>
-												<TooltipContent side="left">Completed</TooltipContent>
-											</Tooltip>
-										)}
-									</div>
-								)}
-							</div>
-						</div>
-					))
+					visibleTasks.map((item) => <HistoryPreviewRow item={item} key={item.id} onSelect={handleHistorySelect} />)
 				) : (
 					<div
 						style={{

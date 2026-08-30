@@ -18,6 +18,8 @@ import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { TaskServiceClient } from "@/services/grpc-client"
 import { formatLargeNumber, formatSize } from "@/utils/format"
+import { TaskCompletionBadge } from "./TaskCompletionBadge"
+import { getTaskUsageLabel, isTaskCompleted } from "./task-metrics"
 
 type HistoryViewItemProps = {
 	item: HistoryItem
@@ -38,8 +40,11 @@ const HistoryViewItem = ({
 	selectedItems,
 }: HistoryViewItemProps) => {
 	const [expanded, setExpanded] = useState(false)
-	const costSymbol = item.currency === "CNY" ? "¥" : "$"
 	const totalInputTokens = (item.tokensIn || 0) + (item.cacheWrites || 0) + (item.cacheReads || 0)
+	// Cost and completion follow the same rules as the Recent list so the two
+	// panels cannot disagree about the same task.
+	const usage = useMemo(() => getTaskUsageLabel(item, 4), [item])
+	const completed = isTaskCompleted(item)
 
 	const isFavoritedItem = useMemo(
 		() => pendingFavoriteToggles[item.id] ?? item.isFavorited,
@@ -177,11 +182,13 @@ const HistoryViewItem = ({
 					variant="icon">
 					<div className="flex items-center justify-between w-full">
 						<div className="text-description text-xs uppercase">{formatDate(item.ts)}</div>
-						<div className="self-end flex items-center text-xs">
-							<span className="text-description">
-								{costSymbol}
-								{item.totalCost?.toFixed(4) ?? 0}
-							</span>
+						<div className="self-end flex items-center gap-1 text-xs">
+							{usage && (
+								<span className="text-description" title={usage.title}>
+									{usage.text}
+								</span>
+							)}
+							{completed && <TaskCompletionBadge className="inline-flex shrink-0 text-success" side="left" />}
 							{expanded ? (
 								<ChevronsDownUpIcon className="text-description" />
 							) : (
