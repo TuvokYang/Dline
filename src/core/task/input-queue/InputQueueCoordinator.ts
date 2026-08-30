@@ -344,8 +344,11 @@ export class InputQueueCoordinator {
 			}
 			return batch
 		})
+		// No projection is published here. Either nothing was owed, in which case
+		// the composer is already correct and a full state build would announce
+		// that nothing changed, or the claim was released, which republishes on
+		// its own.
 		if (!claimed) {
-			await this.host.publishProjection()
 			return undefined
 		}
 		// Removals that queued behind the claim run here, between the two

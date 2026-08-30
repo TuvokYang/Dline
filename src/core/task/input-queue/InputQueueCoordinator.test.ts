@@ -23,12 +23,15 @@ class FakeSnapshotWriter {
 	nextOutcome?: "preserved" | "failed"
 	/** When true, the write rejects before reaching the file at all. */
 	rejectNext = false
+	/** Runs inside a write, to interleave a change with an in-flight claim. */
+	onWrite?: () => void
 	writes = 0
 
 	constructor(private readonly coordinator: () => InputQueueCoordinator) {}
 
 	async write(): Promise<void> {
 		this.writes += 1
+		this.onWrite?.()
 		if (this.rejectNext) {
 			this.rejectNext = false
 			throw new Error("disk unavailable")
@@ -263,6 +266,33 @@ describe("InputQueueCoordinator", () => {
 
 			expect(h.coordinator.hasStagedDelivery).toBe(false)
 			expect(texts(h.coordinator.snapshot())).toEqual(["steer me"])
+		})
+
+		// Publishing costs a full ExtensionState build, and an empty queue means
+		// nothing changed for the composer to catch up on. Doing it on every
+		// delivery point burned that build for no observable difference.
+		it("does not republish when there was nothing to claim", async () => {
+			await h.coordinator.deliverAtToolRound()
+			await h.coordinator.deliverAtTurnEnd()
+
+			expect(h.host.publishProjection).not.toHaveBeenCalled()
+		})
+
+		// The entry was hidden by the claim and then put back, so the composer is
+		// showing a projection that no longer matches. Unlike an empty queue,
+		// this one has to be corrected.
+		it("republishes when a claim was taken and then given back", async () => {
+			const id = await enqueue(h.coordinator, "steer me")
+			await h.coordinator.mutate({ toggleMode: { entryId: id } })
+			// Fails the write that records the in-flight mark, so the claim is
+			// released instead of delivered.
+			h.writer.nextOutcome = "failed"
+			h.host.publishProjection.mockClear()
+
+			await h.coordinator.deliverAtToolRound()
+
+			expect(h.host.stageToolRoundInput).not.toHaveBeenCalled()
+			expect(h.host.publishProjection).toHaveBeenCalled()
 		})
 
 		it("leaves plain queued input for the turn end", async () => {
