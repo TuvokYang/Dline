@@ -42,7 +42,6 @@ import type { Controller } from ".."
 
 const API_PROFILES_FILE = "api_profiles.json"
 
-let needsCleanRewrite = false
 let apiProfilesWriteQueue: Promise<void> = Promise.resolve()
 let cleanRewriteInProgress = false
 /**
@@ -157,30 +156,42 @@ function findFirstJsonValueEnd(raw: string): number | undefined {
 	return undefined
 }
 
-function parseApiProfilesJson(raw: string): { profiles: ApiProfile[]; recovered: boolean } {
+interface ParsedApiProfiles {
+	profiles: ApiProfile[]
+	recovered: boolean
+	migrated: boolean
+}
+
+function parseApiProfilesJson(raw: string): ParsedApiProfiles {
 	try {
-		return { profiles: readProfilesFromJson(JSON.parse(raw)), recovered: false }
+		return { ...readProfilesFromJson(JSON.parse(raw)), recovered: false }
 	} catch (error) {
 		const end = findFirstJsonValueEnd(raw)
 		if (end === undefined || raw.slice(end).trim().length === 0) {
 			throw error
 		}
-		const profiles = readProfilesFromJson(JSON.parse(raw.slice(0, end)))
+		const parsed = readProfilesFromJson(JSON.parse(raw.slice(0, end)))
 		Logger.warn("[getApiProfiles] Recovered api_profiles.json by trimming trailing invalid JSON")
-		return { profiles, recovered: true }
+		return { ...parsed, recovered: true }
 	}
 }
 
-function readProfilesFromJson(data: unknown): ApiProfile[] {
-	const rawProfiles = Array.isArray(data)
+function readProfilesFromJson(data: unknown): Omit<ParsedApiProfiles, "recovered"> {
+	const rawProfiles: unknown[] = Array.isArray(data)
 		? data
 		: data && typeof data === "object" && Array.isArray((data as any).profiles)
 			? (data as any).profiles
 			: []
-	return rawProfiles.map(normalizeApiProfile)
+	let migrated = false
+	const profiles = rawProfiles.map((profile) => {
+		const result = normalizeApiProfileWithMigration(profile)
+		migrated ||= result.migrated
+		return result.profile
+	})
+	return { profiles, migrated }
 }
 
-export function normalizeApiProfile(profile: unknown): ApiProfile {
+function normalizeApiProfileWithMigration(profile: unknown): { profile: ApiProfile; migrated: boolean } {
 	const normalized = ApiProfile.fromJSON(profile ?? {})
 	let migrated = false
 	if (profile && typeof profile === "object") {
@@ -196,17 +207,25 @@ export function normalizeApiProfile(profile: unknown): ApiProfile {
 	}
 
 	if (normalized.provider === "anthropic" && normalized.modelId) {
-		const migratedModelId = normalized.modelId.endsWith(":1m:fast")
-			? `${normalized.modelId.slice(0, -":1m:fast".length)}:fast`
-			: normalized.modelId.endsWith(":1m")
-				? normalized.modelId.slice(0, -":1m".length)
-				: undefined
+		const originalModelId = normalized.modelId
+		const hadLegacyLongContextSuffix = originalModelId.endsWith(":1m:fast") || originalModelId.endsWith(":1m")
+		const migratedModelId =
+			originalModelId === "claude-opus-4-6:fast" || originalModelId === "claude-opus-4-6:1m:fast"
+				? "claude-opus-4-6"
+				: originalModelId.endsWith(":1m:fast")
+					? `${originalModelId.slice(0, -":1m:fast".length)}:fast`
+					: originalModelId.endsWith(":1m")
+						? originalModelId.slice(0, -":1m".length)
+						: undefined
 
 		if (migratedModelId && anthropicModels[migratedModelId]) {
 			normalized.modelId = migratedModelId
+			const targetSupportsLongContextTiers = Boolean(
+				anthropicModels[migratedModelId]?.capabilities?.contextWindowTiers?.length,
+			)
 			normalized.anthropic = AnthropicProviderConfig.create({
 				...normalized.anthropic,
-				enableLongContext: true,
+				...(hadLegacyLongContextSuffix && targetSupportsLongContextTiers ? { enableLongContext: true } : {}),
 			})
 			migrated = true
 		}
@@ -256,10 +275,12 @@ export function normalizeApiProfile(profile: unknown): ApiProfile {
 		}
 	}
 
-	if (migrated) {
-		needsCleanRewrite = true
-	}
-	return normalized
+	return { profile: normalized, migrated }
+}
+
+/** Normalize one request or in-memory Profile without scheduling a disk rewrite. */
+export function normalizeApiProfile(profile: unknown): ApiProfile {
+	return normalizeApiProfileWithMigration(profile).profile
 }
 
 function resolveRegistryModelInfo(profile: ApiProfile) {
@@ -402,7 +423,8 @@ async function persistProviderSecrets(profiles: ApiProfile[]): Promise<void> {
 	await setProviderSecretsBatch(changes)
 }
 
-function hydrateProviderSecrets(profiles: ApiProfile[]): void {
+function hydrateProviderSecrets(profiles: ApiProfile[]): boolean {
+	let migrated = false
 	for (const profile of profiles) {
 		const embedded = collectProviderSecrets(profile)
 		const stored = getProviderSecret(profile.id)
@@ -428,19 +450,21 @@ function hydrateProviderSecrets(profiles: ApiProfile[]): void {
 			void setProviderSecretsBatch({
 				[profile.id]: { name: profile.name, provider: profile.provider, secrets },
 			})
-			needsCleanRewrite = true
+			migrated = true
 		}
 	}
+	return migrated
 }
 
-function hydrateApiKeys(profiles: ApiProfile[]): void {
+function hydrateApiKeys(profiles: ApiProfile[]): boolean {
+	let migrated = false
 	for (const profile of profiles) {
 		if (profile.apiKey) {
 			const stored = getApiKey(profile.id)
 			if (!stored || stored !== profile.apiKey) {
 				setApiKey(profile.id, profile.apiKey, profile.name)
-				needsCleanRewrite = true
 			}
+			migrated = true
 			continue
 		}
 
@@ -449,6 +473,7 @@ function hydrateApiKeys(profiles: ApiProfile[]): void {
 			profile.apiKey = storedKey
 		}
 	}
+	return migrated
 }
 
 async function cleanRewriteApiProfiles(profiles: ApiProfile[]): Promise<void> {
@@ -483,18 +508,16 @@ export async function getApiProfiles(controller: Controller, _request: EmptyRequ
 		const raw = await fs.readFile(filePath, "utf8")
 		const parsed = parseApiProfilesJson(raw)
 		const profiles = parsed.profiles
-		hydrateApiKeys(profiles)
-		hydrateProviderSecrets(profiles)
+		const apiKeysMigrated = hydrateApiKeys(profiles)
+		const providerSecretsMigrated = hydrateProviderSecrets(profiles)
 		const modelInfoChanged = await hydrateModelInfoFromRegistry(profiles)
 		if (parsed.recovered) {
 			// Recovered JSON is genuinely damaged on disk and must be repaired now.
-			needsCleanRewrite = false
 			registryModelInfoRepairedPaths.add(filePath)
 			await writeApiProfilesToFile(filePath, profiles)
-		} else if (needsCleanRewrite) {
-			// An embedded secret was migrated into the secret store; the stripped
-			// Catalog must be persisted exactly once.
-			needsCleanRewrite = false
+		} else if (parsed.migrated || apiKeysMigrated || providerSecretsMigrated) {
+			// Persist migrations derived from this exact disk snapshot. Request
+			// normalization must never schedule an unrelated Catalog rewrite.
 			registryModelInfoRepairedPaths.add(filePath)
 			await cleanRewriteApiProfiles(profiles)
 		} else if (modelInfoChanged && !registryModelInfoRepairedPaths.has(filePath)) {
@@ -757,12 +780,11 @@ export function readApiProfiles(): ApiProfile[] {
 		const raw = fsSync.readFileSync(filePath, "utf8")
 		const parsed = parseApiProfilesJson(raw)
 		const profiles = parsed.profiles
-		hydrateApiKeys(profiles)
-		hydrateProviderSecrets(profiles)
+		const apiKeysMigrated = hydrateApiKeys(profiles)
+		const providerSecretsMigrated = hydrateProviderSecrets(profiles)
 		const defaultsChanged = applyRegistryModelDefaults(profiles)
 		const modelInfoChanged = applyRegistryModelInfo(profiles) || defaultsChanged
-		if (parsed.recovered || needsCleanRewrite) {
-			needsCleanRewrite = false
+		if (parsed.recovered || parsed.migrated || apiKeysMigrated || providerSecretsMigrated) {
 			registryModelInfoRepairedPaths.add(filePath)
 			cleanRewriteApiProfiles(profiles)
 		} else if (modelInfoChanged && !registryModelInfoRepairedPaths.has(filePath)) {

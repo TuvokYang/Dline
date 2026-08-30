@@ -75,6 +75,75 @@ describe("getApiProfiles read/write storm", () => {
 		expect(afterRepeats.size).toBe(afterFirst.size)
 	})
 
+	it("rewrites a legacy disk Catalog once and then settles", async () => {
+		const filePath = await writeCatalog([
+			{
+				id: "legacy-profile",
+				name: "custom-provider:legacy-model",
+				provider: "custom-provider",
+				modelId: "legacy-model",
+			},
+		])
+		const module = await import("../getApiProfiles")
+		const { Logger } = await import("@shared/services/Logger")
+		module.resetRegistryModelInfoRepairGateForTest()
+		const logSpy = vi.spyOn(Logger, "log")
+		const controller = createController()
+
+		const first = await module.getApiProfiles(controller, EmptyRequest.create({}))
+		const afterMigration = await fs.stat(filePath)
+		const stored = JSON.parse(await fs.readFile(filePath, "utf8")) as Array<Record<string, unknown>>
+		await module.getApiProfiles(controller, EmptyRequest.create({}))
+		const afterRepeat = await fs.stat(filePath)
+
+		const cleanRewriteLogs = logSpy.mock.calls.filter(([message]) =>
+			String(message).includes("[cleanRewriteApiProfiles] Stripped apiKey fields from api_profiles.json"),
+		)
+		expect(first.profiles[0].enabled).toBe(true)
+		expect(stored[0].enabled).toBe(true)
+		expect(cleanRewriteLogs).toHaveLength(1)
+		expect(afterRepeat.mtimeMs).toBe(afterMigration.mtimeMs)
+		expect(afterRepeat.size).toBe(afterMigration.size)
+	})
+
+	it("does not let request normalization rewrite an already-clean Catalog", async () => {
+		const filePath = await writeCatalog([
+			{
+				id: "stable-profile",
+				name: "custom-provider:stable-model",
+				provider: "custom-provider",
+				modelId: "stable-model",
+				enabled: true,
+			},
+		])
+		const module = await import("../getApiProfiles")
+		const { Logger } = await import("@shared/services/Logger")
+		module.resetRegistryModelInfoRepairGateForTest()
+		const logSpy = vi.spyOn(Logger, "log")
+		const controller = createController()
+		const before = await fs.stat(filePath)
+
+		for (let index = 0; index < 3; index++) {
+			// updateApiProfiles also calls this public normalizer. A legacy request
+			// must not schedule a clean rewrite for an unrelated disk Catalog.
+			module.normalizeApiProfile({
+				id: `legacy-request-${index}`,
+				name: `legacy-request-${index}`,
+				provider: "custom-provider",
+				modelId: "legacy-model",
+			})
+			await module.getApiProfiles(controller, EmptyRequest.create({}))
+		}
+
+		const after = await fs.stat(filePath)
+		const cleanRewriteLogs = logSpy.mock.calls.filter(([message]) =>
+			String(message).includes("[cleanRewriteApiProfiles] Stripped apiKey fields from api_profiles.json"),
+		)
+		expect(cleanRewriteLogs).toHaveLength(0)
+		expect(after.mtimeMs).toBe(before.mtimeMs)
+		expect(after.size).toBe(before.size)
+	})
+
 	it("keeps repeated synchronous reads from rewriting the Catalog", async () => {
 		const filePath = await writeCatalog([
 			{ id: "profile-1", name: "openai:gpt-4o", provider: "openai", modelId: "gpt-4o", enabled: true },
