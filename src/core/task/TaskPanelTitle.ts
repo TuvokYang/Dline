@@ -18,7 +18,7 @@ function truncateTitle(title: string): string {
 	return characters.length > limit ? characters.slice(0, limit).join("") : title
 }
 
-function formatProgress(checklist: string, currentItemIndex: number | null | undefined): string {
+function formatProgress(checklist: string): string {
 	const items = checklist
 		.split("\n")
 		.map((line) => line.trim())
@@ -28,21 +28,14 @@ function formatProgress(checklist: string, currentItemIndex: number | null | und
 		return ""
 	}
 
-	const explicitCurrentIndex =
-		currentItemIndex != null && currentItemIndex >= 0 && currentItemIndex < items.length ? currentItemIndex : null
-	const currentIndex =
-		explicitCurrentIndex != null && !isCompletedFocusChainItem(items[explicitCurrentIndex])
-			? explicitCurrentIndex
-			: items.findIndex((item) => !isCompletedFocusChainItem(item))
-	const displayIndex = currentIndex >= 0 ? currentIndex + 1 : items.length
-
-	return ` (${displayIndex}/${items.length})`
+	const completedCount = items.filter(isCompletedFocusChainItem).length
+	return ` (${completedCount}/${items.length})`
 }
 
 /** Format an editor-panel task title from the task text and canonical checklist state. */
-export function formatTaskPanelTitle({ taskTitle, checklist, currentItemIndex }: TaskPanelTitleOptions): string {
+export function formatTaskPanelTitle({ taskTitle, checklist }: TaskPanelTitleOptions): string {
 	const baseTitle = truncateTitle(taskTitle?.trim() || PANEL_TITLE_FALLBACK)
-	return `${baseTitle}${checklist ? formatProgress(checklist, currentItemIndex) : ""}`
+	return `${baseTitle}${checklist ? formatProgress(checklist) : ""}`
 }
 
 /** Normalize a title supplied by any panel entry point while preserving a progress suffix. */

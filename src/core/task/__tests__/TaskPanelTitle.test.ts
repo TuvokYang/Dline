@@ -11,33 +11,33 @@ describe("formatTaskPanelTitle", () => {
 				taskTitle: "改进编辑面板任务标题显示逻辑",
 				checklist: checklist("pending", "pending", "pending", "pending", "pending"),
 			}),
-		).toBe("改进编辑面板任务标题 (1/5)")
+		).toBe("改进编辑面板任务标题 (0/5)")
 	})
 
 	it("keeps the existing sixteen-character limit for non-Chinese titles", () => {
 		expect(formatTaskPanelTitle({ taskTitle: "This is a very long task title" })).toBe("This is a very l")
 	})
 
-	it("uses the first unfinished item as the current one when no explicit index exists", () => {
+	it("shows completed items rather than the first unfinished item position", () => {
 		expect(
 			formatTaskPanelTitle({
 				taskTitle: "任务标题",
 				checklist: checklist("completed", "completed", "pending", "pending"),
 			}),
-		).toBe("任务标题 (3/4)")
+		).toBe("任务标题 (2/4)")
 	})
 
-	it("uses the explicit current item index when it still points to an unfinished item", () => {
+	it("matches the TODO completion indicator when five of seven items are complete", () => {
 		expect(
 			formatTaskPanelTitle({
 				taskTitle: "任务标题",
-				checklist: checklist("pending", "pending", "pending"),
-				currentItemIndex: 1,
+				checklist: checklist("completed", "completed", "completed", "completed", "completed", "pending", "pending"),
+				currentItemIndex: 5,
 			}),
-		).toBe("任务标题 (2/3)")
+		).toBe("任务标题 (5/7)")
 	})
 
-	it("shows the total as the current index when every item is complete", () => {
+	it("shows the total completed count when every item is complete", () => {
 		expect(
 			formatTaskPanelTitle({
 				taskTitle: "任务标题",
