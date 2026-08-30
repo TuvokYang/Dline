@@ -114,6 +114,24 @@ interface MockResponseOptions {
 	/** Keep a chat-family stream open after its first content or tool-call chunk. */
 	afterChatContentDelayMs?: number
 	afterReasoningDelayMs?: number
+	/**
+	 * Emit this many distinct Responses `reasoning` items carrying `encrypted_content`
+	 * before any other output item. Long high-effort reasoning turns produce hundreds of
+	 * such items, each with its own item id.
+	 */
+	encryptedReasoningItemCount?: number
+	/** Byte length of each emitted `encrypted_content` payload. */
+	encryptedReasoningChunkSize?: number
+	/**
+	 * In-progress snapshots emitted per reasoning item before its completed item.
+	 *
+	 * A real Responses stream reports one reasoning item as an `output_item.added` snapshot whose
+	 * `encrypted_content` may still be incomplete, followed by the authoritative `output_item.done`.
+	 * Defaults to 1.
+	 */
+	encryptedReasoningSnapshotsPerItem?: number
+	/** Keep the stream open after all encrypted reasoning items are emitted. */
+	afterEncryptedReasoningHoldMs?: number
 	/** Emit a provider reasoning item after a completed function-call item. */
 	afterToolCompletionReasoning?: string
 	/** Delay before the post-tool reasoning item is emitted. */
@@ -1409,6 +1427,55 @@ export class ClineApiServerMock {
 								"response.output_item.done",
 							)
 							if (!(await waitAfterReasoning())) return
+						}
+						// Long high-effort reasoning turns stream many separate reasoning items,
+						// each carrying its own encrypted_content and item id.
+						if (scriptedResponse.encryptedReasoningItemCount) {
+							const encryptedPayload = "E".repeat(scriptedResponse.encryptedReasoningChunkSize ?? 1_292)
+							const snapshotsPerItem = Math.max(1, scriptedResponse.encryptedReasoningSnapshotsPerItem ?? 1)
+							for (let index = 0; index < scriptedResponse.encryptedReasoningItemCount; index++) {
+								const encryptedItemId = `rs_${generationId}_${index}`
+								// In-progress snapshots carry a growing, still-incomplete payload.
+								for (let snapshot = 1; snapshot <= snapshotsPerItem; snapshot++) {
+									writeSse(
+										{
+											type: "response.output_item.added",
+											output_index: 0,
+											item: {
+												id: encryptedItemId,
+												type: "reasoning",
+												status: "in_progress",
+												summary: [],
+												encrypted_content: encryptedPayload.slice(
+													0,
+													Math.max(
+														1,
+														Math.floor((encryptedPayload.length * snapshot) / snapshotsPerItem),
+													),
+												),
+											},
+										},
+										"response.output_item.added",
+									)
+									if (res.destroyed || res.writableEnded) return
+								}
+								writeSse(
+									{
+										type: "response.output_item.done",
+										output_index: 0,
+										item: {
+											id: encryptedItemId,
+											type: "reasoning",
+											status: "completed",
+											summary: [],
+											encrypted_content: encryptedPayload,
+										},
+									},
+									"response.output_item.done",
+								)
+								if (res.destroyed || res.writableEnded) return
+							}
+							if (!(await waitForOpenConnection(scriptedResponse.afterEncryptedReasoningHoldMs))) return
 						}
 						for (const [index, hostedSearchOutputItem] of hostedSearchOutputItems.entries()) {
 							const outputIndex = outputOffset + index

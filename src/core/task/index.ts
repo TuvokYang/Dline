@@ -293,6 +293,8 @@ import type { TaskRateMetricsQuery, TaskRateMetricsQueryResult } from "./perform
 import type { PresentationPriority } from "./presentation-types"
 import { PromptCacheHealthTracker } from "./prompt-cache/PromptCacheHealthTracker"
 import { RestoreHandler } from "./RestoreHandler"
+import { ReasoningIndicator } from "./reasoning-indicator"
+import { repairPersistedEncryptedReasoning } from "./reasoning-retention"
 import { ResumeCoordinator } from "./resume/ResumeCoordinator"
 import { type ResumeInput, selectResumeUiTail } from "./resume/ResumeInput"
 import { projectResumeOrdinaryInput } from "./resume/ResumeInteractionContinuation"
@@ -945,6 +947,7 @@ export class Task {
 		})
 		this.historyResumeMaintenance = new HistoryResumeMaintenance({
 			cleanupLegacyStorage: () => this.cleanLegacyTaskStorage(),
+			repairEncryptedReasoning: () => this.repairPersistedEncryptedReasoning(),
 			recoverInterruptedActivities: () => this.activityStore.recoverInterruptedActivities(),
 			patchInterruptedCommandCards: (activityIds) => this.patchInterruptedCommandCards(activityIds),
 			refreshTaskMetadata: () => this.messageStateHandler.updateTaskHistory(),
@@ -1917,7 +1920,9 @@ export class Task {
 	private async flushPendingReasoningMessage(context?: PresentationFlushContext): Promise<void> {
 		if (context && !context.isCurrent()) return
 		const thinking = this.pendingReasoningText
-		if (!thinking) return
+		// An empty string is meaningful: it opens a contentless activity row for
+		// encrypted reasoning. Only `undefined` means there is nothing to publish.
+		if (thinking === undefined) return
 		this.pendingReasoningText = undefined
 		if (this.taskState.abort || (context && !context.isCurrent())) return
 
@@ -2529,8 +2534,9 @@ export class Task {
 			})
 			if (resolvedBudget.budget.decision !== "ready" && purpose === "send") {
 				throw new Error(
-					`Compaction summary has no available output budget (input ${resolvedBudget.budget.estimatedInputTokens}, ` +
-						`window ${policy.hardPassContextWindowTokens}, carry limit ${summaryOutputLimitTokens ?? "unbounded"}).`,
+					`Compaction summary has no available output budget: the hidden Pass request itself does not fit ` +
+						`(input ${resolvedBudget.budget.estimatedInputTokens}, window ${policy.hardPassContextWindowTokens}, ` +
+						`available remainder ${resolvedBudget.budget.availableRemainder}).`,
 				)
 			}
 			return {
@@ -5063,6 +5069,26 @@ export class Task {
 				await this.messageStateHandler.updateClineMessage(index, { commandStatus: "interrupted" })
 			}
 		}
+	}
+
+	/**
+	 * Drop duplicated encrypted reasoning snapshots left by earlier versions.
+	 *
+	 * Histories written before encrypted reasoning was accumulated by item id can hold thousands of
+	 * repeated `redacted_thinking` snapshots in one assistant message, which exceeds every
+	 * compaction Pass ceiling and leaves the task unable to continue. Repair once on resume.
+	 */
+	private async repairPersistedEncryptedReasoning(): Promise<void> {
+		const history = this.messageStateHandler.apiConversationHistory
+		if (history.length === 0) return
+		const result = repairPersistedEncryptedReasoning(history)
+		if (result.removedBlockCount === 0) return
+
+		await this.messageStateHandler.overwriteApiConversationHistory(result.messages)
+		Logger.warn(
+			`[Task ${this.taskId}] Removed ${result.removedBlockCount} duplicated encrypted reasoning block(s) from ` +
+				`${result.repairedMessageCount} persisted message(s)`,
+		)
 	}
 
 	private async cleanLegacyTaskStorage(): Promise<void> {
@@ -8340,6 +8366,28 @@ export class Task {
 				)
 			}
 
+			// Owns when the streaming "thinking" row opens for encrypted-only reasoning
+			// and whether that contentless row must later be withdrawn.
+			const reasoningIndicator = new ReasoningIndicator()
+
+			/**
+			 * Remove a reasoning row that only ever showed activity, never text.
+			 * Encrypted payloads are unrenderable, so leaving the row behind would
+			 * strand an empty "Thinking" entry once streaming stops.
+			 */
+			const withdrawPlaceholderReasoningMessage = async (options: { notifyWebview: boolean }): Promise<void> => {
+				if (!reasoningIndicator.isPlaceholderOnly) return
+				reasoningIndicator.onClosed()
+				const placeholderTs = this.taskState.reasoningTs
+				this.pendingReasoningText = undefined
+				this.taskState.reasoningTs = undefined
+				if (placeholderTs === undefined) return
+				await this.messageStateHandler.removeMessagesByTs([placeholderTs], { updateTaskHistory: false })
+				if (options.notifyWebview) {
+					await this.postStateToWebview()
+				}
+			}
+
 			const abortStreamOnce = async (cancelReason: ClineApiReqCancelReason, streamingFailedMessage?: string) => {
 				Session.get().finalizeRequest()
 				const reasoningHandler = this.streamHandler.getHandlers().reasonsHandler
@@ -8354,6 +8402,9 @@ export class Task {
 					})
 					this.taskState.reasoningTs = undefined
 				}
+				// The Controller refreshes the webview after cancellation, so removal
+				// here must not push its own partial event.
+				await withdrawPlaceholderReasoningMessage({ notifyWebview: false })
 
 				if (this.diffViewProvider.isEditing) {
 					await this.diffViewProvider.revertChanges() // closes diff view
@@ -8533,6 +8584,7 @@ export class Task {
 								signature: chunk.signature,
 								details,
 								redacted_data: chunk.redacted_data,
+								redacted_phase: chunk.redacted_phase,
 							})
 
 							// fixes bug where cancelling task > aborts task > for loop may be in middle of streaming reasoning > say function throws error before we get a chance to properly clean up and cancel the task.
@@ -8541,16 +8593,20 @@ export class Task {
 								const hasPendingNativeToolUse = toolUseHandler.getPartialToolUsesAsContent().length > 0
 								// Some providers can interleave reasoning after text has started.
 								// Keep rendering stable by only streaming reasoning UI before the first text chunk or native tool call.
-								if (
-									thinkingBlock?.thinking &&
-									chunk.reasoning &&
-									assistantMessage.length === 0 &&
-									!hasPendingNativeToolUse
-								) {
+								const visibleReasoning = thinkingBlock?.thinking ?? ""
+								const action = reasoningIndicator.decide({
+									hasPlainReasoning: Boolean(visibleReasoning && chunk.reasoning),
+									hasEncryptedReasoning: Boolean(chunk.redacted_data),
+									assistantTextStarted: assistantMessage.length > 0,
+									hasPendingNativeToolUse,
+								})
+								if (action !== "none") {
 									if (this.taskState.reasoningTs === undefined) {
 										this.taskState.reasoningTs = this.genMessageTs()
 									}
-									this.pendingReasoningText = thinkingBlock.thinking
+									// Encrypted reasoning has no renderable payload; an empty string
+									// still opens the row so its streaming animation shows activity.
+									this.pendingReasoningText = action === "publish_text" ? visibleReasoning : ""
 								}
 							}
 							await this.scheduleAssistantPresentation(
@@ -8582,6 +8638,8 @@ export class Task {
 								if (ok) {
 									didFinalizeReasoningForUi = true
 								}
+							} else {
+								await withdrawPlaceholderReasoningMessage({ notifyWebview: true })
 							}
 
 							await this.processNativeToolCalls(assistantTextOnly, toolUseHandler.getPartialToolUsesAsContent())
@@ -8611,6 +8669,8 @@ export class Task {
 								if (finalizedReasoning) {
 									didFinalizeReasoningForUi = true
 								}
+							} else {
+								await withdrawPlaceholderReasoningMessage({ notifyWebview: true })
 							}
 							if (chunk.signature) {
 								assistantTextSignature = chunk.signature
@@ -8722,6 +8782,8 @@ export class Task {
 							await this.say("reasoning", finalReasoning.thinking, undefined, undefined, false)
 						}
 						didFinalizeReasoningForUi = true
+					} else {
+						await withdrawPlaceholderReasoningMessage({ notifyWebview: true })
 					}
 				}
 			} catch (error) {

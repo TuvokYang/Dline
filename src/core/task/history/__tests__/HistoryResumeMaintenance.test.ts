@@ -10,6 +10,9 @@ describe("HistoryResumeMaintenance", () => {
 				order.push("cleanup")
 				throw new Error("cleanup failed")
 			},
+			repairEncryptedReasoning: async () => {
+				order.push("reasoning")
+			},
 			recoverInterruptedActivities: async () => {
 				order.push("activities")
 				return ["activity-1"]
@@ -30,7 +33,7 @@ describe("HistoryResumeMaintenance", () => {
 
 		await maintenance.run()
 
-		expect(order).toEqual(["cleanup", "activities", "cards:activity-1", "metadata", "indicator"])
+		expect(order).toEqual(["cleanup", "reasoning", "activities", "cards:activity-1", "metadata", "indicator"])
 		expect(reportFailure.mock.calls.map(([stage]) => stage)).toEqual([
 			"legacy storage cleanup",
 			"interrupted command card recovery",
@@ -44,6 +47,9 @@ describe("HistoryResumeMaintenance", () => {
 		const maintenance = new HistoryResumeMaintenance({
 			cleanupLegacyStorage: async () => {
 				order.push("cleanup")
+			},
+			repairEncryptedReasoning: async () => {
+				order.push("reasoning")
 			},
 			recoverInterruptedActivities: async () => {
 				order.push("activities")
@@ -61,7 +67,7 @@ describe("HistoryResumeMaintenance", () => {
 
 		await maintenance.run()
 
-		expect(order).toEqual(["cleanup", "activities", "metadata", "indicator"])
+		expect(order).toEqual(["cleanup", "reasoning", "activities", "metadata", "indicator"])
 		expect(patchInterruptedCommandCards).not.toHaveBeenCalled()
 	})
 
@@ -73,6 +79,7 @@ describe("HistoryResumeMaintenance", () => {
 		const cleanupLegacyStorage = vi.fn(() => cleanupGate)
 		const maintenance = new HistoryResumeMaintenance({
 			cleanupLegacyStorage,
+			repairEncryptedReasoning: vi.fn(async () => undefined),
 			recoverInterruptedActivities: vi.fn(async () => []),
 			patchInterruptedCommandCards: vi.fn(async () => undefined),
 			refreshTaskMetadata: vi.fn(async () => undefined),

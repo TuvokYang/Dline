@@ -13,6 +13,7 @@ import {
 import { Logger } from "@/shared/services/Logger"
 import { Session } from "@/shared/services/Session"
 import { ClineDefaultTool } from "@/shared/tools"
+import { EncryptedReasoningAccumulator, type EncryptedReasoningPhase } from "./reasoning-retention"
 
 export interface PendingToolUse {
 	function_id: string
@@ -40,13 +41,18 @@ export interface ReasoningDelta {
 	signature?: string
 	details?: any[]
 	redacted_data?: any
+	/**
+	 * Whether `redacted_data` is an in-progress snapshot or the provider's authoritative payload.
+	 * Snapshots refresh the matching item in place; only a final payload is durable.
+	 */
+	redacted_phase?: EncryptedReasoningPhase
 }
 
 export interface PendingReasoning {
 	provider_metadata?: ClineProviderMetadata
 	content: string
 	signature: string
-	redactedThinking: ClineAssistantRedactedThinkingBlock[]
+	redactedThinking: EncryptedReasoningAccumulator
 	summary: unknown[] | ClineReasoningDetailParam[]
 }
 
@@ -335,6 +341,9 @@ class ToolUseHandler {
 class ReasoningHandler {
 	private pendingReasoning: PendingReasoning | null = null
 	private received = false
+	/** Fallback key counter for providers that omit a reasoning item id. */
+	private anonymousRedactedCount = 0
+	private reportedRedactedBudgetExhaustion = false
 
 	processReasoningDelta(delta: ReasoningDelta): void {
 		this.received = true
@@ -345,7 +354,7 @@ class ReasoningHandler {
 				provider_metadata: delta.provider_metadata,
 				content: "",
 				signature: "",
-				redactedThinking: [],
+				redactedThinking: new EncryptedReasoningAccumulator(),
 				summary: [],
 			}
 		}
@@ -369,11 +378,24 @@ class ReasoningHandler {
 			}
 		}
 		if (delta.redacted_data) {
-			this.pendingReasoning.redactedThinking.push({
+			const provider_metadata = delta.provider_metadata ?? this.pendingReasoning.provider_metadata
+			// Refresh by provider item id so repeated in-progress snapshots of one reasoning item
+			// replace each other instead of accumulating as distinct blocks.
+			const itemId = provider_metadata?.response_id
+			const block: ClineAssistantRedactedThinkingBlock = {
 				type: "redacted_thinking",
 				data: delta.redacted_data,
-				provider_metadata: delta.provider_metadata ?? this.pendingReasoning.provider_metadata,
-			})
+				provider_metadata,
+			}
+			const retained = this.pendingReasoning.redactedThinking.record(
+				itemId ?? `anonymous:${this.anonymousRedactedCount++}`,
+				block,
+				delta.redacted_phase ?? "partial",
+			)
+			if (!retained && !this.reportedRedactedBudgetExhaustion) {
+				this.reportedRedactedBudgetExhaustion = true
+				Logger.warn("[Reasoning] Encrypted reasoning budget exhausted; dropping additional items for this response")
+			}
 		}
 	}
 
@@ -411,11 +433,13 @@ class ReasoningHandler {
 	}
 
 	getRedactedThinking(): ClineAssistantRedactedThinkingBlock[] {
-		return this.pendingReasoning?.redactedThinking || []
+		return this.pendingReasoning?.redactedThinking.blocks() ?? []
 	}
 
 	reset(): void {
 		this.pendingReasoning = null
 		this.received = false
+		this.anonymousRedactedCount = 0
+		this.reportedRedactedBudgetExhaustion = false
 	}
 }

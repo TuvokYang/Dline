@@ -1,5 +1,6 @@
 export type HistoryResumeMaintenanceStage =
 	| "legacy storage cleanup"
+	| "encrypted reasoning repair"
 	| "interrupted activity recovery"
 	| "interrupted command card recovery"
 	| "task metadata refresh"
@@ -7,6 +8,8 @@ export type HistoryResumeMaintenanceStage =
 
 export interface HistoryResumeMaintenancePorts {
 	cleanupLegacyStorage(): Promise<void>
+	/** Remove duplicated encrypted reasoning snapshots persisted by earlier versions. */
+	repairEncryptedReasoning(): Promise<void>
 	recoverInterruptedActivities(): Promise<Iterable<string>>
 	patchInterruptedCommandCards(activityIds: ReadonlySet<string>): Promise<void>
 	refreshTaskMetadata(): Promise<void>
@@ -34,6 +37,11 @@ export class HistoryResumeMaintenance {
 	private async runStages(isCurrent: () => boolean): Promise<void> {
 		if (!isCurrent()) return
 		await this.attempt("legacy storage cleanup", () => this.ports.cleanupLegacyStorage())
+
+		// Repair before the metadata and context indicator stages so both observe the
+		// repaired history rather than the oversized persisted one.
+		if (!isCurrent()) return
+		await this.attempt("encrypted reasoning repair", () => this.ports.repairEncryptedReasoning())
 
 		if (!isCurrent()) return
 		const interruptedActivityIds = await this.attempt("interrupted activity recovery", () =>

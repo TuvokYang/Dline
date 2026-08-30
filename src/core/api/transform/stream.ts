@@ -152,5 +152,13 @@ export interface ApiStreamThinkingChunk {
 	 * redacted data
 	 */
 	redacted_data?: string
+	/**
+	 * Whether `redacted_data` is an in-progress snapshot or the provider's authoritative payload.
+	 *
+	 * Responses reasoning items stream as an in-progress item followed by a completed item, and only
+	 * the completed payload may be replayed in a later request. Consumers refresh a `partial`
+	 * payload in place per reasoning item and treat `final` as durable.
+	 */
+	redacted_phase?: "partial" | "final"
 	provider_metadata?: ClineProviderMetadata
 }

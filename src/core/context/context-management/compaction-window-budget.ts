@@ -14,8 +14,21 @@ export interface CompactionWindowBudget {
 	outputHardLimit: number
 	recommendedMin: number
 	recommendedMax: number
+	/**
+	 * The requested next-Pass carry limit was too small to hold any usable summary.
+	 *
+	 * The carry limit is derived from the size of the *next* uncovered turn. When that turn is
+	 * oversized the limit collapses toward zero, which must not silently strip the current Pass of
+	 * its output budget: the current Pass may still fit comfortably and its summary is what makes
+	 * progress possible. The current Pass therefore falls back to its ordinary budget and the
+	 * oversized turn is reported by the planner when that turn is actually reached.
+	 */
+	carryLimitInfeasible: boolean
 	decision: CompactionWindowBudgetDecision
 }
+
+/** Smallest carry budget that can still hold a usable cumulative summary. */
+export const MIN_SUMMARY_CARRY_TOKENS = 512
 
 export interface ResolveCompactionWindowBudgetInput {
 	contextWindow: number
@@ -74,10 +87,15 @@ function computeBudget(input: ResolveCompactionWindowBudgetInput, messages: Clin
 		typeof input.maxOutputTokens === "number" && Number.isFinite(input.maxOutputTokens) && input.maxOutputTokens > 0
 			? Math.floor(input.maxOutputTokens)
 			: availableRemainder
-	const summaryOutputLimit =
+	const requestedSummaryOutputLimit =
 		input.summaryOutputLimitTokens === undefined
 			? Number.POSITIVE_INFINITY
 			: normalizeNonNegativeInteger(input.summaryOutputLimitTokens)
+	// A carry limit below the usable minimum describes the next turn, not this request. Applying it
+	// here would zero this Pass's output and report a misleading "no output budget" failure.
+	const carryLimitInfeasible =
+		Number.isFinite(requestedSummaryOutputLimit) && requestedSummaryOutputLimit < MIN_SUMMARY_CARRY_TOKENS
+	const summaryOutputLimit = carryLimitInfeasible ? Number.POSITIVE_INFINITY : requestedSummaryOutputLimit
 	const providerOutputCap = Math.min(
 		modelOutputLimit,
 		summaryOutputLimit,
@@ -98,6 +116,7 @@ function computeBudget(input: ResolveCompactionWindowBudgetInput, messages: Clin
 		outputHardLimit: providerOutputCap,
 		recommendedMin,
 		recommendedMax,
+		carryLimitInfeasible,
 		decision: providerOutputCap > 0 ? "ready" : "needs_smaller_input",
 	}
 }

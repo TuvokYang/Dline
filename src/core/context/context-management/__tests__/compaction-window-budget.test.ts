@@ -120,7 +120,9 @@ describe("compaction window budget", () => {
 		expect(small.budget.providerOutputCap).toBeLessThan(missing.budget.providerOutputCap)
 	})
 
-	it("rejects a zero next-Pass carry limit instead of generating an uncarryable summary", () => {
+	it("keeps the current Pass usable when the next-Pass carry limit collapses to zero", () => {
+		// A zero carry limit describes an oversized *next* turn. Zeroing this Pass's output would
+		// report "no output budget" for a request that actually fits, blocking all progress.
 		const result = resolveCompactionWindowBudget({
 			contextWindow: 64_000,
 			maxOutputTokens: 32_000,
@@ -129,8 +131,22 @@ describe("compaction window budget", () => {
 			buildMessages: compactionMessages,
 		})
 
-		expect(result.budget.providerOutputCap).toBe(0)
-		expect(result.budget.decision).toBe("needs_smaller_input")
+		expect(result.budget.carryLimitInfeasible).toBe(true)
+		expect(result.budget.providerOutputCap).toBeGreaterThan(0)
+		expect(result.budget.decision).toBe("ready")
+	})
+
+	it("still honours a carry limit large enough to hold a usable summary", () => {
+		const result = resolveCompactionWindowBudget({
+			contextWindow: 64_000,
+			maxOutputTokens: 32_000,
+			summaryOutputLimitTokens: 1_250,
+			systemPrompt: "system",
+			buildMessages: compactionMessages,
+		})
+
+		expect(result.budget.carryLimitInfeasible).toBe(false)
+		expect(result.budget.providerOutputCap).toBe(1_250)
 	})
 
 	it("requests a smaller input instead of inventing an output cap when no remainder exists", () => {

@@ -116,11 +116,15 @@ export async function* handleResponsesApiStreamResponse(
 					}
 				}
 				if (item.type === "reasoning" && item.encrypted_content && item.id) {
+					// An in-progress reasoning item may carry incomplete encrypted_content. Keep it
+					// for interrupted-stream recovery, but mark it so the consumer refreshes the
+					// same item instead of appending another block.
 					yield {
 						type: "reasoning",
 						provider_metadata: { response_id: item.id },
 						reasoning: "",
 						redacted_data: item.encrypted_content,
+						redacted_phase: "partial",
 					} as const
 				}
 			}
@@ -151,6 +155,17 @@ export async function* handleResponsesApiStreamResponse(
 						details: item.summary,
 						reasoning: "",
 					} as const
+					// The completed item carries the authoritative encrypted payload that a
+					// subsequent request must replay.
+					if (item.encrypted_content && item.id) {
+						yield {
+							type: "reasoning",
+							provider_metadata: { response_id: item.id },
+							reasoning: "",
+							redacted_data: item.encrypted_content,
+							redacted_phase: "final",
+						} as const
+					}
 				}
 			}
 			if (chunk.type === "response.reasoning_summary_part.added") {

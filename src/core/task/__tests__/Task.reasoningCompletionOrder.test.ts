@@ -20,7 +20,9 @@ describe("Task reasoning and completion presentation order", () => {
 		const reasoningCase = extractReasoningChunkCase(source)
 		const visibleReasoningGuard = reasoningCase.indexOf("thinkingBlock?.thinking")
 		const reserveTimestamp = reasoningCase.indexOf("this.taskState.reasoningTs = this.genMessageTs()")
-		const publishPendingText = reasoningCase.indexOf("this.pendingReasoningText = thinkingBlock.thinking")
+		// The published value depends on whether the chunk carries renderable text
+		// or only encrypted reasoning, so match the assignment rather than one operand.
+		const publishPendingText = reasoningCase.indexOf("this.pendingReasoningText =")
 
 		expect(visibleReasoningGuard).toBeGreaterThanOrEqual(0)
 		expect(reserveTimestamp).toBeGreaterThan(visibleReasoningGuard)
