@@ -23,17 +23,45 @@ export interface LanguageParser {
 	}
 }
 
-async function loadLanguage(langName: string) {
-	return await Parser.Language.load(path.join(__dirname, `tree-sitter-${langName}.wasm`))
+/**
+ * Compiled grammars, keyed by language name.
+ *
+ * Compiling a grammar is expensive and its result is immutable, so the promise
+ * is cached rather than the resolved value: concurrent callers then await the
+ * same in-flight load instead of each starting their own.
+ */
+const languageLoads = new Map<string, Promise<Parser.Language>>()
+
+async function loadLanguage(langName: string): Promise<Parser.Language> {
+	const cached = languageLoads.get(langName)
+	if (cached) return cached
+	const load = Parser.Language.load(path.join(__dirname, `tree-sitter-${langName}.wasm`)).catch((error) => {
+		// A failed load must not be cached, otherwise every later call replays it.
+		languageLoads.delete(langName)
+		throw error
+	})
+	languageLoads.set(langName, load)
+	return load
 }
 
-let isParserInitialized = false
+/**
+ * In-flight or completed WASM runtime initialization.
+ *
+ * A boolean flag set after `await Parser.init()` is not a usable guard: every
+ * caller that arrives before the await resolves passes the check and re-enters
+ * initialization, which is not re-entrant and hangs when several subagents call
+ * a tree-sitter tool at the same time. Caching the promise makes the first
+ * caller own the work and the rest await that same promise.
+ */
+let parserInitialization: Promise<void> | undefined
 
-async function initializeParser() {
-	if (!isParserInitialized) {
-		await Parser.init()
-		isParserInitialized = true
-	}
+async function initializeParser(): Promise<void> {
+	parserInitialization ??= Parser.init().catch((error) => {
+		// Clear the gate so a later call can retry a genuinely failed init.
+		parserInitialization = undefined
+		throw error
+	})
+	await parserInitialization
 }
 
 /*

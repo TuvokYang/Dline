@@ -4592,23 +4592,52 @@ export class Task {
 		context?: string[],
 		initialUserContent: readonly ClineUserContent[] = [],
 	): Promise<void> {
+		const startTaskBeganAt = performance.now()
 		await this.ensureApiRateMetricsInitialized()
+		const rateMetricsReadyAt = performance.now()
 		try {
 			await this.clineIgnoreController.initialize()
 		} catch (error) {
 			Logger.error("Failed to initialize ClineIgnoreController:", error)
 			// Optionally, inform the user or handle the error appropriately
 		}
+		const ignoreControllerReadyAt = performance.now()
 		this.startContextWindowEnvironmentRefresh()
-		await this.refreshStableContextWindowIndicator()
+		// The stable indicator only refreshes a header readout. Nothing below reads
+		// its result, while it builds full environment details (host version, visible
+		// tabs, open tabs, active task controllers) behind a single await. Keeping it
+		// on the startup path delayed the first request by seconds on large
+		// workspaces, so it now settles in the background.
+		void this.refreshStableContextWindowIndicator().catch((error) => {
+			Logger.debug(`[Task ${this.taskId}] Initial context-window indicator refresh failed: ${error}`)
+		})
+		// The pre-request startup path emits no other log line, so a stall here is
+		// invisible in production logs. Report the segment costs before the first
+		// `say` so a slow start can be attributed without a debugger.
+		Logger.debug(
+			`[Task ${this.taskId}] startTask timing: rateMetrics=${Math.round(rateMetricsReadyAt - startTaskBeganAt)}ms, ` +
+				`clineIgnore=${Math.round(ignoreControllerReadyAt - rateMetricsReadyAt)}ms`,
+		)
 		// conversationHistory (for API) and clineMessages (for webview) need to be in sync
 		// if the extension process were killed, then on restart the clineMessages might not be empty, so we need to set it to [] when we create a new Cline client (otherwise webview would show stale messages from previous session)
 		await this.messageStateHandler.uiMessage?.clear()
+		const uiMessageClearedAt = performance.now()
 		await this.messageStateHandler.apiConversation?.clear()
+		const storesClearedAt = performance.now()
 
 		await this.postStateToWebview()
+		const statePostedAt = performance.now()
 
 		await this.say("task", task, images, files)
+		const taskSaidAt = performance.now()
+		// This span sits between the last startup log line and the first state
+		// delivery, so a stall here is otherwise invisible in production logs.
+		Logger.debug(
+			`[Task ${this.taskId}] startTask handoff timing: clearUiMessage=${Math.round(uiMessageClearedAt - ignoreControllerReadyAt)}ms, ` +
+				`clearApiConversation=${Math.round(storesClearedAt - uiMessageClearedAt)}ms, ` +
+				`postState=${Math.round(statePostedAt - storesClearedAt)}ms, ` +
+				`sayTask=${Math.round(taskSaidAt - statePostedAt)}ms`,
+		)
 
 		const initializing = await this.dispatchRuntime({ type: "TASK_INITIALIZE_REQUESTED" })
 		if (!initializing.accepted) {
@@ -5061,8 +5090,21 @@ export class Task {
 	private async initiateTaskLoop(userContent: ClineContent[]): Promise<void> {
 		let nextUserContent = userContent
 		let includeFileDetails = true
+		// The stretch between task creation and the first provider request had no
+		// instrumentation, so a slow first turn showed up only as a silent gap in
+		// the log. Report it once, for the first turn, where the cost lands.
+		const firstTurnStartedAt = performance.now()
+		let firstTurnReported = false
 		while (!this.taskState.abort) {
 			const didEndLoop = await this.recursivelyMakeClineRequests(nextUserContent, includeFileDetails)
+			if (!firstTurnReported) {
+				firstTurnReported = true
+				Logger.debug(
+					`[Task ${this.taskId}] first turn timing: startToTurnEnd=${Math.round(
+						performance.now() - firstTurnStartedAt,
+					)}ms, includeFileDetails=true`,
+				)
+			}
 			includeFileDetails = false // we only need file details the first time
 
 			//  The way this agentic loop works is that cline will be given a task that he then calls tools to complete. unless there's an attempt_completion call, we keep responding back to him with his tool's responses until he either attempt_completion or does not use anymore tools. If he does not use anymore tools, we ask him to consider if he's completed the task and then call attempt_completion, otherwise proceed with completing the task.
@@ -7807,6 +7849,9 @@ export class Task {
 			!persistedRequest && this.messageStateHandler.clineMessages.filter((m) => m.say === "api_req_started").length === 0
 
 		// Initialize the file checkpoint backend before creating the first chat checkpoint.
+		// This MUST stay blocking: the baseline has to capture the workspace before the
+		// model can touch any file, otherwise the first restore point already contains
+		// model edits and no longer represents the pre-task state.
 		if (
 			isFirstRequest &&
 			this.stateManager.getGlobalSettingsKey("enableCheckpointsSetting") &&
@@ -9358,19 +9403,42 @@ export class Task {
 		// Process current user-authored content and dynamic environment details in parallel.
 		// Tool-generated text remains opaque data unless it belongs to a canonically paired conversational result;
 		// even then, only explicit user-content tags are eligible for mention or slash-command processing.
+		//
+		// This stage sits between "task created" and the first provider request with
+		// no other logging, so a slow workspace scan or mention resolution used to
+		// appear as an unexplained gap. The per-stage timings below attribute it.
+		const loadContextStartedAt = performance.now()
+		let mentionsMs = 0
+		let environmentMs = 0
 		const [processedUserContent, environmentDetails] = await Promise.all([
-			Promise.all(userContent.map(processContentBlock)),
+			Promise.all(userContent.map(processContentBlock)).finally(() => {
+				mentionsMs = performance.now() - loadContextStartedAt
+			}),
 			this.getEnvironmentDetails(includeFileDetails, promptProfile, {
 				preview: options.preview,
 				api: requestScope.api,
 				mode: options.mode ?? requestScope.providerInfo.mode,
+			}).finally(() => {
+				environmentMs = performance.now() - loadContextStartedAt
 			}),
 		])
 
 		// Check clinerulesData if needed
+		const clinerulesCheckStartedAt = performance.now()
 		const clinerulesError = needsClinerulesFileCheck
 			? await ensureLocalClineDirExists(this.cwd, GlobalFileNames.dlineRulesDir)
 			: false
+		const clinerulesMs = performance.now() - clinerulesCheckStartedAt
+		const loadContextMs = performance.now() - loadContextStartedAt
+		// 500ms is already far above a healthy load; below it the line would just
+		// be noise on every turn.
+		if (loadContextMs >= 500) {
+			Logger.debug(
+				`[Task ${this.taskId}] loadContext timing: total=${Math.round(loadContextMs)}ms, ` +
+					`mentions=${Math.round(mentionsMs)}ms, environment=${Math.round(environmentMs)}ms, ` +
+					`clinerules=${Math.round(clinerulesMs)}ms, includeFileDetails=${includeFileDetails}`,
+			)
+		}
 
 		// Add focus chain instructions if needed
 		if (

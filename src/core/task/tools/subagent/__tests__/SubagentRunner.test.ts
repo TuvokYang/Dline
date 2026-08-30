@@ -1593,6 +1593,55 @@ describe("SubagentRunner", () => {
 		assert.equal(createMessage.mock.calls.length, 1)
 	})
 
+	it("stops waiting for a hung tool once the run is aborted", async () => {
+		// A tool call has no cancellation channel of its own, so a tool that never
+		// settles (a shared parser lock, a stuck host request) used to hold the run
+		// forever: the abort flag is only polled between tool calls, and that check
+		// is never reached. Cancelling must abandon the wait and report cancelled.
+		const config = createTaskConfig(true)
+		let toolStarted: () => void = () => undefined
+		const toolHasStarted = new Promise<void>((resolve) => {
+			toolStarted = resolve
+		})
+		config.coordinator.getHandler = vi.fn().mockReturnValue({
+			execute: vi.fn().mockImplementation(() => {
+				toolStarted()
+				// Never settles: the tool is wedged.
+				return new Promise<string>(() => {})
+			}),
+			getDescription: vi.fn().mockReturnValue("list_code_definition_names"),
+		})
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			yield {
+				type: "tool_calls",
+				function_id: "toolu_hung_tool",
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.LIST_CODE_DEF,
+						arguments: JSON.stringify({ path: "." }),
+					},
+				},
+			}
+		})
+		stubSystemPrompt(true)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const runner = new SubagentRunner(config)
+		const runPromise = runner.run("Cancel a wedged tool", () => {})
+		await toolHasStarted
+		await runner.abort()
+
+		const result = await Promise.race([
+			runPromise,
+			new Promise<never>((_, reject) => setTimeout(() => reject(new Error("run did not settle after abort")), 5_000)),
+		])
+
+		assert.equal(result.status, "cancelled")
+	})
+
 	it("does not retry after a hosted Web Search chunk has already been yielded", async () => {
 		const createMessage = vi.fn().mockImplementation(async function* () {
 			yield {

@@ -259,6 +259,17 @@ export class StateManager {
 			candidate.isInitialized = true
 			StateManager.instance = candidate
 
+			// Collapse superseded history revisions off the startup path. Each
+			// metadata update appends a whole record, so a long-lived history grows
+			// to many times its useful size and every later write has to rewrite all
+			// of it under the cross-process lock. Failure only leaves the file large.
+			const historyForCompaction = taskHistory
+			setTimeout(() => {
+				void historyForCompaction
+					.compact()
+					.catch((error) => Logger.debug(`[StateManager] Task history compaction skipped: ${error}`))
+			}, 5_000).unref?.()
+
 			// Start agent config loading in background — does NOT block initialization
 			AgentConfigLoader.getInstance()
 			return candidate

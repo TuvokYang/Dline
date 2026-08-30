@@ -31,11 +31,25 @@ function mergeCompletionProjection(existing: HistoryItem | undefined, incoming: 
  * There is only one taskHistory.jsonl per user.  The instance is created
  * and owned by StateManager, which passes it to consumers as needed.
  */
+/**
+ * Quiet period before a disk change is pulled into the in-memory index.
+ *
+ * A reload takes the cross-process file lock and re-reads the whole history, so
+ * one reload per change event made every window fight for the same lock while a
+ * writer already held it. Coalescing turns a burst into a single reload.
+ */
+const RELOAD_COALESCE_DELAY_MS = 250
+
 export class TaskHistory {
 	private store: BufferedUnifyStore<HistoryItem>
 	private readonly completionWriteMutex = new Mutex()
 	private _watcher: FSWatcher | null = null
 	private _onChangeCallbacks: Array<() => void | Promise<void>> = []
+	private _reloadTimer: NodeJS.Timeout | null = null
+	private _reloadInFlight: Promise<void> | null = null
+	private _reloadRequestedWhileInFlight = false
+	/** Tail of staged metadata writes still settling in the background. */
+	private _pendingStage: Promise<void> = Promise.resolve()
 
 	constructor(store: BufferedUnifyStore<HistoryItem>) {
 		this.store = store
@@ -231,14 +245,16 @@ export class TaskHistory {
 	 * @param item The history item to upsert
 	 */
 	async upsertTaskHistory(item: HistoryItem): Promise<void> {
-		await this.completionWriteMutex.withLock(async () => {
-			await this.store.reload()
+		await this.completionWriteMutex.withLock(() => {
+			// No reload here: `reload()` without `force` is a no-op, and a forced one
+			// would take the cross-process lock to re-read the whole file on a UI hot
+			// path. Cross-process writes arrive through the watcher instead.
 			const all = this.store.getAll() as HistoryItem[]
 			const existingIndex = all.findIndex((m) => m.id === item.id)
 
 			if (existingIndex >= 0) {
 				// Replace in-place (memory-level + markDirty) without overwriting the canonical completion projection.
-				await this.store.stageUpdateAt(existingIndex, mergeCompletionProjection(all[existingIndex], item))
+				this.trackStage(this.store.stageUpdateAt(existingIndex, mergeCompletionProjection(all[existingIndex], item)))
 			} else {
 				// Find insertion position by ts (ascending order)
 				let insertIndex = all.length
@@ -249,8 +265,63 @@ export class TaskHistory {
 					}
 				}
 				// Insert at correct position (memory-level + markDirty)
-				await this.store.stageInsertAt(insertIndex, mergeCompletionProjection(undefined, item))
+				this.trackStage(this.store.stageInsertAt(insertIndex, mergeCompletionProjection(undefined, item)))
 			}
+		})
+	}
+
+	/**
+	 * Let a staged write settle in the background.
+	 *
+	 * Metadata updates sit on the UI hot path and only mutate the buffered
+	 * in-memory list; the durable write happens later through the flush timer.
+	 * Awaiting the stage made every task update wait behind whatever the store
+	 * was doing, so callers now return immediately while `flush` still joins the
+	 * staged tail before reporting durability.
+	 */
+	private trackStage(stage: Promise<void>): void {
+		this._pendingStage = this._pendingStage.then(
+			() => stage,
+			() => stage,
+		)
+		void this._pendingStage.catch((error) => Logger.error("[TaskHistory] Failed to stage a metadata update:", error))
+	}
+
+	/** Persist all staged metadata updates. Used by durability and shutdown barriers. */
+	async flush(): Promise<void> {
+		await this._pendingStage.catch(() => undefined)
+		await this.store.flush()
+	}
+
+	/**
+	 * Collapse superseded revisions of each task into a single latest entry.
+	 *
+	 * The file is append-structured: every metadata update of a task rewrites the
+	 * whole record, so a long-lived history accumulates dozens of dead revisions
+	 * per task. Every write then has to rewrite that entire file while holding
+	 * the cross-process lock, which is what starves other windows.
+	 *
+	 * Compaction is only worth its own full rewrite when there is a real
+	 * surplus, so it is a no-op below `minRedundantEntries` extra rows.
+	 *
+	 * @param minRedundantEntries Superseded rows required before rewriting.
+	 * @returns Number of removed rows, or 0 when nothing was rewritten.
+	 */
+	async compact(minRedundantEntries = 1_000): Promise<number> {
+		return await this.completionWriteMutex.withLock(async () => {
+			const all = this.store.getAll() as ReadonlyArray<HistoryItem & { _deleted?: boolean }>
+			const latestById = new Map<string, HistoryItem>()
+			for (const item of all) {
+				// Later entries supersede earlier ones for the same task.
+				latestById.set(item.id, item)
+			}
+			const removed = all.length - latestById.size
+			if (removed < minRedundantEntries) return 0
+			const compacted = [...latestById.values()].sort((left, right) => left.ts - right.ts)
+			await this.store.replaceAll(compacted)
+			await this.store.flush()
+			Logger.info(`[TaskHistory] Compacted history: ${all.length} -> ${compacted.length} entries`)
+			return removed
 		})
 	}
 
@@ -274,17 +345,9 @@ export class TaskHistory {
 				awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
 			})
 
-			const syncFromDisk = async () => {
-				try {
-					await this.reloadIndex()
-				} catch (err) {
-					Logger.error("[TaskHistory] Failed to reload on file change:", err)
-				}
-			}
-
 			this._watcher
-				.on("add", () => syncFromDisk())
-				.on("change", () => syncFromDisk())
+				.on("add", () => this.scheduleReload())
+				.on("change", () => this.scheduleReload())
 				.on("unlink", async () => {
 					await this.store.replaceAll([])
 					for (const cb of this._onChangeCallbacks) {
@@ -301,14 +364,60 @@ export class TaskHistory {
 		}
 	}
 
+	/**
+	 * Coalesce disk-change notifications into a single reload.
+	 *
+	 * Every window watches the same file, and a reload takes the cross-process
+	 * lock to re-read the whole history. Reloading once per event made the
+	 * windows queue up behind a writer that already held the lock, exhausting its
+	 * bounded retry budget. Only one reload runs at a time; changes observed
+	 * while it runs trigger exactly one follow-up.
+	 */
+	private scheduleReload(): void {
+		if (this._reloadInFlight) {
+			this._reloadRequestedWhileInFlight = true
+			return
+		}
+		if (this._reloadTimer) clearTimeout(this._reloadTimer)
+		this._reloadTimer = setTimeout(() => {
+			this._reloadTimer = null
+			this._reloadInFlight = this.runCoalescedReload().finally(() => {
+				this._reloadInFlight = null
+				if (this._reloadRequestedWhileInFlight) {
+					this._reloadRequestedWhileInFlight = false
+					this.scheduleReload()
+				}
+			})
+		}, RELOAD_COALESCE_DELAY_MS)
+		this._reloadTimer.unref?.()
+	}
+
+	private async runCoalescedReload(): Promise<void> {
+		try {
+			await this.reloadIndex()
+		} catch (err) {
+			// Losing a reload only costs freshness: the next change reschedules one,
+			// and the in-memory index still serves the last known state. Contention
+			// on a busy history file is expected, so it must not surface as an error.
+			Logger.debug(`[TaskHistory] Deferred reload after file change: ${err instanceof Error ? err.message : err}`)
+		}
+	}
+
 	/** Stop watchers and flush/close the underlying JSONL store. */
 	async dispose(): Promise<void> {
 		const watcher = this._watcher
 		this._watcher = null
 		this._onChangeCallbacks = []
+		if (this._reloadTimer) {
+			clearTimeout(this._reloadTimer)
+			this._reloadTimer = null
+		}
+		this._reloadRequestedWhileInFlight = false
 		if (watcher) {
 			await watcher.close()
 		}
+		// Let an in-flight reload settle so it cannot touch a closed store.
+		await this._reloadInFlight?.catch(() => undefined)
 		await this.store.close()
 	}
 }

@@ -243,6 +243,14 @@ export class BufferedUnifyStore<TEntity extends object, TItem extends { ts: numb
 	}
 
 	async clear(): Promise<void> {
+		this.assertWritable()
+		// A freshly created task clears an already-empty store on its startup path.
+		// Routing that through `mutate` costs a flush plus a full query/replaceAll
+		// transaction for no state change, which is pure latency before the first
+		// request. Skip the round trip when there is provably nothing to remove.
+		if (this.items.length === 0 && this.persistedItems.length === 0 && !this.dirty) {
+			return
+		}
 		await this.mutate(() => [])
 	}
 

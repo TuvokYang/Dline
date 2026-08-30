@@ -337,6 +337,14 @@ function pushSubagentToolResultBlock(
 	})
 }
 
+/** Raised when a tool wait is abandoned because the run was interrupted. */
+class SubagentToolInterruptedError extends Error {
+	constructor() {
+		super("Subagent tool execution was interrupted.")
+		this.name = "SubagentToolInterruptedError"
+	}
+}
+
 export class SubagentRunner {
 	private readonly agent: SubagentBuilder
 	private readonly apiHandler: ApiHandler
@@ -350,6 +358,7 @@ export class SubagentRunner {
 	private activeCommandExecutions = 0
 	private abortingCommands = false
 	private apiLogRequestIndex = 0
+	private interruptionController: AbortController | undefined
 
 	constructor(
 		private baseConfig: TaskConfig,
@@ -374,8 +383,44 @@ export class SubagentRunner {
 		return true
 	}
 
+	/**
+	 * Wait for a tool call, but stop waiting once the run is interrupted.
+	 *
+	 * A tool handler has no cancellation channel of its own, and the abort flag
+	 * is only polled between tool calls. A tool that never settles - a contended
+	 * parser lock, a wedged host request - therefore used to hold the whole run
+	 * open with no way out. Racing the interruption signal releases the runner so
+	 * it can report `cancelled`; the abandoned tool still runs to completion in
+	 * the background, but it no longer owns the run's lifetime.
+	 */
+	private async executeToolWithInterruption(execute: () => Promise<unknown>): Promise<unknown> {
+		const signal = this.interruptionController?.signal
+		const toolExecution = execute()
+		if (!signal) return toolExecution
+		if (signal.aborted) throw new SubagentToolInterruptedError()
+		let onAbort: (() => void) | undefined
+		try {
+			return await Promise.race([
+				toolExecution,
+				new Promise<never>((_, reject) => {
+					onAbort = () => reject(new SubagentToolInterruptedError())
+					signal.addEventListener("abort", onAbort, { once: true })
+				}),
+			])
+		} finally {
+			if (onAbort) signal.removeEventListener("abort", onAbort)
+			// The abandoned tool keeps running; make sure it cannot surface as an
+			// unhandled rejection after the runner has moved on.
+			void Promise.resolve(toolExecution).catch(() => undefined)
+		}
+	}
+
 	private async interruptActiveWork(action: "abort" | "finish"): Promise<void> {
 		this.activeRetryAbortController?.abort()
+		// Only an abort abandons an in-flight tool. `finish` is a cooperative
+		// wind-down that still wants the current tool's result before steering the
+		// next turn to attempt_completion.
+		if (action === "abort") this.interruptionController?.abort()
 		try {
 			this.activeApiAbort?.()
 		} catch (error) {
@@ -427,6 +472,7 @@ export class SubagentRunner {
 		this.completionOnly = false
 		this.running = true
 		this.activeRetryAbortController = new AbortController()
+		this.interruptionController = new AbortController()
 		const state = new TaskState()
 		let emptyAssistantResponseRetries = 0
 		let invalidCompletionRetries = 0
@@ -1038,8 +1084,17 @@ export class SubagentRunner {
 						toolResult = formatResponse.toolError(toolError)
 					} else {
 						try {
-							toolResult = await handler.execute(subagentConfig, toolCallBlock)
+							toolResult = await this.executeToolWithInterruption(() =>
+								handler.execute(subagentConfig, toolCallBlock),
+							)
 						} catch (error) {
+							// An interrupted wait is not a tool failure: fall through to the
+							// abort check below so the run reports `cancelled`.
+							if (error instanceof SubagentToolInterruptedError) {
+								const cancelError = "Subagent run cancelled."
+								onProgress({ status: "cancelled", error: cancelError, stats: { ...stats } })
+								return { status: "cancelled", error: cancelError, stats }
+							}
 							toolError = error instanceof Error ? error.message : String(error)
 							toolResult = formatResponse.toolError(toolError)
 						}
@@ -1117,6 +1172,7 @@ export class SubagentRunner {
 			await activeHostedServerToolLifecycle?.finalizeOpen("Subagent hosted web search ended without a result.")
 			this.activeApiAbort = undefined
 			this.activeRetryAbortController = undefined
+			this.interruptionController = undefined
 			this.running = false
 		}
 	}

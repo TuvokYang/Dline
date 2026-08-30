@@ -133,6 +133,11 @@ export async function activate(context: vscode.ExtensionContext) {
 	// Initialize test mode and add disposables to context
 	const testModeWatchers = await initializeTestMode(webview)
 	context.subscriptions.push(...testModeWatchers)
+	if (IS_E2E && process.env.DLINE_E2E_TASK_HISTORY_CONTROL_DIR) {
+		const { startTaskHistoryControl } = await import("./test/e2e-control/task-history-control")
+		const control = await startTaskHistoryControl(webview.controller, process.env.DLINE_E2E_TASK_HISTORY_CONTROL_DIR)
+		context.subscriptions.push({ dispose: () => void control.dispose() })
+	}
 
 	// Initialize hook discovery cache for performance optimization
 	HookDiscoveryCache.getInstance().initialize(

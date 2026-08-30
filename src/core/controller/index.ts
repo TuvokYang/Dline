@@ -232,6 +232,8 @@ export class Controller {
 	private suppressedStatePostsAfterDetach = 0
 	private workspaceMcpRegistration: Promise<void> = Promise.resolve()
 	private workspaceMcpRegistrationGeneration = 0
+	/** Shared in-flight workspace root detection, so concurrent callers spawn one `git` sweep. */
+	private workspaceManagerSetup?: Promise<WorkspaceRootManager | undefined>
 	// Timer for periodic lock heartbeat (keeps .lock file fresh)
 	private lockHeartbeatTimer?: NodeJS.Timeout
 	// Timer for polling lock status when task is in read-only mode
@@ -254,18 +256,29 @@ export class Controller {
 
 	// Public getter for workspace manager with lazy initialization - To get workspaces when task isn't initialized (Used by file mentions)
 	async ensureWorkspaceManager(): Promise<WorkspaceRootManager | undefined> {
-		if (!this.workspaceManager) {
-			try {
-				this.workspaceManager = await setupWorkspaceManager({
-					stateManager: this.stateManager,
-					detectRoots: detectWorkspaceRoots,
-				})
-				await this.updateWorkspaceMcpRegistration(this.workspaceManager?.getRoots().map((root) => root.path))
-			} catch (error) {
-				Logger.error("[Controller] Failed to initialize workspace manager:", error)
-			}
+		if (this.workspaceManager) {
+			return this.workspaceManager
 		}
-		return this.workspaceManager
+		// Root detection spawns `git` child processes for every workspace folder.
+		// Concurrent callers previously each started their own detection because the
+		// only guard was the resolved field. Share one in-flight setup instead.
+		this.workspaceManagerSetup ??= setupWorkspaceManager({
+			stateManager: this.stateManager,
+			detectRoots: detectWorkspaceRoots,
+		})
+			.then(async (manager) => {
+				this.workspaceManager = manager
+				await this.updateWorkspaceMcpRegistration(manager.getRoots().map((root) => root.path))
+				return manager
+			})
+			.catch((error) => {
+				Logger.error("[Controller] Failed to initialize workspace manager:", error)
+				return undefined
+			})
+			.finally(() => {
+				this.workspaceManagerSetup = undefined
+			})
+		return await this.workspaceManagerSetup
 	}
 
 	// Synchronous getter for workspace manager
@@ -530,12 +543,11 @@ export class Controller {
 			this.stateManager.setGlobalState("autoApprovalSettings", updatedAutoApprovalSettings)
 		}
 
-		// Initialize and persist the workspace manager (multi-root or single-root) with telemetry + fallback
-		this.workspaceManager = await setupWorkspaceManager({
-			stateManager: this.stateManager,
-			detectRoots: detectWorkspaceRoots,
-		})
-		await this.updateWorkspaceMcpRegistration(this.workspaceManager?.getRoots().map((root) => root.path))
+		// Initialize and persist the workspace manager (multi-root or single-root) with telemetry + fallback.
+		// Detection spawns `git` per workspace folder and its result never changes for
+		// the lifetime of this controller, so reuse the resolved manager instead of
+		// re-detecting on the critical path of every task start.
+		await this.ensureWorkspaceManager()
 
 		const cwd = this.workspaceManager?.getPrimaryRoot()?.path || (await getCwd(getDesktopDir()))
 
