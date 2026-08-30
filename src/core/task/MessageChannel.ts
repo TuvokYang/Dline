@@ -173,6 +173,8 @@ export class MessageChannel {
 		images: string[] | undefined,
 		files: string[] | undefined,
 		interactionId: string,
+		userInputKind?: ClineMessage["userInputKind"],
+		queuedInputMode?: ClineMessage["queuedInputMode"],
 	): Promise<number> {
 		const messages = this.messageStateHandler.clineMessages
 		const matches = messages
@@ -192,6 +194,11 @@ export class MessageChannel {
 			files,
 			partial: false,
 			interactionId,
+			// Only carried for input that came from the queue. Writing the keys
+			// unconditionally would put `undefined` on every ordinary message and
+			// change the shape that is persisted and compared.
+			...(userInputKind ? { userInputKind } : {}),
+			...(queuedInputMode ? { queuedInputMode } : {}),
 			modelInfo: this.getProviderInfo(),
 		}
 		if (existing) {

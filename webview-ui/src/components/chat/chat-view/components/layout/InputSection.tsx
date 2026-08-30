@@ -23,6 +23,14 @@ interface InputSectionProps {
 	clineAsk?: ClineAsk
 	/** Queue entries owned by the backend; the composer only renders them. */
 	inputQueue?: readonly InputQueuePanelEntry[]
+	/**
+	 * Whether a blocked send can still be delivered later.
+	 *
+	 * The queue drains at a turn end or a tool round. A task that will reach
+	 * neither has nothing to drain it, so retaining input there would hide it
+	 * from the user with no way for it to ever be sent.
+	 */
+	canQueueInput?: boolean
 	/** Receives a send that was blocked because the task is still busy. */
 	onEnqueueInput?: (draft: { text: string; images: string[]; files: string[]; activeQuote?: string }) => void
 	/** Marks an entry as being edited so it is held back from delivery. */
@@ -53,6 +61,7 @@ export const InputSection: React.FC<InputSectionProps> = ({
 	submissionScope,
 	clineAsk,
 	inputQueue,
+	canQueueInput,
 	onEnqueueInput,
 	onEditQueuedInput,
 	onCommitQueuedInput,
@@ -154,18 +163,23 @@ export const InputSection: React.FC<InputSectionProps> = ({
 			files: [...capturedDraft.files],
 			...(activeQuote ? { activeQuote } : {}),
 		}
-		handedToQueueRef.current = capturedDraft.text
 		// Only commit when the entry is still there; otherwise this is ordinary
 		// new input and must be queued rather than dropped.
 		if (editingEntryId && editedEntryExists && onCommitQueuedInput) {
+			handedToQueueRef.current = capturedDraft.text
 			onCommitQueuedInput(editingEntryId, draft)
 			setEditingEntryId(undefined)
 			clearComposerDraft()
 			return
 		}
-		if (!onEnqueueInput) {
+		// Nothing will drain the queue, so the draft stays in the composer where
+		// the user can still see it and send it once the task accepts input.
+		// The ref is left alone as well, otherwise the retry would be mistaken
+		// for a duplicate of a send that never happened.
+		if (!onEnqueueInput || !queueCanDeliver) {
 			return
 		}
+		handedToQueueRef.current = capturedDraft.text
 		onEnqueueInput(draft)
 		clearComposerDraft()
 	}
@@ -177,6 +191,15 @@ export const InputSection: React.FC<InputSectionProps> = ({
 		}
 		void submitDraft(capturedDraft)
 	}
+
+	/**
+	 * Whether a send that cannot go out right now may be handed to the queue.
+	 *
+	 * Defaults to allowed so a caller that does not track task progress keeps
+	 * the previous behaviour; only a caller that knows the task is finished
+	 * turns it off.
+	 */
+	const queueCanDeliver = canQueueInput !== false
 
 	// Editing happens in the composer because attaching images or file
 	// references is only possible there. The entry keeps its queue position and

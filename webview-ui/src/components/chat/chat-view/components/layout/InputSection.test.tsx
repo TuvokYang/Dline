@@ -253,6 +253,32 @@ describe("InputSection deferred task submission", () => {
 		expect(onEnqueue).toHaveBeenCalledOnce()
 	})
 
+	// The queue only drains at a turn end or a tool round. When the task will
+	// reach neither, an entry accepted here would sit there forever while the
+	// user believes the text was sent.
+	it("does not queue a blocked draft when the task has no delivery point left", () => {
+		const onEnqueue = vi.fn()
+		const setInputValue = vi.fn()
+		const current = props(draft("keep me"))
+		current.chatState = { ...current.chatState, setInputValue }
+		render(
+			<InputSection
+				{...current}
+				canQueueInput={false}
+				enabled={false}
+				onEnqueueInput={onEnqueue}
+				onSubmit={vi.fn(async () => undefined)}
+				submissionScope="task-1"
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: "Submit" }))
+
+		expect(onEnqueue).not.toHaveBeenCalled()
+		// The draft stays where the user can still see and resend it.
+		expect(setInputValue).not.toHaveBeenCalled()
+	})
+
 	// `enabled` is undefined whenever the composer has no interaction to answer,
 	// which is the common case while a task runs. The text area still blocks the
 	// send and queues it, so the composer has to be cleared on this path too.

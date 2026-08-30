@@ -3,6 +3,7 @@ import { combineCommandSequences } from "@shared/combineCommandSequences"
 import { combineErrorRetryMessages } from "@shared/combineErrorRetryMessages"
 import { combineHookSequences } from "@shared/combineHookSequences"
 import type { ClineMessage } from "@shared/ExtensionMessage"
+import { taskPhaseStillDelivers } from "@shared/InputQueueDelivery"
 import { BooleanRequest, StringRequest } from "@shared/proto/dline/common"
 import type { ModelInfo } from "@shared/proto/dline/models"
 import { AskResponseRequest, CompactTaskRequest } from "@shared/proto/dline/task"
@@ -483,6 +484,10 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		[interactionSynchronized, setActiveQuote, setInputValue, setSelectedFiles, setSelectedImages, taskViewState],
 	)
 	const taskInputEnabled = Boolean(taskViewState?.input.enabled && taskViewState.input.enterAction && interactionSynchronized)
+	// The queue is drained at a turn end or a tool round, and only a task that
+	// is still working reaches either. Retaining a send after that would hide it
+	// in a queue nothing will come back for.
+	const queueCanDeliver = taskViewState ? taskPhaseStillDelivers(taskViewState.phase) : false
 	const canRenderCompactTask = Boolean(taskViewState?.taskId)
 	const canRenderForceTruncate = taskViewState?.forceTruncateAvailable === true
 	useEffect(() => {
@@ -655,6 +660,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 				) : null}
 				<AutoApproveBar />
 				<InputSection
+					canQueueInput={queueCanDeliver}
 					chatState={chatState}
 					clineAsk={taskViewState?.activeInteraction?.taskAsk}
 					draft={interactionDraft}

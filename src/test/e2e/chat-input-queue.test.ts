@@ -211,6 +211,126 @@ e2e("Chat input queue - a queued entry is delivered at the next turn end", async
 	await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 })
 
+// A finished task has no turn end and no tool round left, so anything the queue
+// accepts there can never be delivered. Input typed after completion belongs in
+// the conversation, not in a queue that will hold it forever.
+e2e("Chat input queue - input after completion is sent, not queued", async ({ helper, server, sidebar, userDataDir }) => {
+	e2e.setTimeout(240_000)
+	await helper.signin(sidebar)
+	server.resetOpenAiMock()
+	server.enqueueOpenAiResponses(
+		{
+			type: "tool",
+			name: "attempt_completion",
+			arguments: { result: "E2E_COMPLETED_FIRST" },
+		},
+		{
+			type: "tool",
+			name: "attempt_completion",
+			arguments: { result: "E2E_COMPLETED_SECOND" },
+		},
+	)
+
+	const input = sidebar.getByTestId("chat-input")
+	await input.fill("E2E_COMPLETED_TASK")
+	await sidebar.getByTestId("send-button").click()
+	await expect.poll(() => server.openAiRequestCount, { timeout: 60_000 }).toBe(1)
+
+	// The task is finished once its completion result is on screen and the
+	// Cancel button is gone.
+	await expect(sidebar.getByText("E2E_COMPLETED_FIRST").first()).toBeVisible({ timeout: 60_000 })
+	await expect(sidebar.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0, { timeout: 30_000 })
+
+	await input.fill("E2E_AFTER_COMPLETION_TEXT")
+	await input.press("Enter")
+
+	// It must reach the model instead of landing in a queue that has no
+	// delivery point left to drain it.
+	await expect.poll(() => server.openAiRequestCount, { timeout: 60_000 }).toBe(2)
+	await expect(sidebar.getByTestId("input-queue-toggle")).toHaveCount(0)
+	await expect(input).toHaveValue("", { timeout: 30_000 })
+	await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+})
+
+// An interaction is created before its anchor is presented, and the composer is
+// disabled for that window. A send landing there was routed to the queue, but
+// the queue only drains at a turn end or tool round, so the entry sat there
+// while the task kept working and no Cancel was offered.
+e2e(
+	"Chat input queue - a send during the interaction opening window is not queued",
+	async ({ helper, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(240_000)
+		await helper.signin(sidebar)
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				name: "ask_followup_question",
+				arguments: { question: "E2E_OPENING_QUESTION" },
+				delayMs: 4_000,
+			},
+			{
+				type: "tool",
+				name: "attempt_completion",
+				arguments: { result: "E2E_OPENING_DONE" },
+			},
+		)
+
+		const input = sidebar.getByTestId("chat-input")
+		await input.fill("E2E_OPENING_TASK")
+		await sidebar.getByTestId("send-button").click()
+		await expect.poll(() => server.openAiRequestCount, { timeout: 60_000 }).toBe(1)
+
+		// Type while the interaction is still being opened rather than waiting for
+		// the question to render, which is the window the user reported.
+		await input.fill("E2E_OPENING_INPUT")
+		await input.press("Enter")
+
+		// Whatever the composer decides, the input must not end up parked in a
+		// queue: either it is sent, or it stays in the composer for the user.
+		await expect(sidebar.getByTestId("input-queue-toggle")).toHaveCount(0, { timeout: 30_000 })
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+// The second completion leaves the task waiting for a reply. Input typed there
+// answers that interaction, so it must reach the conversation rather than being
+// held by the queue.
+e2e(
+	"Chat input queue - input while waiting for a reply is sent, not queued",
+	async ({ helper, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(240_000)
+		await helper.signin(sidebar)
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				name: "ask_followup_question",
+				arguments: { question: "E2E_WAITING_QUESTION" },
+			},
+			{
+				type: "tool",
+				name: "attempt_completion",
+				arguments: { result: "E2E_WAITING_DONE" },
+			},
+		)
+
+		const input = sidebar.getByTestId("chat-input")
+		await input.fill("E2E_WAITING_TASK")
+		await sidebar.getByTestId("send-button").click()
+		await expect.poll(() => server.openAiRequestCount, { timeout: 60_000 }).toBe(1)
+		await expect(sidebar.getByText("E2E_WAITING_QUESTION").first()).toBeVisible({ timeout: 60_000 })
+
+		await input.fill("E2E_WAITING_ANSWER")
+		await input.press("Enter")
+
+		await expect.poll(() => server.openAiRequestCount, { timeout: 60_000 }).toBe(2)
+		await expect(sidebar.getByTestId("input-queue-toggle")).toHaveCount(0)
+		await expect(input).toHaveValue("", { timeout: 30_000 })
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
 e2e("Chat input queue - cancel keeps the queue and a reload restores it", async ({ helper, server, sidebar, userDataDir }) => {
 	e2e.setTimeout(180_000)
 	await helper.signin(sidebar)
