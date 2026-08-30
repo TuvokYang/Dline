@@ -1,6 +1,15 @@
+import "@testing-library/jest-dom/vitest"
 import { fireEvent, render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import { InputQueuePanel, type InputQueuePanelEntry } from "./InputQueuePanel"
+
+class TestResizeObserver implements ResizeObserver {
+	disconnect = vi.fn()
+	observe = vi.fn()
+	unobserve = vi.fn()
+}
+
+globalThis.ResizeObserver = TestResizeObserver
 
 function entry(overrides: Partial<InputQueuePanelEntry> & { id: string }): InputQueuePanelEntry {
 	return {
@@ -120,11 +129,15 @@ describe("InputQueuePanel", () => {
 	})
 
 	// Cancel and the other footer actions must never shift when the queue opens.
-	it("renders expanded entries in an overlay that is removed from layout flow", () => {
+	it("portals the bounded opaque surface out of the local queue root", () => {
 		render(<InputQueuePanel entries={[entry({ id: "a" })]} {...handlers()} />)
 		fireEvent.click(screen.getByTestId("input-queue-toggle"))
 
 		const overlay = screen.getByTestId("input-queue-overlay")
-		expect(overlay.className).toContain("absolute")
+		expect(screen.getByTestId("input-queue-root")).not.toContainElement(overlay)
+		expect(overlay).toHaveAttribute("data-slot", "popover-content")
+		expect(overlay).toHaveClass("w-(--radix-popover-trigger-width)", "max-h-[min(60vh,480px)]", "overflow-y-auto")
+		expect(overlay.style.backgroundColor).toContain("--vscode-editorWidget-background")
+		expect(screen.getByTestId("input-queue-markdown-a")).toHaveClass("max-h-[min(20vh,180px)]")
 	})
 })

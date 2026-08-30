@@ -13,6 +13,48 @@ function enqueued(queue: InputQueue, text: string): string {
 }
 
 describe("InputQueue", () => {
+	// Persisted state is untrusted input: a corrupted or hand-edited file can
+	// repeat an id. Ids address entries individually, so a duplicate makes one
+	// claim, removal or commit act on someone else's text.
+	describe("duplicate persisted ids", () => {
+		it("gives each entry its own identity when the file repeats one", () => {
+			const queue = InputQueue.fromSerialized([
+				{ id: "dup", text: "A", images: [], files: [], mode: "queued", sequence: 0 },
+				{ id: "dup", text: "B", images: [], files: [], mode: "queued", sequence: 1 },
+			])
+
+			const ids = queue.list().map((entry) => entry.id)
+
+			expect(queue.list().map((entry) => entry.text)).toEqual(["A", "B"])
+			expect(new Set(ids).size).toBe(2)
+		})
+
+		it("keeps the entry that was not delivered when a claim is committed", () => {
+			const queue = InputQueue.fromSerialized([
+				{ id: "dup", text: "A", images: [], files: [], mode: "queued", sequence: 0 },
+				{ id: "dup", text: "B", images: [], files: [], mode: "queued", sequence: 1 },
+			])
+
+			const claimed = queue.takeNextQueued()
+			if (!claimed) throw new Error("expected an entry to claim")
+			queue.commitClaim([claimed.id])
+
+			expect(queue.list().map((entry) => entry.text)).toEqual(["B"])
+		})
+
+		it("removes only the entry the user asked to drop", () => {
+			const queue = InputQueue.fromSerialized([
+				{ id: "dup", text: "A", images: [], files: [], mode: "queued", sequence: 0 },
+				{ id: "dup", text: "B", images: [], files: [], mode: "queued", sequence: 1 },
+			])
+			const [, second] = queue.list()
+
+			expect(queue.remove(second.id)).toBe(true)
+
+			expect(queue.list().map((entry) => entry.text)).toEqual(["A"])
+		})
+	})
+
 	describe("enqueue", () => {
 		it("enqueues as queued and preserves insertion order", () => {
 			const queue = new InputQueue()

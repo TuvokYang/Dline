@@ -229,6 +229,71 @@ describe("InputSection deferred task submission", () => {
 		expect(setSelectedFiles).toHaveBeenCalledWith([])
 	})
 
+	// Clearing the composer is a state update, so the text area still reports the
+	// old value until React re-renders. A send arriving in that window used to
+	// queue the same draft again, leaving the user with duplicates and text that
+	// looked like it was never taken.
+	it("does not queue the same draft twice before the composer re-renders", () => {
+		const onEnqueue = vi.fn()
+		const current = props(draft("queue me"))
+		render(
+			<InputSection
+				{...current}
+				enabled={false}
+				onEnqueueInput={onEnqueue}
+				onSubmit={vi.fn(async () => undefined)}
+				submissionScope="task-1"
+			/>,
+		)
+
+		const submit = screen.getByRole("button", { name: "Submit" })
+		fireEvent.click(submit)
+		fireEvent.click(submit)
+
+		expect(onEnqueue).toHaveBeenCalledOnce()
+	})
+
+	// `enabled` is undefined whenever the composer has no interaction to answer,
+	// which is the common case while a task runs. The text area still blocks the
+	// send and queues it, so the composer has to be cleared on this path too.
+	it("clears the composer when the send was blocked without an explicit enabled flag", () => {
+		const setInputValue = vi.fn()
+		const setSelectedImages = vi.fn()
+		const setSelectedFiles = vi.fn()
+		const onEnqueue = vi.fn()
+		const current = props(draft("queue me"))
+		current.chatState = { ...current.chatState, sendingDisabled: true, setInputValue, setSelectedImages, setSelectedFiles }
+		render(
+			<InputSection
+				{...current}
+				onEnqueueInput={onEnqueue}
+				onSubmit={vi.fn(async () => undefined)}
+				submissionScope="task-1"
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: "Submit" }))
+
+		expect(onEnqueue).toHaveBeenCalledWith({ text: "captured", images: ["image"], files: ["file"] })
+		expect(setInputValue).toHaveBeenCalledWith("")
+		expect(setSelectedImages).toHaveBeenCalledWith([])
+		expect(setSelectedFiles).toHaveBeenCalledWith([])
+	})
+
+	// The queue is the only place a blocked send can survive. Without a queue to
+	// hand it to there is nothing to clear the composer for, and wiping it would
+	// destroy what the user typed.
+	it("keeps the draft in the composer when there is no queue to receive it", () => {
+		const setInputValue = vi.fn()
+		const current = props(draft("keep me"))
+		current.chatState = { ...current.chatState, setInputValue }
+		render(<InputSection {...current} enabled={false} onSubmit={vi.fn(async () => undefined)} submissionScope="task-1" />)
+
+		fireEvent.click(screen.getByRole("button", { name: "Submit" }))
+
+		expect(setInputValue).not.toHaveBeenCalled()
+	})
+
 	// Editing pulls the entry back into the composer, because adding images or
 	// file references is only possible there.
 	it("loads a queue entry back into the composer when editing starts", () => {

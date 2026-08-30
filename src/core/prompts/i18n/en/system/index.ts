@@ -8,6 +8,7 @@ import contextManagement from "./contextManagement"
 import editingFiles from "./editingFiles"
 import feedback from "./feedback"
 import focusChain from "./focusChain"
+import inputQueue from "./inputQueue"
 import mcp from "./mcp"
 import objective from "./objective"
 import responses from "./responses"
@@ -53,6 +54,7 @@ export const systemPromptModules = [
 		recommended: createRuntimeContract("LIST_INSTRUCTIONS_RECOMMENDED"),
 		apiRequestCount: createRuntimeContract("API_REQUEST_COUNT", "REMINDER"),
 	}),
+	defineLegacyModule("inputQueue", "system", inputQueue),
 	defineLegacyModule("mcp", "system", mcp),
 	defineLegacyModule("objective", "system", objective),
 	defineLegacyModule("runtimeEnvironment", "system", runtimeEnvironment, {

@@ -237,6 +237,10 @@ export interface ClineMessage {
 	commandCanMoveToBackground?: boolean
 	/** Stable identity of the interaction that owns this ask presentation. */
 	interactionId?: string
+	/** Distinguishes directly submitted input from input delivered by InputQueue. */
+	userInputKind?: "direct" | "queued"
+	/** Original InputQueue delivery pool for queued user input. */
+	queuedInputMode?: "queued" | "steering"
 	/** Stable identity shared by the command message, activity, background record, and cancellation entry. */
 	activityId?: string
 	/** ts of the associated command message (set on command_output messages) */

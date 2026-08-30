@@ -1,6 +1,6 @@
 import { flushPendingTaskSettingsRequests } from "@components/settings/utils/settingsHandlers"
 import type { ClineAsk } from "@shared/ExtensionMessage"
-import React, { useEffect, useState } from "react"
+import React, { useEffect, useRef, useState } from "react"
 import ChatTextArea from "@/components/chat/ChatTextArea"
 import { InputQueuePanel, type InputQueuePanelEntry } from "@/components/chat/input/InputQueuePanel"
 import type { ModeSwitchDraft } from "@/components/chat/mode-switch/useModeSwitch"
@@ -132,13 +132,29 @@ export const InputSection: React.FC<InputSectionProps> = ({
 		setActiveQuote(null)
 	}
 
+	// The text last handed to the queue, held until the composer reports a
+	// different value. Without it, a send arriving before React has rendered the
+	// cleared text area would read the stale value and queue it a second time.
+	const handedToQueueRef = useRef<string>()
+	if (inputValue !== handedToQueueRef.current) {
+		handedToQueueRef.current = undefined
+	}
+
 	const enqueueBlockedDraft = (capturedDraft: ModeSwitchDraft) => {
+		// The captured text comes from the text area, which still holds the old
+		// value until React re-renders with the cleared state. A second send
+		// arriving in that window would queue the same draft again, and the
+		// composer would keep showing text the queue already owns.
+		if (capturedDraft.text === handedToQueueRef.current) {
+			return
+		}
 		const draft = {
 			text: capturedDraft.text,
 			images: [...capturedDraft.images],
 			files: [...capturedDraft.files],
 			...(activeQuote ? { activeQuote } : {}),
 		}
+		handedToQueueRef.current = capturedDraft.text
 		// Only commit when the entry is still there; otherwise this is ordinary
 		// new input and must be queued rather than dropped.
 		if (editingEntryId && editedEntryExists && onCommitQueuedInput) {

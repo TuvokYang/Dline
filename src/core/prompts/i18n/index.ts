@@ -3,12 +3,14 @@ import { Logger } from "@/shared/services/Logger"
 import { RuntimePromptGenerator } from "../generators/RuntimePromptGenerator"
 import type { PromptEnv } from "../template/types"
 import { englishPrompts, englishTemplateStore } from "./en"
+import { simplifiedChinesePrompts } from "./zh-CN"
 
 type PromptModule = Record<string, string>
 type LanguagePack = Record<string, PromptModule>
 
 const registry: Record<string, LanguagePack> = {
 	en: englishPrompts,
+	"zh-CN": simplifiedChinesePrompts,
 }
 const runtimeGenerator = new RuntimePromptGenerator(englishTemplateStore)
 

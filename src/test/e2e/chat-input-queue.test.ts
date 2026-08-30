@@ -8,7 +8,7 @@ import { E2ETestHelper, e2e } from "./utils/helpers"
  */
 e2e(
 	"Chat input queue - a send blocked by a running task is queued instead of dropped",
-	async ({ helper, server, sidebar, userDataDir }) => {
+	async ({ helper, server, sidebar, userDataDir }, testInfo) => {
 		e2e.setTimeout(180_000)
 		await helper.signin(sidebar)
 		server.resetOpenAiMock()
@@ -26,7 +26,9 @@ e2e(
 		await expect(sidebar.getByRole("button", { name: "Cancel", exact: true }).first()).toBeVisible({ timeout: 30_000 })
 
 		// Enter while the task is running must not reach the model as a new request.
-		await input.fill("E2E_QUEUED_ENTRY_ONE")
+		// The markdown body is filled rather than typed because typing newlines
+		// would each be read as a send; only the final Enter is the send here.
+		await input.fill("## E2E_QUEUED_ENTRY_ONE\n\n- E2E_PENDING_MARKDOWN_ITEM")
 		await input.press("Enter")
 
 		const toggle = sidebar.getByTestId("input-queue-toggle")
@@ -34,9 +36,47 @@ e2e(
 		await expect(toggle).toContainText("Queue 1")
 		expect(server.openAiRequestCount).toBe(1)
 
+		// The queue now owns the text. Leaving a copy in the composer shows the
+		// same input twice and invites sending it a second time by hand.
+		await expect(input).toHaveValue("", { timeout: 30_000 })
+
 		await toggle.click()
-		await expect(sidebar.getByTestId("input-queue-overlay")).toBeVisible()
-		await expect(sidebar.getByTestId("input-queue-overlay")).toContainText("E2E_QUEUED_ENTRY_ONE")
+		const overlay = sidebar.getByTestId("input-queue-overlay")
+		await expect(overlay).toBeVisible()
+		await expect(overlay).toContainText("E2E_QUEUED_ENTRY_ONE")
+		await expect(overlay.getByRole("heading", { name: "E2E_QUEUED_ENTRY_ONE" })).toBeVisible()
+		await expect(overlay.getByRole("listitem")).toContainText("E2E_PENDING_MARKDOWN_ITEM")
+
+		const overlayLayout = await overlay.evaluate((element) => {
+			const styles = getComputedStyle(element)
+			const root = document.querySelector('[data-testid="input-queue-root"]')
+			return {
+				isPortalled: root ? !root.contains(element) : false,
+				maxHeight: styles.maxHeight,
+				overflowY: styles.overflowY,
+			}
+		})
+		expect(overlayLayout.isPortalled).toBe(true)
+		expect(overlayLayout.maxHeight).not.toBe("none")
+		expect(overlayLayout.overflowY).toBe("auto")
+
+		const overlayPaint = await overlay.evaluate((element) => {
+			const styles = getComputedStyle(element)
+			return {
+				backgroundColor: styles.backgroundColor,
+				backgroundImage: styles.backgroundImage,
+				sidebarBackgroundToken: styles.getPropertyValue("--vscode-sideBar-background"),
+			}
+		})
+		await testInfo.attach("input-queue-overlay-repro.png", {
+			body: await overlay.screenshot(),
+			contentType: "image/png",
+		})
+		await testInfo.attach("input-queue-overlay-computed-style.json", {
+			body: Buffer.from(JSON.stringify(overlayPaint, null, 2)),
+			contentType: "application/json",
+		})
+		expect(overlayPaint.backgroundColor, JSON.stringify(overlayPaint)).not.toBe("rgba(0, 0, 0, 0)")
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )
@@ -144,7 +184,7 @@ e2e("Chat input queue - a queued entry is delivered at the next turn end", async
 	await expect.poll(() => server.openAiRequestCount, { timeout: 60_000 }).toBe(1)
 	await expect(sidebar.getByRole("button", { name: "Cancel", exact: true }).first()).toBeVisible({ timeout: 30_000 })
 
-	await input.fill("E2E_TURNEND_QUEUED_TEXT")
+	await input.fill("## E2E_TURNEND_QUEUED_TEXT\n\n- E2E_DELIVERED_MARKDOWN_ITEM")
 	await input.press("Enter")
 	await expect(sidebar.getByTestId("input-queue-toggle")).toContainText("Queue 1", { timeout: 30_000 })
 
@@ -156,6 +196,18 @@ e2e("Chat input queue - a queued entry is delivered at the next turn end", async
 	const consumptions = server.getMockConsumptions()
 	const delivered = consumptions.at(-1)
 	expect(JSON.stringify(delivered?.requestToolResults ?? [])).toContain("E2E_TURNEND_QUEUED_TEXT")
+	const deliveredRequest = JSON.stringify(delivered?.requestBody)
+	expect(deliveredRequest).toContain("auxiliary alignment information")
+
+	const deliveredInput = sidebar.getByTestId("queued-user-input").last()
+	await expect(deliveredInput).toBeVisible({ timeout: 30_000 })
+	await expect(deliveredInput).toHaveAttribute("data-queue-state", "delivered")
+	await expect(deliveredInput).toHaveAttribute("data-queued-input-mode", "queued")
+	await expect(deliveredInput.getByRole("heading", { name: "E2E_TURNEND_QUEUED_TEXT" })).toBeVisible()
+	await expect(deliveredInput.getByRole("listitem")).toContainText("E2E_DELIVERED_MARKDOWN_ITEM")
+	await expect(deliveredInput).not.toContainText("auxiliary alignment information")
+	await expect(deliveredInput).not.toContainText("辅助对齐信息")
+	await expect(deliveredInput.getByTestId("queued-input-markdown-scroll")).toHaveCSS("overflow-y", "auto")
 	await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 })
 

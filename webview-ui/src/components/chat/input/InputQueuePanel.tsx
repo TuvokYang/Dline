@@ -1,5 +1,7 @@
 import { ChevronDownIcon, ChevronRightIcon, GripVerticalIcon, PencilIcon, RotateCcwIcon, SendIcon, XIcon } from "lucide-react"
 import { useState } from "react"
+import { UserInputMarkdownBody } from "@/components/chat/UserInputMarkdownBody"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 
 function classes(...values: Array<string | false | undefined>): string {
 	return values.filter(Boolean).join(" ")
@@ -38,13 +40,7 @@ function attachmentSummary(entry: InputQueuePanelEntry): string | undefined {
 	return parts.length > 0 ? parts.join(", ") : undefined
 }
 
-/**
- * Collapsed summary plus an expandable overlay of retained input.
- *
- * The expanded list is an overlay rather than an inline block: growing the
- * footer would displace Cancel and the other task actions, and a destructive
- * action must not move while the user interacts with the queue.
- */
+/** Collapsed summary plus a portalled, collision-aware list of retained input. */
 export function InputQueuePanel({ entries, onToggleMode, onEdit, onCancelEdit, onRemove, onReorder }: InputQueuePanelProps) {
 	const [expanded, setExpanded] = useState(false)
 	const [draggingId, setDraggingId] = useState<string>()
@@ -56,22 +52,49 @@ export function InputQueuePanel({ entries, onToggleMode, onEdit, onCancelEdit, o
 	const steeringCount = entries.filter((entry) => entry.mode === "steering").length
 
 	return (
-		<div className="relative mx-3.5">
-			{expanded ? (
-				<div
+		<div className="mx-3.5" data-testid="input-queue-root">
+			<Popover onOpenChange={setExpanded} open={expanded}>
+				<PopoverTrigger asChild>
+					<button
+						aria-expanded={expanded}
+						className="flex w-full items-center gap-1 appearance-none border-0 bg-transparent px-0 py-0.5 text-left text-xs text-(--vscode-descriptionForeground)"
+						data-testid="input-queue-toggle"
+						type="button">
+						{expanded ? <ChevronDownIcon className="size-3" /> : <ChevronRightIcon className="size-3" />}
+						<span>Queue {entries.length}</span>
+						{steeringCount > 0 ? (
+							<span className="text-(--vscode-charts-orange)"> {steeringCount} steering</span>
+						) : null}
+					</button>
+				</PopoverTrigger>
+
+				<PopoverContent
+					align="start"
 					aria-label="Queued input"
-					className="absolute bottom-full left-0 right-0 z-10 mb-1 max-h-64 overflow-y-auto rounded border border-(--vscode-panel-border) bg-(--vscode-sidebar-background) p-1"
+					className="max-h-[min(60vh,480px)] w-(--radix-popover-trigger-width) overflow-y-auto overscroll-contain rounded p-1 text-xs shadow-lg"
+					collisionPadding={8}
 					data-testid="input-queue-overlay"
-					// The overlay is a reorderable list of entries; the drag handlers below
-					// belong to the option rows, which need an interactive role to carry them.
-					role="listbox">
+					// The surface is portalled out of ChatLayout's overflow-hidden tree.
+					// An explicit fallback chain guarantees an opaque paint even when a
+					// host theme omits one of the more specific widget tokens.
+					role="listbox"
+					side="top"
+					sideOffset={4}
+					style={{
+						backgroundColor:
+							"var(--vscode-editorWidget-background, var(--vscode-menu-background, var(--vscode-sideBar-background, rgb(30, 30, 30))))",
+						borderColor:
+							"var(--vscode-editorWidget-border, var(--vscode-panel-border, var(--vscode-contrastBorder, transparent)))",
+						color: "var(--vscode-foreground)",
+						maxHeight: "min(60vh, 480px, var(--radix-popover-content-available-height))",
+					}}>
 					{entries.map((entry, index) => {
 						const attachments = attachmentSummary(entry)
 						return (
 							<div
 								aria-selected={entry.mode === "steering"}
 								className={classes(
-									"group flex items-center gap-1 rounded px-1 py-1 text-xs",
+									"group rounded border border-(--vscode-editorWidget-border,var(--vscode-panel-border)) bg-(--vscode-editorWidget-background,var(--vscode-sideBar-background)) px-2 py-1.5 text-xs",
 									entry.mode === "steering"
 										? "text-(--vscode-charts-orange)"
 										: "text-(--vscode-descriptionForeground)",
@@ -93,63 +116,69 @@ export function InputQueuePanel({ entries, onToggleMode, onEdit, onCancelEdit, o
 									setDraggingId(undefined)
 								}}
 								role="option"
+								style={{
+									backgroundColor:
+										"var(--vscode-editorWidget-background, var(--vscode-menu-background, var(--vscode-sideBar-background, rgb(30, 30, 30))))",
+								}}
 								// Roving tabindex: the row is programmatically focusable for
 								// assistive tech without adding a tab stop per queue entry.
 								tabIndex={-1}>
-								<GripVerticalIcon className="size-3 shrink-0 cursor-grab opacity-60" />
-								<span className="min-w-0 flex-1 truncate">{entry.text}</span>
-								{attachments ? <span className="shrink-0 opacity-70">{attachments}</span> : null}
-								<button
-									aria-label={entry.mode === "steering" ? "Return to queue" : "Send with next round"}
-									className="input-icon-button shrink-0 appearance-none border-0 bg-transparent p-0"
-									data-testid={`input-queue-send-${entry.id}`}
-									onClick={() => onToggleMode(entry.id)}
-									type="button">
-									<SendIcon className="size-3" />
-								</button>
-								{/* An entry under edit is held back from delivery, so it needs a
+								<header className="mb-1 flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide">
+									<GripVerticalIcon className="size-3 shrink-0 cursor-grab opacity-60" />
+									<span>{entry.mode === "steering" ? "Steering input" : "Queued input"}</span>
+									{attachments ? (
+										<span className="ml-auto shrink-0 normal-case opacity-70">{attachments}</span>
+									) : null}
+								</header>
+								<UserInputMarkdownBody
+									markdown={entry.text}
+									testId={`input-queue-markdown-${entry.id}`}
+									variant="queued-pending"
+								/>
+								<footer className="mt-1 flex items-center justify-end gap-1">
+									<button
+										aria-label={entry.mode === "steering" ? "Return to queue" : "Send with next round"}
+										className="input-icon-button shrink-0 appearance-none border-0 bg-transparent p-0"
+										data-testid={`input-queue-send-${entry.id}`}
+										onClick={() => onToggleMode(entry.id)}
+										type="button">
+										<SendIcon className="size-3" />
+									</button>
+									{/* An entry under edit is held back from delivery, so it needs a
 								    way out that does not require sending or deleting it. */}
-								{entry.editing ? (
+									{entry.editing ? (
+										<button
+											aria-label="Cancel editing"
+											className="input-icon-button shrink-0 appearance-none border-0 bg-transparent p-0"
+											data-testid={`input-queue-cancel-edit-${entry.id}`}
+											onClick={() => onCancelEdit(entry.id)}
+											type="button">
+											<RotateCcwIcon className="size-3" />
+										</button>
+									) : (
+										<button
+											aria-label="Edit queued input"
+											className="input-icon-button shrink-0 appearance-none border-0 bg-transparent p-0"
+											data-testid={`input-queue-edit-${entry.id}`}
+											onClick={() => onEdit(entry.id)}
+											type="button">
+											<PencilIcon className="size-3" />
+										</button>
+									)}
 									<button
-										aria-label="Cancel editing"
+										aria-label="Remove queued input"
 										className="input-icon-button shrink-0 appearance-none border-0 bg-transparent p-0"
-										data-testid={`input-queue-cancel-edit-${entry.id}`}
-										onClick={() => onCancelEdit(entry.id)}
+										data-testid={`input-queue-remove-${entry.id}`}
+										onClick={() => onRemove(entry.id)}
 										type="button">
-										<RotateCcwIcon className="size-3" />
+										<XIcon className="size-3" />
 									</button>
-								) : (
-									<button
-										aria-label="Edit queued input"
-										className="input-icon-button shrink-0 appearance-none border-0 bg-transparent p-0"
-										data-testid={`input-queue-edit-${entry.id}`}
-										onClick={() => onEdit(entry.id)}
-										type="button">
-										<PencilIcon className="size-3" />
-									</button>
-								)}
-								<button
-									aria-label="Remove queued input"
-									className="input-icon-button shrink-0 appearance-none border-0 bg-transparent p-0"
-									data-testid={`input-queue-remove-${entry.id}`}
-									onClick={() => onRemove(entry.id)}
-									type="button">
-									<XIcon className="size-3" />
-								</button>
+								</footer>
 							</div>
 						)
 					})}
-				</div>
-			) : null}
-			<button
-				className="flex w-full items-center gap-1 appearance-none border-0 bg-transparent px-0 py-0.5 text-left text-xs text-(--vscode-descriptionForeground)"
-				data-testid="input-queue-toggle"
-				onClick={() => setExpanded((current) => !current)}
-				type="button">
-				{expanded ? <ChevronDownIcon className="size-3" /> : <ChevronRightIcon className="size-3" />}
-				<span>Queue {entries.length}</span>
-				{steeringCount > 0 ? <span className="text-(--vscode-charts-orange)"> {steeringCount} steering</span> : null}
-			</button>
+				</PopoverContent>
+			</Popover>
 		</div>
 	)
 }

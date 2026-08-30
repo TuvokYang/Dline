@@ -116,8 +116,28 @@ export class InputQueue {
 	 */
 	static fromSerialized(value: unknown): InputQueue {
 		const queue = new InputQueue()
-		if (!Array.isArray(value)) return queue
+		queue.resetFrom(value)
+		return queue
+	}
+
+	/**
+	 * Reload persisted state into this queue instead of building a new one.
+	 *
+	 * A reload can reach a task that is already running, and any delivery in
+	 * flight holds a closure over this object. Replacing the instance would
+	 * leave that delivery settling a queue nothing else reads, so its entry
+	 * could be claimed and sent a second time. Resetting in place keeps every
+	 * holder pointed at the one queue that is actually persisted.
+	 */
+	resetFrom(value: unknown): void {
+		this.entries = []
+		this.claimedIds.clear()
+		this.cancelledIds.clear()
+		this.droppedInFlightOnLoad = 0
+		this.sequenceCounter = 0
+		if (!Array.isArray(value)) return
 		const restored: QueuedInputEntry[] = []
+		const seenIds = new Set<string>()
 		value.forEach((raw, index) => {
 			const entry = normalizeEntry(raw, index)
 			if (!entry) {
@@ -126,15 +146,21 @@ export class InputQueue {
 				return
 			}
 			if (wasDelivering(raw)) {
-				queue.droppedInFlightOnLoad += 1
+				this.droppedInFlightOnLoad += 1
 				return
 			}
-			restored.push(entry)
+			// A corrupted or hand-edited file can repeat an id. Ids address
+			// entries one at a time, so leaving a duplicate in would let a
+			// single claim, removal or commit act on someone else's text.
+			// Renaming the later one keeps both texts and makes each
+			// addressable; dropping either would discard user input.
+			const unique = seenIds.has(entry.id) ? { ...entry, id: createEntryId() } : entry
+			seenIds.add(unique.id)
+			restored.push(unique)
 		})
-		queue.entries = restored
+		this.entries = restored
 		// Keep future insertions ordered after everything restored from disk.
-		queue.sequenceCounter = queue.entries.reduce((highest, entry) => Math.max(highest, entry.sequence), -1) + 1
-		return queue
+		this.sequenceCounter = this.entries.reduce((highest, entry) => Math.max(highest, entry.sequence), -1) + 1
 	}
 
 	/**
@@ -406,6 +432,23 @@ export class InputQueue {
 			// Clear the durable mark too, otherwise a reload would drop an entry
 			// whose delivery is already known to have failed.
 			if (entry) this.replace(id, { ...entry, delivering: false })
+		}
+	}
+
+	/**
+	 * Hide entries again after a release that could not be written.
+	 *
+	 * The file still marks them in flight, so a reload will drop them. Leaving
+	 * them visible would offer the user input that is about to disappear, and
+	 * would let them claim it a second time. Withholding keeps what the user
+	 * sees consistent with what would survive a reload.
+	 */
+	reclaim(ids: readonly string[]): void {
+		for (const id of ids) {
+			const entry = this.get(id)
+			if (!entry) continue
+			this.claimedIds.add(id)
+			this.replace(id, { ...entry, delivering: true })
 		}
 	}
 

@@ -68,4 +68,22 @@ describe("ClineMessage command identity conversion", () => {
 		})
 		expect(roundTripMessage.compactionConversationRange).toEqual(applicationMessage.compactionConversationRange)
 	})
+
+	it("preserves queued user input semantics across the Webview proto boundary", () => {
+		const applicationMessage = {
+			ts: 103,
+			type: "say" as const,
+			say: "user_feedback" as const,
+			text: "你好",
+			userInputKind: "queued" as const,
+			queuedInputMode: "steering" as const,
+		}
+
+		const protoMessage = convertClineMessageToProto(applicationMessage)
+		const roundTripMessage = convertProtoToClineMessage(protoMessage)
+
+		expect(protoMessage.userInputKind).toBe("queued")
+		expect(protoMessage.queuedInputMode).toBe("steering")
+		expect(roundTripMessage).toMatchObject(applicationMessage)
+	})
 })

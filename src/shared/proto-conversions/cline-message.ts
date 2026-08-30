@@ -252,6 +252,8 @@ export function convertClineMessageToProto(message: AppClineMessage): ProtoCline
 					preCompactionApiEndIndex: message.compactionConversationRange.preCompactionApiEndIndex,
 				}
 			: undefined,
+		userInputKind: message.userInputKind ?? "",
+		queuedInputMode: message.queuedInputMode ?? "",
 	}
 
 	return protoMessage
@@ -355,6 +357,12 @@ export function convertProtoToClineMessage(protoMessage: ProtoClineMessage): App
 	}
 	if (protoMessage.commandCanMoveToBackground) {
 		message.commandCanMoveToBackground = true
+	}
+	if (protoMessage.userInputKind !== "") {
+		message.userInputKind = protoMessage.userInputKind as AppClineMessage["userInputKind"]
+	}
+	if (protoMessage.queuedInputMode !== "") {
+		message.queuedInputMode = protoMessage.queuedInputMode as AppClineMessage["queuedInputMode"]
 	}
 
 	return message

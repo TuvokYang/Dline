@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { InputQueue } from "./InputQueue"
-import { QUEUED_INPUT_GUIDANCE, takeQueueDelivery } from "./InputQueueDelivery"
+import { takeQueueDelivery } from "./InputQueueDelivery"
 
 function queueWith(drafts: Array<{ text: string; steering?: boolean; editing?: boolean }>): InputQueue {
 	const queue = new InputQueue()
@@ -70,9 +70,9 @@ describe("takeQueueDelivery", () => {
 		expect(queue.size).toBe(2)
 	})
 
-	// Each entry has to stay a separate block; merging them would read as one
-	// note and lose the boundaries between what the user said at each point.
-	it("renders one self-contained user message block per entry", () => {
+	// The delivery layer owns user data only. The Task host adds the model-only
+	// XML envelope so it can never become part of Webview presentation data.
+	it("keeps one pure user-authored block per entry", () => {
 		const queue = queueWith([
 			{ text: "steer one", steering: true },
 			{ text: "steer two", steering: true },
@@ -80,17 +80,11 @@ describe("takeQueueDelivery", () => {
 
 		const delivery = takeQueueDelivery(queue, "tool-round")
 
-		expect(delivery?.blocks).toEqual([
-			"<user_message>\nsteer one\n</user_message>",
-			"<user_message>\nsteer two\n</user_message>",
-		])
-		expect(delivery?.text).toContain(QUEUED_INPUT_GUIDANCE)
+		expect(delivery?.blocks).toEqual(["steer one", "steer two"])
+		expect(delivery?.text).not.toContain("auxiliary alignment information")
 	})
 
-	// A steering batch can also land on a turn end, where the receiving handler
-	// can only take one string and wraps it once. The per-entry tags have to
-	// survive into `text`, or several messages arrive merged into one.
-	it("keeps per-entry boundaries in the flat payload of a batch", () => {
+	it("keeps the flat payload free of model-only XML", () => {
 		const queue = queueWith([
 			{ text: "steer one", steering: true },
 			{ text: "steer two", steering: true },
@@ -98,19 +92,15 @@ describe("takeQueueDelivery", () => {
 
 		const delivery = takeQueueDelivery(queue, "turn-end")
 
-		expect(delivery?.text).toBe(
-			`${QUEUED_INPUT_GUIDANCE}\n\n<user_message>\nsteer one\n</user_message>\n\n<user_message>\nsteer two\n</user_message>`,
-		)
+		expect(delivery?.text).toBe("steer one\n\nsteer two")
 	})
 
-	// A single entry needs no tags: the handler already presents it as one
-	// message, so wrapping would only add noise the user never wrote.
-	it("sends a single entry without wrapping tags", () => {
+	it("keeps a single entry unchanged", () => {
 		const queue = queueWith([{ text: "just one" }])
 
 		const delivery = takeQueueDelivery(queue, "turn-end")
 
-		expect(delivery?.text).toBe(`${QUEUED_INPUT_GUIDANCE}\n\njust one`)
+		expect(delivery?.text).toBe("just one")
 	})
 
 	it("collects the images and files carried by the delivered entries", () => {
@@ -135,6 +125,22 @@ describe("takeQueueDelivery", () => {
 		delivery?.restore()
 
 		expect(queue.list().map((entry) => entry.text)).toEqual(["first", "second"])
+	})
+
+	// A restore that could not be written leaves the file marking the entry in
+	// flight, so a reload would drop it. Showing it again would promise a
+	// recovery that does not survive, and would let it be claimed a second time.
+	it("withholds the batch again when the restore could not be persisted", () => {
+		const queue = queueWith([{ text: "retry me" }])
+
+		const delivery = takeQueueDelivery(queue, "turn-end")
+		delivery?.restore()
+		expect(queue.list()).toHaveLength(1)
+
+		delivery?.reclaim()
+
+		expect(queue.list()).toHaveLength(0)
+		expect(queue.serialize()[0]?.delivering).toBe(true)
 	})
 
 	// Removal outranks a delivery that has not sent yet, and a remove request

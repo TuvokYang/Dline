@@ -1,11 +1,11 @@
 import { CheckpointRestoreRequest } from "@shared/proto/dline/checkpoints"
 import { ClineCheckpointRestore } from "@shared/WebviewMessage"
-import React, { forwardRef, useMemo, useRef, useState } from "react"
+import React, { forwardRef, useRef, useState } from "react"
 import DynamicTextArea from "react-textarea-autosize"
 import Thumbnails from "@/components/common/Thumbnails"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { CheckpointsServiceClient } from "@/services/grpc-client"
-import { highlightText } from "./task-header/Highlights"
+import { UserInputMarkdownBody } from "./UserInputMarkdownBody"
 
 interface UserMessageProps {
 	text?: string
@@ -13,6 +13,8 @@ interface UserMessageProps {
 	images?: string[]
 	messageTs?: number // Timestamp for the message, needed for checkpoint restore
 	sendMessageFromChatRow?: (text: string, images: string[], files: string[]) => void
+	inputKind?: "direct" | "queued"
+	queuedInputMode?: "queued" | "steering"
 }
 
 const UserMessage: React.FC<UserMessageProps> = ({
@@ -21,19 +23,22 @@ const UserMessage: React.FC<UserMessageProps> = ({
 	files,
 	messageTs,
 	sendMessageFromChatRow: _sendMessageFromChatRow,
+	inputKind = "direct",
+	queuedInputMode,
 }) => {
 	const [isEditing, setIsEditing] = useState(false)
 	const [editedText, setEditedText] = useState(text || "")
 	const textAreaRef = useRef<HTMLTextAreaElement>(null)
 	const { checkpointManagerErrorMessage } = useExtensionState()
 
-	const highlightedText = useMemo(() => highlightText(editedText || text), [editedText, text])
+	const queued = inputKind === "queued"
 
 	// Create refs for the buttons to check in the blur handler
 	const restoreAllButtonRef = useRef<HTMLButtonElement>(null)
 	const restoreChatButtonRef = useRef<HTMLButtonElement>(null)
 
-	const handleClick = () => {
+	const handleClick = (event: React.MouseEvent<HTMLElement>) => {
+		if ((event.target as HTMLElement).closest("a, button, pre, code")) return
 		if (!isEditing) {
 			setIsEditing(true)
 		}
@@ -92,14 +97,33 @@ const UserMessage: React.FC<UserMessageProps> = ({
 	}
 
 	return (
-		<div
-			className="p-2.5 pr-1 my-1 text-badge-foreground rounded-xs"
+		<article
+			className={
+				queued
+					? "my-1 rounded-xs border border-(--vscode-editorWidget-border,var(--vscode-panel-border)) bg-(--vscode-editorWidget-background,var(--vscode-sideBar-background)) p-2.5 pr-1 text-(--vscode-foreground)"
+					: "p-2.5 pr-1 my-1 text-badge-foreground rounded-xs"
+			}
+			data-input-kind={inputKind}
+			data-queue-state={queued ? "delivered" : undefined}
+			data-queued-input-mode={queuedInputMode}
+			data-testid={queued ? "queued-user-input" : "direct-user-input"}
 			onClick={handleClick}
 			style={{
-				backgroundColor: isEditing ? "unset" : "var(--vscode-badge-background)",
+				backgroundColor: isEditing
+					? "unset"
+					: queued
+						? "var(--vscode-editorWidget-background, var(--vscode-menu-background, var(--vscode-sideBar-background, rgb(30, 30, 30))))"
+						: "var(--vscode-badge-background)",
 				whiteSpace: "pre-line",
 				wordWrap: "break-word",
 			}}>
+			{queued && !isEditing ? (
+				<header className="mb-1.5 flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-description">
+					<span aria-hidden="true" className="codicon codicon-list-ordered" />
+					<span>Queued input</span>
+					{queuedInputMode === "steering" ? <span>· Steering</span> : null}
+				</header>
+			) : null}
 			{isEditing ? (
 				<>
 					<DynamicTextArea
@@ -149,14 +173,16 @@ const UserMessage: React.FC<UserMessageProps> = ({
 					</div>
 				</>
 			) : (
-				<span className="ph-no-capture text-sm max-h-[80vh] overflow-y-auto" style={{ display: "block" }}>
-					{highlightedText}
-				</span>
+				<UserInputMarkdownBody
+					markdown={text}
+					testId={queued ? "queued-input-markdown-scroll" : "user-input-markdown-scroll"}
+					variant={queued ? "queued-history" : "direct"}
+				/>
 			)}
 			{((images && images.length > 0) || (files && files.length > 0)) && (
 				<Thumbnails files={files ?? []} images={images ?? []} style={{ marginTop: "8px" }} />
 			)}
-		</div>
+		</article>
 	)
 }
 

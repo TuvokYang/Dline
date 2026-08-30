@@ -20,6 +20,12 @@ export interface InteractionResponse {
 	actionId: InteractionActionType
 	stateRevision: number
 	draft?: InteractionDraft
+	/** Optional presentation-only draft when model input contains internal guidance. */
+	presentationDraft?: InteractionDraft
+	/** Stable UI semantics for user-authored input. */
+	userInputKind?: "direct" | "queued"
+	/** Delivery pool for a queued input presentation. */
+	queuedInputMode?: "queued" | "steering"
 	selection?: InteractionSelection
 }
 

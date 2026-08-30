@@ -10,32 +10,16 @@ import type { InputQueue, QueuedInputEntry } from "./InputQueue"
  */
 export type QueueDeliveryPoint = "turn-end" | "tool-round"
 
-/**
- * Shared preamble attached to every delivered batch. It states that queued
- * input is auxiliary alignment information so the model does not treat it as a
- * replacement for the approved plan unless the user says so explicitly.
- */
-export const QUEUED_INPUT_GUIDANCE =
-	"The following blocks are auxiliary alignment information the user queued while work was in progress. " +
-	"Use them to align subsequent execution. Unless the user explicitly asks for a different approach, " +
-	"keep the agreed plan and apply only minor adjustments."
-
 export interface QueueDelivery {
 	/** Which pool produced this batch; steering always takes priority. */
 	readonly kind: "queued" | "steering"
 	readonly entries: readonly QueuedInputEntry[]
 	/**
-	 * One rendered block per entry, each already wrapped in its own
-	 * `<user_message>` tags. Callers append these as separate text blocks so a
-	 * batch reads as several distinct messages rather than one merged note.
+	 * One pure user-authored text block per entry. The Task host owns the model
+	 * envelope so internal guidance and XML formatting cannot leak into UI data.
 	 */
 	readonly blocks: readonly string[]
-	/**
-	 * Flat payload for callers that can only carry a single string, such as the
-	 * turn-end interaction draft. A batch keeps its per-entry `<user_message>`
-	 * boundaries here too, because the receiving handler wraps the whole string
-	 * once and would otherwise merge several messages into one.
-	 */
+	/** Pure user-authored payload. Internal guidance is composed by the host. */
 	readonly text: string
 	readonly images: readonly string[]
 	readonly files: readonly string[]
@@ -43,6 +27,14 @@ export interface QueueDelivery {
 	commit(): void
 	/** Return the entries to the user's queue when delivery failed. */
 	restore(): void
+	/**
+	 * Hide the entries again after a restore that could not be persisted.
+	 *
+	 * The file still marks them in flight, so a reload would drop them.
+	 * Showing them in the composer would promise a recovery the task cannot
+	 * keep; withholding them keeps memory consistent with disk.
+	 */
+	reclaim(): void
 	/**
 	 * Rebuild this batch without the entries the user removed since the claim.
 	 *
@@ -56,25 +48,22 @@ export interface QueueDelivery {
 }
 
 function renderBlocks(entries: readonly QueuedInputEntry[]): string[] {
-	return entries.map((entry) => `<user_message>\n${entry.text}\n</user_message>`)
+	return entries.map((entry) => entry.text)
 }
 
 function buildDelivery(queue: InputQueue, kind: QueueDelivery["kind"], entries: readonly QueuedInputEntry[]): QueueDelivery {
 	const blocks = renderBlocks(entries)
 	const ids = entries.map((entry) => entry.id)
-	// A single entry is sent as-is: the receiving handler already presents it as
-	// one message, so extra tags would only add noise. Several entries keep
-	// their tags so they stay distinguishable inside the one string.
-	const body = entries.length > 1 ? blocks : entries.map((entry) => entry.text)
 	return {
 		kind,
 		entries,
 		blocks,
-		text: [QUEUED_INPUT_GUIDANCE, ...body].join("\n\n"),
+		text: blocks.join("\n\n"),
 		images: entries.flatMap((entry) => [...entry.images]),
 		files: entries.flatMap((entry) => [...entry.files]),
 		commit: () => queue.commitClaim(ids),
 		restore: () => queue.releaseClaim(ids),
+		reclaim: () => queue.reclaim(ids),
 		withoutCancelled: () => {
 			// Evaluated on call, not when the batch was built: the whole point is
 			// to see removals that landed after the claim was taken.
