@@ -749,9 +749,33 @@ export const ChatRowContent = memo(
 					)
 				case "summarizeTask": {
 					const status = tool.compactionStatus ?? (message.partial ? "running" : "completed")
-					const content = status === "failed" ? "" : typeof tool.content === "string" ? tool.content : ""
+					const content = typeof tool.content === "string" ? tool.content : ""
 					if (status === "running" && !content) return null
 					const isSummaryRefit = tool.compactionUnitKind === "summary_refit"
+					// A failed compaction produced no summary, so it carries none of the card
+					// chrome that presents one. Rendering it as a standalone error keeps the
+					// compaction card a summary-only surface and lets the failure be removed
+					// on its own when a Restore rewinds past it.
+					if (status === "failed") {
+						return (
+							<div
+								data-compaction-attempt-id={tool.compactionAttemptId}
+								data-compaction-attempt-index={tool.compactionAttemptIndex}
+								data-compaction-durable={tool.compactionDurable}
+								data-compaction-operation-id={tool.compactionOperationId}
+								data-compaction-pass-index={tool.compactionPassIndex}
+								data-compaction-status={status}
+								data-compaction-unit-index={tool.compactionUnitIndex}
+								data-compaction-unit-kind={tool.compactionUnitKind}
+								data-testid="compaction-failure">
+								<ApiErrorBox
+									error={tool.error ?? "Conversation compaction failed before completion."}
+									testId="compaction-error-box"
+									title="Conversation Compaction Failed"
+								/>
+							</div>
+						)
+					}
 					const title =
 						status === "preparing"
 							? isSummaryRefit
@@ -765,13 +789,11 @@ export const ChatRowContent = memo(
 									? isSummaryRefit
 										? "Summary refit was interrupted; retrying:"
 										: "Compaction was interrupted; retrying:"
-									: status === "failed"
-										? "Conversation compaction failed:"
-										: status === "completed" && isSummaryRefit
-											? "Cumulative summary refit completed:"
-											: status === "receiving" && isSummaryRefit
-												? "Dline is refitting the cumulative summary:"
-												: "Dline is condensing the conversation:"
+									: status === "completed" && isSummaryRefit
+										? "Cumulative summary refit completed:"
+										: status === "receiving" && isSummaryRefit
+											? "Dline is refitting the cumulative summary:"
+											: "Dline is condensing the conversation:"
 					const contentLabel =
 						status === "completed"
 							? isSummaryRefit
@@ -782,7 +804,6 @@ export const ChatRowContent = memo(
 								: "Partial summary:"
 					return (
 						<div
-							className="bg-code overflow-hidden border border-editor-group-border rounded-[3px]"
 							data-compaction-attempt-id={tool.compactionAttemptId}
 							data-compaction-attempt-index={tool.compactionAttemptIndex}
 							data-compaction-durable={tool.compactionDurable}
@@ -792,63 +813,60 @@ export const ChatRowContent = memo(
 							data-compaction-unit-index={tool.compactionUnitIndex}
 							data-compaction-unit-kind={tool.compactionUnitKind}
 							data-testid="compaction-pass">
-							<div className="flex items-center gap-2.5 px-2.5 py-2">
-								<FoldVerticalIcon className="size-2" />
-								<span className="min-w-0 flex-1 font-bold">{title}</span>
-							</div>
-							{status === "failed" && tool.error && (
-								<div className="px-2.5 pb-2.5">
-									<ApiErrorBox
-										error={tool.error}
-										testId="compaction-error-box"
-										title="Conversation Compaction Failed"
-									/>
+							<div className="bg-code overflow-hidden border border-editor-group-border rounded-[3px]">
+								<div className="flex items-center gap-2.5 px-2.5 py-2">
+									<FoldVerticalIcon className="size-2" />
+									<span className="min-w-0 flex-1 font-bold">{title}</span>
 								</div>
-							)}
-							{status === "retrying" && tool.retryAttempt !== undefined && tool.maxRetryAttempts !== undefined && (
-								<div className="px-2.5 pb-2 text-description">
-									Attempt {tool.retryAttempt} of {tool.maxRetryAttempts}
-								</div>
-							)}
-							{content ? (
-								<div className="px-2.5 pb-2.5" data-testid="compaction-summary-content">
-									<div
-										aria-label={isExpanded ? "Collapse summary" : "Expand summary"}
-										className="text-description cursor-pointer select-none"
-										onClick={handleToggle}
-										onKeyDown={(e) => {
-											if (e.key === "Enter" || e.key === " ") {
-												e.preventDefault()
-												e.stopPropagation()
-												handleToggle()
-											}
-										}}
-										role="button"
-										tabIndex={0}>
-										{isExpanded ? (
-											<div>
-												<div className="flex items-center mb-2">
-													<span className="font-bold mr-1">{contentLabel}</span>
-													<div className="grow" />
-													<ChevronDownIcon className="my-0.5 shrink-0 size-4" />
+								{status === "retrying" &&
+									tool.retryAttempt !== undefined &&
+									tool.maxRetryAttempts !== undefined && (
+										<div className="px-2.5 pb-2 text-description">
+											Attempt {tool.retryAttempt} of {tool.maxRetryAttempts}
+										</div>
+									)}
+								{content ? (
+									<div className="px-2.5 pb-2.5" data-testid="compaction-summary-content">
+										<div
+											aria-label={isExpanded ? "Collapse summary" : "Expand summary"}
+											className="text-description cursor-pointer select-none"
+											onClick={handleToggle}
+											onKeyDown={(e) => {
+												if (e.key === "Enter" || e.key === " ") {
+													e.preventDefault()
+													e.stopPropagation()
+													handleToggle()
+												}
+											}}
+											role="button"
+											tabIndex={0}>
+											{isExpanded ? (
+												<div>
+													<div className="flex items-center mb-2">
+														<span className="font-bold mr-1">{contentLabel}</span>
+														<div className="grow" />
+														<ChevronDownIcon className="my-0.5 shrink-0 size-4" />
+													</div>
+													<SummaryScrollContainer>
+														<span className="ph-no-capture break-words whitespace-pre-wrap">
+															{content}
+														</span>
+													</SummaryScrollContainer>
 												</div>
-												<SummaryScrollContainer>
-													<span className="ph-no-capture break-words whitespace-pre-wrap">
-														{content}
+											) : (
+												<div className="flex items-center">
+													<span className="ph-no-capture whitespace-nowrap overflow-hidden text-ellipsis text-left flex-1 mr-2 [direction:rtl]">
+														{`${content}\u200E`}
 													</span>
-												</SummaryScrollContainer>
-											</div>
-										) : (
-											<div className="flex items-center">
-												<span className="ph-no-capture whitespace-nowrap overflow-hidden text-ellipsis text-left flex-1 mr-2 [direction:rtl]">
-													{`${content}\u200E`}
-												</span>
-												<ChevronRightIcon className="my-0.5 shrink-0 size-4" />
-											</div>
-										)}
+													<ChevronRightIcon className="my-0.5 shrink-0 size-4" />
+												</div>
+											)}
+										</div>
 									</div>
-								</div>
-							) : null}
+								) : null}
+							</div>
+							{/* The checkpoint control renders its menu outside the card, so it must not
+							    sit inside the card's clipping box or the control gets occluded. */}
 							{status === "completed" && message.partial !== true && message.compactionConversationRange && (
 								<CheckmarkControl hasWorkspaceCheckpoint={false} messageTs={message.ts} />
 							)}

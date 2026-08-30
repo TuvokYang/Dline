@@ -99,6 +99,18 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 		this.uiMessage.overwrite(msgs).catch((e) => Logger.error("set clineMessages failed:", e))
 	}
 
+	/**
+	 * Durable UI rows without transient presentation overlays.
+	 *
+	 * Checkpoint restore truncates the durable store, so its boundary arithmetic and
+	 * staleness check must read the same sequence. Reading the merged `clineMessages`
+	 * view instead made the loaded length disagree with the durable count whenever an
+	 * in-flight compaction card was present, which rejected the restore outright.
+	 */
+	get durableClineMessages(): ClineMessage[] {
+		return this.uiMessage ? (this.uiMessage.getAll() as unknown as ClineMessage[]) : []
+	}
+
 	/** ApiConversationHistory as a property getter — reads directly from apiConversation store. */
 	get apiConversationHistory(): ClineStorageMessage[] {
 		return this.apiConversation ? (this.apiConversation.getAll() as unknown as ClineStorageMessage[]) : []
@@ -432,6 +444,21 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 		}
 		await this.updateTaskHistoryOnly()
 		return committed
+	}
+
+	/**
+	 * Drop every transient presentation row without touching durable UI history.
+	 *
+	 * Checkpoint restore rewinds durable conversation state only. Any presentation
+	 * overlay that never reached a durable commit belongs to the superseded
+	 * continuation, so it must not survive the rewind and keep rendering.
+	 *
+	 * @returns The timestamps of the removed transient rows.
+	 */
+	clearTransientClineMessages(): number[] {
+		const removed = [...this.transientClineMessages.keys()]
+		for (const ts of removed) this.removeTransientClineMessage(ts)
+		return removed
 	}
 
 	/** Remove a transient presentation row without touching durable UI history. */

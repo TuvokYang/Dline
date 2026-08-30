@@ -1565,7 +1565,7 @@ e2e(
 			})
 			await sendTask(sidebar, "/compact E2E_MANUAL_INCOMPLETE_GUIDANCE")
 
-			await expect(sidebar.getByText("Conversation compaction failed:", { exact: true }).last()).toBeVisible({
+			await expect(sidebar.getByTestId("compaction-failure").last()).toBeVisible({
 				timeout: 60_000,
 			})
 			await expect(sidebar.getByText(partialSummary, { exact: false })).not.toBeVisible()

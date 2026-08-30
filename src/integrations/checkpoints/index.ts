@@ -249,7 +249,18 @@ export class TaskCheckpointManager implements ICheckpointManager {
 		editedText?: string,
 	): Promise<CheckpointRestoreStateUpdate> {
 		try {
-			const clineMessages = this.services.messageStateHandler.clineMessages
+			// Restore rewinds durable conversation state only. Presentation overlays that
+			// never reached a durable commit belong to the superseded continuation, so they
+			// are dropped before the boundary is resolved. Keeping them made the loaded
+			// length disagree with the durable count, which rejected the restore outright
+			// and left in-flight compaction cards rendered after the rewind.
+			if (restoreType !== "workspace") {
+				this.services.messageStateHandler.clearTransientClineMessages()
+			}
+			const clineMessages =
+				restoreType === "workspace"
+					? this.services.messageStateHandler.clineMessages
+					: this.services.messageStateHandler.durableClineMessages
 			const messageIndex = clineMessages.findIndex((m) => m.ts === messageTs) - (offset || 0)
 			// Find the last message before messageIndex that has a lastCheckpointHash
 			const lastHashIndex = findLastIndex(clineMessages.slice(0, messageIndex), (m) => m.lastCheckpointHash !== undefined)
@@ -642,7 +653,8 @@ export class TaskCheckpointManager implements ICheckpointManager {
 		if (message.compactionConversationRange && editedText !== undefined) {
 			throw new Error("Editing input is unavailable when restoring a compaction card")
 		}
-		const deletedMessages = this.services.messageStateHandler.clineMessages.slice(boundary.uiKeepCount)
+		// The boundary indexes the durable sequence, so the deleted slice must read it too.
+		const deletedMessages = this.services.messageStateHandler.durableClineMessages.slice(boundary.uiKeepCount)
 		this.abortAndClearState()
 		this.state.conversationHistoryDeletedRange = boundary.conversationHistoryDeletedRange
 		this.taskState.conversationHistoryDeletedRange = boundary.conversationHistoryDeletedRange

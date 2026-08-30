@@ -395,7 +395,7 @@ e2e(
 			await resumeButton.click()
 			await expect(input).toHaveValue("")
 
-			await expect(resumed.sidebar.getByText("Conversation compaction failed:", { exact: true })).toBeVisible({
+			await expect(resumed.sidebar.getByTestId("compaction-failure")).toBeVisible({
 				timeout: 120_000,
 			})
 			await expect(resumed.sidebar.getByText("Automatic retry stopped", { exact: true })).toHaveCount(0)

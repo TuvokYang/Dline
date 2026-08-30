@@ -22,6 +22,7 @@ interface RestoreHarness {
 	truncateContextHistory: ReturnType<typeof vi.fn>
 	truncateApiHistory: ReturnType<typeof vi.fn>
 	truncateUiHistory: ReturnType<typeof vi.fn>
+	clearTransientClineMessages: ReturnType<typeof vi.fn>
 }
 
 function createHarness(messages: ClineMessage[], trackedFiles?: string[], apiHistoryLength = 2): RestoreHarness {
@@ -53,8 +54,13 @@ function createHarness(messages: ClineMessage[], trackedFiles?: string[], apiHis
 	const persistTaskHistory = vi.fn().mockResolvedValue(undefined)
 	const postStateToWebview = vi.fn().mockResolvedValue(undefined)
 	const truncateContextHistory = vi.fn().mockResolvedValue(undefined)
+	const clearTransientClineMessages = vi.fn().mockReturnValue([])
 	const messageStateHandler = {
 		clineMessages: messages,
+		// Restore reads the durable sequence, which excludes presentation overlays.
+		// These fixtures carry durable rows only, so both views are identical here.
+		durableClineMessages: messages,
+		clearTransientClineMessages,
 		apiConversationHistory: Array.from({ length: apiHistoryLength }, (_, index) => ({
 			role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
 			content: `message-${index}`,
@@ -103,6 +109,7 @@ function createHarness(messages: ClineMessage[], trackedFiles?: string[], apiHis
 		truncateContextHistory,
 		truncateApiHistory,
 		truncateUiHistory,
+		clearTransientClineMessages,
 	}
 }
 
@@ -126,6 +133,50 @@ describe("TaskCheckpointManager restore isolation", () => {
 		})
 		expect(harness.restoreChatRuntime).not.toHaveBeenCalled()
 		expect(harness.resumeTask).not.toHaveBeenCalled()
+		// A file-only restore must not touch conversation presentation state.
+		expect(harness.clearTransientClineMessages).not.toHaveBeenCalled()
+	})
+
+	it("truncates a durable compaction failure card that follows the restore point", async () => {
+		// A failed compaction carries no compactionConversationRange, so it is an ordinary
+		// durable row. Restoring an earlier point must rewind past it and remove it.
+		const failureCard: ClineMessage = {
+			ts: 43,
+			type: "say",
+			say: "tool",
+			partial: false,
+			conversationHistoryIndex: 1,
+			text: JSON.stringify({
+				tool: "summarizeTask",
+				content: "",
+				compactionStatus: "failed",
+				compactionUnitKind: "failure",
+				error: "Internal compaction Pass did not return a valid summarize_task context",
+			}),
+		} as ClineMessage
+		const harness = createHarness([
+			{ ts: 42, type: "say", say: "checkpoint_created", lastCheckpointHash: "hash-1" },
+			failureCard,
+		])
+
+		await harness.manager.restoreCheckpoint(42, "task")
+
+		// uiKeepCount stops at the restored checkpoint row, so the failure card is dropped.
+		expect(harness.truncateUiHistory).toHaveBeenCalledWith(1)
+	})
+
+	it("drops transient presentation overlays before resolving the chat boundary", async () => {
+		const harness = createHarness([
+			{ ts: 42, type: "say", say: "checkpoint_created", lastCheckpointHash: "hash-1" },
+			{ ts: 43, type: "say", say: "text", text: "later" },
+		])
+
+		await harness.manager.restoreCheckpoint(42, "task")
+
+		expect(harness.clearTransientClineMessages).toHaveBeenCalledOnce()
+		expect(harness.clearTransientClineMessages.mock.invocationCallOrder[0]).toBeLessThan(
+			harness.truncateUiHistory.mock.invocationCallOrder[0],
+		)
 	})
 
 	it("restores only files owned by the active task when file tracking is available", async () => {

@@ -825,7 +825,7 @@ e2e(
 
 			// Deterministic 400s surface the canonical Retry interaction without claiming
 			// that transient retry attempts were consumed. The raw Provider diagnostic remains in logs.
-			await expect(sidebar.getByText("Conversation compaction failed:", { exact: true })).toBeVisible({
+			await expect(sidebar.getByTestId("compaction-failure")).toBeVisible({
 				timeout: 120_000,
 			})
 			const compactionError = sidebar.getByTestId("compaction-error-box")
@@ -1924,7 +1924,7 @@ e2e(
 			await expect(sidebar.getByText(turnBMarker, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 			await sendTask(sidebar, continueMarker)
 
-			await expect(sidebar.getByText("Conversation compaction failed:", { exact: true })).toBeVisible({
+			await expect(sidebar.getByTestId("compaction-failure")).toBeVisible({
 				timeout: 120_000,
 			})
 			await expect(sidebar.getByText("Automatic retry stopped", { exact: true })).toHaveCount(0)

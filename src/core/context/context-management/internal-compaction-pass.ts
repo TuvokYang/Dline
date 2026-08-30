@@ -253,9 +253,13 @@ export async function runInternalCompactionPass(input: RunInternalCompactionPass
 			}
 			await presentationQueue.flush()
 			if (completedSummary === undefined) {
-				const summary = nativeSummary ?? parseXmlSummary(assistantText)
+				// Truncated native arguments never parse as complete JSON, so a Pass that
+				// streamed a usable summary was discarded together with every token it
+				// cost. The partial reader already backs the streamed presentation, so it
+				// is trusted here as the final fallback before declaring the Pass unusable.
+				const summary = nativeSummary ?? parseXmlSummary(assistantText) ?? parseSalvagedNativeSummary(nativeArguments)
 				if (!summary) {
-					throw new Error("Internal compaction Pass did not return a valid summarize_task context")
+					throw createUnusableSummaryError(nativeArguments)
 				}
 				completedSummary = summary
 				resolveCompletedSummary(summary)
@@ -341,7 +345,13 @@ export async function runInternalCompactionPassWithRetry(
 				currentAttempt = nextAttempt
 				continue
 			}
-			if (isOpenAiMaxOutputFailure(error) || !isRetryableCompactionError(error)) {
+			// A suspected truncation has already consumed its single reduced replay above,
+			// so it must not fall through into ordinary same-cap Pass retries.
+			if (
+				isOpenAiMaxOutputFailure(error) ||
+				isSuspectedCompactionOutputTruncation(error) ||
+				!isRetryableCompactionError(error)
+			) {
 				throw error
 			}
 
@@ -381,7 +391,10 @@ function getOpenAiMaxOutputReplayCap(
 	error: unknown,
 	replayUsed: boolean,
 ): number | undefined {
-	if (replayUsed || !isOpenAiMaxOutputFailure(error) || initialProviderOutputCap === undefined) return undefined
+	if (replayUsed || initialProviderOutputCap === undefined) return undefined
+	// A reported max-output failure and an unreadable argument payload both mean the
+	// summary did not fit the cap, so both earn the same single reduced replay.
+	if (!isOpenAiMaxOutputFailure(error) && !isSuspectedCompactionOutputTruncation(error)) return undefined
 	const replayCap = Math.floor(initialProviderOutputCap * 0.9)
 	return replayCap > 0 ? replayCap : undefined
 }
@@ -409,6 +422,49 @@ function parseSummaryArguments(value: string): string | undefined {
 	} catch {
 		return undefined
 	}
+}
+
+/** Marks a Pass whose native arguments arrived but never yielded a usable summary. */
+const SUSPECTED_OUTPUT_TRUNCATION = Symbol.for("dline.compaction.suspectedOutputTruncation")
+
+/**
+ * Report whether a Pass failure looks like a Provider output-cap truncation.
+ *
+ * The Provider does not always report a `length` stop reason, so an unparsable
+ * argument payload is the only available signal that the summary was cut off.
+ *
+ * @param error The failure raised while settling one compaction Pass.
+ * @returns True when the same Pass is worth replaying under a smaller output cap.
+ */
+export function isSuspectedCompactionOutputTruncation(error: unknown): boolean {
+	return typeof error === "object" && error !== null && SUSPECTED_OUTPUT_TRUNCATION in error
+}
+
+/**
+ * Build the terminal error for a Pass that produced no usable summarize_task context.
+ *
+ * @param nativeArguments Accumulated raw argument text per tool-call key.
+ * @returns The error, tagged when argument text arrived but could not be read.
+ */
+function createUnusableSummaryError(nativeArguments: ReadonlyMap<string, string>): Error {
+	const error = new Error("Internal compaction Pass did not return a valid summarize_task context")
+	const receivedArgumentText = [...nativeArguments.values()].some((value) => value.trim().length > 0)
+	return receivedArgumentText ? Object.assign(error, { [SUSPECTED_OUTPUT_TRUNCATION]: true }) : error
+}
+
+/**
+ * Recover the longest usable summary from native arguments that never completed.
+ *
+ * @param nativeArguments Accumulated raw argument text per tool-call key.
+ * @returns The salvaged summary, or undefined when no fragment carries content.
+ */
+function parseSalvagedNativeSummary(nativeArguments: ReadonlyMap<string, string>): string | undefined {
+	let salvaged: string | undefined
+	for (const accumulated of nativeArguments.values()) {
+		const candidate = parseSummaryArguments(accumulated) ?? parsePartialSummaryArguments(accumulated)
+		if (candidate && (salvaged === undefined || candidate.length > salvaged.length)) salvaged = candidate
+	}
+	return salvaged
 }
 
 function parsePartialSummaryArguments(value: string): string | undefined {
@@ -449,5 +505,9 @@ function parseXmlSummaryBlock(text: string, allowPartial: boolean): string | und
 			typeof block.params.context === "string" &&
 			block.params.context.trim().length > 0,
 	)
-	return summaries.length === 1 ? summaries[0].params.context?.trim() : undefined
+	// A model may emit several summarize_task blocks in one response, for example a
+	// revised summary after a first draft. Requiring exactly one block rejected a
+	// response that did carry a usable summary, which burned the whole Pass and its
+	// tokens. The last complete block is the model's final answer, so it wins.
+	return summaries.at(-1)?.params.context?.trim()
 }

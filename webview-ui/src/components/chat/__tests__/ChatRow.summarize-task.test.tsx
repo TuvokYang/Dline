@@ -176,7 +176,11 @@ describe("ChatRow summarizeTask rendering", () => {
 
 		const card = screen.getByTestId("compaction-pass")
 		expect(card).toHaveAttribute("data-compaction-durable", "true")
-		expect(card).toHaveClass("bg-code", "border", "border-editor-group-border", "rounded-[3px]")
+		// The card root carries identity only; exactly one nested element draws the surface,
+		// which keeps the checkpoint control outside the clipping box.
+		const surfaces = card.querySelectorAll(".bg-code.border.border-editor-group-border")
+		expect(surfaces).toHaveLength(1)
+		expect(surfaces[0]).toHaveClass("rounded-[3px]")
 		// Durability is diagnostic metadata only; it must not reach the card header.
 		expect(screen.queryByTestId("compaction-durability")).not.toBeInTheDocument()
 		expect(screen.queryByText("Durable")).not.toBeInTheDocument()
@@ -274,7 +278,40 @@ describe("ChatRow summarizeTask rendering", () => {
 		expect(request?.compactionExpectedChainRevision).toBeUndefined()
 	})
 
-	it("renders the terminal failure detail on the compaction card", () => {
+	it("keeps the checkpoint control outside the compaction card clipping box", () => {
+		render(
+			<ChatRowContent
+				{...baseProps}
+				message={{
+					ts: 14,
+					type: "say",
+					say: "tool",
+					partial: false,
+					compactionConversationRange: {
+						logicalTurnRange: [0, 1],
+						apiConversationRange: [0, 3],
+						preCompactionApiEndIndex: 3,
+					},
+					text: JSON.stringify({
+						tool: "summarizeTask",
+						content: "durable summary",
+						compactionStatus: "completed",
+					}),
+				}}
+			/>,
+		)
+
+		const card = screen.getByTestId("compaction-pass")
+		const restore = screen.getByRole("button", { name: "Restore", exact: true, hidden: true })
+		// The control must stay in the card, but never inside the overflow-hidden surface
+		// that clips the summary, otherwise its menu and hover target are occluded.
+		expect(card).toContainElement(restore)
+		const clippingBox = card.querySelector(".overflow-hidden")
+		expect(clippingBox).not.toBeNull()
+		expect(clippingBox?.contains(restore)).toBe(false)
+	})
+
+	it("renders a terminal failure as a standalone error card without compaction card chrome", () => {
 		render(
 			<ChatRowContent
 				{...baseProps}
@@ -294,7 +331,11 @@ describe("ChatRow summarizeTask rendering", () => {
 			/>,
 		)
 
-		expect(screen.getByText("Conversation compaction failed:")).toBeInTheDocument()
+		// A failure carries no summary, so it must not borrow the summary card surface.
+		expect(screen.queryByTestId("compaction-pass")).not.toBeInTheDocument()
+		expect(screen.getByTestId("compaction-failure")).toBeInTheDocument()
+		expect(screen.getByTestId("compaction-error-box")).toBeInTheDocument()
+		expect(screen.queryByText("Conversation compaction failed:")).not.toBeInTheDocument()
 		expect(screen.queryByText("E2E_MANUAL_INCOMPLETE_PARTIAL_MUST_NOT_RENDER")).not.toBeInTheDocument()
 		expect(screen.getByText("The summary exceeded the request output limit.")).toBeInTheDocument()
 		expect(screen.queryByText("Dline is condensing the conversation:")).not.toBeInTheDocument()
