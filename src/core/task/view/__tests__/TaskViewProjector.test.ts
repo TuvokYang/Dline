@@ -304,18 +304,32 @@ describe("projectTaskView", () => {
 		])
 	})
 
-	it("projects ordinary input without Cancel between turns", () => {
+	// BETWEEN_TURNS is the gap between a finished turn and the next provider
+	// request: the task loop is still running and nobody is waiting for a
+	// reply. Projecting it as ready-for-input let the composer bypass the queue
+	// and push text in as an answer to a question that was never asked, while
+	// the missing Cancel left a working task with no way to stop it. A slow
+	// checkpoint write widens this gap enough for the user to hit it.
+	it("projects a working task without input and with Cancel between turns", () => {
 		const view = projectTaskView(runtime(TaskPhase.BETWEEN_TURNS))
 
 		expect(view.activeInteraction).toBeUndefined()
 		expect(view.input).toEqual({
-			enabled: true,
-			acceptsText: true,
-			acceptsImages: true,
-			acceptsFiles: true,
-			enterAction: "reply",
+			enabled: false,
+			acceptsText: false,
+			acceptsImages: false,
+			acceptsFiles: false,
 		})
-		expect(view.footer.actions).toEqual([])
+		expect(view.footer.actions).toEqual([
+			{
+				type: "cancel",
+				label: "Cancel",
+				appearance: "danger",
+				enabled: true,
+				payloadPolicy: "none",
+				dispatchTarget: "task",
+			},
+		])
 	})
 
 	it("projects cancel from working runtime phase without message inference", () => {

@@ -324,3 +324,94 @@ describe("MessageChannel.ask", () => {
 		}
 	})
 })
+
+/**
+ * A response is only meaningful to the ask that is waiting for it.
+ *
+ * `resolve` used to park its argument in `taskState` unconditionally. With
+ * nothing waiting, that value survived until the next unrelated `ask()` read
+ * it as its own answer, so text the user typed while the task was working
+ * entered the conversation as a reply to a question they never saw.
+ */
+describe("MessageChannel.resolve without a waiting ask", () => {
+	it("refuses a response when no ask is waiting", () => {
+		const { channel, taskState } = createMessageChannel()
+
+		assert.equal(channel.resolve("messageResponse", "typed while the task was working"), false)
+		assert.equal(taskState.askResponse, undefined)
+		assert.equal(taskState.askResponseText, undefined)
+	})
+
+	it("does not let a refused response answer the next unrelated ask", async () => {
+		const clock = vi.useFakeTimers()
+		const { channel } = createMessageChannel()
+
+		try {
+			// Arrives while the task is working, with nothing waiting for it.
+			assert.equal(channel.resolve("messageResponse", "ghost response"), false)
+
+			// A later, unrelated question must not find that value sitting there.
+			const askPromise = channel.ask("qna_respond")
+			let settled = false
+			void askPromise.then(
+				() => {
+					settled = true
+				},
+				() => {
+					settled = true
+				},
+			)
+			await flushMicrotasks()
+			await clock.advanceTimersByTimeAsync(300)
+
+			assert.equal(settled, false)
+
+			// The real answer still resolves it normally.
+			assert.equal(channel.resolve("messageResponse", "real answer"), true)
+			await clock.advanceTimersByTimeAsync(100)
+
+			const result = await askPromise
+			assert.equal(result.text, "real answer")
+		} finally {
+			clock.useRealTimers()
+		}
+	})
+
+	it("stops accepting responses once the ask has settled", async () => {
+		const clock = vi.useFakeTimers()
+		const { channel } = createMessageChannel()
+
+		try {
+			const askPromise = channel.ask("qna_respond")
+			await flushMicrotasks()
+			assert.equal(channel.resolve("messageResponse", "answer"), true)
+			await clock.advanceTimersByTimeAsync(100)
+			await askPromise
+
+			assert.equal(channel.resolve("messageResponse", "too late"), false)
+		} finally {
+			clock.useRealTimers()
+		}
+	})
+
+	// An abandoned ask must not leave the channel accepting responses for a
+	// question that is no longer being asked.
+	it("stops accepting responses after a superseded ask is abandoned", async () => {
+		const clock = vi.useFakeTimers()
+		const { channel } = createMessageChannel()
+
+		try {
+			const askPromise = channel.ask("resume_task")
+			const rejection = assert.rejects(askPromise, { message: "Current ask promise was ignored" })
+
+			await flushMicrotasks()
+			await channel.say("text", "new visible message")
+			await clock.advanceTimersByTimeAsync(100)
+			await rejection
+
+			assert.equal(channel.resolve("messageResponse", "orphaned"), false)
+		} finally {
+			clock.useRealTimers()
+		}
+	})
+})

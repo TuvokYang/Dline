@@ -105,8 +105,9 @@ export class TaskController {
 		return this.channel.ask(type, text, partial, options)
 	}
 
-	resolveAsk(response: ClineAskResponse, text?: string, images?: string[], files?: string[]): void {
-		this.channel.resolve(response, text, images, files)
+	/** @returns Whether a waiting ask accepted the response. */
+	resolveAsk(response: ClineAskResponse, text?: string, images?: string[], files?: string[]): boolean {
+		return this.channel.resolve(response, text, images, files)
 	}
 
 	// ── Block Phase API (delegates to BlockPhaseMachine) ──

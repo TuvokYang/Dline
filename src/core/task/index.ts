@@ -2296,13 +2296,13 @@ export class Task {
 						this.getAutoCondenseTriggerOptions(),
 					).passInputCeilingTokens
 				},
-				getPassInputCeilingAllowance: (input) => {
+				getSingleTurnInputCeiling: (input) => {
 					const { contextWindow } = getContextWindowInfo(input.compactionApi)
 					return resolveCompactTriggerPolicy(
 						contextWindow,
 						computeSummarizeBudget(),
 						this.getAutoCondenseTriggerOptions(),
-					).passInputCeilingAllowanceTokens
+					).singleTurnInputCeilingTokens
 				},
 				estimatePassInput: async (input, passHistory) => {
 					const request = await this.buildContextCompactionPassRequest(
@@ -2527,6 +2527,7 @@ export class Task {
 			)
 			const resolvedBudget = resolveCompactionWindowBudget({
 				contextWindow: policy.hardPassContextWindowTokens,
+				concessionTokens: policy.passInputCeilingAllowanceTokens,
 				maxOutputTokens: requestScope.providerInfo.model.info.capabilities?.maxTokens,
 				summaryOutputLimitTokens,
 				systemPrompt: providerInput.systemPrompt,
@@ -3617,7 +3618,15 @@ export class Task {
 	}
 
 	async handleWebviewAskResponse(askResponse: ClineAskResponse, text?: string, images?: string[], files?: string[]) {
-		this.taskController.resolveAsk(askResponse, text, images, files)
+		// Nothing was waiting for this response. Recording it anyway would put
+		// the text into the conversation as user feedback and leave it parked
+		// for the next unrelated question to consume. Input that arrives while
+		// the task is working belongs in the input queue, which delivers it at
+		// a tool round or turn end.
+		if (!this.taskController.resolveAsk(askResponse, text, images, files)) {
+			Logger.warn("[Task] Discarded an ask response that no pending ask was waiting for")
+			return
+		}
 		const activeBlock = this.taskController.getActiveBlock()
 		const isConversationalResponse = Boolean(
 			activeBlock && CONVERSATIONAL_TOOL_NAMES.has(activeBlock.toolName as ClineDefaultTool),

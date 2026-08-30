@@ -6,6 +6,11 @@
  * finished, aborted or been paused reaches neither, so accepting input into
  * the queue there would hide it from the user with nothing left to send it.
  *
+ * Deliberately wider than `isTaskWorkingPhase` in
+ * `@core/task/TaskActivityPhases`: a task parked on an approval still resumes
+ * afterwards and will reach a delivery point, so queued input stays valid
+ * there even though the loop is not advancing on its own.
+ *
  * Written as a phase list rather than a negated list of terminal phases: a new
  * phase should have to opt in to holding the user's input, not inherit it.
  */

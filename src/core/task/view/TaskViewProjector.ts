@@ -1,5 +1,6 @@
 import type { TaskInputViewState, TaskViewAction, TaskViewState } from "@shared/ExtensionMessage"
 import type { TaskRuntimeState } from "../runtime/TaskRuntimeState"
+import { isTaskWorkingPhase } from "../TaskActivityPhases"
 import { TaskPhase } from "../TaskPhase"
 import { projectInteraction } from "./InteractionProjector"
 
@@ -8,14 +9,6 @@ const DISABLED_INPUT: TaskInputViewState = {
 	acceptsText: false,
 	acceptsImages: false,
 	acceptsFiles: false,
-}
-
-const READY_INPUT: TaskInputViewState = {
-	enabled: true,
-	acceptsText: true,
-	acceptsImages: true,
-	acceptsFiles: true,
-	enterAction: "reply",
 }
 
 const CANCELLING_ACTION: TaskViewAction = {
@@ -36,13 +29,6 @@ const RETRY_PENDING_ACTION: TaskViewAction = {
 	payloadPolicy: "none",
 	dispatchTarget: "task",
 }
-
-const CANCELLABLE_PHASES = new Set<TaskPhase>([
-	TaskPhase.INITIALIZING,
-	TaskPhase.STREAMING,
-	TaskPhase.EXECUTING,
-	TaskPhase.RESUMING,
-])
 
 export interface TaskViewProjectionOptions {
 	autoRetryActive?: boolean
@@ -77,7 +63,9 @@ export function projectTaskView(
 		options.forceTruncateAvailable === true &&
 		state.interaction?.kind === "error_retry" &&
 		state.interaction.status === "awaiting"
-	const isCancellable = CANCELLABLE_PHASES.has(state.phase)
+	// Cancel follows the one definition of "the loop is still working", so the
+	// footer can never disagree with what the backend is willing to cancel.
+	const isCancellable = isTaskWorkingPhase(state.phase)
 	const interactionIsBeingResolved = state.interaction?.status === "resolving"
 	// An interaction is created before its anchor is presented, so a long turn
 	// can sit in `opening` indefinitely. Its own actions are projected disabled
@@ -118,7 +106,11 @@ export function projectTaskView(
 		...(diagnostic ? { diagnostic } : {}),
 		...(contextCompaction ? { contextCompaction } : {}),
 		...(forceTruncateAvailable ? { forceTruncateAvailable: true } : {}),
-		input: interaction?.input ?? (state.phase === TaskPhase.BETWEEN_TURNS ? { ...READY_INPUT } : { ...DISABLED_INPUT }),
+		// Only an active interaction opens the composer. A working task has
+		// nobody waiting for a reply, so input must go to the queue instead of
+		// being sent into the conversation as an answer to a question that was
+		// never asked.
+		input: interaction?.input ?? { ...DISABLED_INPUT },
 		footer: { actions },
 	}
 }

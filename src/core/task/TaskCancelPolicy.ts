@@ -1,6 +1,6 @@
 import type { InteractionKind } from "./interaction/Interaction"
 import type { CancelSource, TaskRuntimeState } from "./runtime/TaskRuntimeState"
-import { TaskPhase } from "./TaskPhase"
+import { isTaskWorkingPhase } from "./TaskActivityPhases"
 
 /** Observable runtime activity that is not represented by the aggregate phase alone. */
 export interface TaskCancelActivity {
@@ -18,13 +18,6 @@ export interface TaskCancelPolicyInput {
 }
 
 const USER_WAIT_INTERACTIONS = new Set<InteractionKind>(["resume", "completion"])
-const ACTIVE_PHASES = new Set<TaskPhase>([
-	TaskPhase.INITIALIZING,
-	TaskPhase.STREAMING,
-	TaskPhase.EXECUTING,
-	TaskPhase.BETWEEN_TURNS,
-	TaskPhase.RESUMING,
-])
 
 /** Decide whether cancellation interrupts work without consulting UI message history. */
 export function shouldRunTaskCancelHook(input: TaskCancelPolicyInput): boolean {
@@ -43,5 +36,5 @@ export function shouldRunTaskCancelHook(input: TaskCancelPolicyInput): boolean {
 	if (interaction && USER_WAIT_INTERACTIONS.has(interaction.kind)) {
 		return false
 	}
-	return ACTIVE_PHASES.has(input.runtime.phase)
+	return isTaskWorkingPhase(input.runtime.phase)
 }

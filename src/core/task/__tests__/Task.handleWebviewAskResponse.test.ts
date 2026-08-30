@@ -24,8 +24,20 @@ type TaskSnapshotEmitter = {
 
 // ── Helpers ──
 
+/**
+ * Channel double for the case these tests exercise: an ask is waiting.
+ *
+ * `resolve` reports whether a waiting ask accepted the response, so the double
+ * must answer `true`. Returning `undefined` would make the handler treat every
+ * response as arriving with nothing to receive it.
+ */
 function createMockChannel(): MessageChannel {
-	return { say: vi.fn(), ask: vi.fn(), resolve: vi.fn() } as unknown as MessageChannel
+	return { say: vi.fn(), ask: vi.fn(), resolve: vi.fn(() => true) } as unknown as MessageChannel
+}
+
+/** Channel double for the opposite case: nothing is waiting for a response. */
+function createChannelWithNoWaitingAsk(): MessageChannel {
+	return { say: vi.fn(), ask: vi.fn(), resolve: vi.fn(() => false) } as unknown as MessageChannel
 }
 
 /**
@@ -381,6 +393,35 @@ describe("Task.handleWebviewAskResponse", () => {
 		assert.equal(say.mock.calls[0][1], "hello from My lord")
 		assert.equal(userMessageContent.length, 1)
 		assert.equal(saveCheckpoint.mock.calls.length, 0)
+	})
+
+	/**
+	 * Input typed while the task is working has nothing waiting to receive it.
+	 *
+	 * Recording it would show it as user feedback and push it into the next
+	 * model turn as an answer to a question that was never asked. Such input
+	 * belongs in the input queue, which delivers it at a tool round or turn
+	 * end instead.
+	 */
+	it("discards a response that no pending ask was waiting for", async () => {
+		const channel = createChannelWithNoWaitingAsk()
+		const controller = new TaskController(channel)
+		const say = vi.fn(async (_type: string, _text?: string) => 123)
+		const userMessageContent: Array<{ type: "text"; text: string }> = []
+		const fakeTask = createFakeTaskForHandleWebviewAskResponse(controller, {
+			say,
+			taskState: { userMessageContent },
+			checkpointManager: { saveCheckpoint: vi.fn(async () => {}) },
+		})
+
+		await Task.prototype.handleWebviewAskResponse.call(
+			fakeTask,
+			"messageResponse" as ClineAskResponse,
+			"typed while the task was working",
+		)
+
+		assert.equal(say.mock.calls.length, 0)
+		assert.equal(userMessageContent.length, 0)
 	})
 
 	// =====================================================================

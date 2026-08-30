@@ -59,6 +59,16 @@ export class MessageChannel {
 	private taskState: TaskState
 	private getProviderInfo: () => ClineMessageModelInfo
 	private genTs: () => number
+	/**
+	 * Whether an `ask()` call is currently waiting for a response.
+	 *
+	 * `resolve()` only parks its argument in `taskState`, so a response that
+	 * arrives while nothing is waiting is not discarded: it sits there until
+	 * the *next* unrelated `ask()` consumes it as if it were the answer. The
+	 * user's text then enters the conversation as a reply to a question they
+	 * never saw. This flag lets `resolve()` recognize and refuse that case.
+	 */
+	private isAwaitingAskResponse = false
 
 	constructor(config: MessageChannelConfig) {
 		this.pushMessage = config.pushMessage
@@ -370,13 +380,21 @@ export class MessageChannel {
 
 		// Wait for response
 		const shouldWakeOnAbort = type !== "resume_task" && type !== "resume_completed_task"
-		await pWaitFor(
-			() =>
-				this.taskState.askResponse !== undefined ||
-				this.isAskPromiseSuperseded(invalidationStartIndex) ||
-				(shouldWakeOnAbort && this.taskState.abort),
-			{ interval: 100 },
-		)
+		this.isAwaitingAskResponse = true
+		try {
+			await pWaitFor(
+				() =>
+					this.taskState.askResponse !== undefined ||
+					this.isAskPromiseSuperseded(invalidationStartIndex) ||
+					(shouldWakeOnAbort && this.taskState.abort),
+				{ interval: 100 },
+			)
+		} finally {
+			// Cleared on every exit, including the throws below: an abandoned
+			// ask must not leave the channel accepting responses for a question
+			// that is no longer being asked.
+			this.isAwaitingAskResponse = false
+		}
 		if (shouldWakeOnAbort && this.taskState.abort && this.taskState.askResponse === undefined) {
 			throw new Error("Dline instance aborted")
 		}
@@ -402,11 +420,21 @@ export class MessageChannel {
 	/**
 	 * Resolve a pending ask with the webview's response.
 	 * Called by handleWebviewAskResponse → this resolves the Promise in ask().
+	 *
+	 * A response that arrives while no ask is waiting is refused rather than
+	 * stored. Storing it would let it be consumed by whatever question is asked
+	 * next, turning the user's input into an answer to something else.
+	 *
+	 * @returns Whether the response was accepted by a waiting ask.
 	 */
-	resolve(response: ClineAskResponse, text?: string, images?: string[], files?: string[]): void {
+	resolve(response: ClineAskResponse, text?: string, images?: string[], files?: string[]): boolean {
+		if (!this.isAwaitingAskResponse) {
+			return false
+		}
 		this.taskState.askResponse = response
 		this.taskState.askResponseText = text
 		this.taskState.askResponseImages = images
 		this.taskState.askResponseFiles = files
+		return true
 	}
 }
