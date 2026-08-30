@@ -57,13 +57,16 @@ export function InputQueuePanel({ entries, onToggleMode, onEdit, onCancelEdit, o
 				<PopoverTrigger asChild>
 					<button
 						aria-expanded={expanded}
-						className="flex w-full items-center gap-1 appearance-none border-0 bg-transparent px-0 py-0.5 text-left text-xs text-(--vscode-descriptionForeground)"
+						className="flex w-full items-center gap-1 appearance-none border-0 bg-transparent px-0 py-0.5 text-left text-xs text-(--vscode-foreground)"
 						data-testid="input-queue-toggle"
 						type="button">
 						{expanded ? <ChevronDownIcon className="size-3" /> : <ChevronRightIcon className="size-3" />}
 						<span>Queue {entries.length}</span>
 						{steeringCount > 0 ? (
-							<span className="text-(--vscode-charts-orange)"> {steeringCount} steering</span>
+							<span className="text-(--vscode-charts-orange,var(--vscode-foreground))">
+								{" "}
+								{steeringCount} steering
+							</span>
 						) : null}
 					</button>
 				</PopoverTrigger>
@@ -94,11 +97,14 @@ export function InputQueuePanel({ entries, onToggleMode, onEdit, onCancelEdit, o
 							<div
 								aria-selected={entry.mode === "steering"}
 								className={classes(
-									"group rounded border border-(--vscode-editorWidget-border,var(--vscode-panel-border)) bg-(--vscode-editorWidget-background,var(--vscode-sideBar-background)) px-2 py-1.5 text-xs",
+									// The body carries the user's own text, so it stays on the
+									// primary foreground token. Mode is signalled by the header
+									// and the border instead of dimming the whole entry.
+									"group rounded border bg-(--vscode-editorWidget-background,var(--vscode-sideBar-background)) px-2 py-1.5 text-xs text-(--vscode-foreground)",
 									entry.mode === "steering"
-										? "text-(--vscode-charts-orange)"
-										: "text-(--vscode-descriptionForeground)",
-									entry.editing && "opacity-60 italic",
+										? "border-(--vscode-charts-orange,var(--vscode-focusBorder))"
+										: "border-(--vscode-editorWidget-border,var(--vscode-panel-border))",
+									entry.editing && "italic",
 									draggingId === entry.id && "opacity-40",
 								)}
 								data-editing={entry.editing ? "true" : "false"}
@@ -123,12 +129,17 @@ export function InputQueuePanel({ entries, onToggleMode, onEdit, onCancelEdit, o
 								// Roving tabindex: the row is programmatically focusable for
 								// assistive tech without adding a tab stop per queue entry.
 								tabIndex={-1}>
-								<header className="mb-1 flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide">
-									<GripVerticalIcon className="size-3 shrink-0 cursor-grab opacity-60" />
+								<header
+									className={classes(
+										"mb-1 flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide",
+										entry.mode === "steering"
+											? "text-(--vscode-charts-orange,var(--vscode-foreground))"
+											: "text-(--vscode-descriptionForeground)",
+									)}>
+									<GripVerticalIcon className="size-3 shrink-0 cursor-grab" />
 									<span>{entry.mode === "steering" ? "Steering input" : "Queued input"}</span>
-									{attachments ? (
-										<span className="ml-auto shrink-0 normal-case opacity-70">{attachments}</span>
-									) : null}
+									{entry.editing ? <span className="normal-case">· Editing</span> : null}
+									{attachments ? <span className="ml-auto shrink-0 normal-case">{attachments}</span> : null}
 								</header>
 								<UserInputMarkdownBody
 									markdown={entry.text}
