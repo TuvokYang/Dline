@@ -36,7 +36,7 @@ Critical rules:
 7. FAILURE RECOVERY: If SEARCH block fails to match:
     - The match text may be too short, causing multiple identical matches in the file. Read the file with read_file, select a longer unique snippet around the target lines, and retry.
     - The match text may not exist exactly in the file due to character differences, whitespace, or indentation. Read the file and copy/paste the EXACT text you need to match.
-    - NEVER use command-line tools (sed, awk, ripgrep, etc.) to edit files. Only use replace_in_file for editing existing files.
+    - You MUST use replace_in_file for editing existing files. If replace_in_file cannot complete the affected operation, stop and wait for the user to decide whether command-line tools are authorized for a task specified by the user. If the user already gave that authorization for the specified task, it remains valid; risk assessment and requires_approval are unchanged.
     - Always re-read the file before retrying after a failed match.`,
 	notebookInstructions: `
 7. For Jupyter Notebook (.ipynb) files:
