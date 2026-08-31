@@ -565,8 +565,11 @@ export class ApplyPatchHandler implements IFullyManagedTool {
 			const absolutePath = typeof pathResult === "string" ? pathResult : pathResult.absolutePath
 			const resolvedPath = typeof pathResult === "string" ? filePath : pathResult.resolvedPath
 
+			// A patch reads the original and then rewrites it, so both permissions
+			// must hold before any hunk is applied.
 			const accessValidation = this.validator.checkClineIgnorePath(resolvedPath)
-			if (!accessValidation.ok) {
+			const writeValidation = this.validator.checkWritePath(resolvedPath)
+			if (!accessValidation.ok || !writeValidation.ok) {
 				await config.callbacks.say("clineignore_error", resolvedPath)
 				throw new DiffError(`Access denied: ${resolvedPath}`)
 			}

@@ -335,7 +335,7 @@ function getLogFilePatterns(): string[] {
  */
 export async function loadWorkspaceIgnoreContent(workspacePath: string): Promise<string> {
 	const rules = await IgnoreController.loadSnapshot(workspacePath)
-	return rules.toGitignoreContent("git")
+	return rules.toRepositoryGitignoreContent()
 }
 
 /** Outcome of writing the shadow repository excludes. */

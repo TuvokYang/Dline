@@ -1,5 +1,5 @@
 import type { ToolParamName, ToolUse } from "@core/assistant-message"
-import { AGENT_IGNORE_FILE, type IgnoreController } from "@core/ignore/IgnoreController"
+import { AGENT_IGNORE_FILE, type IgnoreController, type IgnorePermission } from "@core/ignore/IgnoreController"
 
 export type ValidationResult = { ok: true } | { ok: false; error: string }
 
@@ -28,18 +28,31 @@ export class ToolValidator {
 	/**
 	 * Verify that a path may be opened.
 	 *
-	 * Uses the read scope, so only agent-authored rules apply: a path excluded
-	 * from version control is still readable. Callers should pass a repo-relative
-	 * (workspace-relative) path.
+	 * Only agent-authored rules apply: a path excluded from version control, or
+	 * living under a generated directory, is still readable. Callers should pass
+	 * a repo-relative (workspace-relative) path.
 	 */
 	checkClineIgnorePath(relPath: string): ValidationResult {
-		const accessAllowed = this.ignoreController.validateAccess(relPath, "read")
-		if (!accessAllowed) {
-			return {
-				ok: false,
-				error: `Access to path '${relPath}' is blocked by ${AGENT_IGNORE_FILE} settings.`,
-			}
+		return this.checkPermission(relPath, "read")
+	}
+
+	/**
+	 * Verify that a path may be modified.
+	 *
+	 * Write is a separate permission, so a project can expose a directory for
+	 * reading while keeping it read-only, for example vendored dependencies or
+	 * generated sources.
+	 */
+	checkWritePath(relPath: string): ValidationResult {
+		return this.checkPermission(relPath, "write")
+	}
+
+	private checkPermission(relPath: string, permission: IgnorePermission): ValidationResult {
+		if (this.ignoreController.validateAccess(relPath, permission)) return { ok: true }
+		const action = permission === "write" ? "Writing to" : "Access to"
+		return {
+			ok: false,
+			error: `${action} path '${relPath}' is blocked by ${AGENT_IGNORE_FILE} settings.`,
 		}
-		return { ok: true }
 	}
 }

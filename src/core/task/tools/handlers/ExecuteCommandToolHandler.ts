@@ -203,8 +203,9 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 			return formatResponse.toolError(formatResponse.permissionDeniedError(errorMessage))
 		}
 
-		// Check clineignore validation for command
-		if (!config.services.ignoreController.validateDirectoryAccess(executionDir)) {
+		// The working directory is where the command runs, so it is judged by the
+		// execute permission rather than by what listings choose to hide.
+		if (!config.services.ignoreController.validateDirectoryAccess(executionDir, "execute")) {
 			if (!config.isSubagentExecution) {
 				await config.callbacks.say("clineignore_error", executionDir)
 			}

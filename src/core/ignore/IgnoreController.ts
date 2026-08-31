@@ -5,28 +5,24 @@ import chokidar, { FSWatcher } from "chokidar"
 import fs from "fs/promises"
 import ignore, { Ignore } from "ignore"
 import path from "path"
+import { IGNORE_PERMISSIONS, type IgnorePermission, parsePermissionRules, withAdditionalRules } from "./permission-rules"
+
+export { IGNORE_PERMISSIONS, type IgnorePermission } from "./permission-rules"
 
 export const LOCK_TEXT_SYMBOL = "\u{1F512}"
 
 /**
- * Which exclusion contract a caller is asking about.
+ * Which rule sources compose a decision.
  *
- * - `git`: only `.gitignore`. Used by checkpoints so the shadow repository keeps
- *   the same visibility as the user's real repository.
- * - `agent`: `.gitignore` plus `.agentignore`. Used by file reads, tool calls and
- *   prompt-input watching so the agent's view is the repository view narrowed (or
- *   re-widened via negation) by agent-specific rules.
- */
-/**
- * The exclusion question being asked.
+ * - `git`: only `.gitignore`, so checkpoints keep the same visibility as the
+ *   user's real repository.
+ * - `agent`: the workspace rules the agent must obey, resolved per permission.
  *
- * - `git`: what the repository does not track. Owns checkpoints.
- * - `agent`: what discovery should not traverse or list. Repository rules apply
- *   here because build output and local caches are noise for the agent too.
- * - `read`: what the agent must not open. Only agent-authored rules apply: not
- *   tracking a path in git says nothing about whether reading it is allowed.
+ * The operation being attempted is a separate question, answered by
+ * {@link IgnorePermission}. Folding the two into one enum previously made
+ * "not tracked by git" mean "the agent may not open it".
  */
-export type IgnoreScope = "git" | "agent" | "read"
+export type IgnoreScope = "git" | "agent"
 
 /** Workspace file holding agent-scoped rules, in `.gitignore` syntax. */
 export const AGENT_IGNORE_FILE = ".agentignore"
@@ -50,6 +46,18 @@ const GIT_IGNORE_FILE = ".gitignore"
  * else must come from `.gitignore` / `.agentignore`.
  */
 const BUILTIN_IGNORED_DIRECTORIES = [".git", "node_modules", "dist", "build", "out", "tmp"] as const
+
+/** The floor as rule text, applied only to the scan permission. */
+const BUILTIN_SCAN_RULES = BUILTIN_IGNORED_DIRECTORIES.map((directory) => `${directory}/`).join("\n")
+
+/**
+ * The repository directory is readable for diagnostics but never writable.
+ *
+ * Reading `.git/HEAD` is a legitimate way to answer a question about the
+ * checkout; rewriting anything inside it would corrupt the user's repository in
+ * a way no checkpoint can undo.
+ */
+const BUILTIN_WRITE_RULES = ".git/"
 
 const INCLUDE_DIRECTIVE = "!include "
 
@@ -147,10 +155,14 @@ function collectDirectoryNames(content: string): Set<string> {
  */
 export class IgnoreController {
 	private readonly cwd: string
-	private readonly scopes: Record<IgnoreScope, ScopeState> = {
+	/** Repository rules, used by checkpoints. */
+	private readonly gitScope: ScopeState = createScopeState()
+	/** Agent rules, compiled once per permission. */
+	private readonly permissions: Record<IgnorePermission, ScopeState> = {
 		read: createScopeState(),
-		git: createScopeState(),
-		agent: createScopeState(),
+		write: createScopeState(),
+		execute: createScopeState(),
+		scan: createScopeState(),
 	}
 	private readonly changeListeners = new Set<(scope: IgnoreScope) => void>()
 	private watcher?: FSWatcher
@@ -182,62 +194,66 @@ export class IgnoreController {
 	}
 
 	/**
-	 * Raw rules text for one scope, or undefined when no rule file contributed.
+	 * Raw rules text governing one permission, or undefined when nothing applies.
 	 *
 	 * Callers that hand rules to an external process (`rg --ignore-file`) use this;
-	 * an undefined result means "no user rules", not "allow nothing".
+	 * an undefined result means "no rules", not "allow nothing".
 	 */
-	getIgnoreContent(scope: IgnoreScope): string | undefined {
-		return this.scopes[scope].content
+	getIgnoreContent(permission: IgnorePermission): string | undefined {
+		return this.permissions[permission].content
 	}
 
-	/** Report whether a file may be read under one scope. */
-	validateAccess(filePath: string, scope: IgnoreScope = "agent", baseDir: string = this.cwd): boolean {
-		const relativePath = this.toRelative(filePath, baseDir)
-		if (relativePath === undefined) return true
-		if (this.isBuiltinIgnoredPath(relativePath)) return false
-		const state = this.scopes[scope]
-		if (!state.content) return true
-		try {
-			return !state.instance.ignores(relativePath)
-		} catch {
-			return true
-		}
+	/** Raw repository rules, for callers that mirror git's own visibility. */
+	getRepositoryContent(): string | undefined {
+		return this.gitScope.content
 	}
 
-	/** Report whether a directory may be entered under one scope. */
-	validateDirectoryAccess(directoryPath: string, scope: IgnoreScope = "agent", baseDir: string = this.cwd): boolean {
-		const relativePath = this.toRelative(directoryPath, baseDir)
-		if (relativePath === undefined) return true
-		if (this.isBuiltinIgnoredPath(relativePath)) return false
-		const state = this.scopes[scope]
-		if (!state.content) return true
-		try {
-			const directoryRelativePath = relativePath.endsWith("/") ? relativePath : `${relativePath}/`
-			return !state.instance.ignores(directoryRelativePath)
-		} catch {
-			return true
-		}
+	/** Report whether one operation is allowed on a file. */
+	validateAccess(filePath: string, permission: IgnorePermission = "read", baseDir: string = this.cwd): boolean {
+		return this.matches(this.permissions[permission], filePath, baseDir, false)
+	}
+
+	/** Report whether one operation is allowed on a directory. */
+	validateDirectoryAccess(directoryPath: string, permission: IgnorePermission = "read", baseDir: string = this.cwd): boolean {
+		return this.matches(this.permissions[permission], directoryPath, baseDir, true)
+	}
+
+	/** Report whether the repository tracks a path, for checkpoint callers. */
+	validateRepositoryAccess(filePath: string, baseDir: string = this.cwd): boolean {
+		return this.matches(this.gitScope, filePath, baseDir, false)
 	}
 
 	/**
 	 * Synchronous directory prune predicate for recursive watchers and scanners.
 	 *
 	 * Deliberately free of I/O: watcher predicates run for every traversed entry,
-	 * so this only consults already-loaded rules.
+	 * so this only consults already-loaded rules. Pruning is a scan decision, so
+	 * this never consults the read, write or execute permissions.
 	 */
-	shouldIgnoreDirectory(absolutePath: string, scope: IgnoreScope = "agent"): boolean {
+	shouldIgnoreDirectory(absolutePath: string): boolean {
 		const resolved = path.resolve(absolutePath)
 		if (resolved === this.cwd) return false
 		const name = path.basename(resolved).toLowerCase()
-		if ((BUILTIN_IGNORED_DIRECTORIES as readonly string[]).includes(name)) return true
-		if (this.scopes[scope].directoryNames.has(name)) return true
-		return !this.validateDirectoryAccess(resolved, scope)
+		if (this.permissions.scan.directoryNames.has(name)) return true
+		return !this.validateDirectoryAccess(resolved, "scan")
 	}
 
-	/** Terminal command guard: returns the first agent-ignored path an argument reads. */
+	/** Evaluate one path against one compiled rule set. */
+	private matches(state: ScopeState, inputPath: string, baseDir: string, asDirectory: boolean): boolean {
+		const relativePath = this.toRelative(inputPath, baseDir)
+		if (relativePath === undefined) return true
+		if (!state.content) return true
+		try {
+			const candidate = asDirectory && !relativePath.endsWith("/") ? `${relativePath}/` : relativePath
+			return !state.instance.ignores(candidate)
+		} catch {
+			return true
+		}
+	}
+
+	/** Terminal command guard: returns the first unreadable path an argument opens. */
 	validateCommand(command: string, workdirectory: string = this.cwd): string | undefined {
-		if (!this.scopes.agent.content) return undefined
+		if (!this.permissions.read.content) return undefined
 
 		const parts = command.trim().split(/\s+/)
 		const baseCommand = parts[0]?.toLowerCase()
@@ -268,15 +284,17 @@ export class IgnoreController {
 			if (argument.startsWith("-") || argument.startsWith("/")) continue
 			// Ignore PowerShell parameter names
 			if (argument.includes(":")) continue
-			if (!this.validateAccess(argument, "agent", workdirectory)) return argument
+			// The command opens the file, so this is a read even though the tool
+			// being guarded is command execution.
+			if (!this.validateAccess(argument, "read", workdirectory)) return argument
 		}
 		return undefined
 	}
 
-	/** Keep only the paths readable under one scope. */
-	filterPaths(paths: string[], scope: IgnoreScope = "agent"): string[] {
+	/** Keep only the paths one operation is allowed to touch. */
+	filterPaths(paths: string[], permission: IgnorePermission = "scan"): string[] {
 		try {
-			return paths.filter((candidate) => this.validateAccess(candidate, scope))
+			return paths.filter((candidate) => this.validateAccess(candidate, permission))
 		} catch (error) {
 			Logger.error("[IgnoreController] Failed to filter paths:", error)
 			return [] // Fail closed for security
@@ -290,12 +308,9 @@ export class IgnoreController {
 	 * re-inclusion; scanners must re-check survivors with {@link validateAccess}
 	 * when exact fidelity matters.
 	 */
-	toGlobPatterns(scope: IgnoreScope = "agent"): string[] {
+	toGlobPatterns(): string[] {
 		const patterns = new Set<string>()
-		for (const directory of BUILTIN_IGNORED_DIRECTORIES) {
-			patterns.add(`**/${directory}/**`)
-		}
-		const content = this.scopes[scope].content
+		const content = this.permissions.scan.content
 		if (!content) return [...patterns]
 
 		for (const pattern of gitignoreToGlobPatterns(content)) {
@@ -304,11 +319,21 @@ export class IgnoreController {
 		return [...patterns]
 	}
 
-	/** Rules text in `.gitignore` syntax, including the built-in floor. */
-	toGitignoreContent(scope: IgnoreScope = "agent"): string {
-		const builtin = BUILTIN_IGNORED_DIRECTORIES.map((directory) => `${directory}/`).join("\n")
-		const content = this.scopes[scope].content
-		return content ? `${builtin}\n${content}` : builtin
+	/** Scan rules in `.gitignore` syntax, for callers that drive an external tool. */
+	toGitignoreContent(): string {
+		return this.permissions.scan.content ?? ""
+	}
+
+	/**
+	 * Repository rules plus the built-in floor, in `.gitignore` syntax.
+	 *
+	 * Checkpoints mirror what the repository itself does not track, so agent
+	 * permissions must not leak in: an agent rule restricts what the agent may
+	 * touch, not what the workspace considers untracked.
+	 */
+	toRepositoryGitignoreContent(): string {
+		const repositoryRules = this.gitScope.content
+		return repositoryRules ? `${BUILTIN_SCAN_RULES}\n${repositoryRules}` : BUILTIN_SCAN_RULES
 	}
 
 	/** Subscribe to committed rule changes. Returns an unsubscribe function. */
@@ -343,19 +368,6 @@ export class IgnoreController {
 		} catch {
 			return undefined
 		}
-	}
-
-	/** Report whether any segment of a relative path is a built-in excluded directory. */
-	private isBuiltinIgnoredPath(relativePath: string): boolean {
-		const segments = relativePath.split("/")
-		// The last segment is only a directory name when the caller passed a
-		// trailing slash, so plain files named `out` or `tmp` stay readable.
-		const limit = relativePath.endsWith("/") ? segments.length : segments.length - 1
-		for (let index = 0; index < limit; index++) {
-			const segment = segments[index]?.toLowerCase()
-			if (segment && (BUILTIN_IGNORED_DIRECTORIES as readonly string[]).includes(segment)) return true
-		}
-		return false
 	}
 
 	private setupWatcher(): void {
@@ -403,18 +415,23 @@ export class IgnoreController {
 			break
 		}
 
-		// Agent rules layer on top of repository rules so a workspace only has to
-		// express the difference, including negations that re-admit a path.
-		const agentContent =
-			gitContent !== undefined && agentRules !== undefined ? `${gitContent}\n${agentRules}` : (agentRules ?? gitContent)
+		// Each permission gets its own compiled rules. Repository rules and the
+		// built-in floor only restrict scanning: not tracking a path, or it being
+		// generated output, says nothing about whether opening it is allowed.
+		let rules = parsePermissionRules(agentRules)
+		rules = withAdditionalRules(rules, "scan", gitContent)
+		rules = withAdditionalRules(rules, "scan", BUILTIN_SCAN_RULES)
+		rules = withAdditionalRules(rules, "write", BUILTIN_WRITE_RULES)
+
+		let agentChanged = false
+		for (const permission of IGNORE_PERMISSIONS) {
+			if (this.applyRules(this.permissions[permission], rules[permission])) agentChanged = true
+		}
+		const gitChanged = this.applyRules(this.gitScope, gitContent)
 
 		const changed: IgnoreScope[] = []
-		if (this.applyScope("git", gitContent)) changed.push("git")
-		if (this.applyScope("agent", agentContent)) changed.push("agent")
-		// Read access is governed by agent rules alone. A path excluded only by
-		// `.gitignore` stays readable, so generated output and local records such
-		// as build artifacts or notes remain available to open.
-		if (this.applyScope("read", agentRules)) changed.push("read")
+		if (gitChanged) changed.push("git")
+		if (agentChanged) changed.push("agent")
 
 		if (changed.length > 0) {
 			Logger.debug(
@@ -425,15 +442,15 @@ export class IgnoreController {
 		}
 	}
 
-	/** Replace one scope's compiled rules. Returns whether the content changed. */
-	private applyScope(scope: IgnoreScope, content: string | undefined): boolean {
-		const state = this.scopes[scope]
-		if (state.content === content) return false
+	/** Replace one rule set's compiled rules. Returns whether the content changed. */
+	private applyRules(state: ScopeState, content: string | undefined): boolean {
+		const normalized = content ? content : undefined
+		if (state.content === normalized) return false
 		const instance = ignore()
-		if (content) instance.add(content)
+		if (normalized) instance.add(normalized)
 		state.instance = instance
-		state.content = content
-		state.directoryNames = content ? collectDirectoryNames(content) : new Set()
+		state.content = normalized
+		state.directoryNames = normalized ? collectDirectoryNames(normalized) : new Set()
 		return true
 	}
 

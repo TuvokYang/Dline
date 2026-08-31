@@ -110,9 +110,10 @@ export async function regexSearchFiles(
 ): Promise<string> {
 	const args = ["--json", "-e", regex, "--glob", filePattern || "*", "--context", "1"]
 
-	// Hand the agent rules to rg as an ignore file so they prune during the search
-	// instead of only filtering the results afterwards.
-	const agentIgnoreContent = ignoreController?.getIgnoreContent("read")
+	// Searching walks the tree, so it follows the scan rules rather than the read
+	// rules. Handing them to rg as an ignore file prunes during the search instead
+	// of only filtering the results afterwards.
+	const agentIgnoreContent = ignoreController?.getIgnoreContent("scan")
 	let ignoreFilePath: string | undefined
 	if (agentIgnoreContent) {
 		try {
@@ -181,7 +182,7 @@ export async function regexSearchFiles(
 
 	// Safety net for patterns rg's --ignore-file may not evaluate identically.
 	const filteredResults = ignoreController
-		? results.filter((result) => ignoreController.validateAccess(result.filePath, "read"))
+		? results.filter((result) => ignoreController.validateAccess(result.filePath, "scan"))
 		: results
 
 	return formatResults(filteredResults, cwd)

@@ -32,7 +32,7 @@ export async function parseSourceCodeForDefinitionsTopLevel(
 	const languageParsers = await loadRequiredLanguageParsers(filesToParse)
 
 	// Parse specific files we have language parsers for
-	const allowedFilesToParse = ignoreController ? ignoreController.filterPaths(filesToParse, "agent") : filesToParse
+	const allowedFilesToParse = ignoreController ? ignoreController.filterPaths(filesToParse, "scan") : filesToParse
 	const excludedByIgnoreRules = filesToParse.length - allowedFilesToParse.length
 
 	for (const filePath of allowedFilesToParse) {

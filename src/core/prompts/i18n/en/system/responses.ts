@@ -24,7 +24,7 @@ const prompts: Record<string, string> = {
 	checkpointRestorePlan:
 		"The conversation was restored to a checkpoint. Files may have changed since the checkpoint was created. You are in PLAN MODE — respond to the user's edited input below.\n\n<user_message>\n@EDITED_TEXT@\n</user_message>",
 	clineIgnoreInstructions:
-		"# .clineignore\n\n(The following is provided by a root-level .clineignore file where the user has specified files and directories that should not be accessed. When using list_files, you'll notice a @LOCK_SYMBOL@ next to files that are blocked. Attempting to access the file's contents e.g. through read_file will result in an error.)\n\n@CONTENT@\n.clineignore",
+		"# .agentignore\n\n(The following is provided by a root-level .agentignore file where the user has declared what you may do with each path. A line may end with attributes that remove individual permissions: -r read, -w write, -x run a command there, -s appear in listings and searches. A line with no attributes removes all of them. The rules below are the ones that remove read access; a path listed here cannot be opened, and list_files marks it with @LOCK_SYMBOL@. Paths hidden only from listings are still readable by exact path.)\n\n@CONTENT@\n.agentignore",
 	clineRulesGlobalDirInstructions:
 		"# Global User Rules\n\nThe following is provided by global user rules where the user has specified instructions for all working directories:\n\n@CONTENT@",
 	clineRulesLocalDirInstructions:

@@ -63,7 +63,7 @@ function isTargetingHiddenDirectory(absolutePath: string): boolean {
  * directories, which made V8 run out of memory during regex compilation.
  */
 async function buildIgnorePatterns(absolutePath: string, ignoreController: IgnoreController | undefined): Promise<string[]> {
-	const patterns = new Set(ignoreController ? ignoreController.toGlobPatterns("agent") : builtinIgnoreGlobPatterns())
+	const patterns = new Set(ignoreController ? ignoreController.toGlobPatterns() : builtinIgnoreGlobPatterns())
 
 	// Without a controller the workspace rules are still needed, so read the root
 	// file directly; nested files are picked up during traversal either way.

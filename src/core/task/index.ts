@@ -5788,9 +5788,9 @@ export class Task {
 				skillDirectories: getSkillsDirectoriesForScan(this.cwd).map((directory) => directory.path),
 				subagentDirectories: getSubagentsScanDirectories(this.cwd).map((directory) => directory.path),
 				invalidate: () => this.invalidatePromptFreshness("prompt_input_file"),
-				// Prune with the same agent rules the tools use, so the recursive
-				// workspace watch never descends into excluded trees.
-				shouldIgnoreDirectory: (absolutePath) => this.ignoreController.shouldIgnoreDirectory(absolutePath, "agent"),
+				// Pruning is a scan decision, so the recursive workspace watch never
+				// descends into trees that listing would skip anyway.
+				shouldIgnoreDirectory: (absolutePath) => this.ignoreController.shouldIgnoreDirectory(absolutePath),
 			})
 			this.promptInputFileWatcher = watcher
 			await watcher.start()
@@ -6479,7 +6479,9 @@ export class Task {
 		)
 		const localRulesLoadMs = Math.round(performance.now() - stageStartedAt)
 
-		const agentIgnoreContent = this.ignoreController.getIgnoreContent("agent")
+		// The prompt describes what the agent may not open, so it carries the read
+		// rules rather than the wider scan rules that also hide generated trees.
+		const agentIgnoreContent = this.ignoreController.getIgnoreContent("read")
 		let clineIgnoreInstructions: string | undefined
 		if (agentIgnoreContent) {
 			clineIgnoreInstructions = formatResponse.clineIgnoreInstructions(agentIgnoreContent)
@@ -9509,9 +9511,10 @@ export class Task {
 				options.preview ? undefined : this.fileContextTracker,
 				this.workspaceManager,
 				{
-					validateFileAccess: (filePath, baseDir) => this.ignoreController.validateAccess(filePath, "agent", baseDir),
+					// A mention pulls file content into the prompt, so it is a read.
+					validateFileAccess: (filePath, baseDir) => this.ignoreController.validateAccess(filePath, "read", baseDir),
 					validateDirectoryAccess: (directoryPath, baseDir) =>
-						this.ignoreController.validateDirectoryAccess(directoryPath, "agent", baseDir),
+						this.ignoreController.validateDirectoryAccess(directoryPath, "read", baseDir),
 				},
 			)
 			if (!parseCommands) return parsedText

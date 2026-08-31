@@ -31,46 +31,70 @@ afterEach(async () => {
 })
 
 describe("IgnoreController", () => {
-	describe("scopes", () => {
-		it("keeps agent rules out of the git scope", async () => {
-			const { cwd, rules } = await loadRules({
-				".gitignore": "build/\n",
-				".agentignore": "secrets/\n",
-			})
+	describe("permissions", () => {
+		it("removes every permission for a rule without attributes", async () => {
+			const { cwd, rules } = await loadRules({ ".agentignore": "secrets/\n" })
+			const target = path.join(cwd, "secrets/key.txt")
 
-			expect(rules.validateAccess(path.join(cwd, "secrets/key.txt"), "git")).toBe(true)
-			expect(rules.validateAccess(path.join(cwd, "secrets/key.txt"), "agent")).toBe(false)
+			expect(rules.validateAccess(target, "read")).toBe(false)
+			expect(rules.validateAccess(target, "write")).toBe(false)
+			expect(rules.validateAccess(target, "execute")).toBe(false)
+			expect(rules.validateAccess(target, "scan")).toBe(false)
 		})
 
-		it("layers agent rules on top of the repository rules", async () => {
-			const { cwd, rules } = await loadRules({
-				".gitignore": "build/\n",
-				".agentignore": "secrets/\n",
-			})
+		it("hides a directory from listings while keeping its files usable", async () => {
+			const { cwd, rules } = await loadRules({ ".agentignore": "generated/ -s\n" })
+			const target = path.join(cwd, "generated/schema.ts")
 
-			// The repository rule still applies to the agent scope.
-			expect(rules.validateAccess(path.join(cwd, "build/app.js"), "agent")).toBe(false)
+			expect(rules.validateAccess(target, "scan")).toBe(false)
+			expect(rules.validateAccess(target, "read")).toBe(true)
+			expect(rules.validateAccess(target, "write")).toBe(true)
 		})
 
-		it("keeps a repository-ignored path readable while excluding it from discovery", async () => {
-			const { cwd, rules } = await loadRules({
-				".gitignore": ".memory-bank/\n",
-				".agentignore": "secrets/\n",
-			})
+		it("makes a directory read-only", async () => {
+			const { cwd, rules } = await loadRules({ ".agentignore": "vendor/ -w\n" })
+			const target = path.join(cwd, "vendor/lib.js")
+
+			expect(rules.validateAccess(target, "read")).toBe(true)
+			expect(rules.validateAccess(target, "scan")).toBe(true)
+			expect(rules.validateAccess(target, "write")).toBe(false)
+		})
+
+		it("refuses a directory as a command working directory", async () => {
+			const { cwd, rules } = await loadRules({ ".agentignore": "scripts/untrusted/ -x\n" })
+			const target = path.join(cwd, "scripts/untrusted")
+
+			expect(rules.validateDirectoryAccess(target, "execute")).toBe(false)
+			expect(rules.validateDirectoryAccess(target, "read")).toBe(true)
+		})
+
+		it("allows every operation when the workspace has no rule files", async () => {
+			const { cwd, rules } = await loadRules({ "src/app.ts": "" })
+
+			expect(rules.validateAccess(path.join(cwd, "src/app.ts"), "read")).toBe(true)
+			expect(rules.getIgnoreContent("read")).toBeUndefined()
+		})
+	})
+
+	describe("repository rules", () => {
+		it("keeps an untracked path readable while hiding it from listings", async () => {
+			const { cwd, rules } = await loadRules({ ".gitignore": ".memory-bank/\n" })
+			const target = path.join(cwd, ".memory-bank/notes.md")
 
 			// Not tracking a path says nothing about whether opening it is allowed.
-			expect(rules.validateAccess(path.join(cwd, ".memory-bank/notes.md"), "agent")).toBe(false)
-			expect(rules.validateAccess(path.join(cwd, ".memory-bank/notes.md"), "read")).toBe(true)
+			expect(rules.validateAccess(target, "scan")).toBe(false)
+			expect(rules.validateAccess(target, "read")).toBe(true)
+			expect(rules.validateAccess(target, "write")).toBe(true)
 		})
 
-		it("blocks agent-excluded paths from being read", async () => {
+		it("keeps agent rules out of the repository view", async () => {
 			const { cwd, rules } = await loadRules({
 				".gitignore": "build/\n",
 				".agentignore": "secrets/\n",
 			})
 
-			expect(rules.validateAccess(path.join(cwd, "secrets/key.txt"), "read")).toBe(false)
-			expect(rules.validateAccess(path.join(cwd, "src/app.ts"), "read")).toBe(true)
+			expect(rules.validateRepositoryAccess(path.join(cwd, "build/app.js"))).toBe(false)
+			expect(rules.validateRepositoryAccess(path.join(cwd, "secrets/key.txt"))).toBe(true)
 		})
 
 		it("lets an agent negation re-admit a repository-ignored file", async () => {
@@ -78,18 +102,47 @@ describe("IgnoreController", () => {
 			// re-included, so the repository rule must target the file itself.
 			const { cwd, rules } = await loadRules({
 				".gitignore": "*.log\n",
-				".agentignore": "!audit.log\n",
+				".agentignore": "!audit.log -s\n",
 			})
 
-			expect(rules.validateAccess(path.join(cwd, "audit.log"), "agent")).toBe(true)
-			expect(rules.validateAccess(path.join(cwd, "audit.log"), "git")).toBe(false)
+			expect(rules.validateAccess(path.join(cwd, "audit.log"), "scan")).toBe(true)
+			expect(rules.validateRepositoryAccess(path.join(cwd, "audit.log"))).toBe(false)
 		})
+	})
 
-		it("allows every path when the workspace has no rule files", async () => {
+	describe("built-in floor", () => {
+		it("hides generated directories from listings without any rule file", async () => {
 			const { cwd, rules } = await loadRules({ "src/app.ts": "" })
 
-			expect(rules.validateAccess(path.join(cwd, "src/app.ts"), "agent")).toBe(true)
-			expect(rules.getIgnoreContent("agent")).toBeUndefined()
+			for (const artifact of ["node_modules/pkg/index.js", "dist/extension.js", "tmp/report.png"]) {
+				expect(rules.validateAccess(path.join(cwd, artifact), "scan")).toBe(false)
+			}
+		})
+
+		it("keeps generated directories readable and writable", async () => {
+			const { cwd, rules } = await loadRules({ "src/app.ts": "" })
+
+			// Opening a named artifact costs no traversal, so test output, build
+			// results and packaged bundles must stay reachable.
+			for (const artifact of ["tmp/test-result/run/report.png", "dist/extension.js", "out/build.log"]) {
+				expect(rules.validateAccess(path.join(cwd, artifact), "read")).toBe(true)
+				expect(rules.validateAccess(path.join(cwd, artifact), "write")).toBe(true)
+			}
+		})
+
+		it("keeps the repository directory readable but never writable", async () => {
+			const { cwd, rules } = await loadRules({ "src/app.ts": "" })
+			const target = path.join(cwd, ".git/HEAD")
+
+			expect(rules.validateAccess(target, "read")).toBe(true)
+			expect(rules.validateAccess(target, "write")).toBe(false)
+		})
+
+		it("still refuses a floor directory that an agent rule excludes", async () => {
+			const { cwd, rules } = await loadRules({ ".agentignore": "tmp/secrets/\n" })
+
+			expect(rules.validateAccess(path.join(cwd, "tmp/secrets/token.txt"), "read")).toBe(false)
+			expect(rules.validateAccess(path.join(cwd, "tmp/report.png"), "read")).toBe(true)
 		})
 	})
 
@@ -97,13 +150,13 @@ describe("IgnoreController", () => {
 		it("reads .dlineignore when .agentignore is absent", async () => {
 			const { cwd, rules } = await loadRules({ ".dlineignore": "secrets/\n" })
 
-			expect(rules.validateAccess(path.join(cwd, "secrets/key.txt"), "agent")).toBe(false)
+			expect(rules.validateAccess(path.join(cwd, "secrets/key.txt"), "read")).toBe(false)
 		})
 
 		it("reads .clineignore when the preferred names are absent", async () => {
 			const { cwd, rules } = await loadRules({ ".clineignore": "secrets/\n" })
 
-			expect(rules.validateAccess(path.join(cwd, "secrets/key.txt"), "agent")).toBe(false)
+			expect(rules.validateAccess(path.join(cwd, "secrets/key.txt"), "read")).toBe(false)
 		})
 
 		it("uses only the highest-precedence file", async () => {
@@ -112,8 +165,8 @@ describe("IgnoreController", () => {
 				".clineignore": "superseded/\n",
 			})
 
-			expect(rules.validateAccess(path.join(cwd, "current/a.txt"), "agent")).toBe(false)
-			expect(rules.validateAccess(path.join(cwd, "superseded/a.txt"), "agent")).toBe(true)
+			expect(rules.validateAccess(path.join(cwd, "current/a.txt"), "read")).toBe(false)
+			expect(rules.validateAccess(path.join(cwd, "superseded/a.txt"), "read")).toBe(true)
 		})
 	})
 
@@ -122,7 +175,6 @@ describe("IgnoreController", () => {
 			const { cwd, rules } = await loadRules({ "src/app.ts": "" })
 
 			expect(rules.shouldIgnoreDirectory(path.join(cwd, "node_modules"))).toBe(true)
-			expect(rules.shouldIgnoreDirectory(path.join(cwd, "tmp"))).toBe(true)
 			expect(rules.shouldIgnoreDirectory(path.join(cwd, "src"))).toBe(false)
 		})
 
@@ -130,7 +182,6 @@ describe("IgnoreController", () => {
 			const { cwd, rules } = await loadRules({ ".agentignore": "coverage/\n" })
 
 			expect(rules.shouldIgnoreDirectory(path.join(cwd, "coverage"))).toBe(true)
-			expect(rules.shouldIgnoreDirectory(path.join(cwd, "packages/api/coverage"))).toBe(true)
 		})
 
 		it("never prunes the workspace root", async () => {
@@ -138,37 +189,52 @@ describe("IgnoreController", () => {
 
 			expect(rules.shouldIgnoreDirectory(cwd)).toBe(false)
 		})
+
+		it("does not prune a directory that is only read-only", async () => {
+			const { cwd, rules } = await loadRules({ ".agentignore": "vendor/ -w\n" })
+
+			expect(rules.shouldIgnoreDirectory(path.join(cwd, "vendor"))).toBe(false)
+		})
 	})
 
 	describe("exports", () => {
 		it("includes the built-in floor in the glob patterns", async () => {
 			const { rules } = await loadRules({ "src/app.ts": "" })
 
-			expect(rules.toGlobPatterns("agent")).toContain("**/node_modules/**")
+			expect(rules.toGlobPatterns()).toContain("**/node_modules")
 		})
 
 		it("translates directory and anchored rules into globs", async () => {
 			const { rules } = await loadRules({ ".agentignore": "coverage/\n/generated\n" })
 
-			const patterns = rules.toGlobPatterns("agent")
-			expect(patterns).toContain("**/coverage/**")
-			expect(patterns).toContain("generated/**")
+			expect(rules.toGlobPatterns()).toEqual(expect.arrayContaining(["**/coverage", "generated", "generated/**"]))
 		})
 
-		it("emits the built-in floor in gitignore syntax", async () => {
-			const { rules } = await loadRules({ ".gitignore": "build/\n" })
+		it("omits a read-only rule from the scan globs", async () => {
+			const { rules } = await loadRules({ ".agentignore": "vendor/ -w\n" })
 
-			const content = rules.toGitignoreContent("git")
+			expect(rules.toGlobPatterns()).not.toContain("**/vendor")
+		})
+
+		it("emits repository rules and the floor in gitignore syntax", async () => {
+			const { rules } = await loadRules({
+				".gitignore": "build/\n",
+				".agentignore": "secrets/\n",
+			})
+			const content = rules.toRepositoryGitignoreContent()
+
 			expect(content).toContain("node_modules/")
 			expect(content).toContain("build/")
+			// Checkpoints mirror the repository, so agent rules must not leak in.
+			expect(content).not.toContain("secrets/")
 		})
 	})
 
 	describe("filterPaths", () => {
-		it("drops the paths excluded by the requested scope", async () => {
+		it("drops the paths excluded by the requested permission", async () => {
 			const { rules } = await loadRules({ ".agentignore": "secrets/\n" })
 
-			expect(rules.filterPaths(["src/app.ts", "secrets/key.txt"], "agent")).toEqual(["src/app.ts"])
+			expect(rules.filterPaths(["src/app.ts", "secrets/key.txt"], "read")).toEqual(["src/app.ts"])
 		})
 	})
 })

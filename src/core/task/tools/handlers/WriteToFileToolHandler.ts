@@ -33,7 +33,6 @@ import { interactionId, interactionTurnId, type TaskConfig } from "../types/Task
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 import { captureAccepted, captureRejected, getModelInfo } from "../utils/AiOutputTelemetry"
 import { applyModelContentFixes } from "../utils/ModelContentProcessor"
-import { ToolDisplayUtils } from "../utils/ToolDisplayUtils"
 import { ToolResultUtils } from "../utils/ToolResultUtils"
 import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
@@ -42,6 +41,17 @@ export class WriteToFileToolHandler implements IFullyManagedTool {
 
 	/** Cache for diff error from validateAndPrepareFileOperation to return via execute(). */
 	private _lastDiffError: string | null = null
+
+	/**
+	 * Cache for an ignore denial raised by validateAndPrepareFileOperation.
+	 *
+	 * The denial must travel back through execute()'s return value. Pushing it
+	 * here and then returning an empty string let ToolExecutor commit that empty
+	 * string over the same function_id, which replaced the denial with the
+	 * "(tool did not return anything)" placeholder and hid the refusal from the
+	 * model.
+	 */
+	private _lastAccessDenial: string | null = null
 
 	constructor(private validator: ToolValidator) {}
 
@@ -248,13 +258,17 @@ export class WriteToFileToolHandler implements IFullyManagedTool {
 		// The reset was moved to after saveChanges() succeeds to properly track consecutive failures
 
 		try {
-			// Reset cached diff error before each execution
+			// Reset cached failures before each execution
 			this._lastDiffError = null
+			this._lastAccessDenial = null
 
 			const result = await this.validateAndPrepareFileOperation(config, block, rawRelPath, rawDiff, rawContent)
 			if (!result) {
-				// If validateAndPrepareFileOperation stored a diff error, return it as toolError
+				// If validateAndPrepareFileOperation stored a failure, return it as toolError
 				// so ToolExecutor.handleCompleteBlock pushes it to the API exactly once.
+				if (this._lastAccessDenial) {
+					return this._lastAccessDenial
+				}
 				if (this._lastDiffError) {
 					return this._lastDiffError
 				}
@@ -612,21 +626,17 @@ export class WriteToFileToolHandler implements IFullyManagedTool {
 			resolutionMethod: (typeof pathResult !== "string" ? "hint" : "primary_fallback") as "hint" | "primary_fallback",
 		}
 
-		// Check clineignore access first
-		const accessValidation = this.validator.checkClineIgnorePath(resolvedPath)
+		// Writing has its own permission, so a read-only directory is refused here
+		// even though its files can still be opened.
+		const accessValidation = this.validator.checkWritePath(resolvedPath)
 		if (!accessValidation.ok) {
 			// Show error and return early (full original behavior)
 			await config.callbacks.say("clineignore_error", resolvedPath)
 
-			// Push tool result and save checkpoint using existing utilities
-			const errorResponse = formatResponse.toolError(formatResponse.clineIgnoreError(resolvedPath))
-			ToolResultUtils.pushToolResult(
-				errorResponse,
-				block,
-				config.taskState.userMessageContent,
-				ToolDisplayUtils.getToolDescription,
-				config.coordinator,
-			)
+			// Hand the denial back through execute()'s return value so
+			// ToolExecutor.handleCompleteBlock commits it exactly once. Pushing
+			// it here would be overwritten by execute()'s own empty result.
+			this._lastAccessDenial = formatResponse.toolError(formatResponse.clineIgnoreError(resolvedPath))
 			if (!config.enableParallelToolCalling) {
 				config.taskState.didAlreadyUseTool = true
 			}
