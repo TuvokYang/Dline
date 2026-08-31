@@ -408,6 +408,31 @@ describe("reduceTask lifecycle events", () => {
 		})
 	})
 
+	it("keeps queued model guidance out of the persisted user presentation", () => {
+		const result = reduceTask(awaitingInteraction(), {
+			type: "INTERACTION_RESPONDED",
+			response: {
+				taskId: "task-1",
+				turnId: "turn-1",
+				interactionId: "interaction-1",
+				actionId: "approve",
+				stateRevision: 4,
+				draft: { text: "internal guidance\n\n你好", images: [], files: [] },
+				presentationDraft: { text: "你好", images: [], files: [] },
+				userInputKind: "queued",
+				queuedInputMode: "queued",
+			},
+		})
+
+		expect(result.effects[0]).toMatchObject({
+			type: "APPEND_SAY",
+			presentation: "你好",
+			userInputKind: "queued",
+			queuedInputMode: "queued",
+			feedbackAcknowledgmentText: "internal guidance\n\n你好",
+		})
+	})
+
 	it("rejects stale interaction revision without mutation", () => {
 		const state = awaitingInteraction()
 		const result = reduceTask(state, {

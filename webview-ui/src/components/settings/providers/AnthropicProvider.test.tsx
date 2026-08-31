@@ -51,13 +51,47 @@ const adaptiveModel: ModelInfo = {
 	} as ModelCapabilities,
 }
 
+const defaultAdaptiveModel: ModelInfo = {
+	id: "claude-opus-5",
+	name: "Claude Opus 5",
+	capabilities: {
+		contextWindow: 1_000_000,
+		supportsReasoning: true,
+		thinking: {
+			supported: true,
+			mode: "effort",
+			effortLevels: ["none", "low", "medium", "high", "xhigh", "max"],
+		},
+	} as ModelCapabilities,
+}
+
+const requiredAdaptiveModel: ModelInfo = {
+	id: "claude-fable-5",
+	name: "Claude Fable 5",
+	capabilities: {
+		contextWindow: 1_000_000,
+		supportsReasoning: true,
+		thinking: {
+			supported: true,
+			mode: "effort",
+			effortLevels: ["low", "medium", "high", "xhigh", "max"],
+		},
+	} as ModelCapabilities,
+}
+
 vi.mock("@/context/ExtensionStateContext", () => ({
 	useExtensionState: () => ({ remoteConfigSettings: {} }),
 }))
 
 vi.mock("./useProviderModels", () => ({
 	useProviderModels: () => ({
-		models: { "claude-custom": registryModel, "claude-native": nativeContextModel, "claude-sonnet-4-6": adaptiveModel },
+		models: {
+			"claude-custom": registryModel,
+			"claude-native": nativeContextModel,
+			"claude-sonnet-4-6": adaptiveModel,
+			"claude-opus-5": defaultAdaptiveModel,
+			"claude-fable-5": requiredAdaptiveModel,
+		},
 		defaultModelId: "claude-custom",
 		modelInfoSaneDefaults: registryModel,
 		loading: false,
@@ -117,8 +151,23 @@ vi.mock("../common/RemotelyConfiguredInputWrapper", () => ({
 	RemotelyConfiguredInputWrapper: ({ children }: { children: ReactNode }) => <>{children}</>,
 }))
 vi.mock("../ThinkingControl", () => ({
-	default: ({ effortOptions }: { effortOptions?: readonly string[] }) => (
-		<div data-testid="thinking-efforts">{effortOptions?.join(",")}</div>
+	default: ({
+		defaultEffort,
+		defaultEnabled,
+		disableSupported,
+		effortOptions,
+	}: {
+		defaultEffort?: string
+		defaultEnabled?: boolean
+		disableSupported?: boolean
+		effortOptions?: readonly string[]
+	}) => (
+		<div data-testid="thinking-control">
+			<span data-testid="thinking-efforts">{effortOptions?.join(",")}</span>
+			<span data-testid="thinking-default-enabled">{String(defaultEnabled)}</span>
+			<span data-testid="thinking-default-effort">{defaultEffort}</span>
+			<span data-testid="thinking-disable-supported">{String(disableSupported)}</span>
+		</div>
 	),
 }))
 vi.mock("@vscode/webview-ui-toolkit/react", () => ({
@@ -205,28 +254,19 @@ describe("AnthropicProvider", () => {
 		})
 	})
 
-	it("exposes context window tier editing for official models and persists updates", () => {
-		const onUpdate = vi.fn()
+	it("does not expose context tier editing for native-window official models", () => {
 		const profile = {
 			id: "profile-2",
 			provider: "anthropic",
-			modelId: "claude-custom",
+			modelId: "claude-native",
 			anthropic: AnthropicProviderConfig.create({}),
 		} as unknown as ApiProfile
 
-		render(<AnthropicProvider onUpdate={onUpdate} profile={profile} showModelOptions={true} />)
+		render(<AnthropicProvider onUpdate={vi.fn()} profile={profile} showModelOptions={true} />)
 
-		// Official models keep the context-window tier fields editable.
-		expect(screen.getByTestId("capability-fields")).toHaveTextContent("contextWindowTiers")
-
-		fireEvent.click(screen.getByText("Add Context Tier"))
-
-		expect(onUpdate).toHaveBeenCalledWith({
-			anthropic: {
-				...profile.anthropic,
-				capabilities: { contextWindowTiers: [{ id: "long", contextWindow: 1_000_000, label: "1M" }] },
-			},
-		})
+		expect(screen.getByTestId("capability-fields")).not.toHaveTextContent("contextWindowTiers")
+		expect(screen.queryByRole("checkbox", { name: "Enable Long Context" })).not.toBeInTheDocument()
+		expect(screen.getByTestId("current-context-window")).toHaveTextContent("1000000")
 	})
 
 	it("uses the selected tier for the explicit context window and preserves both tier values", () => {
@@ -318,7 +358,7 @@ describe("AnthropicProvider", () => {
 		expect(screen.getByTestId("thinking-efforts")).toHaveTextContent("none,low,medium,high,max")
 	})
 
-	it("enables the 1M long context by default for official models with tiers", () => {
+	it("selects the long context by default for explicitly tiered registry models", () => {
 		const onUpdate = vi.fn()
 		const profile = {
 			id: "profile-3",
@@ -329,7 +369,38 @@ describe("AnthropicProvider", () => {
 
 		render(<AnthropicProvider onUpdate={onUpdate} profile={profile} showModelOptions={true} />)
 
-		// Long context is on by default: the effective context window resolves to 1M.
+		// Explicitly tiered compatible models keep the legacy long-context control.
 		expect(screen.getByText("context:1000000")).toBeInTheDocument()
+	})
+
+	it("marks Opus 5 thinking as enabled by default while keeping disabled available", () => {
+		const profile = {
+			id: "profile-opus-5",
+			provider: "anthropic",
+			modelId: "claude-opus-5",
+			anthropic: AnthropicProviderConfig.create({}),
+		} as unknown as ApiProfile
+
+		render(<AnthropicProvider onUpdate={vi.fn()} profile={profile} showModelOptions={true} />)
+
+		expect(screen.getByTestId("thinking-default-enabled")).toHaveTextContent("true")
+		expect(screen.getByTestId("thinking-default-effort")).toHaveTextContent("high")
+		expect(screen.getByTestId("thinking-disable-supported")).toHaveTextContent("true")
+		expect(screen.getByTestId("thinking-efforts")).toHaveTextContent("none,low,medium,high,xhigh,max")
+	})
+
+	it("keeps Fable 5 thinking required and removes the disabled effort", () => {
+		const profile = {
+			id: "profile-fable-5",
+			provider: "anthropic",
+			modelId: "claude-fable-5",
+			anthropic: AnthropicProviderConfig.create({ reasoning: { enableThinking: false, effort: "none" } }),
+		} as unknown as ApiProfile
+
+		render(<AnthropicProvider onUpdate={vi.fn()} profile={profile} showModelOptions={true} />)
+
+		expect(screen.getByTestId("thinking-default-enabled")).toHaveTextContent("true")
+		expect(screen.getByTestId("thinking-disable-supported")).toHaveTextContent("false")
+		expect(screen.getByTestId("thinking-efforts")).toHaveTextContent("low,medium,high,xhigh,max")
 	})
 })

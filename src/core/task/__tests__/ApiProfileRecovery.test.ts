@@ -85,6 +85,63 @@ describe("resolveTaskApiProfile", () => {
 		expect(persisted.actModeProfile).toBe("old-profile")
 	})
 
+	it("migrates a name-only task through a unique historical Profile name", () => {
+		profiles.push({
+			id: "profile-id",
+			name: "renamed-profile",
+			legacyNames: ["old-profile"],
+			provider: "anthropic",
+			modelId: "claude-test",
+			apiKey: "test-key",
+			enabled: true,
+		} as ApiProfile)
+
+		const result = resolveTaskApiProfile({ actModeProfile: "old-profile" }, "act", "anthropic")
+
+		expect(result).toMatchObject({
+			requestedProfile: "old-profile",
+			resolvedProfile: "renamed-profile",
+			resolvedProfileId: "profile-id",
+			usedFallback: false,
+		})
+		expect(result.configuration).toMatchObject({
+			actModeProfileId: "profile-id",
+			actModeProfile: "renamed-profile",
+		})
+	})
+
+	it("rejects an ambiguous historical Profile name without selecting a fallback", () => {
+		profiles.push(
+			{
+				id: "profile-a",
+				name: "renamed-a",
+				legacyNames: ["old-profile"],
+				provider: "anthropic",
+				modelId: "claude-a",
+				apiKey: "test-key",
+				enabled: true,
+			} as ApiProfile,
+			{
+				id: "profile-b",
+				name: "renamed-b",
+				legacyNames: ["old-profile"],
+				provider: "anthropic",
+				modelId: "claude-b",
+				apiKey: "test-key",
+				enabled: true,
+			} as ApiProfile,
+		)
+
+		const result = resolveTaskApiProfile({ actModeProfile: "old-profile" }, "act", "anthropic")
+
+		expect(result).toMatchObject({
+			resolvedProfile: undefined,
+			usedFallback: false,
+			validity: { status: "invalid", reason: "ambiguous" },
+		})
+		expect(result.error).toContain("matches multiple Profiles")
+	})
+
 	it("marks a missing task profile invalid instead of selecting an enabled fallback", () => {
 		profiles.push(
 			{ id: "other-id", name: "other-provider", provider: "openrouter", enabled: true } as ApiProfile,

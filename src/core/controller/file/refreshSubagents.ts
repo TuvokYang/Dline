@@ -71,6 +71,8 @@ async function scanSubagentsDirectory(dirPath: string): Promise<SubagentInfo[]> 
  *   - Project overrides global on name collision.
  */
 export async function refreshSubagents(controller: Controller): Promise<RefreshedSubagents> {
+	const startedAt = performance.now()
+	let scannedDirectories = 0
 	try {
 		// Get workspace paths for local subagents
 		const workspacePaths = await HostProvider.workspace.getWorkspacePaths({})
@@ -82,6 +84,7 @@ export async function refreshSubagents(controller: Controller): Promise<Refreshe
 		if (primaryWorkspace) {
 			const scanDirs = getSubagentsScanDirectories(primaryWorkspace)
 			for (const dir of scanDirs) {
+				scannedDirectories++
 				const agents = await scanSubagentsDirectory(dir.path)
 				if (dir.source === "global") {
 					globalSubagents.push(...agents)
@@ -93,6 +96,7 @@ export async function refreshSubagents(controller: Controller): Promise<Refreshe
 			const scanDirs = getSubagentsScanDirectories("")
 			for (const dir of scanDirs) {
 				if (dir.source !== "global") continue
+				scannedDirectories++
 				const agents = await scanSubagentsDirectory(dir.path)
 				globalSubagents.push(...agents)
 			}
@@ -116,12 +120,18 @@ export async function refreshSubagents(controller: Controller): Promise<Refreshe
 			agent.enabled = localToggles[agent.path] !== false
 		}
 
+		Logger.debug(
+			`[CapabilityPerf] phase=subagents_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} directories=${scannedDirectories} global=${visibleGlobalSubagents.length} local=${localSubagents.length} shadowedGlobal=${globalSubagents.length - visibleGlobalSubagents.length}`,
+		)
 		return RefreshedSubagents.create({
 			globalSubagents: visibleGlobalSubagents,
 			localSubagents,
 		})
 	} catch (error) {
 		Logger.error("refreshSubagents failed:", error)
+		Logger.debug(
+			`[CapabilityPerf] phase=subagents_refresh_error taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} directories=${scannedDirectories}`,
+		)
 		return RefreshedSubagents.create({
 			globalSubagents: [],
 			localSubagents: [],

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises"
 import * as os from "node:os"
-import { ClineIgnoreController } from "@core/ignore/ClineIgnoreController"
+import type { IgnoreController } from "@core/ignore/IgnoreController"
 import * as childProcess from "child_process"
 import * as path from "path"
 import * as readline from "readline"
@@ -106,22 +106,23 @@ export async function regexSearchFiles(
 	directoryPath: string,
 	regex: string,
 	filePattern?: string,
-	clineIgnoreController?: ClineIgnoreController,
+	ignoreController?: IgnoreController,
 ): Promise<string> {
 	const args = ["--json", "-e", regex, "--glob", filePattern || "*", "--context", "1"]
 
-	// If .clineignore rules exist, write them to a temp file so rg can apply them
-	// alongside .gitignore rules during search (instead of filtering results after)
+	// Hand the agent rules to rg as an ignore file so they prune during the search
+	// instead of only filtering the results afterwards.
+	const agentIgnoreContent = ignoreController?.getIgnoreContent("read")
 	let ignoreFilePath: string | undefined
-	if (clineIgnoreController?.clineIgnoreContent) {
+	if (agentIgnoreContent) {
 		try {
 			const tempDir = os.tmpdir()
-			const tempName = `.clineignore-search-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+			const tempName = `.agentignore-search-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 			ignoreFilePath = path.join(tempDir, tempName)
-			await fs.writeFile(ignoreFilePath, clineIgnoreController.clineIgnoreContent, "utf8")
+			await fs.writeFile(ignoreFilePath, agentIgnoreContent, "utf8")
 			args.push("--ignore-file", ignoreFilePath)
 		} catch (error) {
-			Logger.error("Failed to write .clineignore temp file for rg:", error)
+			Logger.error("Failed to write the agent ignore file for rg:", error)
 		}
 	}
 
@@ -178,10 +179,9 @@ export async function regexSearchFiles(
 		results.push(currentResult as SearchResult)
 	}
 
-	// Filter results using ClineIgnoreController if provided (safety net for any
-	// patterns that rg's --ignore-file might not handle identically)
-	const filteredResults = clineIgnoreController
-		? results.filter((result) => clineIgnoreController.validateAccess(result.filePath))
+	// Safety net for patterns rg's --ignore-file may not evaluate identically.
+	const filteredResults = ignoreController
+		? results.filter((result) => ignoreController.validateAccess(result.filePath, "read"))
 		: results
 
 	return formatResults(filteredResults, cwd)

@@ -28,15 +28,14 @@ export type CompactionPassEstimatePurpose = "request_envelope" | "summary_carry"
 
 export interface PlanNextCompactionPassInput {
 	state: TargetWindowFittingState
-	passInputCeiling: number
 	/**
-	 * Extra tokens the complete-range probe may borrow from the compaction reserve.
+	 * Maximum estimated input one Pass request may carry.
 	 *
-	 * A trailing logical turn that slightly overshoots the Pass ceiling must not force a
-	 * second Pass while the compaction reserve still has ample headroom. Callers derive
-	 * this allowance from the reserve and keep it inside the hard context window.
+	 * The caller resolves this from the compaction trigger plus the reserve concession, so the
+	 * ceiling already accounts for the tokens a complete range is allowed to borrow. The planner
+	 * applies it uniformly and never maintains a second, looser bound.
 	 */
-	passInputCeilingAllowance?: number
+	passInputCeiling: number
 	estimateInputTokens(
 		messages: readonly ClineStorageMessage[],
 		purpose?: CompactionPassEstimatePurpose,
@@ -51,7 +50,6 @@ export type PlanNextCompactionPassResult =
 /** Select the maximal contiguous complete-turn batch that fits the full hidden request ceiling. */
 export async function planNextCompactionPass(input: PlanNextCompactionPassInput): Promise<PlanNextCompactionPassResult> {
 	const passInputCeiling = normalizeTokenCount(input.passInputCeiling)
-	const fullRangeCeiling = passInputCeiling + normalizeTokenCount(input.passInputCeilingAllowance ?? 0)
 	const passStartTurnIndex = input.state.coveredTurnCount
 	if (passStartTurnIndex >= input.state.turns.length) {
 		throw new Error("No uncovered logical turn is available for the next compaction Pass")
@@ -70,34 +68,11 @@ export async function planNextCompactionPass(input: PlanNextCompactionPassInput)
 		input,
 		passStartTurnIndex,
 		passInputCeiling,
-		fullRangeCeiling,
 		staticCosts,
 		estimateExactInput,
 	)
-	if (exactCandidate.acceptedByAllowance) {
-		const rangeIdentity = createCompactionPassRangeIdentity(input.state, passStartTurnIndex, exactCandidate.passEndTurnIndex)
-		return {
-			kind: "planned",
-			plan: {
-				operationId: input.state.operationId,
-				passIndex: input.state.passIndex,
-				passStartTurnIndex,
-				passEndTurnIndex: exactCandidate.passEndTurnIndex,
-				coveredTurnCount: input.state.coveredTurnCount,
-				summaryBaselineHash: input.state.summaryBaselineHash,
-				...rangeIdentity,
-				...exactCandidate.breakdown,
-				estimatedInputTokens: exactCandidate.breakdown.combinedEstimatedInputTokens,
-				passHistoryHash: hashPassHistory(exactCandidate.passHistory),
-				candidateEstimateCount,
-			},
-			passHistory: exactCandidate.passHistory,
-		}
-	}
-	if (
-		exactCandidate.passEndTurnIndex === passStartTurnIndex &&
-		exactCandidate.breakdown.combinedEstimatedInputTokens > passInputCeiling
-	) {
+	const isSingleTurnPass = exactCandidate.passEndTurnIndex === passStartTurnIndex
+	if (isSingleTurnPass && exactCandidate.breakdown.combinedEstimatedInputTokens > passInputCeiling) {
 		const turnFitsWithoutSummary =
 			exactCandidate.breakdown.requestEnvelopeTokens + exactCandidate.breakdown.turnTokens <= passInputCeiling
 		return {
@@ -149,8 +124,6 @@ interface RangeEstimate {
 	passHistory: ClineStorageMessage[]
 	breakdown: CompactionPassEstimateBreakdown
 	tokenScale: number
-	/** The complete range only fits after borrowing from the compaction reserve allowance. */
-	acceptedByAllowance?: boolean
 }
 
 interface StaticPassCosts {
@@ -178,7 +151,6 @@ async function selectExactCandidate(
 	input: PlanNextCompactionPassInput,
 	passStartTurnIndex: number,
 	passInputCeiling: number,
-	fullRangeCeiling: number,
 	staticCosts: StaticPassCosts,
 	estimateExactInput: (messages: readonly ClineStorageMessage[], purpose: CompactionPassEstimatePurpose) => Promise<number>,
 ): Promise<RangeEstimate> {
@@ -211,16 +183,15 @@ async function selectExactCandidate(
 	const fullEndTurnIndex = input.state.turns.length - 1
 	const fullPassHistory = buildCompactionPassHistoryForRange(input.state, passStartTurnIndex, fullEndTurnIndex)
 	const fullCombinedTokens = await estimateExactInput(fullPassHistory, "final_candidate")
-	// The trailing logical turn may overshoot the Pass ceiling by a small margin. Splitting a
-	// range that still fits the reserve allowance would strand a large part of the window, so
-	// accept the complete range whenever it stays inside the allowance-extended ceiling.
-	if (fullCombinedTokens <= fullRangeCeiling) {
+	// The ceiling already includes the reserve concession, so a complete range that fits it is
+	// always sent as one request. Splitting here would strand a large part of the window and
+	// force the excluded tail to be replayed as a fresh prefix after compaction.
+	if (fullCombinedTokens <= passInputCeiling) {
 		return {
 			passEndTurnIndex: fullEndTurnIndex,
 			passHistory: fullPassHistory,
-			breakdown: createBreakdown(fullCombinedTokens, Math.max(passInputCeiling, fullCombinedTokens), staticCosts),
+			breakdown: createBreakdown(fullCombinedTokens, passInputCeiling, staticCosts),
 			tokenScale,
-			acceptedByAllowance: fullCombinedTokens > passInputCeiling,
 		}
 	}
 

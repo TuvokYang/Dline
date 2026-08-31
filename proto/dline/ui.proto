@@ -283,6 +283,8 @@ message ClineMessage {
   string command_execution_mode = 31;
   bool command_can_move_to_background = 32;
   CompactionConversationRange compaction_conversation_range = 33;
+  string user_input_kind = 34;
+  string queued_input_mode = 35;
 }
 
 message ShowWebviewEvent {

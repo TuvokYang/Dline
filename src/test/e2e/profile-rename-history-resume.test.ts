@@ -56,15 +56,6 @@ async function openApiSettings(page: Page, sidebar: Frame): Promise<void> {
 	await expect(sidebar.getByRole("heading", { name: "API Configuration" })).toBeVisible()
 }
 
-async function selectProfile(sidebar: Frame, profileName: string): Promise<void> {
-	const modelSwitcher = sidebar.getByRole("button", { name: "Select model" })
-	await modelSwitcher.click()
-	const option = sidebar.getByRole("option").filter({ has: sidebar.getByText(profileName, { exact: true }) })
-	await expect(option).toHaveCount(1)
-	await option.click()
-	await expect(modelSwitcher).toHaveText(profileName, { timeout: 30_000 })
-}
-
 e2e(
 	"Profile rename - history opens a legacy name-only task and recovers through the renamed Profile",
 	async ({ dlineDir, dlineDocsDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
@@ -109,6 +100,8 @@ e2e(
 				})
 
 			await openApiSettings(page, sidebar)
+			await sidebar.getByRole("button", { name: "Manage profiles" }).click()
+			await expect(sidebar.getByRole("button", { name: "Done managing profiles" })).toBeVisible()
 			const profileNameInput = sidebar.locator(`input[value=${JSON.stringify(initialProfile.name)}]`)
 			await expect(profileNameInput).toHaveCount(1)
 			await profileNameInput.fill(renamedProfileName)
@@ -116,7 +109,8 @@ e2e(
 			await waitForProfileName(dlineDir, initialProfile.id, renamedProfileName)
 			await expect(sidebar.locator(`input[value=${JSON.stringify(initialProfile.name)}]`)).toHaveCount(0)
 			await expect(sidebar.locator(`input[value=${JSON.stringify(renamedProfileName)}]`)).toHaveCount(1)
-			await sidebar.getByRole("button", { name: "Done" }).click()
+			await sidebar.getByRole("button", { name: "Done managing profiles" }).click()
+			await sidebar.getByRole("button", { name: "Done", exact: true }).click()
 
 			const modelSwitcher = sidebar.getByRole("button", { name: "Select model" })
 			await expect(modelSwitcher).toHaveText(renamedProfileName, { timeout: 30_000 })
@@ -194,9 +188,9 @@ e2e(
 			await expect(historyItem).toHaveCount(1)
 			await historyItem.click()
 			await expect(sidebar.getByText(taskText, { exact: true }).first()).toBeVisible({ timeout: 30_000 })
-			await expect(sidebar.getByRole("button", { name: "Select model" })).toHaveText("-:-")
-			await expect(sidebar.getByTestId("chat-input")).toBeEnabled()
-			await selectProfile(sidebar, renamedProfileName)
+			await expect(sidebar.getByRole("button", { name: "Select model" })).toHaveText(renamedProfileName, {
+				timeout: 30_000,
+			})
 			await expect(sidebar.getByTestId("chat-input")).toBeEnabled()
 			await expect
 				.poll(async () => readTaskSettings(dlineDocsDir, taskId), { timeout: 30_000 })

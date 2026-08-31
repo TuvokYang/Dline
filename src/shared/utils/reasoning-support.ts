@@ -2,6 +2,7 @@ import { normalizeOpenaiReasoningEffort, type OpenaiReasoningEffort } from "../s
 
 export const ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS = ["none", "low", "medium", "high", "xhigh", "max"] as const
 export const ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS_WITHOUT_XHIGH = ["none", "low", "medium", "high", "max"] as const
+export const ANTHROPIC_REQUIRED_ADAPTIVE_REASONING_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh", "max"] as const
 
 export type ClaudeAdaptiveThinkingEffort = "low" | "medium" | "high" | "xhigh" | "max"
 
@@ -22,6 +23,15 @@ export function isDeepSeekReasoningModel(modelId?: string): boolean {
 export interface DeepSeekAdaptiveThinkingSettings {
 	enabled: boolean
 	effort?: DeepSeekReasoningEffort
+}
+
+export function isClaudeAdaptiveThinkingEnabledByDefault(modelId?: string): boolean {
+	const id = modelId?.toLowerCase()
+	return id?.includes("claude-fable-5") === true || id?.includes("claude-opus-5") === true || id?.includes("claude-sonnet-5") === true
+}
+
+export function canDisableClaudeAdaptiveThinking(modelId?: string): boolean {
+	return modelId?.toLowerCase().includes("claude-fable-5") !== true
 }
 
 export function isClaudeOpusAdaptiveThinkingModel(modelId?: string): boolean {

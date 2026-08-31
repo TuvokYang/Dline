@@ -430,17 +430,28 @@ export class StateManager {
 	}
 
 	private async notifySyncExternalChange(event: StateSyncEvent): Promise<void> {
+		const startedAt = performance.now()
 		const callbacks = new Set(this.onSyncExternalChangeCallbacks)
 		if (this.onSyncExternalChange) {
 			callbacks.add(this.onSyncExternalChange)
 		}
+		let index = 0
 		for (const callback of callbacks) {
+			const callbackStartedAt = performance.now()
 			try {
 				await callback(event)
 			} catch (error) {
 				Logger.error("[StateManager] Failed to broadcast committed Settings state:", error)
+			} finally {
+				Logger.debug(
+					`[SettingsPerf] phase=sync_callback index=${index} source=${event.source} durationMs=${Math.round(performance.now() - callbackStartedAt)} callbacks=${callbacks.size}`,
+				)
+				index++
 			}
 		}
+		Logger.debug(
+			`[SettingsPerf] phase=sync_broadcast source=${event.source} callbacks=${callbacks.size} totalMs=${Math.round(performance.now() - startedAt)}`,
+		)
 	}
 
 	public static get(): StateManager {
@@ -1427,6 +1438,15 @@ export class StateManager {
 	 * Bypasses the debounced persistence and forces immediate writes
 	 */
 	public async flushPendingState(): Promise<void> {
+		const startedAt = performance.now()
+		let drainPasses = 0
+		const initialPending = {
+			global: this.pendingGlobalState.size,
+			settings: this.pendingSettings.size,
+			secrets: this.pendingSecrets.size,
+			workspace: this.pendingWorkspaceState.size,
+			tasks: this.pendingTaskState.size,
+		}
 		// Cancel any pending timeout
 		if (this.persistenceTimeout) {
 			clearTimeout(this.persistenceTimeout)
@@ -1437,9 +1457,13 @@ export class StateManager {
 		// draining until the queue and all dirty collections are empty; shutdown sets
 		// shuttingDown first so no new mutation can be admitted during this loop.
 		do {
+			drainPasses++
 			await this.persistPendingState()
 			await this.settingsRepository?.flush()
 		} while (this.hasPendingState())
+		Logger.debug(
+			`[SettingsPerf] phase=state_flush durationMs=${Math.round(performance.now() - startedAt)} passes=${drainPasses} initialGlobal=${initialPending.global} initialSettings=${initialPending.settings} initialSecrets=${initialPending.secrets} initialWorkspace=${initialPending.workspace} initialTasks=${initialPending.tasks}`,
+		)
 	}
 
 	/**

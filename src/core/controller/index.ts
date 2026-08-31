@@ -6,6 +6,7 @@ import { getProfileModelInfo } from "@core/api/model-info"
 import { createGlobalConfigurationSnapshot, type GlobalConfigurationSnapshot } from "@core/configuration/GlobalConfiguration"
 import { GlobalConfigurationManager, type GlobalConfigurationResult } from "@core/configuration/GlobalConfigurationManager"
 import { resolveTargetContextScope } from "@core/context/context-management/target-context-scope"
+import { IgnoreController } from "@core/ignore/IgnoreController"
 import { ContextTransitionEngine } from "@core/controller/context-transition/ContextTransitionEngine"
 import { ContextTransitionLease } from "@core/controller/context-transition/ContextTransitionLease"
 import { ModeTransitionPolicy } from "@core/controller/context-transition/policies/ModeTransitionPolicy"
@@ -135,6 +136,15 @@ https://github.com/KumarVariable/vscode-extension-sidebar-html/blob/master/src/c
 */
 
 export class Controller {
+	/**
+	 * One backfill scan per process.
+	 *
+	 * Multiple Controllers (multi-window/webview) share the same taskHistory
+	 * file; letting each one schedule its own scan multiplied full-history
+	 * reads and durable transactions for identical repairs.
+	 */
+	private static taskCompletionBackfillScheduled = false
+
 	task?: Task
 
 	mcpHub: McpHub
@@ -224,6 +234,46 @@ export class Controller {
 		await this.workspaceMcpRegistration
 	}
 
+	/**
+	 * Resolve the workspace-scoped ignore rules, loading them at most once.
+	 *
+	 * Concurrent callers share one in-flight load. A changed workspace root
+	 * replaces the instance because the rules belong to that root.
+	 */
+	async ensureIgnoreController(cwd: string): Promise<IgnoreController> {
+		const resolvedCwd = path.resolve(cwd)
+		if (this.ignoreController && this.ignoreControllerCwd === resolvedCwd) {
+			return this.ignoreController
+		}
+		if (this.ignoreControllerSetup && this.ignoreControllerCwd === resolvedCwd) {
+			return await this.ignoreControllerSetup
+		}
+
+		const previous = this.ignoreController
+		this.ignoreControllerCwd = resolvedCwd
+		this.ignoreController = undefined
+		const controller = new IgnoreController(resolvedCwd)
+		this.ignoreControllerSetup = controller
+			.initialize()
+			.then(() => {
+				this.ignoreController = controller
+				return controller
+			})
+			.finally(() => {
+				this.ignoreControllerSetup = undefined
+			})
+
+		// Release the superseded instance's watcher only after the replacement is
+		// in flight, so a failed load cannot leave the workspace without rules.
+		if (previous) void previous.dispose().catch(() => undefined)
+		return await this.ignoreControllerSetup
+	}
+
+	/** Return the loaded ignore rules, or undefined before the first load completes. */
+	getIgnoreController(): IgnoreController | undefined {
+		return this.ignoreController
+	}
+
 	// Timer for periodic remote config fetching
 	private remoteConfigTimer?: NodeJS.Timeout
 	// Timer for periodic account usage polling
@@ -237,6 +287,16 @@ export class Controller {
 	private suppressedStatePostsAfterDetach = 0
 	private workspaceMcpRegistration: Promise<void> = Promise.resolve()
 	private workspaceMcpRegistrationGeneration = 0
+	/**
+	 * Workspace-scoped exclusion rules shared by every Task on this Controller.
+	 *
+	 * Rules are workspace state, not Task state: a per-Task instance re-read and
+	 * re-watched the same files for each Task and let discovery, checkpoints and
+	 * prompt-input watching drift apart.
+	 */
+	private ignoreController?: IgnoreController
+	private ignoreControllerSetup?: Promise<IgnoreController>
+	private ignoreControllerCwd?: string
 	/** Shared in-flight workspace root detection, so concurrent callers spawn one `git` sweep. */
 	private workspaceManagerSetup?: Promise<WorkspaceRootManager | undefined>
 	// Timer for periodic lock heartbeat (keeps .lock file fresh)
@@ -320,12 +380,23 @@ export class Controller {
 				Logger.error("[Controller] Storage persistence failed (will retry):", error)
 			},
 			onSyncExternalChange: async (event) => {
+				const startedAt = performance.now()
+				const changedKeys = event.source === "settings" ? event.commit.changedKeys : []
 				await this.configureGlobalComponents()
+				const configureMs = Math.round(performance.now() - startedAt)
 				if (event.source === "settings" && this.task && settingsAffectPromptFreshness(event.commit.changedKeys)) {
+					const freshnessStartedAt = performance.now()
 					await this.task.flushPromptFreshnessInvalidation("settings")
+					Logger.debug(
+						`[SettingsPerf] phase=controller_callback taskId=${this.task.taskId} source=${event.source} keys=${changedKeys.join(",") || "none"} configureMs=${configureMs} freshnessMs=${Math.round(performance.now() - freshnessStartedAt)} totalMs=${Math.round(performance.now() - startedAt)} outcome=freshness_publish`,
+					)
 					return
 				}
+				const publishStartedAt = performance.now()
 				await this.postStateToWebview()
+				Logger.debug(
+					`[SettingsPerf] phase=controller_callback taskId=${this.task?.taskId ?? "none"} source=${event.source} keys=${changedKeys.join(",") || "none"} configureMs=${configureMs} publishMs=${Math.round(performance.now() - publishStartedAt)} totalMs=${Math.round(performance.now() - startedAt)} outcome=state_publish`,
+				)
 			},
 		})
 		this.authService = AuthService.getInstance(this)
@@ -375,6 +446,11 @@ export class Controller {
 	 */
 	private scheduleTaskCompletionBackfill(): void {
 		if (this.stateManager.getGlobalStateKey("taskCompletionBackfillCompleted")) return
+		// Process-level single-flight: every Controller shares the same history
+		// file, so a second scheduled scan would only multiply full-file reads
+		// and durable transactions without repairing anything new.
+		if (Controller.taskCompletionBackfillScheduled) return
+		Controller.taskCompletionBackfillScheduled = true
 
 		const timer = setTimeout(() => {
 			void this.runTaskCompletionBackfill().catch((error) =>
@@ -386,11 +462,14 @@ export class Controller {
 
 	private async runTaskCompletionBackfill(): Promise<void> {
 		if (this.disposed) return
+		// The marker may have been set durably by another window while the timer
+		// was pending; re-check before paying for the scan.
+		if (this.stateManager.getGlobalStateKey("taskCompletionBackfillCompleted")) return
 
 		const backfill = new TaskCompletionBackfill({
 			listTasks: () => this.stateManager.taskHistory.getDeduplicated(),
 			readCompletion: (taskId) => readPersistedTaskCompletion(taskId),
-			persist: (taskId, isCompleted, revision) => this.persistTaskCompletionState(taskId, isCompleted, revision),
+			persistBatch: (updates) => this.persistTaskCompletionStates(updates),
 			onRepaired: async () => {
 				await this.postStateToWebview()
 			},
@@ -474,6 +553,13 @@ export class Controller {
 		// Stop the account usage polling timer to prevent background
 		// postStateToWebview calls after the controller is disposed.
 		this.stopAccountUsagePolling()
+		// Release the workspace ignore watchers with the window that owns them.
+		const ignoreController = this.ignoreController
+		this.ignoreController = undefined
+		this.ignoreControllerCwd = undefined
+		if (ignoreController) {
+			void ignoreController.dispose().catch((error) => Logger.error("[Controller] Failed to dispose ignore rules:", error))
+		}
 
 		await this.clearTask()
 		this.mcpPromptCatalogDispose?.()
@@ -554,6 +640,16 @@ export class Controller {
 		taskSettings?: Partial<Settings>,
 		options?: InitTaskOptions,
 	) {
+		const initStartedAt = performance.now()
+		let stageStartedAt = initStartedAt
+		const initKind = historyItem ? "history" : task || images || files ? "new" : "empty"
+		const logInitStage = (phase: string, taskId = historyItem?.id ?? "pending", details = "") => {
+			const now = performance.now()
+			Logger.debug(
+				`[TaskInitPerf] phase=${phase} taskId=${taskId} kind=${initKind} durationMs=${Math.round(now - stageStartedAt)} elapsedMs=${Math.round(now - initStartedAt)}${details ? ` ${details}` : ""}`,
+			)
+			stageStartedAt = now
+		}
 		// Fire-and-forget: We intentionally don't await fetchRemoteConfig here.
 		// Remote config is already fetched in startRemoteConfigTimer() which runs in the constructor,
 		// so enterprise policies (yoloModeAllowed, allowedMCPServers, etc.) are already applied.
@@ -565,6 +661,7 @@ export class Controller {
 
 		if (!options?.skipInitialClear) {
 			await this.clearTask()
+			logInitStage("initial_clear")
 		}
 
 		const autoApprovalSettings = this.stateManager.getGlobalSettingsKey("autoApprovalSettings")
@@ -597,8 +694,13 @@ export class Controller {
 		// the lifetime of this controller, so reuse the resolved manager instead of
 		// re-detecting on the critical path of every task start.
 		await this.ensureWorkspaceManager()
+		logInitStage("workspace_manager")
 
 		const cwd = this.workspaceManager?.getPrimaryRoot()?.path || (await getCwd(getDesktopDir()))
+		// Load workspace exclusion rules before the Task exists so its first
+		// discovery, tool call and prompt-input scan all see the same rules.
+		const ignoreController = await this.ensureIgnoreController(cwd)
+		logInitStage("ignore_controller")
 
 		const taskId = historyItem?.id || Date.now().toString()
 
@@ -614,8 +716,10 @@ export class Controller {
 			// Start polling for lock release in the background
 			this.startLockPoll(taskId)
 		}
+		logInitStage("task_lock", taskId, `acquired=${this.taskLockAcquired}`)
 
 		await this.stateManager.loadTaskSettings(taskId)
+		logInitStage("task_settings", taskId)
 		if (taskSettings) {
 			this.stateManager.setTaskSettingsBatch(taskId, taskSettings)
 		}
@@ -646,6 +750,7 @@ export class Controller {
 		// and restored by loadTaskSettings above �?do NOT override it from historyItem.
 		const uiMessage = await UIMessage.open(taskId)
 		const apiConversation = await ApiConversation.open(taskId)
+		logInitStage("message_stores_open", taskId)
 
 		this.task = new Task({
 			controller: this,
@@ -662,6 +767,7 @@ export class Controller {
 			defaultTerminalProfile: defaultTerminalProfile ?? "default",
 			vscodeTerminalExecutionMode,
 			cwd,
+			ignoreController,
 			stateManager: this.stateManager,
 			workspaceManager: this.workspaceManager,
 			task,
@@ -672,6 +778,7 @@ export class Controller {
 			uiMessage,
 			apiConversation,
 		})
+		logInitStage("task_construct", taskId)
 		this.restartAccountUsagePolling()
 		const taskInstance = this.task
 		const initializedTaskId = taskInstance.taskId
@@ -691,6 +798,7 @@ export class Controller {
 					isCurrent: () => this.task === taskInstance,
 					onReadyToDisplay: options?.onHistoryTaskReadyToDisplay,
 				})
+				logInitStage("history_prepare", initializedTaskId, `current=${remainsCurrent}`)
 				if (!remainsCurrent) {
 					return initializedTaskId
 				}
@@ -731,6 +839,7 @@ export class Controller {
 			return initializedTaskId
 		}
 		await this.postStateToWebview()
+		logInitStage("final_state_publish", initializedTaskId)
 		if (this.task !== taskInstance) {
 			return initializedTaskId
 		}
@@ -2021,18 +2130,31 @@ export class Controller {
 		preserveCompletedState?: boolean
 		suppressPostState?: boolean
 	}) {
+		const startedAt = performance.now()
+		let stageStartedAt = startedAt
 		const taskId = this.task?.taskId
+		const logCloseStage = (phase: string, details = "") => {
+			const now = performance.now()
+			Logger.debug(
+				`[ControllerClosePerf] phase=${phase} taskId=${taskId ?? "none"} durationMs=${Math.round(now - stageStartedAt)} elapsedMs=${Math.round(now - startedAt)}${details ? ` ${details}` : ""}`,
+			)
+			stageStartedAt = now
+		}
 		if (taskId && options?.clearPanelState) {
 			await this.clearPanelStateIfNeeded()
+			logCloseStage("panel_state_clear")
 		}
 		await this.contextTransitionEngine.reset("Task cleared during context transition.")
+		logCloseStage("context_transition_reset")
 		if (this.task) {
 			// Sync task mode to global state so slider works after task closed
 			this.stateManager.setGlobalState("mode", this.task.taskSm.mode)
 			// Clear task settings cache when task ends
 			await this.stateManager.clearTaskSettings(taskId)
+			logCloseStage("task_settings_clear")
 		}
 		await this.task?.terminate({ preserveCompletedState: options?.preserveCompletedState })
+		logCloseStage("task_terminate", `preserveCompleted=${options?.preserveCompletedState === true}`)
 		// Stop lock heartbeat and polling only after terminate() completes:
 		// terminate() pushes intermediate state to the webview while the task
 		// instance still exists, so flipping taskLockAcquired early would make
@@ -2046,6 +2168,7 @@ export class Controller {
 		// Release file lock so other instances can open the task
 		if (taskId) {
 			await this.lockService.releaseTaskLock(taskId).catch((e) => Logger.error("Failed to release lock:", e))
+			logCloseStage("lock_release")
 			const { OrchestratorController } = await import("@/core/orchestrator/OrchestratorController")
 			OrchestratorController.getInstance().unregisterController(taskId)
 		}
@@ -2058,7 +2181,9 @@ export class Controller {
 		}
 		if (!options?.suppressPostState) {
 			await this.postStateToWebview()
+			logCloseStage("final_state_publish")
 		}
+		logCloseStage("complete", `suppressPostState=${options?.suppressPostState === true}`)
 	}
 
 	// Caching mechanism to keep track of webview messages + API conversation history per provider instance
@@ -2115,15 +2240,37 @@ export class Controller {
 			const updated = await this.stateManager.taskHistory.setCompletionState({ taskId, isCompleted, revision })
 			if (!updated) return false
 
-			const history = [...(this.stateManager.getGlobalStateKey("taskHistory") ?? [])]
-			const existingItemIndex = history.findIndex((item) => item.id === taskId)
-			if (existingItemIndex >= 0) {
-				history[existingItemIndex] = updated
-			} else {
-				history.push(updated)
-			}
-			this.stateManager.setGlobalState("taskHistory", history)
+			this.syncTaskHistoryCache([updated])
 			return true
 		})
+	}
+
+	/**
+	 * Durably persist many completion projections in one batch transaction and
+	 * synchronize the controller cache. Used by the one-time backfill so a large
+	 * history pays for at most one full-file rewrite instead of one per row.
+	 */
+	private async persistTaskCompletionStates(
+		updates: readonly { taskId: string; isCompleted: boolean; revision: number }[],
+	): Promise<number> {
+		return await this.taskHistoryProjectionMutex.withLock(async () => {
+			const applied = await this.stateManager.taskHistory.setCompletionStates(updates)
+			if (applied.length > 0) this.syncTaskHistoryCache(applied)
+			return applied.length
+		})
+	}
+
+	/** Merge freshly persisted history rows into the cached global task history. */
+	private syncTaskHistoryCache(rows: readonly HistoryItem[]): void {
+		const history = [...(this.stateManager.getGlobalStateKey("taskHistory") ?? [])]
+		for (const row of rows) {
+			const existingItemIndex = history.findIndex((item) => item.id === row.id)
+			if (existingItemIndex >= 0) {
+				history[existingItemIndex] = row
+			} else {
+				history.push(row)
+			}
+		}
+		this.stateManager.setGlobalState("taskHistory", history)
 	}
 }

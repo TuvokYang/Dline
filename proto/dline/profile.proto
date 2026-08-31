@@ -43,6 +43,9 @@ message ApiProfile {
   bool enabled = 8;
   optional ModelInfo model_info = 9;  // user defined model info overwrite
 
+  // Previous display names retained for name-only Task migration after rename.
+  repeated string legacy_names = 91;
+
   // Web search routing policy for this provider profile. Omitted legacy values
   // resolve to WEB_SEARCH_MODE_AUTO.
   optional dline.provider.WebSearchMode web_search_mode = 90;

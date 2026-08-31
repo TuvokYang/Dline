@@ -10,6 +10,8 @@ describe("WebSearchModeControl", () => {
 
 		const control = screen.getByRole("combobox", { name: "Web Search mode" })
 		expect(control).toHaveValue(String(WebSearchMode.WEB_SEARCH_MODE_AUTO))
+		expect(control).toHaveClass("min-h-7", "w-full", "text-sm")
+		expect(screen.getByText("Web Search")).toHaveClass("text-sm", "font-medium")
 		expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
 			"Auto",
 			"Force Local",

@@ -26,19 +26,13 @@ describe("provider model tiers", () => {
 		}
 	})
 
-	it("stores Anthropic long context metadata only on base model IDs", () => {
+	it("keeps official Anthropic models at their native 1M window without legacy tiers", () => {
 		expect(Object.keys(anthropicModels).filter((modelId) => modelId.includes(":1m"))).toEqual([])
 
-		for (const modelId of ["claude-sonnet-4-6", "claude-opus-4-6", "claude-opus-4-6:fast"]) {
-			const model = anthropicModels[modelId]
-			expect(model?.capabilities?.contextWindow).toBe(200_000)
-			expect(model?.capabilities?.contextWindowTiers).toEqual([
-				{ id: "standard", contextWindow: 200_000, label: "200K" },
-				{ id: "long", contextWindow: 1_000_000, label: "1M", apiModelSuffix: ":1m" },
-			])
+		for (const model of Object.values(anthropicModels)) {
+			expect(model.capabilities?.contextWindow).toBe(1_000_000)
+			expect(model.capabilities?.contextWindowTiers).toBeUndefined()
+			expect(model.pricing?.tiers).toBeUndefined()
 		}
-		expect(anthropicModels["claude-sonnet-4-6"]?.pricing?.tiers).toEqual(expect.any(Array))
-		expect(anthropicModels["claude-opus-4-6"]?.pricing?.tiers).toEqual(expect.any(Array))
-		expect(anthropicModels["claude-opus-4-6:fast"]?.pricing?.tiers).toBeUndefined()
 	})
 })

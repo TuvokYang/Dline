@@ -6,7 +6,7 @@ import type { ApiStreamServerToolChunk } from "@core/api/transform/stream"
 import { FileContextTracker } from "@core/context/context-tracking/FileContextTracker"
 import { getHookModelContext } from "@core/hooks/hook-model-context"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
-import { ClineIgnoreController } from "@core/ignore/ClineIgnoreController"
+import { IgnoreController } from "@core/ignore/IgnoreController"
 import { CommandPermissionController } from "@core/permissions"
 import type { ResolvedPromptRuntime } from "@core/prompts/system-prompt-cache/FrozenPromptRuntime"
 import { TaskFileTracker } from "@integrations/checkpoints/TaskFileTracker"
@@ -404,7 +404,7 @@ export class ToolExecutor {
 		private mcpHub: McpHub,
 		private fileContextTracker: FileContextTracker,
 		private taskFileTracker: TaskFileTracker,
-		private clineIgnoreController: ClineIgnoreController,
+		private ignoreController: IgnoreController,
 		private commandPermissionController: CommandPermissionController,
 		private contextManager: ContextManager,
 		private stateManager: StateManager,
@@ -534,7 +534,7 @@ export class ToolExecutor {
 				diffViewProvider: this.diffViewProvider,
 				fileContextTracker: this.fileContextTracker,
 				taskFileTracker: this.taskFileTracker,
-				clineIgnoreController: this.clineIgnoreController,
+				ignoreController: this.ignoreController,
 				commandPermissionController: this.commandPermissionController,
 				contextManager: this.contextManager,
 				stateManager: this.stateManager,
@@ -591,7 +591,7 @@ export class ToolExecutor {
 	 * Register all tool handlers with the coordinator
 	 */
 	private registerToolHandlers(): void {
-		const validator = new ToolValidator(this.clineIgnoreController)
+		const validator = new ToolValidator(this.ignoreController)
 		// Register all tools via toolUseNames
 		for (const tool of toolUseNames) {
 			this.coordinator.registerByName(tool, validator)

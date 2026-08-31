@@ -1184,7 +1184,7 @@ export class SubagentRunner {
 	): TaskConfig {
 		const baseCallbacks = this.baseConfig.callbacks
 		const coordinator = new ToolExecutorCoordinator()
-		const validator = new ToolValidator(this.baseConfig.services.clineIgnoreController)
+		const validator = new ToolValidator(this.baseConfig.services.ignoreController)
 
 		for (const tool of this.allowedTools) {
 			coordinator.registerByName(tool, validator)

@@ -49,7 +49,7 @@ export async function openTaskInNewWindow(controller: Controller, request: Strin
 					onHistoryTaskReadyToDisplay: () => sendChatButtonClickedEvent(panelProvider.controller),
 				})
 				.then(() => {
-					Logger.log(`[openTaskInNewWindow] Task ${taskId} reopened in existing panel: ${title}`)
+					Logger.log(`[openTaskInNewWindow] Task ${taskId} reopened in existing panel`)
 				})
 				.catch((error: unknown) => {
 					Logger.error(`[openTaskInNewWindow] Failed to initialize task ${taskId} in existing panel:`, error)
@@ -66,7 +66,7 @@ export async function openTaskInNewWindow(controller: Controller, request: Strin
 					onHistoryTaskReadyToDisplay: () => sendChatButtonClickedEvent(panelProvider.controller),
 				})
 				.then(() => {
-					Logger.log(`[openTaskInNewWindow] Task ${taskId} opened in new panel: ${title}`)
+					Logger.log(`[openTaskInNewWindow] Task ${taskId} opened in new panel`)
 				})
 				.catch((error: unknown) => {
 					Logger.error(`[openTaskInNewWindow] Failed to initialize task ${taskId} in new panel:`, error)

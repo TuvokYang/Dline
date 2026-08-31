@@ -62,7 +62,26 @@ export function resolveProfileReference(
 		return {
 			status: "invalid",
 			reason: "ambiguous",
-			error: `Profile not valid: legacy name "${reference}" matches multiple Profiles.`,
+			error: `Profile not valid: current name "${reference}" matches multiple Profiles.`,
+		}
+	}
+
+	const historicalNameMatches = profiles.filter((profile) => (profile.legacyNames ?? []).includes(reference))
+	if (historicalNameMatches.length === 1) {
+		const profile = historicalNameMatches[0]
+		return {
+			status: "resolved",
+			profile,
+			profileId: profile.id,
+			profileName: profile.name,
+			migratedFromLegacyName: true,
+		}
+	}
+	if (historicalNameMatches.length > 1) {
+		return {
+			status: "invalid",
+			reason: "ambiguous",
+			error: `Profile not valid: historical name "${reference}" matches multiple Profiles.`,
 		}
 	}
 

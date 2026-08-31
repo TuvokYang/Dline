@@ -1,3 +1,4 @@
+import { IgnoreController } from "@core/ignore/IgnoreController"
 import { fileExistsAtPath } from "@utils/fs"
 import fs from "fs/promises"
 import { join } from "path"
@@ -127,8 +128,8 @@ function getBuildArtifactPatterns(): string[] {
  * and eliminates EPERM races when multiple CheckpointTracker instances share a
  * worktree (e.g. main window + debug Extension Host).
  *
- * @param extraGlobs - Additional globby-compatible ignore patterns (e.g. from
- *   workspace .gitignore / .dlineignore parsed via parseGitignoreToGlobs)
+ * @param extraGlobs - Additional globby-compatible ignore patterns, normally
+ *   from `IgnoreController.toGlobPatterns()`
  * @returns Array of globby-compatible ignore patterns (e.g. "** /dist/**")
  */
 export function getExcludedDirectoryGlobs(extraGlobs?: string[]): string[] {
@@ -322,84 +323,30 @@ function getLogFilePatterns(): string[] {
 }
 
 /**
- * Reads workspace-level ignore files (.gitignore and .dlineignore) and returns
- * their combined content in gitignore syntax. This content is appended to the
- * shadow git info/exclude so that paths the user has already ignored via
- * .gitignore (e.g. tmp/) are also excluded from checkpoint tracking.
+ * Repository-scoped ignore rules to append to the shadow git info/exclude.
  *
- * .dlineignore uses the same syntax as .gitignore with optional !include
- * directives; !include lines are filtered out because the included files may
- * not exist at shadow-git write time.
+ * Checkpoints track the repository, so they follow the repository's own rules:
+ * only `.gitignore` plus the built-in floor. Agent-scoped files (`.agentignore`
+ * and its accepted aliases) deliberately do not apply here — they restrict what
+ * the agent may read, not what the workspace considers untracked.
  *
  * @param workspacePath - Absolute path to the workspace root
- * @returns Combined gitignore-format content, or empty string if neither file exists
+ * @returns gitignore-format content to append after the built-in patterns
  */
 export async function loadWorkspaceIgnoreContent(workspacePath: string): Promise<string> {
-	const parts: string[] = []
-
-	// Load .gitignore
-	try {
-		const gitignorePath = join(workspacePath, ".gitignore")
-		if (await fileExistsAtPath(gitignorePath)) {
-			const content = await fs.readFile(gitignorePath, "utf8")
-			if (content.trim()) {
-				parts.push(`# --- from .gitignore ---\n${content}`)
-			}
-		}
-	} catch (error) {
-		Logger.warn("CheckpointExclusions: failed to read .gitignore:", error)
-	}
-
-	// Load .dlineignore (filter out !include directives)
-	try {
-		const dlineignorePath = join(workspacePath, ".dlineignore")
-		if (await fileExistsAtPath(dlineignorePath)) {
-			const content = await fs.readFile(dlineignorePath, "utf8")
-			if (content.trim()) {
-				// Strip !include lines — included files may not be resolvable at write time
-				const filtered = content
-					.split(/\r?\n/)
-					.filter((line) => !line.trimStart().startsWith("!include "))
-					.join("\n")
-				if (filtered.trim()) {
-					parts.push(`# --- from .dlineignore ---\n${filtered}`)
-				}
-			}
-		}
-	} catch (error) {
-		Logger.warn("CheckpointExclusions: failed to read .dlineignore:", error)
-	}
-
-	return parts.join("\n\n")
+	const rules = await IgnoreController.loadSnapshot(workspacePath)
+	return rules.toGitignoreContent("git")
 }
 
-/**
- * Converts gitignore-format content into globby-compatible ignore patterns.
- * Mirrors the logic in list-files.ts:readGitignorePatterns so that the same
- * directories excluded from shadow git info/exclude are also skipped during
- * repository-boundary discovery.
- *
- * @param content - Raw gitignore / .dlineignore content (one pattern per line)
- * @returns Array of globby-compatible ignore patterns (e.g. "** /tmp/**")
- */
-export function parseGitignoreToGlobs(content: string): string[] {
-	const patterns: string[] = []
-	for (const rawLine of content.split(/\r?\n/)) {
-		const trimmed = rawLine.trim()
-		// Skip empty lines, comments, negation patterns, and include directives
-		if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("!") || trimmed.startsWith("!include ")) {
-			continue
-		}
-		if (trimmed.endsWith("/")) {
-			const dirName = trimmed.slice(0, -1)
-			patterns.push(`**/${dirName}`)
-			patterns.push(`**/${dirName}/**`)
-		} else {
-			patterns.push(`**/${trimmed}`)
-			patterns.push(`**/${trimmed}/**`)
-		}
-	}
-	return patterns
+/** Outcome of writing the shadow repository excludes. */
+export interface WriteExcludesResult {
+	/**
+	 * True when the effective exclusion ruleset differs from the one the shadow
+	 * repository was last built with. Only a ruleset change can invalidate files
+	 * that are already indexed, so callers use this to decide whether the shadow
+	 * index must be rebuilt from scratch or may take the incremental path.
+	 */
+	changed: boolean
 }
 
 /**
@@ -412,13 +359,14 @@ export function parseGitignoreToGlobs(content: string): string[] {
  *   workspace .gitignore / .dlineignore to append after the built-in patterns
  * @param boundaryPatterns - Root-relative nested repository paths owned outside
  *   the root shadow checkpoint
+ * @returns Whether the written ruleset differs from the previous one
  */
 export const writeExcludesFile = async (
 	gitPath: string,
 	lfsPatterns: string[] = [],
 	workspaceIgnoreContent?: string,
 	boundaryPatterns: string[] = [],
-): Promise<void> => {
+): Promise<WriteExcludesResult> => {
 	const excludesPath = join(gitPath, "info", "exclude")
 	await fs.mkdir(join(gitPath, "info"), { recursive: true })
 
@@ -426,7 +374,10 @@ export const writeExcludesFile = async (
 	if (workspaceIgnoreContent) {
 		patterns.push(workspaceIgnoreContent)
 	}
-	await fs.writeFile(excludesPath, patterns.join("\n"))
+	const content = patterns.join("\n")
+	const previousContent = await fs.readFile(excludesPath, "utf8").catch(() => undefined)
+	await fs.writeFile(excludesPath, content)
+	return { changed: previousContent !== content }
 }
 
 /**

@@ -56,6 +56,49 @@ describe("provider reasoning and service-tier options", () => {
 		})
 	})
 
+	it("keeps required Fable 5 thinking available even when a stale Profile disables it", () => {
+		const thinking = resolveTaskThinkingConfig(
+			"anthropic",
+			{
+				supportsReasoning: true,
+				thinking: {
+					supported: true,
+					mode: "effort",
+					effortLevels: ["low", "medium", "high", "xhigh", "max"],
+				},
+			},
+			{ enableThinking: false, effort: "none" },
+			"claude-fable-5",
+		)
+
+		expect(thinking?.effortLevels).to.deep.equal(["low", "medium", "high", "xhigh", "max"])
+		expect(validateTaskReasoningOverride({ kind: "effort", effort: "none" }, thinking)).to.deep.include({
+			valid: false,
+			error: "unsupported_effort",
+		})
+	})
+
+	it("allows Opus 5 to expose the explicit disabled effort", () => {
+		const thinking = resolveTaskThinkingConfig(
+			"anthropic",
+			{
+				supportsReasoning: true,
+				thinking: {
+					supported: true,
+					mode: "effort",
+					effortLevels: ["none", "low", "medium", "high", "xhigh", "max"],
+				},
+			},
+			undefined,
+			"claude-opus-5",
+		)
+
+		expect(validateTaskReasoningOverride({ kind: "effort", effort: "none" }, thinking)).to.deep.equal({
+			valid: true,
+			override: { kind: "effort", effort: "none" },
+		})
+	})
+
 	it("uses an enabled Provider reasoning config when model capability hydration is unavailable", () => {
 		const deepSeekThinking = resolveTaskThinkingConfig("deepseek", undefined, {
 			enableThinking: true,

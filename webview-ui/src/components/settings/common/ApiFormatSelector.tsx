@@ -1,5 +1,7 @@
 import { ApiFormat } from "@shared/proto/dline/models/metadata"
 import { getApiFormatLabel, resolveApiFormat } from "@shared/providers/api-format"
+import { useId } from "react"
+import { ProfileField } from "../profile-ui"
 
 interface ApiFormatSelectorProps {
 	apiFormats: ApiFormat[] | undefined
@@ -15,13 +17,13 @@ export function ApiFormatSelector({ apiFormats, selectedApiFormat, fallbackApiFo
 	}
 
 	const selected = resolveApiFormat(selectedApiFormat, { apiFormats }, fallbackApiFormat)
+	const inputId = useId()
 	return (
-		<label className="flex flex-col gap-1 my-2" htmlFor="api-format">
-			<span className="text-xs font-medium">API Format</span>
+		<ProfileField htmlFor={inputId} label="API Format">
 			<select
 				aria-label="API Format"
-				className="w-full h-7 px-2 border"
-				id="api-format"
+				className="min-h-7 w-full rounded-xs border px-2 text-sm"
+				id={inputId}
 				onChange={(event) => onChange(Number(event.target.value) as ApiFormat)}
 				style={{
 					backgroundColor: "var(--vscode-dropdown-background)",
@@ -41,6 +43,6 @@ export function ApiFormatSelector({ apiFormats, selectedApiFormat, fallbackApiFo
 					</option>
 				))}
 			</select>
-		</label>
+		</ProfileField>
 	)
 }

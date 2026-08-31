@@ -321,4 +321,55 @@ describe("useTaskCapabilityToggles", () => {
 			added: true,
 		})
 	})
+
+	it("keeps reconcile and updateToggle referentially stable across state publishes", () => {
+		mocks.state = {
+			...baseState(),
+			stateRevision: 1,
+			taskViewState: { taskId: "task-1" },
+			taskCapabilityToggles: createTaskCapabilityToggles({ localWorkflowToggles: { kept: true } }),
+		}
+		const { result, rerender } = renderHook(() => useTaskCapabilityToggles())
+		const firstReconcile = result.current.reconcile
+		const firstUpdateToggle = result.current.updateToggle
+
+		// Discovery polling republishes state constantly. Consumers list these
+		// callbacks as effect dependencies, so a new identity would tear down and
+		// immediately restart their polling, multiplying workspace scans.
+		mocks.state = {
+			...mocks.state,
+			stateRevision: 2,
+			taskCapabilityToggles: createTaskCapabilityToggles({ localWorkflowToggles: { kept: true } }),
+		}
+		rerender()
+
+		expect(result.current.reconcile).toBe(firstReconcile)
+		expect(result.current.updateToggle).toBe(firstUpdateToggle)
+	})
+
+	it("reconciles against the latest authoritative snapshot even when called through a stable callback", async () => {
+		mocks.state = {
+			...baseState(),
+			stateRevision: 1,
+			taskViewState: { taskId: "task-1" },
+			taskCapabilityToggles: createTaskCapabilityToggles({ localWorkflowToggles: { kept: true } }),
+		}
+		const { result, rerender } = renderHook(() => useTaskCapabilityToggles())
+		const stableReconcile = result.current.reconcile
+
+		mocks.state = {
+			...mocks.state,
+			stateRevision: 2,
+			taskCapabilityToggles: createTaskCapabilityToggles({ localWorkflowToggles: { kept: false } }),
+		}
+		rerender()
+
+		await act(() => stableReconcile({ localWorkflowToggles: { kept: true, added: true } }))
+
+		const settings = mocks.updateTaskSettings.mock.calls[0][1]
+		expect(parseTaskCapabilityToggles(settings.taskCapabilityToggles)?.localWorkflowToggles).toEqual({
+			kept: false,
+			added: true,
+		})
+	})
 })

@@ -1,9 +1,10 @@
 import { geminiModels, ModelInfo } from "@shared/api"
 import type { PricingTier } from "@shared/providers/types"
 import { VSCodeDropdown, VSCodeOption } from "@vscode/webview-ui-toolkit/react"
-import { useState } from "react"
+import { useId } from "react"
 import styled from "styled-components"
 import { ModelDescriptionMarkdown } from "../ModelDescriptionMarkdown"
+import { ProfileDisclosure, ProfileField } from "../profile-ui"
 import { formatPrice, hasThinkingBudget, supportsBrowserUse, supportsImages, supportsPromptCache } from "../utils/pricingUtils"
 
 // ========== Styled Components ==========
@@ -12,7 +13,7 @@ const InfoRow = styled.div`
 	display: flex;
 	column-gap: 16px;
 	row-gap: 4px;
-	font-size: 12px;
+	font-size: calc(var(--vscode-font-size) * 0.85);
 	color: var(--vscode-foreground);
 	margin-top: 8px;
 	flex-wrap: wrap;
@@ -30,39 +31,8 @@ const InfoValue = styled.span`
 	font-weight: 500;
 `
 
-const CollapsibleHeader = styled.div`
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	margin-top: 12px;
-	cursor: pointer;
-	user-select: none;
-	font-size: 11px;
-	font-weight: 600;
-	text-transform: uppercase;
-	letter-spacing: 0.5px;
-	color: var(--vscode-descriptionForeground);
-
-	&:hover {
-		color: var(--vscode-foreground);
-	}
-`
-
-const CollapsibleArrow = styled.span<{ $isExpanded: boolean }>`
-	font-size: 10px;
-	transition: transform 0.15s ease;
-	transform: rotate(${({ $isExpanded }) => ($isExpanded ? "90deg" : "0deg")});
-`
-
-const CollapsibleContent = styled.div<{ $isExpanded: boolean }>`
-	max-height: ${({ $isExpanded }) => ($isExpanded ? "800px" : "0")};
-	overflow: ${({ $isExpanded }) => ($isExpanded ? "visible" : "hidden")};
-	transition: max-height 0.2s ease;
-`
-
 const AdvancedSection = styled.div`
-	padding-top: 8px;
-	font-size: 12px;
+	font-size: calc(var(--vscode-font-size) * 0.85);
 	color: var(--vscode-descriptionForeground);
 `
 
@@ -78,17 +48,6 @@ const AdvancedValue = styled.span`
 	color: var(--vscode-foreground);
 `
 
-const ProviderRoutingContainer = styled.div`
-	margin-top: 8px;
-	margin-bottom: 8px;
-`
-
-const ProviderRoutingLabel = styled.label`
-	display: block;
-	font-size: 12px;
-	color: var(--vscode-descriptionForeground);
-	margin-bottom: 4px;
-`
 
 // ========== Helper Functions ==========
 
@@ -189,8 +148,7 @@ export const ModelInfoView = ({
 	onProviderSortingChange,
 	showProviderRouting,
 }: ModelInfoViewProps) => {
-	const [advancedExpanded, setAdvancedExpanded] = useState(false)
-
+	const providerRoutingId = useId()
 	const isGemini = Object.keys(geminiModels).includes(selectedModelId)
 	const hasThinkingConfig = hasThinkingBudget(modelInfo)
 	const hasTiers = !!modelInfo.pricing?.tiers && modelInfo.pricing.tiers.length > 0
@@ -206,7 +164,7 @@ export const ModelInfoView = ({
 		modelInfo.capabilities?.supportsPromptCache && (modelInfo.pricing?.cacheWritesPrice || modelInfo.pricing?.cacheReadsPrice)
 
 	return (
-		<div style={{ marginTop: 4 }}>
+		<div className="min-w-0">
 			{/* Description */}
 			{modelInfo.description && (
 				<ModelDescriptionMarkdown isPopup={isPopup} key="description" markdown={modelInfo.description} />
@@ -238,12 +196,7 @@ export const ModelInfoView = ({
 				)}
 			</InfoRow>
 
-			{/* Collapsible Advanced Section */}
-			<CollapsibleHeader onClick={() => setAdvancedExpanded(!advancedExpanded)}>
-				<CollapsibleArrow $isExpanded={advancedExpanded}>▶</CollapsibleArrow>
-				Advanced
-			</CollapsibleHeader>
-			<CollapsibleContent $isExpanded={advancedExpanded}>
+			<ProfileDisclosure title="Advanced">
 				<AdvancedSection>
 					{/* Capabilities */}
 					<AdvancedRow>
@@ -326,36 +279,35 @@ export const ModelInfoView = ({
 					)}
 
 					{/* Provider Routing */}
-					{showProviderRouting && onProviderSortingChange && (
-						<ProviderRoutingContainer>
-							<ProviderRoutingLabel>Provider Routing</ProviderRoutingLabel>
+					{showProviderRouting && onProviderSortingChange ? (
+						<ProfileField
+							description={
+								<>
+									{!providerSorting &&
+										"Load balance across providers (AWS, Google Vertex, etc.), prioritizing price while considering uptime"}
+									{providerSorting === "price" && "Sort by price, prioritizing the lowest cost provider"}
+									{providerSorting === "throughput" &&
+										"Sort by throughput, prioritizing highest throughput (may increase cost)"}
+									{providerSorting === "latency" && "Sort by response time, prioritizing lowest latency"}
+								</>
+							}
+							htmlFor={providerRoutingId}
+							label="Provider Routing">
 							<VSCodeDropdown
+								aria-label="Provider Routing"
+								className="min-h-7 w-full"
+								id={providerRoutingId}
 								onChange={(e: any) => onProviderSortingChange(e.target.value)}
-								style={{ width: "100%" }}
 								value={providerSorting || ""}>
 								<VSCodeOption value="">Default</VSCodeOption>
 								<VSCodeOption value="price">Price</VSCodeOption>
 								<VSCodeOption value="throughput">Throughput</VSCodeOption>
 								<VSCodeOption value="latency">Latency</VSCodeOption>
 							</VSCodeDropdown>
-							<p
-								style={{
-									fontSize: "11px",
-									marginTop: 4,
-									marginBottom: 0,
-									color: "var(--vscode-descriptionForeground)",
-								}}>
-								{!providerSorting &&
-									"Load balance across providers (AWS, Google Vertex, etc.), prioritizing price while considering uptime"}
-								{providerSorting === "price" && "Sort by price, prioritizing the lowest cost provider"}
-								{providerSorting === "throughput" &&
-									"Sort by throughput, prioritizing highest throughput (may increase cost)"}
-								{providerSorting === "latency" && "Sort by response time, prioritizing lowest latency"}
-							</p>
-						</ProviderRoutingContainer>
-					)}
+						</ProfileField>
+					) : null}
 				</AdvancedSection>
-			</CollapsibleContent>
+			</ProfileDisclosure>
 		</div>
 	)
 }

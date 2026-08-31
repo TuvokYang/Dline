@@ -172,6 +172,89 @@ describe("CheckpointTracker with tracked files in an unborn user repository", ()
 		}
 	})
 
+	it("reuses the shadow index for an unchanged exclusion ruleset instead of rebuilding it", async () => {
+		const sandbox = await createUnbornSandbox()
+		const firstTaskId = "task-index-reuse-first"
+		const nextTaskId = "task-index-reuse-next"
+		try {
+			const firstTracker = await CheckpointTracker.create(firstTaskId, true, sandbox.workspacePath)
+			if (!firstTracker) throw new Error("checkpoint_tracker_missing")
+			firstTracker.setTaskFileTracker(new TaskFileTracker(firstTaskId))
+			expectCheckpointHash(await firstTracker.commit())
+
+			// Discarding the index forces git to re-hash every tracked file. That is
+			// only justified when the exclusion ruleset changed, because nothing else
+			// can invalidate an already-indexed entry.
+			const modes: string[] = []
+			const addCheckpointFiles = GitOperations.prototype.addCheckpointFiles
+			const spy = vi.spyOn(GitOperations.prototype, "addCheckpointFiles").mockImplementation(async function (
+				this: GitOperations,
+				options,
+			) {
+				if (options.taskId === nextTaskId) modes.push(options.mode)
+				return addCheckpointFiles.call(this, options)
+			})
+			try {
+				await fs.writeFile(sandbox.trackedFile, "changed without touching exclusions")
+				const nextTracker = await CheckpointTracker.create(nextTaskId, true, sandbox.workspacePath)
+				if (!nextTracker) throw new Error("checkpoint_tracker_missing")
+				nextTracker.setTaskFileTracker(new TaskFileTracker(nextTaskId))
+				const nextHash = await nextTracker.commit()
+				expectCheckpointHash(nextHash)
+
+				expect(modes).not.toContain("baseline")
+				const shadowGitPath = await getShadowGitPath(hashWorkingDir(sandbox.workspacePath))
+				const shadowGit = simpleGit(path.dirname(shadowGitPath))
+				expect(await shadowGit.show([`${nextHash}:write_test.txt`])).toBe("changed without touching exclusions")
+			} finally {
+				spy.mockRestore()
+			}
+		} finally {
+			WorkspaceFileRegistry.getInstance().releaseTask(firstTaskId)
+			WorkspaceFileRegistry.getInstance().releaseTask(nextTaskId)
+			await disposeSandbox(sandbox)
+		}
+	})
+
+	it("rebuilds the shadow index when the exclusion ruleset changed", async () => {
+		const sandbox = await createUnbornSandbox()
+		const firstTaskId = "task-index-rebuild-first"
+		const nextTaskId = "task-index-rebuild-next"
+		try {
+			const firstTracker = await CheckpointTracker.create(firstTaskId, true, sandbox.workspacePath)
+			if (!firstTracker) throw new Error("checkpoint_tracker_missing")
+			firstTracker.setTaskFileTracker(new TaskFileTracker(firstTaskId))
+			expectCheckpointHash(await firstTracker.commit())
+
+			const modes: string[] = []
+			const addCheckpointFiles = GitOperations.prototype.addCheckpointFiles
+			const spy = vi.spyOn(GitOperations.prototype, "addCheckpointFiles").mockImplementation(async function (
+				this: GitOperations,
+				options,
+			) {
+				if (options.taskId === nextTaskId) modes.push(options.mode)
+				return addCheckpointFiles.call(this, options)
+			})
+			try {
+				// Checkpoints follow the repository's own rules, so only .gitignore
+				// (plus the built-in floor) can change what the shadow index tracks.
+				await fs.writeFile(path.join(sandbox.workspacePath, ".gitignore"), "stale_test.txt\n")
+				const nextTracker = await CheckpointTracker.create(nextTaskId, true, sandbox.workspacePath)
+				if (!nextTracker) throw new Error("checkpoint_tracker_missing")
+				nextTracker.setTaskFileTracker(new TaskFileTracker(nextTaskId))
+				expectCheckpointHash(await nextTracker.commit())
+
+				expect(modes).toContain("baseline")
+			} finally {
+				spy.mockRestore()
+			}
+		} finally {
+			WorkspaceFileRegistry.getInstance().releaseTask(firstTaskId)
+			WorkspaceFileRegistry.getInstance().releaseTask(nextTaskId)
+			await disposeSandbox(sandbox)
+		}
+	})
+
 	it("removes a previously tracked file when refreshed exclusions begin ignoring it", async () => {
 		const sandbox = await createUnbornSandbox()
 		const firstTaskId = "task-ignore-shadow-first"
@@ -185,7 +268,7 @@ describe("CheckpointTracker with tracked files in an unborn user repository", ()
 			const firstHash = await firstTracker.commit()
 			expectCheckpointHash(firstHash)
 
-			await fs.writeFile(path.join(sandbox.workspacePath, ".dlineignore"), "later-ignored.txt\n")
+			await fs.writeFile(path.join(sandbox.workspacePath, ".gitignore"), "later-ignored.txt\n")
 			const nextTracker = await CheckpointTracker.create(nextTaskId, true, sandbox.workspacePath)
 			if (!nextTracker) throw new Error("checkpoint_tracker_missing")
 			nextTracker.setTaskFileTracker(new TaskFileTracker(nextTaskId))
@@ -228,7 +311,11 @@ describe("CheckpointTracker with tracked files in an unborn user repository", ()
 				options,
 			) {
 				const result = await originalAddCheckpointFiles.call(this, options)
-				return options.taskId === failedTaskId && options.mode === "baseline" ? { success: false } : result
+				// Existing-shadow refresh stages the whole worktree; it picks
+				// "baseline" or "workspace-scan" depending on whether the exclusion
+				// ruleset changed, so match on that role rather than one mode name.
+				const isRefreshStaging = options.mode === "baseline" || options.mode === "workspace-scan"
+				return options.taskId === failedTaskId && isRefreshStaging ? { success: false } : result
 			})
 
 			await expect(CheckpointTracker.create(failedTaskId, true, sandbox.workspacePath)).rejects.toThrow(

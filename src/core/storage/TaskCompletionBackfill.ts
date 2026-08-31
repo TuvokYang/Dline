@@ -37,6 +37,13 @@ export async function readPersistedTaskCompletion(taskId: string): Promise<Recov
 	}
 }
 
+/** One completion projection patch collected by the scan. */
+export interface CompletionRepair {
+	taskId: string
+	isCompleted: boolean
+	revision: number
+}
+
 export interface TaskCompletionBackfillOptions {
 	/** History rows to inspect, newest first. */
 	listTasks(): Promise<HistoryItem[]>
@@ -47,8 +54,15 @@ export interface TaskCompletionBackfillOptions {
 	 * error: such a Task simply has no authoritative verdict to project.
 	 */
 	readCompletion(taskId: string): Promise<RecoveredCompletion | undefined>
-	/** Durably patch one completion projection; returns false when rejected as stale. */
-	persist(taskId: string, isCompleted: boolean, revision: number): Promise<boolean>
+	/**
+	 * Durably patch the collected projections in one batch transaction.
+	 *
+	 * Per-row durable commits turned a large history into hundreds of full-file
+	 * rewrites under the cross-process lock, so the scan only collects in memory
+	 * and commits once. Returns how many rows were actually rewritten; stale
+	 * entries are skipped inside the batch.
+	 */
+	persistBatch(updates: readonly CompletionRepair[]): Promise<number>
 	/** Notify that at least one projection changed, so caches and views can refresh. */
 	onRepaired?(repairedCount: number): Promise<void> | void
 	/** Yield between chunks so the scan cannot monopolize the event loop. */
@@ -91,11 +105,15 @@ export class TaskCompletionBackfill {
 	/**
 	 * Scan the whole history once and repair disagreeing projections.
 	 *
+	 * The scan itself only reads snapshots and collects patches in memory; all
+	 * durable work happens in one batch commit at the end.
+	 *
 	 * @returns Counts describing what the scan observed and changed.
 	 */
 	async run(): Promise<TaskCompletionBackfillResult> {
 		const tasks = await this.options.listTasks()
 		const result: TaskCompletionBackfillResult = { scanned: 0, repaired: 0, failed: 0 }
+		const repairs: CompletionRepair[] = []
 
 		for (let index = 0; index < tasks.length; index++) {
 			if (index > 0 && index % CHUNK_SIZE === 0) {
@@ -103,7 +121,8 @@ export class TaskCompletionBackfill {
 			}
 			result.scanned++
 			try {
-				if (await this.repairTask(tasks[index])) result.repaired++
+				const repair = await this.collectRepair(tasks[index])
+				if (repair) repairs.push(repair)
 			} catch {
 				// One unreadable Task must not abort the whole scan; the row simply
 				// keeps its current projection and can be repaired on a later run.
@@ -111,24 +130,27 @@ export class TaskCompletionBackfill {
 			}
 		}
 
+		if (repairs.length > 0) {
+			result.repaired = await this.options.persistBatch(repairs)
+		}
 		if (result.repaired > 0) {
 			await this.options.onRepaired?.(result.repaired)
 		}
 		return result
 	}
 
-	/** Rewrite one row when its stored verdict disagrees with its snapshot. */
-	private async repairTask(item: HistoryItem): Promise<boolean> {
+	/** Build one repair patch when the stored verdict disagrees with the snapshot. */
+	private async collectRepair(item: HistoryItem): Promise<CompletionRepair | undefined> {
 		const recovered = await this.options.readCompletion(item.id)
-		if (!recovered) return false
+		if (!recovered) return undefined
 
 		const storedRevision = item.completionStateRevision
 		const stored = storedRevision === undefined ? undefined : item.isCompleted === true
-		if (stored === recovered.isCompleted) return false
+		if (stored === recovered.isCompleted) return undefined
 
 		// Stay above the stored watermark so the durable store cannot reject the
 		// repair as stale.
-		return await this.options.persist(item.id, recovered.isCompleted, (storedRevision ?? 0) + 1)
+		return { taskId: item.id, isCompleted: recovered.isCompleted, revision: (storedRevision ?? 0) + 1 }
 	}
 
 	private async yield(): Promise<void> {

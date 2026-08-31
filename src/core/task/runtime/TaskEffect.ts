@@ -69,8 +69,12 @@ export interface AppendSayEffect {
 	presentation: string
 	images?: string[]
 	files?: string[]
+	userInputKind?: "direct" | "queued"
+	queuedInputMode?: "queued" | "steering"
 	/** Legacy handler response identity used to suppress a duplicate handler-level echo. */
 	feedbackAcknowledgment?: ClineAskResponse
+	/** Model-facing text used only for legacy feedback echo deduplication. */
+	feedbackAcknowledgmentText?: string
 }
 
 /** Append an interaction presentation anchor. */

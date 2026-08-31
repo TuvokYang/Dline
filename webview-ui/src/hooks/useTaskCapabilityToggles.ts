@@ -69,6 +69,16 @@ export function useTaskCapabilityToggles() {
 	const authoritativeRevision = stateRevision ?? 0
 	const currentTaskIdRef = useRef(taskId)
 	currentTaskIdRef.current = taskId
+	// The authoritative snapshot and revision change on every state publish, and
+	// discovery polling publishes constantly. Reading them through refs keeps the
+	// returned callbacks referentially stable, so consumers that list them as
+	// effect dependencies do not tear down and restart their polling on each
+	// publish. Callers still observe the latest values because the refs are read
+	// when the callback runs, not when it is created.
+	const authoritativeSnapshotRef = useRef(authoritativeSnapshot)
+	authoritativeSnapshotRef.current = authoritativeSnapshot
+	const authoritativeRevisionRef = useRef(authoritativeRevision)
+	authoritativeRevisionRef.current = authoritativeRevision
 	const [, setCoordinatorVersion] = useState(0)
 	const snapshot =
 		taskId && authoritativeSnapshot
@@ -97,34 +107,38 @@ export function useTaskCapabilityToggles() {
 
 	const updateToggle = useCallback(
 		(key: TaskCapabilityToggleKey, resourceId: string, enabled: boolean) => {
-			if (!taskId || !authoritativeSnapshot) return Promise.resolve()
+			const operationTaskId = currentTaskIdRef.current
+			const authoritative = authoritativeSnapshotRef.current
+			if (!operationTaskId || !authoritative) return Promise.resolve()
 			return taskCapabilityMutationCoordinator.updateToggle({
-				taskId,
-				authoritative: authoritativeSnapshot,
-				authoritativeRevision,
+				taskId: operationTaskId,
+				authoritative,
+				authoritativeRevision: authoritativeRevisionRef.current,
 				key,
 				resourceId,
 				enabled,
-				persist: (next) => persist(taskId, next),
-				publish: (next) => publish(taskId, next),
+				persist: (next) => persist(operationTaskId, next),
+				publish: (next) => publish(operationTaskId, next),
 			})
 		},
-		[authoritativeRevision, authoritativeSnapshot, persist, publish, taskId],
+		[persist, publish],
 	)
 
 	const reconcile = useCallback(
 		(discovered: Partial<TaskCapabilityToggles>) => {
-			if (!taskId || !authoritativeSnapshot) return Promise.resolve()
+			const operationTaskId = currentTaskIdRef.current
+			const authoritative = authoritativeSnapshotRef.current
+			if (!operationTaskId || !authoritative) return Promise.resolve()
 			return taskCapabilityMutationCoordinator.reconcile({
-				taskId,
-				authoritative: authoritativeSnapshot,
-				authoritativeRevision,
+				taskId: operationTaskId,
+				authoritative,
+				authoritativeRevision: authoritativeRevisionRef.current,
 				discovered,
-				persist: (next) => persist(taskId, next),
-				publish: (next) => publish(taskId, next),
+				persist: (next) => persist(operationTaskId, next),
+				publish: (next) => publish(operationTaskId, next),
 			})
 		},
-		[authoritativeRevision, authoritativeSnapshot, persist, publish, taskId],
+		[persist, publish],
 	)
 
 	return { isTaskScoped, snapshot, updateToggle, reconcile }

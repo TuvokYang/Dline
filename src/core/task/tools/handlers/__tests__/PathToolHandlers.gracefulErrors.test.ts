@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { AGENT_IGNORE_FILE } from "@core/ignore/IgnoreController"
 import { ClineDefaultTool } from "@shared/tools"
 import * as pathUtils from "@utils/path"
 import { afterEach, beforeEach, describe, it, vi } from "vitest"
@@ -102,7 +103,7 @@ function createConfig() {
 			browserSession: {},
 			urlContentFetcher: {},
 			diffViewProvider: {},
-			clineIgnoreController: { validateAccess: () => true, filterPaths: (paths: string[]) => paths },
+			ignoreController: { validateAccess: () => true, filterPaths: (paths: string[]) => paths },
 			commandPermissionController: {},
 			contextManager: {},
 		},
@@ -401,20 +402,20 @@ describe("ListFilesToolHandler.execute – error recovery", () => {
 		assert.equal(listSpy.mock.calls.length, 0)
 	})
 
-	it("increments consecutiveMistakeCount on clineignore denial", async () => {
+	it("increments consecutiveMistakeCount on ignore denial", async () => {
 		const { config, taskState } = createConfig()
-		// Create a validator whose clineIgnoreController blocks all paths
+		// Create a validator whose ignoreController blocks all paths
 		const blockingValidator = new ToolValidator({ validateAccess: () => false } as any)
 		const handler = new ListFilesToolHandler(blockingValidator)
 
 		const result = await handler.execute(config, makeBlock("blocked-dir"))
 
 		assert.equal(typeof result, "string")
-		assert.ok((result as string).includes("clineignore"))
+		assert.ok((result as string).includes(AGENT_IGNORE_FILE))
 		assert.equal(taskState.consecutiveMistakeCount, 1)
 	})
 
-	it("accumulates clineignore denials across repeated calls", async () => {
+	it("accumulates ignore denials across repeated calls", async () => {
 		const { config, taskState } = createConfig()
 		const blockingValidator = new ToolValidator({ validateAccess: () => false } as any)
 		const handler = new ListFilesToolHandler(blockingValidator)

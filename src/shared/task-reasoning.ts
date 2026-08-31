@@ -5,6 +5,7 @@ import { PROFILE_PROVIDER_KEYS } from "@shared/providers/profile-model-info"
 import { OPENAI_REASONING_EFFORT_OPTIONS } from "@shared/storage/types"
 import {
 	ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS,
+	canDisableClaudeAdaptiveThinking,
 	DEEPSEEK_REASONING_EFFORT_OPTIONS,
 	isDeepSeekReasoningModel,
 } from "@shared/utils/reasoning-support"
@@ -31,7 +32,8 @@ export function resolveTaskThinkingConfig(
 	const configured = resolveConfiguredThinkingState(reasoning)
 	const explicitlyUnsupported =
 		thinking?.supported === false || (capabilities?.supportsReasoning === false && thinking?.supported !== true)
-	if (configured === false || explicitlyUnsupported) return undefined
+	const thinkingRequired = provider === "anthropic" && !canDisableClaudeAdaptiveThinking(modelId)
+	if ((configured === false && !thinkingRequired) || explicitlyUnsupported) return undefined
 
 	const supportsReasoning = configured === true || capabilities?.supportsReasoning === true || thinking?.supported === true
 	if (!supportsReasoning) return thinking

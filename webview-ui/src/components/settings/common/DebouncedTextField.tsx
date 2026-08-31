@@ -14,6 +14,7 @@ interface DebouncedTextFieldProps {
 	type?: "text" | "password"
 	placeholder?: string
 	id?: string
+	ariaLabel?: string
 	children?: React.ReactNode
 	disabled?: boolean
 	className?: string
@@ -29,6 +30,7 @@ export const DebouncedTextField = ({
 	children,
 	type,
 	className,
+	ariaLabel,
 	...otherProps
 }: DebouncedTextFieldProps) => {
 	const [localValue, setLocalValue] = useDebouncedInput(initialValue, onChange)
@@ -36,6 +38,7 @@ export const DebouncedTextField = ({
 	return (
 		<VSCodeTextField
 			{...otherProps}
+			aria-label={ariaLabel}
 			className={className}
 			onInput={(e: any) => {
 				const value = e.target.value

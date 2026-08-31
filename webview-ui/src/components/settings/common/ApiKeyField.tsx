@@ -1,4 +1,6 @@
 import { VSCodeLink, VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
+import { useId } from "react"
+import { ProfileField } from "../profile-ui"
 import { useDebouncedInput } from "../utils/useDebouncedInput"
 
 /**
@@ -25,36 +27,36 @@ export const ApiKeyField = ({
 	helpText,
 }: ApiKeyFieldProps) => {
 	const [localValue, setLocalValue] = useDebouncedInput(initialValue, onChange)
+	const inputId = useId()
+	const label = `${providerName} API Key`
 
 	return (
-		<div>
+		<ProfileField
+			description={
+				<>
+					{helpText || "This key is stored locally and only used to make API requests from this extension."}
+					{!localValue && signupUrl ? (
+						<>
+							{" "}
+							<VSCodeLink className="inline text-inherit" href={signupUrl}>
+								You can get a{/^[aeiou]/i.test(providerName) ? "n" : ""} {providerName} API key by signing up here.
+							</VSCodeLink>
+						</>
+					) : null}
+				</>
+			}
+			htmlFor={inputId}
+			label={label}>
 			<VSCodeTextField
+				aria-label={label}
+				className="min-h-7 w-full"
+				id={inputId}
 				onInput={(e: any) => setLocalValue(e.target.value)}
 				placeholder={placeholder}
 				required={true}
-				style={{ width: "100%" }}
 				type="password"
-				value={localValue}>
-				<span style={{ fontWeight: 500 }}>{providerName} API Key</span>
-			</VSCodeTextField>
-			<p
-				style={{
-					fontSize: "12px",
-					marginTop: 3,
-					color: "var(--vscode-descriptionForeground)",
-				}}>
-				{helpText || "This key is stored locally and only used to make API requests from this extension."}
-				{!localValue && signupUrl && (
-					<VSCodeLink
-						href={signupUrl}
-						style={{
-							display: "inline",
-							fontSize: "inherit",
-						}}>
-						You can get a{/^[aeiou]/i.test(providerName) ? "n" : ""} {providerName} API key by signing up here.
-					</VSCodeLink>
-				)}
-			</p>
-		</div>
+				value={localValue}
+			/>
+		</ProfileField>
 	)
 }

@@ -106,13 +106,25 @@ export class TaskSnapshotPersistence {
 			this.clearTimeoutFn(this.flushTimer)
 			this.flushTimer = undefined
 		}
+		const requestedAt = performance.now()
 		const attempt = this.writeChain.then(async () => {
 			const snapshot = this.pendingSnapshot
 			if (!snapshot) return
+			// Callers await this flush inside runtime transitions, so separate the
+			// wait behind earlier writes from the write itself: only the latter is
+			// this snapshot's own disk cost.
+			const queueMs = Math.round(performance.now() - requestedAt)
+			const writeStartedAt = performance.now()
 
 			await this.writeSnapshot(snapshot)
 			if (this.pendingSnapshot === snapshot) {
 				this.pendingSnapshot = undefined
+			}
+			const writeMs = Math.round(performance.now() - writeStartedAt)
+			if (queueMs + writeMs >= 250) {
+				Logger.debug(
+					`[TaskSnapshotPerf] phase=flush_now taskId=${snapshot.taskId} queueMs=${queueMs} writeMs=${writeMs} totalMs=${Math.round(performance.now() - requestedAt)}`,
+				)
 			}
 		})
 		// The caller still observes this attempt's failure, while the internal tail

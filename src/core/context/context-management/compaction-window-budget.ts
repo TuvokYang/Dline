@@ -102,6 +102,8 @@ function computeBudget(input: ResolveCompactionWindowBudgetInput, messages: Clin
 		Math.floor(availableRemainder * 0.9),
 		Math.max(0, availableRemainder - closureReserveTokens),
 	)
+	// The recommended range must stay within the hard limit: advising a longer response than the
+	// request can actually emit would guarantee truncation.
 	const recommendedMax = Math.min(Math.floor(availableRemainder * 0.9), 30_000, providerOutputCap)
 	const recommendedMin = Math.min(Math.floor(availableRemainder * 0.8), 5_000, recommendedMax)
 	const reservedRequestTokens = estimatedInputTokens + providerOutputCap + closureReserveTokens

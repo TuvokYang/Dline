@@ -123,6 +123,28 @@ if (onTag || onMain) {
 	console.log(`[package-dev] Modified version: ${originalVersion} → ${pkg.version}`)
 }
 
+/**
+ * Verify the built bundle is a dev build right before packing.
+ *
+ * dist/extension.js is shared with other build entry points (e.g. the E2E
+ * prepublish writes a production bundle to the same path). If one of those
+ * runs between our build step and vsce packing, we would silently ship a
+ * production bundle in a dev VSIX. The DLINE_BUILD_TYPE banner written by
+ * esbuild.mjs makes the bundle variant verifiable.
+ */
+function assertDevBundle() {
+	const bundlePath = path.join(PROJECT_ROOT, "dist", "extension.js")
+	const header = fs.readFileSync(bundlePath, "utf-8").slice(0, 512)
+	const marker = header.match(/DLINE_BUILD_TYPE:(\w+)/)
+	if (!marker || marker[1] !== "dev") {
+		throw new Error(
+			`[package-dev] dist/extension.js is not a dev bundle (marker: ${marker ? marker[1] : "missing"}). ` +
+				"Another build (e.g. test:e2e prepublish) overwrote it. Re-run vsix:dev without concurrent builds.",
+		)
+	}
+	console.log("[package-dev] Verified dist/extension.js is a dev bundle.")
+}
+
 try {
 	// 1. Run the same validation and Webview build as vscode:prepublish,
 	// then produce a dev extension bundle with IS_DEV=true and source maps.
@@ -137,6 +159,7 @@ try {
 
 	// 2. Pack the already-built files. createVSIX() cannot be used here because
 	// it always runs vscode:prepublish and would overwrite dist with a production build.
+	assertDevBundle()
 	console.log("[package-dev] Creating VSIX...")
 	const { packagePath } = await packVSIX({
 		cwd: PROJECT_ROOT,

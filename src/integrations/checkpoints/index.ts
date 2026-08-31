@@ -839,9 +839,29 @@ export class TaskCheckpointManager implements ICheckpointManager {
 			// Timeout - If checkpoints take too long to initialize, warn user and disable checkpoints for the task
 			const workspacePath = await this.getWorkspacePath()
 			const createTracker = this.config.createCheckpointTracker ?? CheckpointTracker.create
+
+			// Single-flight across retry attempts: pTimeout only stops waiting, it
+			// cannot cancel the underlying Git work. Starting a second tracker
+			// after a timeout made both attempts fight for the same shadow-repo
+			// mutex and repeat the whole topology/baseline scan. A timed-out
+			// attempt therefore stays in flight and the retry waits on the same
+			// promise; only a real rejection clears it so the retry can start
+			// a fresh attempt.
+			let inFlightCreate: Promise<CheckpointTracker | undefined> | undefined
+			const startOrReuseCreate = (): Promise<CheckpointTracker | undefined> => {
+				if (!inFlightCreate) {
+					const attempt = createTracker(this.task.taskId, this.config.enableCheckpoints, workspacePath)
+					inFlightCreate = attempt
+					attempt.catch(() => {
+						if (inFlightCreate === attempt) inFlightCreate = undefined
+					})
+				}
+				return inFlightCreate
+			}
+
 			const tracker = await retryWithBackoff(
 				() =>
-					pTimeout(createTracker(this.task.taskId, this.config.enableCheckpoints, workspacePath), {
+					pTimeout(startOrReuseCreate(), {
 						milliseconds: CHECKPOINT_TRACKER_ATTEMPT_TIMEOUT_MS,
 						message:
 							"Checkpoints taking too long to initialize. Consider re-opening Dline in a project that uses git, or disabling checkpoints.",

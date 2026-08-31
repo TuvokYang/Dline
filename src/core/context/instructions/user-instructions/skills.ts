@@ -151,6 +151,7 @@ async function loadSkillMetadata(
  *   [remote..., disk-global..., project...]
  */
 export async function discoverSkills(cwd: string, remoteSkillEntries?: GlobalInstructionsFile[]): Promise<SkillMetadata[]> {
+	const startedAt = performance.now()
 	const skills: SkillMetadata[] = []
 
 	const scanDirs = getSkillsDirectoriesForScan(cwd)
@@ -179,6 +180,9 @@ export async function discoverSkills(cwd: string, remoteSkillEntries?: GlobalIns
 	// Insert in order: remote → disk-global → project.
 	// getAvailableSkills iterates backwards so project/local wins over global and remote entries.
 	skills.push(...remoteSkills, ...diskGlobalSkills, ...projectSkills)
+	Logger.debug(
+		`[CapabilityPerf] phase=skills_discover durationMs=${Math.round(performance.now() - startedAt)} directories=${scanDirs.length} global=${diskGlobalSkills.length} project=${projectSkills.length} remote=${remoteSkills.length} total=${skills.length}`,
+	)
 
 	return skills
 }
@@ -226,8 +230,13 @@ export function filterEnabledSkills(skills: SkillMetadata[], toggleState: SkillT
 }
 
 export async function discoverAvailableSkills(cwd: string, toggleState: SkillToggleState = {}): Promise<SkillMetadata[]> {
+	const startedAt = performance.now()
 	const allSkills = await discoverSkills(cwd, toggleState.remoteSkillEntries)
-	return filterEnabledSkills(getAvailableSkills(allSkills), toggleState)
+	const available = filterEnabledSkills(getAvailableSkills(allSkills), toggleState)
+	Logger.debug(
+		`[CapabilityPerf] phase=skills_available durationMs=${Math.round(performance.now() - startedAt)} discovered=${allSkills.length} enabled=${available.length}`,
+	)
+	return available
 }
 
 /**

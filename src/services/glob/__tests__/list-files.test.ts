@@ -164,10 +164,9 @@ describe("listFiles gitignore handling", () => {
 		// With incremental reading, we never enter third-party/ because the root
 		// .gitignore excludes it, so we never read any .gitignore files inside it.
 		//
-		// NOTE: We intentionally use "third-party/" instead of "vendor/" here because
-		// "vendor" is in DEFAULT_IGNORE_DIRECTORIES and would be excluded regardless
-		// of .gitignore. Using a name NOT in that list proves the .gitignore-based
-		// exclusion is actually working.
+		// NOTE: We intentionally use "third-party/" because it is absent from the
+		// built-in excluded directories, so the assertion proves the .gitignore-based
+		// exclusion is what actually applies here.
 		//
 		// project/
 		//   .gitignore          → "third-party/"

@@ -4,6 +4,7 @@ import {
 	readDirectoryRecursive,
 	synchronizeRuleToggles,
 } from "@core/context/instructions/user-instructions/rule-helpers"
+import type { IgnoreController } from "@core/ignore/IgnoreController"
 import { formatResponse } from "@core/prompts/responses"
 import { GlobalFileNames } from "@core/storage/disk"
 import { listFiles } from "@services/glob/list-files"
@@ -25,6 +26,7 @@ export async function refreshExternalRulesToggles(
 	cursorLocalToggles: ClineRulesToggles
 	agentsLocalToggles: ClineRulesToggles
 }> {
+	const startedAt = performance.now()
 	// local windsurf toggles
 	const localWindsurfRulesToggles = controller.stateManager.getWorkspaceStateKey("localWindsurfRulesToggles")
 	const localWindsurfRulesFilePath = path.resolve(workingDirectory, GlobalFileNames.windsurfRules)
@@ -50,6 +52,9 @@ export async function refreshExternalRulesToggles(
 	const localAgentsRulesFilePath = path.resolve(workingDirectory, GlobalFileNames.agentsRulesFile)
 	const updatedLocalAgentsToggles = await synchronizeRuleToggles(localAgentsRulesFilePath, localAgentsRulesToggles)
 	controller.stateManager.setWorkspaceState("localAgentsRulesToggles", updatedLocalAgentsToggles)
+	Logger.debug(
+		`[CapabilityPerf] phase=external_rules_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} windsurf=${Object.keys(updatedLocalWindsurfToggles).length} cursor=${Object.keys(updatedLocalCursorToggles).length} agents=${Object.keys(updatedLocalAgentsToggles).length}`,
+	)
 
 	return {
 		windsurfLocalToggles: updatedLocalWindsurfToggles,
@@ -132,7 +137,7 @@ export const getLocalCursorRules = async (cwd: string, toggles: ClineRulesToggle
  * Helper function to find all agents.md files recursively (case-insensitive)
  * Only searches if a top-level agents.md file exists
  */
-async function findAgentsMdFiles(cwd: string): Promise<string[]> {
+async function findAgentsMdFiles(cwd: string, ignoreController?: IgnoreController): Promise<string[]> {
 	try {
 		// First check if top-level agents.md exists
 		const topLevelAgentsPath = path.resolve(cwd, GlobalFileNames.agentsRulesFile)
@@ -143,12 +148,14 @@ async function findAgentsMdFiles(cwd: string): Promise<string[]> {
 			return []
 		}
 
-		// Search recursively for all agents.md files
-		const [allFiles] = await listFiles(cwd, true, 500)
-		return allFiles.filter((info) => {
-			const basename = path.basename(info.path).toLowerCase()
-			return basename === GlobalFileNames.agentsRulesFile.toLowerCase()
-		}) as any
+		// Search recursively for all agents.md files. `listFiles` yields FileInfo
+		// entries, so map to the path: returning the entries themselves made every
+		// downstream `path.resolve` throw and silently dropped all agents rules.
+		const [allFiles] = await listFiles(cwd, true, 500, { ignoreController })
+		const agentsFileName = GlobalFileNames.agentsRulesFile.toLowerCase()
+		return allFiles
+			.filter((info) => !info.isDirectory && path.basename(info.path).toLowerCase() === agentsFileName)
+			.map((info) => info.path)
 	} catch (error) {
 		Logger.error(`Failed to find agents.md files in ${cwd}:`, error)
 		return []
@@ -158,7 +165,7 @@ async function findAgentsMdFiles(cwd: string): Promise<string[]> {
 /**
  * Gather formatted agents rules - searches recursively and combines all agents.md files
  */
-export const getLocalAgentsRules = async (cwd: string, toggles: ClineRulesToggles) => {
+export const getLocalAgentsRules = async (cwd: string, toggles: ClineRulesToggles, ignoreController?: IgnoreController) => {
 	const agentsRulesFilePath = path.resolve(cwd, GlobalFileNames.agentsRulesFile)
 
 	// Check if the top-level agents.md file is enabled
@@ -167,7 +174,7 @@ export const getLocalAgentsRules = async (cwd: string, toggles: ClineRulesToggle
 	}
 
 	try {
-		const agentsMdFiles = await findAgentsMdFiles(cwd)
+		const agentsMdFiles = await findAgentsMdFiles(cwd, ignoreController)
 
 		if (agentsMdFiles.length === 0) {
 			return undefined

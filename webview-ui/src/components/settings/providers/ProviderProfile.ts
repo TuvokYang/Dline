@@ -32,6 +32,7 @@ export function createEmptyApiProfile(): ApiProfile {
 		baseUrl: undefined,
 		modelId: "",
 		modelInfo: undefined,
+		legacyNames: [],
 		webSearchMode: WebSearchMode.WEB_SEARCH_MODE_AUTO,
 		usedFor: ["act", "plan", "subagents"],
 		enabled: true,

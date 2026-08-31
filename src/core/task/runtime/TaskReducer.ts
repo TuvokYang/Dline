@@ -88,7 +88,7 @@ function interactionResponseEffects(
 	response: Extract<TaskEvent, { type: "INTERACTION_RESPONDED" }>["response"],
 	revision: number,
 ): TaskEffect[] {
-	const draft = response.draft
+	const draft = response.presentationDraft ?? response.draft
 	const hasVisibleDraft = Boolean(draft && (draft.text.trim() || draft.images.length > 0 || draft.files.length > 0))
 	if (!draft || !hasVisibleDraft) {
 		return stateEffects(revision)
@@ -102,7 +102,10 @@ function interactionResponseEffects(
 			presentation: draft.text,
 			images: draft.images,
 			files: draft.files,
+			userInputKind: response.userInputKind,
+			queuedInputMode: response.queuedInputMode,
 			feedbackAcknowledgment: handlerFeedbackAcknowledgment(interaction.kind, response.actionId),
+			feedbackAcknowledgmentText: response.draft?.text,
 		},
 		{ id: effectId(revision, 2), type: "POST_TASK_VIEW" },
 		{ id: effectId(revision, 3), type: "PERSIST_SNAPSHOT" },

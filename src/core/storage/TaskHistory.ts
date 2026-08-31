@@ -32,6 +32,39 @@ function newerProjection(
 	return right.revision > left.revision ? right : left
 }
 
+/** Result of applying one completion update against an in-memory row list. */
+interface AppliedCompletionUpdate {
+	/** The rewritten row, when the update was accepted. */
+	updated?: HistoryItem
+	/** The projection that stays canonical, when the update was rejected as stale. */
+	kept?: CompletionProjection
+}
+
+/** Apply one completion update in place; shared by single and batch patch paths. */
+function applyCompletionUpdate(
+	items: HistoryItem[],
+	update: TaskCompletionStateUpdate,
+	knownProjection: CompletionProjection | undefined,
+): AppliedCompletionUpdate {
+	const existingIndex = items.findIndex((item) => item.id === update.taskId)
+	if (existingIndex < 0) return {}
+
+	const existing = items[existingIndex]
+	if (!existing) return {}
+	const current = newerProjection(readCompletionProjection(existing), knownProjection)
+	if (current && (current.revision >= update.revision || current.isCompleted === update.isCompleted)) {
+		return { kept: current }
+	}
+
+	const updated: HistoryItem = {
+		...existing,
+		isCompleted: update.isCompleted,
+		completionStateRevision: update.revision,
+	}
+	items[existingIndex] = updated
+	return { updated }
+}
+
 /** Preserve the canonical completion projection while merging ordinary metadata. */
 function mergeCompletionProjection(projection: CompletionProjection | undefined, incoming: HistoryItem): HistoryItem {
 	const merged = { ...incoming }
@@ -232,25 +265,23 @@ export class TaskHistory {
 	/** Durably patch one Task completion projection without replacing unrelated metadata. */
 	async setCompletionState(update: TaskCompletionStateUpdate): Promise<HistoryItem | undefined> {
 		return await this.completionWriteMutex.withLock(async () => {
+			// Fast no-op path: a provably stale or unchanged update must not pay a
+			// flush plus a full-file rewrite while holding the cross-process lock.
+			// The in-memory view is at least as new as anything this process
+			// persisted, so a rejection here agrees with the transactional check
+			// below; only updates that would actually change a row go durable.
+			const staged = (this.store.getAll() as HistoryItem[]).find((item) => item.id === update.taskId)
+			const known = newerProjection(readCompletionProjection(staged), this.knownProjections.get(update.taskId))
+			if (known && (known.revision >= update.revision || known.isCompleted === update.isCompleted)) {
+				this.rememberProjection(update.taskId, known)
+				return undefined
+			}
+
 			let updated: HistoryItem | undefined
 			await this.store.mutate((items) => {
-				const existingIndex = items.findIndex((item) => item.id === update.taskId)
-				if (existingIndex < 0) return items
-
-				const existing = items[existingIndex]
-				if (!existing) return items
-				const current = newerProjection(readCompletionProjection(existing), this.knownProjections.get(update.taskId))
-				if (current && (current.revision >= update.revision || current.isCompleted === update.isCompleted)) {
-					this.rememberProjection(update.taskId, current)
-					return items
-				}
-
-				updated = {
-					...existing,
-					isCompleted: update.isCompleted,
-					completionStateRevision: update.revision,
-				}
-				items[existingIndex] = updated
+				const applied = applyCompletionUpdate(items, update, this.knownProjections.get(update.taskId))
+				if (applied.kept) this.rememberProjection(update.taskId, applied.kept)
+				updated = applied.updated
 				return items
 			})
 			if (updated) {
@@ -260,6 +291,40 @@ export class TaskHistory {
 				})
 			}
 			return updated
+		})
+	}
+
+	/**
+	 * Durably patch many completion projections with one full-file transaction.
+	 *
+	 * Committing each repaired row through its own transaction turned a large
+	 * history into hundreds of full rewrites under the cross-process lock.
+	 * Batching keeps the same per-row staleness rules but pays for at most one
+	 * rewrite, no matter how many rows the backfill repairs.
+	 *
+	 * @param updates Projection patches to apply; stale entries are skipped.
+	 * @returns The rows that were actually rewritten.
+	 */
+	async setCompletionStates(updates: readonly TaskCompletionStateUpdate[]): Promise<HistoryItem[]> {
+		if (updates.length === 0) return []
+		return await this.completionWriteMutex.withLock(async () => {
+			const applied: HistoryItem[] = []
+			await this.store.mutate((items) => {
+				for (const update of updates) {
+					const result = applyCompletionUpdate(items, update, this.knownProjections.get(update.taskId))
+					if (result.kept) this.rememberProjection(update.taskId, result.kept)
+					if (result.updated) applied.push(result.updated)
+				}
+				return items
+			})
+			for (const row of applied) {
+				if (row.completionStateRevision === undefined) continue
+				this.rememberProjection(row.id, {
+					isCompleted: row.isCompleted === true,
+					revision: row.completionStateRevision,
+				})
+			}
+			return applied
 		})
 	}
 

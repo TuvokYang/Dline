@@ -501,16 +501,21 @@ async function cleanRewriteApiProfiles(profiles: ApiProfile[]): Promise<void> {
  * Auto-initializes from apiConfiguration if no saved data exists.
  */
 export async function getApiProfiles(controller: Controller, _request: EmptyRequest): Promise<ApiProfilesResponse> {
+	const startedAt = performance.now()
 	const settingsDir = path.join(getDlineDataDir(), "settings")
 	const filePath = path.join(settingsDir, API_PROFILES_FILE)
 
 	try {
+		let stageStartedAt = performance.now()
 		const raw = await fs.readFile(filePath, "utf8")
+		const readMs = Math.round(performance.now() - stageStartedAt)
 		const parsed = parseApiProfilesJson(raw)
 		const profiles = parsed.profiles
 		const apiKeysMigrated = hydrateApiKeys(profiles)
 		const providerSecretsMigrated = hydrateProviderSecrets(profiles)
+		stageStartedAt = performance.now()
 		const modelInfoChanged = await hydrateModelInfoFromRegistry(profiles)
+		const hydrateMs = Math.round(performance.now() - stageStartedAt)
 		if (parsed.recovered) {
 			// Recovered JSON is genuinely damaged on disk and must be repaired now.
 			registryModelInfoRepairedPaths.add(filePath)
@@ -529,19 +534,31 @@ export async function getApiProfiles(controller: Controller, _request: EmptyRequ
 		// Flush any pending globalState writes before ensureProfileDefaults
 		// reads planModeProfile/actModeProfile, so it sees the latest values
 		// and doesn't incorrectly reset to the provider default.
+		stageStartedAt = performance.now()
 		await controller.stateManager.flushPendingState()
+		const firstFlushMs = Math.round(performance.now() - stageStartedAt)
 		const defaultsChanged = ensureProfileDefaults(controller, profiles)
 		// Only post state to webview if defaults actually changed (Bug fix:
 		// posting on every read causes excessive webview re-renders and
 		// contributes to updateApiProfiles call storms).
+		let defaultsFlushMs = 0
+		let publishMs = 0
 		if (defaultsChanged) {
+			stageStartedAt = performance.now()
 			await controller.stateManager.flushPendingState()
+			defaultsFlushMs = Math.round(performance.now() - stageStartedAt)
+			stageStartedAt = performance.now()
 			await controller.postStateToWebview()
+			publishMs = Math.round(performance.now() - stageStartedAt)
 		}
 		recordProfileCatalogBaseline(controller, profiles)
+		Logger.debug(
+			`[ProfilePerf] phase=get_profiles taskId=${controller.task?.taskId ?? "none"} outcome=read profiles=${profiles.length} readMs=${readMs} hydrateMs=${hydrateMs} firstFlushMs=${firstFlushMs} defaultsChanged=${defaultsChanged} defaultsFlushMs=${defaultsFlushMs} publishMs=${publishMs} totalMs=${Math.round(performance.now() - startedAt)}`,
+		)
 		return ApiProfilesResponse.create({ profiles })
 	} catch (err: any) {
 		if (err.code === "ENOENT") {
+			const initializeStartedAt = performance.now()
 			// Try migration from providers first, then fall back to legacy config
 			let profiles = await migrateFromProviders(controller)
 			Logger.log(`[getApiProfiles] migrateFromProviders returned ${profiles.length} profiles`)
@@ -561,6 +578,9 @@ export async function getApiProfiles(controller: Controller, _request: EmptyRequ
 			// Always post on first initialization so webview picks up defaults
 			await controller.postStateToWebview()
 			recordProfileCatalogBaseline(controller, profiles)
+			Logger.debug(
+				`[ProfilePerf] phase=get_profiles taskId=${controller.task?.taskId ?? "none"} outcome=initialize profiles=${profiles.length} initializeMs=${Math.round(performance.now() - initializeStartedAt)} totalMs=${Math.round(performance.now() - startedAt)}`,
+			)
 			return ApiProfilesResponse.create({ profiles })
 		}
 		Logger.error("[getApiProfiles] Failed to read api_profiles.json:", err)

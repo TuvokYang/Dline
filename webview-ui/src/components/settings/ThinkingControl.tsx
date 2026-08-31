@@ -77,6 +77,9 @@ interface ThinkingControlProps {
 	effortDescription?: string
 	budgetLabel?: string
 	maxBudget?: number
+	defaultEnabled?: boolean
+	defaultEffort?: string
+	disableSupported?: boolean
 	showModeSelector?: boolean
 	modeSelectorLabel?: string
 	modeSelectorOptions?: Array<{ value: ThinkingMode; label: string }>
@@ -95,6 +98,9 @@ const ThinkingControl = ({
 	effortDescription = "Higher effort improves depth, but uses more tokens.",
 	budgetLabel = "Thinking Budget",
 	maxBudget = ANTHROPIC_MAX_THINKING_BUDGET,
+	defaultEnabled = false,
+	defaultEffort,
+	disableSupported = true,
 	showModeSelector = true,
 	modeSelectorLabel = "Thinking Mode",
 	modeSelectorOptions = [
@@ -104,6 +110,9 @@ const ThinkingControl = ({
 }: ThinkingControlProps) => {
 	// Derive state from reasoningConfig
 	const enableThinking = useMemo(() => {
+		if (!disableSupported) {
+			return true
+		}
 		// Use explicit enableThinking field if present
 		if (reasoningConfig?.enableThinking !== undefined) {
 			return reasoningConfig.enableThinking
@@ -112,8 +121,8 @@ const ThinkingControl = ({
 		// Exclude empty string '' to prevent proto3 zero-value from being treated as enabled
 		const hasEffort = !!(reasoningConfig?.effort && reasoningConfig.effort !== "none" && reasoningConfig.effort !== "")
 		const hasBudget = !!(reasoningConfig?.thinkingBudget && reasoningConfig.thinkingBudget > 0)
-		return hasEffort || hasBudget
-	}, [reasoningConfig?.enableThinking, reasoningConfig?.effort, reasoningConfig?.thinkingBudget])
+		return hasEffort || hasBudget || defaultEnabled
+	}, [defaultEnabled, disableSupported, reasoningConfig?.enableThinking, reasoningConfig?.effort, reasoningConfig?.thinkingBudget])
 
 	const activeType = useMemo<ThinkingMode>(() => {
 		if (reasoningConfig?.thinkingBudget != null && reasoningConfig.thinkingBudget > 0) {
@@ -130,12 +139,15 @@ const ThinkingControl = ({
 
 	const handleEnableChange = useCallback(
 		(checked: boolean) => {
+			if (!checked && !disableSupported) {
+				return
+			}
 			if (checked) {
 				// Enable with default values based on mode
 				const defaultMode = mode === "budget-only" ? "budget" : "effort"
 				onReasoningConfigUpdate({
 					enableThinking: true,
-					effort: defaultMode === "effort" ? "medium" : undefined,
+					effort: defaultMode === "effort" ? (defaultEffort ?? "medium") : undefined,
 					thinkingBudget: defaultMode === "budget" ? 1024 : undefined,
 				})
 			} else {
@@ -147,13 +159,13 @@ const ThinkingControl = ({
 				})
 			}
 		},
-		[mode, onReasoningConfigUpdate],
+		[defaultEffort, disableSupported, mode, onReasoningConfigUpdate],
 	)
 
 	const handleEffortChange = useCallback(
 		(value: string) => {
 			onReasoningConfigUpdate({
-				enableThinking: true,
+				enableThinking: value !== "none",
 				effort: value,
 				thinkingBudget: undefined,
 			})
@@ -203,6 +215,7 @@ const ThinkingControl = ({
 			{/* Enable Thinking Checkbox */}
 			<VSCodeCheckbox
 				checked={enableThinking}
+				disabled={!disableSupported}
 				onChange={(event) => {
 					const target = event.target as (EventTarget & { checked?: boolean }) | null
 					handleEnableChange(target?.checked === true)
@@ -238,7 +251,11 @@ const ThinkingControl = ({
 							<Select
 								onValueChange={handleEffortChange}
 								value={
-									isOpenaiReasoningEffort(effort) && effortOptions.includes(effort) ? effort : effortOptions[0]
+									isOpenaiReasoningEffort(effort) && effortOptions.includes(effort)
+										? effort
+										: defaultEffort && effortOptions.includes(defaultEffort)
+											? defaultEffort
+											: effortOptions[0]
 								}>
 								<SelectTrigger className="w-full mt-1">
 									<SelectValue />

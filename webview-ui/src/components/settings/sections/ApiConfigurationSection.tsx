@@ -24,6 +24,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		setEditMode,
 		addProfile,
 		updateProfile,
+		reorderProfiles,
 		removeProfile,
 		toggleExpand,
 		providerOptions,
@@ -52,6 +53,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 						expandedId={expandedId}
 						onAddProfile={addProfile}
 						onDeleteProfile={removeProfile}
+						onReorderProfiles={reorderProfiles}
 						onToggleEditMode={() => setEditMode(!editMode)}
 						onToggleExpand={toggleExpand}
 						onUpdateProfile={updateProfile}

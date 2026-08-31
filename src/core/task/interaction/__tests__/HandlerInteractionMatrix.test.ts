@@ -149,7 +149,7 @@ describe("handler interaction matrix", () => {
 					getGlobalSettingsKey: vi.fn(() => "act"),
 				},
 				commandPermissionController: { validateCommand: vi.fn(() => ({ allowed: true })) },
-				clineIgnoreController: { validateDirectoryAccess: vi.fn(() => true), validateCommand: vi.fn(() => undefined) },
+				ignoreController: { validateDirectoryAccess: vi.fn(() => true), validateCommand: vi.fn(() => undefined) },
 			},
 			autoApprover: { shouldAutoApproveTool: vi.fn(() => [false, false]) },
 			autoApprovalSettings: { enableNotifications: false },
@@ -194,7 +194,7 @@ describe("handler interaction matrix", () => {
 						getGlobalSettingsKey: vi.fn(() => "act"),
 					},
 					commandPermissionController: { validateCommand: vi.fn(() => ({ allowed: true })) },
-					clineIgnoreController: {
+					ignoreController: {
 						validateDirectoryAccess: vi.fn(() => true),
 						validateCommand: vi.fn(() => undefined),
 					},
@@ -250,7 +250,7 @@ describe("handler interaction matrix", () => {
 					),
 				},
 				commandPermissionController: { validateCommand: vi.fn(() => ({ allowed: true })) },
-				clineIgnoreController: { validateDirectoryAccess: vi.fn(() => true), validateCommand: vi.fn(() => undefined) },
+				ignoreController: { validateDirectoryAccess: vi.fn(() => true), validateCommand: vi.fn(() => undefined) },
 			},
 			autoApprover: { shouldAutoApproveTool: vi.fn(() => [true, true]) },
 			autoApprovalSettings: { enableNotifications: false },

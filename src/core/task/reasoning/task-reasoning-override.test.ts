@@ -15,6 +15,7 @@ function createProfile(): ApiProfile {
 		apiKey: "secret",
 		modelId: "reasoning-model",
 		usedFor: [],
+		legacyNames: [],
 		enabled: true,
 		openai: {
 			reasoning: {

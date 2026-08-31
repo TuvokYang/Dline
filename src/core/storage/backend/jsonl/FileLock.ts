@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import * as path from "node:path"
 import fs from "fs/promises"
 import { Logger } from "@/shared/services/Logger"
 
@@ -115,6 +116,7 @@ export class FileLock {
 	async acquire(jsonlPath: string): Promise<void> {
 		const lockPath = lockPathFor(jsonlPath)
 		const ownerId = randomUUID()
+		const startedAt = performance.now()
 
 		for (let attempt = 1; attempt <= MAX_ACQUIRE_RETRIES; attempt++) {
 			const payload: LockPayload = {
@@ -133,6 +135,15 @@ export class FileLock {
 					await handle.close()
 				}
 				this.ownedLocks.set(jsonlPath, ownerId)
+				// Bounded retry caps contention at roughly one second, so a longer
+				// acquire on the first attempt means the filesystem call itself was
+				// slow rather than the lock being held elsewhere.
+				const durationMs = Math.round(performance.now() - startedAt)
+				if (durationMs >= 250) {
+					Logger.debug(
+						`[FileLockPerf] phase=acquire path=${path.basename(lockPath)} attempts=${attempt} durationMs=${durationMs}`,
+					)
+				}
 				return
 			} catch (error) {
 				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error

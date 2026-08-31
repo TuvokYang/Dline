@@ -4,11 +4,12 @@ import type { ModelInfo } from "@shared/proto/dline/models"
 import { OcaModelInfo as ProtoOcaModelInfo } from "@shared/proto/dline/models"
 import type { ApiProfile } from "@shared/proto/dline/profile"
 import { VSCodeButton, VSCodeDropdown, VSCodeOption } from "@vscode/webview-ui-toolkit/react"
-import React, { useCallback, useEffect, useMemo, useState } from "react"
+import React, { useCallback, useEffect, useId, useMemo, useState } from "react"
 import { ModelsServiceClient } from "@/services/grpc-client"
 import { VSC_BUTTON_BACKGROUND, VSC_BUTTON_FOREGROUND, VSC_DESCRIPTION_FOREGROUND, VSC_FOREGROUND } from "@/utils/vscStyles"
 import { ModelInfoView } from "../common/ModelInfoView"
 import ThinkingBudgetSlider from "../ThinkingBudgetSlider"
+import { ProfileField } from "../profile-ui"
 
 /** Convert proto OcaModelInfo (flat) to app OcaModelInfo (layered capabilities/pricing). */
 function protoToAppOcaModelInfo(proto: ProtoOcaModelInfo, modelId: string): OcaModelInfo {
@@ -118,6 +119,9 @@ const OcaModelPicker: React.FC<OcaModelPickerProps> = ({ showModelOptions, isPop
 		}
 	}
 
+	const fieldId = useId().replace(/:/g, "")
+	const modelInputId = `oca-model-${fieldId}`
+	const reasoningEffortInputId = `oca-reasoning-${fieldId}`
 	const reasoningEffortOptions: string[] = (ocaModels[selectedModelId]?.reasoningEffortOptions as string[] | undefined) ?? []
 
 	const modelIds = useMemo(() => Object.keys(ocaModels).sort((a, b) => a.localeCompare(b)), [ocaModels])
@@ -131,12 +135,20 @@ const OcaModelPicker: React.FC<OcaModelPickerProps> = ({ showModelOptions, isPop
 	return (
 		<div className="w-full">
 			{showRestrictedPopup && <OcaRestrictivePopup bannerText={pendingBanner} onAcknowledge={onAcknowledge} />}
-			<style>{`#model-id::part(listbox){max-height:100px;overflow:auto;}`}</style>
-			<label className="font-medium text-[12px] mt-[10px] mb-[2px]">Model</label>
-			<div className="relative z-100 flex items-center gap-2 mb-1">
+			<style>{`#${modelInputId}::part(listbox){max-height:100px;overflow:auto;}`}</style>
+			<ProfileField
+				actions={
+					<VSCodeButton disabled={loading} onClick={refreshOcaModels}>
+						{loading ? "Refreshing…" : "Refresh"}
+					</VSCodeButton>
+				}
+				description={lastRefreshedText ? `Last refreshed at ${lastRefreshedText}` : undefined}
+				htmlFor={modelInputId}
+				label="Model">
 				<VSCodeDropdown
-					className="flex-1 text-[12px] min-h-[24px]"
-					id="model-id"
+					aria-label="Model"
+					className="min-h-7 min-w-0 w-full text-sm"
+					id={modelInputId}
 					onChange={(event: Event | React.FormEvent<HTMLElement>) => {
 						const v = (event.target as HTMLSelectElement | null)?.value ?? ""
 						handleModelChange(v)
@@ -144,50 +156,30 @@ const OcaModelPicker: React.FC<OcaModelPickerProps> = ({ showModelOptions, isPop
 					style={{ position: "relative", zIndex: 100 }}
 					value={selectedModelId || ""}>
 					{modelIds.map((id) => (
-						<VSCodeOption key={id} style={{ padding: "4px 8px", fontSize: 12 }} value={id}>
+						<VSCodeOption key={id} value={id}>
 							{id}
 						</VSCodeOption>
 					))}
 				</VSCodeDropdown>
-				<VSCodeButton
-					disabled={loading}
-					onClick={refreshOcaModels}
-					style={{
-						fontSize: 14,
-						fontWeight: 500,
-						background: "var(--vscode-button-background,#0078d4)",
-						color: "var(--vscode-button-foreground,#fff)",
-						minWidth: 0,
-						margin: 0,
-					}}>
-					{loading ? "Refreshing…" : "Refresh"}
-				</VSCodeButton>
-			</div>
-			{lastRefreshedText && (
-				<div className="text-[11px] text-(--vscode-descriptionForeground) mt-0 mb-2">
-					Last refreshed at {lastRefreshedText}
-				</div>
-			)}
-			{!loading && selectedModelInfo?.capabilities?.supportsReasoning && reasoningEffortOptions.length > 0 && (
-				<>
-					<label className="font-medium text-[12px] mt-[10px] mb-[2px]">Reasoning Effort</label>
-					<div className="flex items-center gap-2 mb-1">
-						<VSCodeDropdown
-							className="flex-1 text-[12px] min-h-[24px]"
-							id="reasoning-effort-dropdown"
-							onChange={(e: Event | React.FormEvent<HTMLElement>) => {
-								const v = (e.target as HTMLSelectElement | null)?.value ?? ""
-								onUpdate({ modelId: profile.modelId, modelInfo: profile.modelInfo })
-							}}>
-							{reasoningEffortOptions.map((effort) => (
-								<VSCodeOption key={effort} style={{ padding: "4px 8px", fontSize: 12 }} value={effort}>
-									{effort}
-								</VSCodeOption>
-							))}
-						</VSCodeDropdown>
-					</div>
-				</>
-			)}
+			</ProfileField>
+			{!loading && selectedModelInfo?.capabilities?.supportsReasoning && reasoningEffortOptions.length > 0 ? (
+				<ProfileField htmlFor={reasoningEffortInputId} label="Reasoning Effort">
+					<VSCodeDropdown
+						aria-label="Reasoning Effort"
+						className="min-h-7 min-w-0 w-full text-sm"
+						id={reasoningEffortInputId}
+						onChange={(e: Event | React.FormEvent<HTMLElement>) => {
+							const v = (e.target as HTMLSelectElement | null)?.value ?? ""
+							onUpdate({ modelId: profile.modelId, modelInfo: profile.modelInfo })
+						}}>
+						{reasoningEffortOptions.map((effort) => (
+							<VSCodeOption key={effort} value={effort}>
+								{effort}
+							</VSCodeOption>
+						))}
+					</VSCodeDropdown>
+				</ProfileField>
+			) : null}
 			{selectedModelInfo && (
 				<>
 					{showBudgetSlider && <ThinkingBudgetSlider />}

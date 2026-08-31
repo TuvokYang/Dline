@@ -7,7 +7,7 @@ import { buildEffectiveModelInfo, mergeCapabilities, mergePricing } from "@share
 import { DEFAULT_OPENAI_RESPONSES_STREAM_IDLE_TIMEOUT_SECONDS } from "@shared/providers/openai-stream"
 import { OPENAI_COMPATIBLE_REASONING_EFFORT_OPTIONS, OPENAI_REASONING_EFFORT_OPTIONS } from "@shared/storage/types"
 import { VSCodeButton, VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useId, useMemo, useState } from "react"
 import { ModelsServiceClient } from "@/services/grpc-client"
 import { ApiFormatSelector } from "../common/ApiFormatSelector"
 import { ApiKeyField } from "../common/ApiKeyField"
@@ -19,6 +19,8 @@ import { ModelInfoView } from "../common/ModelInfoView"
 import { ModelSelector } from "../common/ModelSelector"
 import OpenAIServiceTierSelector from "../OpenAIServiceTierSelector"
 import ThinkingControl from "../ThinkingControl"
+import { ProfileActionRow, ProfileField, ProfileNotice, ProfileSection, ProfileSectionTitle } from "../profile-ui"
+import { getModelCompatibilityNotice } from "./modelCompatibilityNotice"
 import type { ApiProfile } from "./ProviderProfile"
 import { ProviderWebSearchSettings } from "./ProviderWebSearchSettings"
 import { useProviderModels } from "./useProviderModels"
@@ -39,6 +41,8 @@ function getOpenAiConfig(profile: ApiProfile): OpenAiProviderConfig {
 /** Unified OpenAI API-key provider for official and custom OpenAI-compatible models. */
 export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }: OpenAIProviderProps) => {
 	const pc = getOpenAiConfig(profile)
+	const fieldId = useId()
+	const streamIdleTimeoutId = `${fieldId}-stream-idle-timeout`
 	const { models, defaultModelId, modelInfoSaneDefaults } = useProviderModels("openai")
 	const [discoveredModelIds, setDiscoveredModelIds] = useState<string[]>([])
 	// Profiles created by the former OpenAI Compatible provider have no
@@ -56,6 +60,13 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 		pricing: pc.pricing,
 		enableLongContext: pc.enableLongContext,
 		pricingTiersEnabled: pc.pricingTiersEnabled,
+	})
+	const compatibilityCapabilities = customModelEnabled
+		? mergeCapabilities(profile.modelInfo?.capabilities, pc.capabilities ?? {})
+		: modelInfo.capabilities
+	const compatibilityNotice = getModelCompatibilityNotice({
+		capabilities: compatibilityCapabilities,
+		requireCompleteMetadata: customModelEnabled,
 	})
 	const apiFormats =
 		registryModel?.apiFormats ??
@@ -168,7 +179,7 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 	}
 
 	return (
-		<div className="flex flex-col gap-1">
+		<div className="flex min-w-0 flex-col gap-3">
 			<BaseUrlField
 				initialValue={profile.baseUrl}
 				label="Use custom base URL"
@@ -295,31 +306,50 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 				</>
 			)}
 
-			<div style={{ marginBottom: 10 }}>
-				<div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-					<span style={{ fontWeight: 500 }}>Custom Headers</span>
-					<VSCodeButton onClick={addHeader}>Add Header</VSCodeButton>
+			<ProfileSection>
+				<div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+					<ProfileSectionTitle>Custom Headers</ProfileSectionTitle>
+					<ProfileActionRow>
+						<VSCodeButton onClick={addHeader}>Add Header</VSCodeButton>
+					</ProfileActionRow>
 				</div>
-				{headerEntries.map(([key, value], index) => (
-					<div key={`${key}-${index}`} style={{ display: "flex", gap: 5, marginTop: 5 }}>
-						<DebouncedTextField
-							initialValue={key}
-							onChange={(newValue) => updateHeader(key, newValue, value)}
-							placeholder="Header name"
-							style={{ width: "40%" }}
-						/>
-						<DebouncedTextField
-							initialValue={value}
-							onChange={(newValue) => updateHeader(key, key, newValue)}
-							placeholder="Header value"
-							style={{ width: "40%" }}
-						/>
-						<VSCodeButton appearance="secondary" onClick={() => removeHeader(key)}>
-							Remove
-						</VSCodeButton>
-					</div>
-				))}
-			</div>
+				{headerEntries.map(([key, value], index) => {
+					const nameId = `${fieldId}-header-${index}-name`
+					const valueId = `${fieldId}-header-${index}-value`
+					return (
+						<div
+							className="grid min-w-0 grid-cols-1 gap-2 xs:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
+							data-testid="custom-header-row"
+							key={`${key}-${index}`}>
+							<ProfileField htmlFor={nameId} label="Header name">
+								<DebouncedTextField
+									ariaLabel="Header name"
+									className="min-h-7 w-full"
+									id={nameId}
+									initialValue={key}
+									onChange={(newValue) => updateHeader(key, newValue, value)}
+									placeholder="Header name"
+								/>
+							</ProfileField>
+							<ProfileField htmlFor={valueId} label="Header value">
+								<DebouncedTextField
+									ariaLabel="Header value"
+									className="min-h-7 w-full"
+									id={valueId}
+									initialValue={value}
+									onChange={(newValue) => updateHeader(key, key, newValue)}
+									placeholder="Header value"
+								/>
+							</ProfileField>
+							<ProfileActionRow className="justify-end xs:self-end">
+								<VSCodeButton appearance="secondary" onClick={() => removeHeader(key)}>
+									Remove
+								</VSCodeButton>
+							</ProfileActionRow>
+						</div>
+					)
+				})}
+			</ProfileSection>
 
 			<BaseUrlField
 				initialValue={pc.azureApiVersion}
@@ -348,22 +378,25 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 				Include usage stats in stream responses
 			</VSCodeCheckbox>
 
-			<DebouncedTextField
-				initialValue={String(pc.streamIdleTimeoutSeconds ?? DEFAULT_OPENAI_RESPONSES_STREAM_IDLE_TIMEOUT_SECONDS)}
-				onChange={handleStreamIdleTimeoutChange}
-				placeholder={String(DEFAULT_OPENAI_RESPONSES_STREAM_IDLE_TIMEOUT_SECONDS)}>
-				Responses stream idle timeout (seconds)
-			</DebouncedTextField>
-			<p style={{ fontSize: 12, marginTop: 3, color: "var(--vscode-descriptionForeground)" }}>
-				Abort and retry when no Responses streaming event is received for this many seconds.
-			</p>
+			<ProfileField
+				description="Abort and retry when no Responses streaming event is received for this many seconds."
+				htmlFor={streamIdleTimeoutId}
+				label="Responses stream idle timeout (seconds)">
+				<DebouncedTextField
+					ariaLabel="Responses stream idle timeout (seconds)"
+					className="min-h-7 w-full"
+					id={streamIdleTimeoutId}
+					initialValue={String(pc.streamIdleTimeoutSeconds ?? DEFAULT_OPENAI_RESPONSES_STREAM_IDLE_TIMEOUT_SECONDS)}
+					onChange={handleStreamIdleTimeoutChange}
+					placeholder={String(DEFAULT_OPENAI_RESPONSES_STREAM_IDLE_TIMEOUT_SECONDS)}
+				/>
+			</ProfileField>
 
-			<p style={{ fontSize: 12, marginTop: 3, color: "var(--vscode-descriptionForeground)" }}>
-				<span style={{ color: "var(--vscode-errorForeground)" }}>
-					(<span style={{ fontWeight: 500 }}>Note:</span> Dline uses complex prompts. Verify your model's capability
-					before use.)
-				</span>
-			</p>
+			{compatibilityNotice ? (
+				<ProfileNotice title={compatibilityNotice.title} variant={compatibilityNotice.variant}>
+					{compatibilityNotice.message}
+				</ProfileNotice>
+			) : null}
 
 			{showModelOptions && <ModelInfoView isPopup={isPopup} modelInfo={modelInfo} selectedModelId={modelId} />}
 		</div>

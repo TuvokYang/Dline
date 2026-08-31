@@ -1,9 +1,9 @@
 import type { ModelInfo } from "@shared/proto/dline/models"
 import { type ModelCapabilities, type ModelPricing, ServerTool } from "@shared/proto/dline/models/metadata"
 import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
-import { useEffect, useState } from "react"
-import { Label } from "@/components/ui/label"
+import { useEffect, useId, useState } from "react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { ProfileDisclosure, ProfileField, ProfileInlineGrid, ProfileSection, ProfileSectionTitle } from "../profile-ui"
 import { DebouncedTextField } from "./DebouncedTextField"
 import { ContextTierEditor, PricingTierEditor } from "./ModelTierEditor"
 
@@ -17,19 +17,7 @@ type CapabilityCheckField =
 	| "supportsWebSearch"
 	| "supportsBrowserAction"
 
-const sectionTitleStyle = {
-	color: "var(--vscode-descriptionForeground)",
-	fontSize: "11px",
-	fontWeight: 600,
-	letterSpacing: "0.02em",
-	textTransform: "uppercase",
-} as const
-
-const fieldLabelStyle = {
-	color: "var(--vscode-descriptionForeground)",
-	fontSize: "12px",
-	fontWeight: 400,
-} as const
+const fieldControlClass = "min-h-7 w-full"
 
 /**
  * Props for the ModelConfiguration component
@@ -96,7 +84,15 @@ export const ModelConfiguration = ({
 	contextWindowValue: selectedContextWindowValue,
 	onContextWindowUpdate,
 }: ModelConfigurationProps) => {
-	const [expanded, setExpanded] = useState(false)
+	const fieldId = useId()
+	const temperatureId = `${fieldId}-temperature`
+	const contextWindowId = `${fieldId}-context-window`
+	const maxTokensId = `${fieldId}-max-tokens`
+	const currencyId = `${fieldId}-currency`
+	const inputPriceId = `${fieldId}-input-price`
+	const outputPriceId = `${fieldId}-output-price`
+	const cacheWritesPriceId = `${fieldId}-cache-writes-price`
+	const cacheReadsPriceId = `${fieldId}-cache-reads-price`
 	const [draftChecks, setDraftChecks] = useState<Partial<Record<CapabilityCheckField, boolean>>>({})
 	const [pendingChecks, setPendingChecks] = useState<Partial<Record<CapabilityCheckField, boolean>>>({})
 	// Show registry defaults until the user edits them; edits persist as provider overrides.
@@ -286,231 +282,223 @@ export const ModelConfiguration = ({
 	const pricingTiers = draftPricingTiers
 
 	return (
-		<div style={{ marginBottom: 8 }}>
-			{/* Collapsible header */}
-			<div
-				onClick={() => setExpanded(!expanded)}
-				onKeyDown={(e) => {
-					if (e.key === "Enter" || e.key === " ") {
-						e.preventDefault()
-						setExpanded(!expanded)
-					}
-				}}
-				role="button"
-				style={{
-					color: "var(--vscode-descriptionForeground)",
-					display: "flex",
-					margin: "10px 0",
-					cursor: "pointer",
-					alignItems: "center",
-				}}
-				tabIndex={0}>
-				<span
-					className={`codicon ${expanded ? "codicon-chevron-down" : "codicon-chevron-right"}`}
-					style={{ marginRight: "4px" }}
-				/>
-				<span style={{ fontWeight: 700, textTransform: "uppercase" }}>Model Configuration</span>
-			</div>
+		<ProfileDisclosure title="Model Configuration">
+			{hasOptionsFields ? (
+				<ProfileSection>
+					<ProfileSectionTitle className="text-xs uppercase tracking-wide text-description">Options</ProfileSectionTitle>
+					<div className="flex flex-col gap-1.5 text-sm">
+						{capabilityFields.includes("supportsImages") ? (
+							<VSCodeCheckbox
+								checked={supportsImages}
+								onChange={(e: Event | React.FormEvent<HTMLElement>) =>
+									updateCheck("supportsImages", (e.target as HTMLInputElement | null)?.checked === true)
+								}>
+								Supports Images
+							</VSCodeCheckbox>
+						) : null}
+						{capabilityFields.includes("supportsWebSearch") ? (
+							<VSCodeCheckbox
+								checked={supportsWebSearch}
+								onChange={(e: Event | React.FormEvent<HTMLElement>) =>
+									updateWebSearchCheck((e.target as HTMLInputElement | null)?.checked === true)
+								}>
+								Supports Web Search
+							</VSCodeCheckbox>
+						) : null}
+						{capabilityFields.includes("supportsBrowserAction") ? (
+							<VSCodeCheckbox
+								checked={supportsBrowserAction}
+								onChange={(e: Event | React.FormEvent<HTMLElement>) =>
+									updateCheck(
+										"supportsBrowserAction",
+										(e.target as HTMLInputElement | null)?.checked === true,
+									)
+								}>
+								Supports Browser Actions
+							</VSCodeCheckbox>
+						) : null}
+						{capabilityFields.includes("supportsPromptCache") ? (
+							<VSCodeCheckbox
+								checked={supportsPromptCache}
+								onChange={(e: Event | React.FormEvent<HTMLElement>) =>
+									updateCheck(
+										"supportsPromptCache",
+										(e.target as HTMLInputElement | null)?.checked === true,
+									)
+								}>
+								Supports Prompt Cache
+							</VSCodeCheckbox>
+						) : null}
+						{capabilityFields.includes("supportsTools") ? (
+							<VSCodeCheckbox
+								checked={supportsTools}
+								onChange={(e: Event | React.FormEvent<HTMLElement>) =>
+									updateCheck("supportsTools", (e.target as HTMLInputElement | null)?.checked === true)
+								}>
+								Supports Native Tool Calls
+							</VSCodeCheckbox>
+						) : null}
+					</div>
+					{capabilityFields.includes("temperature") ? (
+						<ProfileField htmlFor={temperatureId} label="Temperature">
+							<DebouncedTextField
+								ariaLabel="Temperature"
+								className={fieldControlClass}
+								id={temperatureId}
+								initialValue={temperature != null ? String(temperature) : ""}
+								onChange={(value) => updateTemperature(parsePrice(value, 0))}
+								placeholder={
+									defaults?.capabilities?.temperature != null
+										? String(defaults.capabilities.temperature)
+										: defaults?.temperature != null
+											? String(defaults.temperature)
+											: ""
+								}
+							/>
+						</ProfileField>
+					) : null}
+				</ProfileSection>
+			) : null}
 
-			{/* Collapsible content */}
-			{expanded && (
-				<>
-					{hasOptionsFields && (
-						<div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
-							<Label style={sectionTitleStyle}>Options</Label>
-							{capabilityFields.includes("supportsImages") && (
-								<VSCodeCheckbox
-									checked={supportsImages}
-									onChange={(e: Event | React.FormEvent<HTMLElement>) =>
-										updateCheck("supportsImages", (e.target as HTMLInputElement | null)?.checked === true)
-									}>
-									Supports Images
-								</VSCodeCheckbox>
-							)}
-							{capabilityFields.includes("supportsWebSearch") && (
-								<VSCodeCheckbox
-									checked={supportsWebSearch}
-									onChange={(e: Event | React.FormEvent<HTMLElement>) =>
-										updateWebSearchCheck((e.target as HTMLInputElement | null)?.checked === true)
-									}>
-									Supports Web Search
-								</VSCodeCheckbox>
-							)}
-							{capabilityFields.includes("supportsBrowserAction") && (
-								<VSCodeCheckbox
-									checked={supportsBrowserAction}
-									onChange={(e: Event | React.FormEvent<HTMLElement>) =>
-										updateCheck(
-											"supportsBrowserAction",
-											(e.target as HTMLInputElement | null)?.checked === true,
-										)
-									}>
-									Supports Browser Actions
-								</VSCodeCheckbox>
-							)}
-							{capabilityFields.includes("supportsPromptCache") && (
-								<VSCodeCheckbox
-									checked={supportsPromptCache}
-									onChange={(e: Event | React.FormEvent<HTMLElement>) =>
-										updateCheck(
-											"supportsPromptCache",
-											(e.target as HTMLInputElement | null)?.checked === true,
-										)
-									}>
-									Supports Prompt Cache
-								</VSCodeCheckbox>
-							)}
-							{capabilityFields.includes("supportsTools") && (
-								<VSCodeCheckbox
-									checked={supportsTools}
-									onChange={(e: Event | React.FormEvent<HTMLElement>) =>
-										updateCheck("supportsTools", (e.target as HTMLInputElement | null)?.checked === true)
-									}>
-									Supports Native Tool Calls
-								</VSCodeCheckbox>
-							)}
-							{capabilityFields.includes("temperature") && (
+			{hasCapabilityFields ? (
+				<ProfileSection>
+					<ProfileSectionTitle className="text-xs uppercase tracking-wide text-description">Capabilities</ProfileSectionTitle>
+					<ProfileInlineGrid>
+						{capabilityFields.includes("contextWindow") ? (
+							<ProfileField htmlFor={contextWindowId} label="Context Window Size">
 								<DebouncedTextField
-									initialValue={temperature != null ? String(temperature) : ""}
-									onChange={(value) => updateTemperature(parsePrice(value, 0))}
-									placeholder={
-										defaults?.capabilities?.temperature != null
-											? String(defaults.capabilities.temperature)
-											: defaults?.temperature != null
-												? String(defaults.temperature)
-												: ""
+									ariaLabel="Context Window Size"
+									className={fieldControlClass}
+									id={contextWindowId}
+									initialValue={String(contextWindowValue)}
+									onChange={(value) =>
+										onContextWindowUpdate
+											? onContextWindowUpdate(Number(value) || 0)
+											: updateCapability("contextWindow", Number(value) || 0)
 									}
-									style={{ marginTop: "5px" }}>
-									<span style={fieldLabelStyle}>Temperature</span>
-								</DebouncedTextField>
-							)}
-						</div>
-					)}
-
-					{hasCapabilityFields && (
-						<div style={{ marginTop: 10 }}>
-							<Label style={sectionTitleStyle}>Capabilities</Label>
-							<div style={{ display: "flex", gap: 10, marginTop: "5px" }}>
-								{capabilityFields.includes("contextWindow") && (
-									<DebouncedTextField
-										initialValue={String(contextWindowValue)}
-										onChange={(value) =>
-											onContextWindowUpdate
-												? onContextWindowUpdate(Number(value) || 0)
-												: updateCapability("contextWindow", Number(value) || 0)
-										}
-										placeholder={String(defaultContextWindow)}
-										style={{ flex: 1 }}>
-										<span style={fieldLabelStyle}>Context Window Size</span>
-									</DebouncedTextField>
-								)}
-								{capabilityFields.includes("maxTokens") && (
-									<DebouncedTextField
-										initialValue={String(maxTokensValue)}
-										onChange={(value) => updateCapability("maxTokens", Number(value) || 0)}
-										placeholder={String(defaultMaxTokens)}
-										style={{ flex: 1 }}>
-										<span style={fieldLabelStyle}>Max Output Tokens</span>
-									</DebouncedTextField>
-								)}
-							</div>
-							{capabilityFields.includes("contextWindowTiers") ? (
-								<ContextTierEditor editable={tiersEditable} onChange={updateContextTiers} tiers={contextTiers} />
-							) : null}
-						</div>
-					)}
-
-					{hasPricingFields && (
-						<div style={{ marginTop: 10 }}>
-							<Label style={sectionTitleStyle}>Pricing</Label>
-							<div style={{ marginTop: 5, marginBottom: 5 }}>
-								<Label style={fieldLabelStyle}>Currency</Label>
-								<Select onValueChange={updateCurrency} value={pricing.currency || "USD"}>
-									<SelectTrigger className="w-full mt-1">
-										<SelectValue />
-									</SelectTrigger>
-									<SelectContent>
-										<SelectItem value="USD">USD ($)</SelectItem>
-										<SelectItem value="CNY">CNY (¥)</SelectItem>
-										<SelectItem value="EUR">EUR (€)</SelectItem>
-										<SelectItem value="GBP">GBP (£)</SelectItem>
-									</SelectContent>
-								</Select>
-							</div>
-
-							{hasBasePricingFields && (
-								<div style={{ display: "flex", gap: 10, marginTop: "5px" }}>
-									{pricingFields.includes("inputPrice") && (
-										<DebouncedTextField
-											initialValue={pricing.inputPrice != null ? String(pricing.inputPrice) : ""}
-											onChange={(value) => updatePricing("inputPrice", parsePrice(value, 0))}
-											placeholder={
-												defaults?.pricing?.inputPrice != null ? String(defaults.pricing.inputPrice) : ""
-											}
-											style={{ flex: 1 }}>
-											<span style={fieldLabelStyle}>Input Price ({currencySymbol}/1M tokens)</span>
-										</DebouncedTextField>
-									)}
-									{pricingFields.includes("outputPrice") && (
-										<DebouncedTextField
-											initialValue={pricing.outputPrice != null ? String(pricing.outputPrice) : ""}
-											onChange={(value) => updatePricing("outputPrice", parsePrice(value, 0))}
-											placeholder={
-												defaults?.pricing?.outputPrice != null ? String(defaults.pricing.outputPrice) : ""
-											}
-											style={{ flex: 1 }}>
-											<span style={fieldLabelStyle}>Output Price ({currencySymbol}/1M tokens)</span>
-										</DebouncedTextField>
-									)}
-								</div>
-							)}
-
-							{hasCachePricingFields && (
-								<div style={{ display: "flex", gap: 10, marginTop: "5px" }}>
-									{pricingFields.includes("cacheWritesPrice") && (
-										<DebouncedTextField
-											initialValue={
-												pricing.cacheWritesPrice != null ? String(pricing.cacheWritesPrice) : ""
-											}
-											onChange={(value) => updatePricing("cacheWritesPrice", parsePrice(value, 0))}
-											placeholder={
-												defaults?.pricing?.cacheWritesPrice != null
-													? String(defaults.pricing.cacheWritesPrice)
-													: ""
-											}
-											style={{ flex: 1 }}>
-											<span style={fieldLabelStyle}>Cache Writes ({currencySymbol}/M)</span>
-										</DebouncedTextField>
-									)}
-									{pricingFields.includes("cacheReadsPrice") && (
-										<DebouncedTextField
-											initialValue={pricing.cacheReadsPrice != null ? String(pricing.cacheReadsPrice) : ""}
-											onChange={(value) => updatePricing("cacheReadsPrice", parsePrice(value, 0))}
-											placeholder={
-												defaults?.pricing?.cacheReadsPrice != null
-													? String(defaults.pricing.cacheReadsPrice)
-													: ""
-											}
-											style={{ flex: 1 }}>
-											<span style={fieldLabelStyle}>Cache Reads ({currencySymbol}/M)</span>
-										</DebouncedTextField>
-									)}
-								</div>
-							)}
-
-							{pricingFields.includes("pricingTiers") ? (
-								<PricingTierEditor
-									currencySymbol={currencySymbol}
-									editable={tiersEditable}
-									onChange={updatePricingTiers}
-									showCachePrices={supportsPromptCache}
-									tiers={pricingTiers}
+									placeholder={String(defaultContextWindow)}
 								/>
+							</ProfileField>
+						) : null}
+						{capabilityFields.includes("maxTokens") ? (
+							<ProfileField htmlFor={maxTokensId} label="Max Output Tokens">
+								<DebouncedTextField
+									ariaLabel="Max Output Tokens"
+									className={fieldControlClass}
+									id={maxTokensId}
+									initialValue={String(maxTokensValue)}
+									onChange={(value) => updateCapability("maxTokens", Number(value) || 0)}
+									placeholder={String(defaultMaxTokens)}
+								/>
+							</ProfileField>
+						) : null}
+					</ProfileInlineGrid>
+					{capabilityFields.includes("contextWindowTiers") ? (
+						<ContextTierEditor editable={tiersEditable} onChange={updateContextTiers} tiers={contextTiers} />
+					) : null}
+				</ProfileSection>
+			) : null}
+
+			{hasPricingFields ? (
+				<ProfileSection>
+					<ProfileSectionTitle className="text-xs uppercase tracking-wide text-description">Pricing</ProfileSectionTitle>
+					<ProfileField htmlFor={currencyId} label="Currency">
+						<Select onValueChange={updateCurrency} value={pricing.currency || "USD"}>
+							<SelectTrigger className={fieldControlClass} id={currencyId}>
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="USD">USD ($)</SelectItem>
+								<SelectItem value="CNY">CNY (¥)</SelectItem>
+								<SelectItem value="EUR">EUR (€)</SelectItem>
+								<SelectItem value="GBP">GBP (£)</SelectItem>
+							</SelectContent>
+						</Select>
+					</ProfileField>
+
+					{hasBasePricingFields ? (
+						<ProfileInlineGrid>
+							{pricingFields.includes("inputPrice") ? (
+								<ProfileField htmlFor={inputPriceId} label={`Input Price (${currencySymbol}/1M tokens)`}>
+									<DebouncedTextField
+										ariaLabel={`Input Price (${currencySymbol}/1M tokens)`}
+										className={fieldControlClass}
+										id={inputPriceId}
+										initialValue={pricing.inputPrice != null ? String(pricing.inputPrice) : ""}
+										onChange={(value) => updatePricing("inputPrice", parsePrice(value, 0))}
+										placeholder={
+											defaults?.pricing?.inputPrice != null ? String(defaults.pricing.inputPrice) : ""
+										}
+									/>
+								</ProfileField>
 							) : null}
-						</div>
-					)}
-				</>
-			)}
-		</div>
+							{pricingFields.includes("outputPrice") ? (
+								<ProfileField htmlFor={outputPriceId} label={`Output Price (${currencySymbol}/1M tokens)`}>
+									<DebouncedTextField
+										ariaLabel={`Output Price (${currencySymbol}/1M tokens)`}
+										className={fieldControlClass}
+										id={outputPriceId}
+										initialValue={pricing.outputPrice != null ? String(pricing.outputPrice) : ""}
+										onChange={(value) => updatePricing("outputPrice", parsePrice(value, 0))}
+										placeholder={
+											defaults?.pricing?.outputPrice != null ? String(defaults.pricing.outputPrice) : ""
+										}
+									/>
+								</ProfileField>
+							) : null}
+						</ProfileInlineGrid>
+					) : null}
+
+					{hasCachePricingFields ? (
+						<ProfileInlineGrid>
+							{pricingFields.includes("cacheWritesPrice") ? (
+								<ProfileField htmlFor={cacheWritesPriceId} label={`Cache Writes (${currencySymbol}/M)`}>
+									<DebouncedTextField
+										ariaLabel={`Cache Writes (${currencySymbol}/M)`}
+										className={fieldControlClass}
+										id={cacheWritesPriceId}
+										initialValue={
+											pricing.cacheWritesPrice != null ? String(pricing.cacheWritesPrice) : ""
+										}
+										onChange={(value) => updatePricing("cacheWritesPrice", parsePrice(value, 0))}
+										placeholder={
+											defaults?.pricing?.cacheWritesPrice != null
+												? String(defaults.pricing.cacheWritesPrice)
+												: ""
+										}
+									/>
+								</ProfileField>
+							) : null}
+							{pricingFields.includes("cacheReadsPrice") ? (
+								<ProfileField htmlFor={cacheReadsPriceId} label={`Cache Reads (${currencySymbol}/M)`}>
+									<DebouncedTextField
+										ariaLabel={`Cache Reads (${currencySymbol}/M)`}
+										className={fieldControlClass}
+										id={cacheReadsPriceId}
+										initialValue={pricing.cacheReadsPrice != null ? String(pricing.cacheReadsPrice) : ""}
+										onChange={(value) => updatePricing("cacheReadsPrice", parsePrice(value, 0))}
+										placeholder={
+											defaults?.pricing?.cacheReadsPrice != null
+												? String(defaults.pricing.cacheReadsPrice)
+												: ""
+										}
+									/>
+								</ProfileField>
+							) : null}
+						</ProfileInlineGrid>
+					) : null}
+
+					{pricingFields.includes("pricingTiers") ? (
+						<PricingTierEditor
+							currencySymbol={currencySymbol}
+							editable={tiersEditable}
+							onChange={updatePricingTiers}
+							showCachePrices={supportsPromptCache}
+							tiers={pricingTiers}
+						/>
+					) : null}
+				</ProfileSection>
+			) : null}
+		</ProfileDisclosure>
 	)
 }

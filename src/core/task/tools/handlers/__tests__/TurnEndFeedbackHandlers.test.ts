@@ -90,7 +90,7 @@ function createConfig(text: string): TaskConfig {
 			diffViewProvider: {} as TaskConfig["services"]["diffViewProvider"],
 			fileContextTracker: {} as TaskConfig["services"]["fileContextTracker"],
 			taskFileTracker: {} as TaskConfig["services"]["taskFileTracker"],
-			clineIgnoreController: {} as TaskConfig["services"]["clineIgnoreController"],
+			ignoreController: {} as TaskConfig["services"]["ignoreController"],
 			commandPermissionController: {} as TaskConfig["services"]["commandPermissionController"],
 			contextManager: {} as TaskConfig["services"]["contextManager"],
 			stateManager: Object.assign(Object.create(null), {

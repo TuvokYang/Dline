@@ -14,6 +14,7 @@ function createOpenAiProfile(provider: "openai" | "openai-codex" = "openai"): Ap
 		apiKey: "secret",
 		modelId: "gpt-5.6-sol",
 		usedFor: [],
+		legacyNames: [],
 		enabled: true,
 		...(provider === "openai"
 			? {

@@ -179,13 +179,13 @@ export class GitOperations {
 				Logger.warn(`Using existing shadow git at ${gitPath}`)
 
 				// shadow git repo already exists, but update the excludes just in case
-				await writeExcludesFile(
+				const excludes = await writeExcludesFile(
 					gitPath,
 					await getLfsPatterns(this.cwd),
 					workspaceIgnoreContent || undefined,
 					topology.exclusionPatterns,
 				)
-				await this.refreshExistingShadowBaseline(git, taskId)
+				await this.refreshExistingShadowBaseline(git, taskId, excludes.changed)
 
 				return gitPath
 			}
@@ -226,17 +226,42 @@ export class GitOperations {
 		return gitPath
 	}
 
-	/** Rebuild an existing baseline from current exclusions, resetting its index to HEAD on failure. */
-	private async refreshExistingShadowBaseline(git: SimpleGit, taskId: string): Promise<void> {
+	/**
+	 * Bring an existing baseline up to date with the current workspace, resetting
+	 * its index to HEAD on failure.
+	 *
+	 * The staging mode is chosen by whether the exclusion ruleset changed:
+	 *
+	 * - Changed rules can make already-indexed files invalid, so the index must be
+	 *   discarded and rebuilt (`baseline`) to drop newly excluded entries.
+	 * - Unchanged rules leave every indexed entry valid, so the index stat cache is
+	 *   preserved and only modified files are re-hashed (`workspace-scan`). On a
+	 *   large repository this is the difference between re-hashing every tracked
+	 *   file and touching only what actually changed.
+	 *
+	 * Both paths stage the whole worktree, so a workspace edit made between tasks
+	 * is captured either way.
+	 */
+	private async refreshExistingShadowBaseline(git: SimpleGit, taskId: string, exclusionsChanged: boolean): Promise<void> {
+		const startedAt = performance.now()
+		const mode = exclusionsChanged ? "baseline" : "workspace-scan"
 		try {
-			const baselineResult = await this.addCheckpointFiles({ git, mode: "baseline", taskId })
+			const baselineResult = await this.addCheckpointFiles({ git, mode, taskId })
 			if (!baselineResult.success) {
 				throw new Error("Failed to refresh the existing checkpoints shadow baseline")
 			}
-			if (await this.hasStagedChanges(git, taskId)) {
+			const stageMs = Math.round(performance.now() - startedAt)
+			const detectStartedAt = performance.now()
+			const staged = await this.hasStagedChanges(git, taskId)
+			const detectMs = Math.round(performance.now() - detectStartedAt)
+			const commitStartedAt = performance.now()
+			if (staged) {
 				await git.commit(`workspace baseline-${taskId}`, { "--no-verify": null })
 				Logger.info(`[Task ${taskId}] Refreshed existing checkpoints shadow baseline`)
 			}
+			Logger.debug(
+				`[CheckpointPerf] phase=existing_shadow_baseline taskId=${taskId} mode=${mode} exclusionsChanged=${exclusionsChanged} stageMs=${stageMs} detectMs=${detectMs} commitMs=${Math.round(performance.now() - commitStartedAt)} totalMs=${Math.round(performance.now() - startedAt)} staged=${staged}`,
+			)
 		} catch (error) {
 			try {
 				// Initialization never owns staged user work: discard both this

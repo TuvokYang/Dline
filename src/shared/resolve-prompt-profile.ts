@@ -1,7 +1,7 @@
 import { PromptProfile } from "@core/prompts/profiles/types"
+import { DEFAULT_PROMPT_CONTEXT_WINDOW, LITE_PROMPT_CONTEXT_WINDOW_LIMIT } from "./prompt-profile-constants"
 
-export const DEFAULT_PROMPT_CONTEXT_WINDOW = 128_000
-export const LITE_PROMPT_CONTEXT_WINDOW_LIMIT = 64_000
+export { DEFAULT_PROMPT_CONTEXT_WINDOW, LITE_PROMPT_CONTEXT_WINDOW_LIMIT } from "./prompt-profile-constants"
 
 export interface ResolvePromptProfileInput {
 	readonly explicitProfile?: PromptProfile

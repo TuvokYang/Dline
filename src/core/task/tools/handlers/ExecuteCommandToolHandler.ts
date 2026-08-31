@@ -204,14 +204,14 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 		}
 
 		// Check clineignore validation for command
-		if (!config.services.clineIgnoreController.validateDirectoryAccess(executionDir)) {
+		if (!config.services.ignoreController.validateDirectoryAccess(executionDir)) {
 			if (!config.isSubagentExecution) {
 				await config.callbacks.say("clineignore_error", executionDir)
 			}
 			return formatResponse.toolError(formatResponse.clineIgnoreError(executionDir))
 		}
 
-		const ignoredFileAttemptedToAccess = config.services.clineIgnoreController.validateCommand(actualCommand, executionDir)
+		const ignoredFileAttemptedToAccess = config.services.ignoreController.validateCommand(actualCommand, executionDir)
 		if (ignoredFileAttemptedToAccess) {
 			if (!config.isSubagentExecution) {
 				await config.callbacks.say("clineignore_error", ignoredFileAttemptedToAccess)

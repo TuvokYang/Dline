@@ -45,7 +45,7 @@ export const TASK_SERVICES_KEYS = [
 	"diffViewProvider",
 	"fileContextTracker",
 	"taskFileTracker",
-	"clineIgnoreController",
+	"ignoreController",
 	"commandPermissionController",
 	"contextManager",
 	"stateManager",

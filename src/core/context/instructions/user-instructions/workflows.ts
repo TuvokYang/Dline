@@ -2,6 +2,7 @@ import { synchronizeRuleToggles } from "@core/context/instructions/user-instruct
 import { getWorkflowsScanDirectories } from "@core/storage/disk"
 import { resolveCapabilityToggles } from "@core/storage/settings/capability-toggle-store"
 import { ClineRulesToggles } from "@shared/cline-rules"
+import { Logger } from "@shared/services/Logger"
 import { Controller } from "@/core/controller"
 
 /**
@@ -22,6 +23,7 @@ export async function refreshWorkflowToggles(
 	globalWorkflowToggles: ClineRulesToggles
 	localWorkflowToggles: ClineRulesToggles
 }> {
+	const startedAt = performance.now()
 	const scanDirs = getWorkflowsScanDirectories(workingDirectory)
 
 	const discoveredGlobal: ClineRulesToggles = {}
@@ -40,6 +42,9 @@ export async function refreshWorkflowToggles(
 	// workspace or task override applies to both.
 	const globalToggles = resolveCapabilityToggles(controller.stateManager, "workflows", discoveredGlobal)
 	const localToggles = resolveCapabilityToggles(controller.stateManager, "workflows", discoveredLocal)
+	Logger.debug(
+		`[CapabilityPerf] phase=workflows_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} directories=${scanDirs.length} global=${Object.keys(globalToggles).length} local=${Object.keys(localToggles).length}`,
+	)
 
 	return {
 		globalWorkflowToggles: globalToggles,

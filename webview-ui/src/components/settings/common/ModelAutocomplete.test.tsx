@@ -10,6 +10,16 @@ describe("ModelAutocomplete", () => {
 		vi.useRealTimers()
 	})
 
+	it("uses the shared settings field hierarchy and a full-width 28px control", () => {
+		render(<ModelAutocomplete label="Model ID" models={{}} onChange={vi.fn()} selectedModelId="custom-model" />)
+
+		const label = screen.getByText("Model ID").closest("label")
+		const input = document.getElementById(label?.getAttribute("for") ?? "")
+		expect(input).toHaveClass("min-h-7", "w-full")
+		expect(screen.getAllByText("Model ID")).toHaveLength(1)
+		expect(input?.closest(".profile-field")).toBeInTheDocument()
+	})
+
 	it("does not overwrite a clicked suggestion with the stale blur value", async () => {
 		vi.useFakeTimers()
 		const onChange = vi.fn()

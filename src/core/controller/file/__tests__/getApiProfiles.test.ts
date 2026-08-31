@@ -31,7 +31,7 @@ describe("getApiProfiles", () => {
 		expect(profile.enabled).to.equal(true)
 	})
 
-	it("migrates legacy Anthropic 1M model ids to tier selection", () => {
+	it("migrates legacy Anthropic 1M model ids to native 1M base models", () => {
 		const profile = normalizeApiProfile({
 			id: "legacy-anthropic-1m",
 			name: "anthropic:claude-opus-4-7:1m",
@@ -40,10 +40,10 @@ describe("getApiProfiles", () => {
 		})
 
 		expect(profile.modelId).to.equal("claude-opus-4-7")
-		expect(profile.anthropic?.enableLongContext).to.equal(true)
+		expect(profile.anthropic?.enableLongContext).to.equal(undefined)
 	})
 
-	it("migrates legacy Anthropic fast 1M model ids without changing the fast suffix", () => {
+	it("migrates retired Opus 4.6 fast ids to the supported standard model", () => {
 		const profile = normalizeApiProfile({
 			id: "legacy-anthropic-fast-1m",
 			name: "anthropic:claude-opus-4-6:1m:fast",
@@ -51,8 +51,8 @@ describe("getApiProfiles", () => {
 			modelId: "claude-opus-4-6:1m:fast",
 		})
 
-		expect(profile.modelId).to.equal("claude-opus-4-6:fast")
-		expect(profile.anthropic?.enableLongContext).to.equal(true)
+		expect(profile.modelId).to.equal("claude-opus-4-6")
+		expect(profile.anthropic?.enableLongContext).to.equal(undefined)
 	})
 
 	it("does not migrate a legacy-looking custom Anthropic model id", () => {
@@ -67,7 +67,7 @@ describe("getApiProfiles", () => {
 		expect(profile.anthropic?.enableLongContext).to.equal(undefined)
 	})
 
-	it("migrates a legacy standalone Anthropic window into the selected tier", () => {
+	it("preserves a direct context override for a native-window Anthropic model", () => {
 		const profile = normalizeApiProfile({
 			id: "legacy-anthropic-window",
 			name: "anthropic:claude-opus-4-7",
@@ -79,17 +79,8 @@ describe("getApiProfiles", () => {
 			},
 		})
 
-		expect(profile.anthropic?.capabilities?.contextWindow).to.equal(undefined)
-		const tiers = profile.anthropic?.capabilities?.contextWindowTiers ?? []
-		expect(tiers.find((tier) => tier.id === "standard")).to.include({
-			contextWindow: 180_000,
-			label: "200K",
-		})
-		expect(tiers.find((tier) => tier.id === "long")).to.include({
-			contextWindow: 1_000_000,
-			label: "1M",
-			apiModelSuffix: ":1m",
-		})
+		expect(profile.anthropic?.capabilities?.contextWindow).to.equal(180_000)
+		expect(profile.anthropic?.capabilities?.contextWindowTiers).to.equal(undefined)
 	})
 
 	it("removes stale tiers while preserving a direct window for Anthropic models without tiers", () => {

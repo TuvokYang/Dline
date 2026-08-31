@@ -84,16 +84,25 @@ vi.mock("../common/ModelInfoView", () => ({
 vi.mock("../common/ApiKeyField", () => ({ ApiKeyField: () => <div /> }))
 vi.mock("../common/BaseUrlField", () => ({ BaseUrlField: () => <div /> }))
 vi.mock("../common/DebouncedTextField", () => ({
-	DebouncedTextField: ({ children, initialValue, onChange }: any) => (
-		<label>
-			{children}
+	DebouncedTextField: ({ ariaLabel, children, className, id, initialValue, onChange }: any) => {
+		const input = (
 			<input
-				aria-label={typeof children === "string" ? children : "Model ID"}
+				aria-label={ariaLabel ?? (typeof children === "string" ? children : "Model ID")}
+				className={className}
 				defaultValue={initialValue}
+				id={id}
 				onChange={(event) => onChange(event.target.value)}
 			/>
-		</label>
-	),
+		)
+		return children ? (
+			<label>
+				{children}
+				{input}
+			</label>
+		) : (
+			input
+		)
+	},
 }))
 vi.mock("../common/ModelSelector", () => ({
 	ModelSelector: ({ label, models, onChange, selectedModelId }: any) => (
@@ -299,6 +308,23 @@ describe("OpenAIProvider", () => {
 		expect(screen.getByTestId("service-tier-enabled")).toHaveTextContent("false")
 	})
 
+	it("uses a responsive field grid for custom headers", () => {
+		const profile = {
+			id: "profile-headers",
+			provider: "openai",
+			modelId: "gpt-multi",
+			openai: OpenAiProviderConfig.create({ openAiHeaders: { Authorization: "Bearer token" } }),
+		} as unknown as ApiProfile
+
+		render(<OpenAIProvider onUpdate={vi.fn()} profile={profile} showModelOptions={true} />)
+
+		const row = screen.getByTestId("custom-header-row")
+		expect(row).toHaveClass("grid-cols-1", "xs:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]")
+		expect(screen.getByRole("textbox", { name: "Header name" })).toHaveClass("min-h-7", "w-full")
+		expect(screen.getByRole("textbox", { name: "Header value" })).toHaveClass("min-h-7", "w-full")
+		expect(screen.getByRole("button", { name: "Remove" }).parentElement).toHaveClass("justify-end", "xs:self-end")
+	})
+
 	it("shows the default Responses stream idle timeout and persists a positive number of seconds", () => {
 		const onUpdate = vi.fn()
 		const profile = {
@@ -365,5 +391,50 @@ describe("OpenAIProvider", () => {
 				apiFormat: ApiFormat.OPENAI_RESPONSES,
 			},
 		})
+	})
+
+	it("does not show a compatibility notice for a catalog model with known metadata", () => {
+		const profile = {
+			id: "official-openai",
+			provider: "openai",
+			modelId: "gpt-multi",
+			openai: OpenAiProviderConfig.create(),
+		} as unknown as ApiProfile
+
+		render(<OpenAIProvider onUpdate={vi.fn()} profile={profile} showModelOptions={true} />)
+
+		expect(screen.queryByText("Dline uses complex prompts", { exact: false })).not.toBeInTheDocument()
+		expect(screen.queryByText("Model metadata incomplete")).not.toBeInTheDocument()
+	})
+
+	it("shows metadata guidance for a custom model without prompt-relevant metadata", () => {
+		const profile = {
+			id: "custom-openai",
+			provider: "openai",
+			modelId: "custom-model",
+			openai: OpenAiProviderConfig.create({ customModelEnabled: true }),
+		} as unknown as ApiProfile
+
+		render(<OpenAIProvider onUpdate={vi.fn()} profile={profile} showModelOptions={true} />)
+
+		expect(screen.getByText("Model metadata incomplete")).toBeInTheDocument()
+		expect(screen.getByRole("status")).toHaveTextContent("Confirm the context window and native tool support")
+	})
+
+	it("shows Lite prompt guidance for a custom model below 64K context", () => {
+		const profile = {
+			id: "small-openai",
+			provider: "openai",
+			modelId: "small-model",
+			openai: OpenAiProviderConfig.create({
+				customModelEnabled: true,
+				capabilities: { contextWindow: 32_768, supportsTools: false } as ModelCapabilities,
+			}),
+		} as unknown as ApiProfile
+
+		render(<OpenAIProvider onUpdate={vi.fn()} profile={profile} showModelOptions={true} />)
+
+		expect(screen.getByText("Lite prompt profile")).toBeInTheDocument()
+		expect(screen.getByRole("status")).toHaveTextContent("below 64K tokens")
 	})
 })

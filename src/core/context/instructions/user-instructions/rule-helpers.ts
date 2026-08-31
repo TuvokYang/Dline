@@ -46,6 +46,9 @@ export async function synchronizeRuleToggles(
 	allowedFileExtension = "",
 	excludedPaths: string[][] = [],
 ): Promise<ClineRulesToggles> {
+	const startedAt = performance.now()
+	let discoveredFiles = 0
+	let pathKind = "missing"
 	// Create a copy of toggles to modify
 	const updatedToggles = { ...currentToggles }
 
@@ -56,8 +59,10 @@ export async function synchronizeRuleToggles(
 			const isDir = await isDirectory(rulesDirectoryPath)
 
 			if (isDir) {
+				pathKind = "directory"
 				// DIRECTORY CASE
 				const filePaths = await readDirectoryRecursive(rulesDirectoryPath, allowedFileExtension, excludedPaths)
+				discoveredFiles = filePaths.length
 				const existingRulePaths = new Set<string>()
 
 				for (const filePath of filePaths) {
@@ -78,6 +83,8 @@ export async function synchronizeRuleToggles(
 					}
 				}
 			} else {
+				pathKind = "file"
+				discoveredFiles = 1
 				// FILE CASE
 				// Add toggle for this file
 				const pathHasToggle = rulesDirectoryPath in updatedToggles
@@ -103,6 +110,9 @@ export async function synchronizeRuleToggles(
 		Logger.error(`Failed to synchronize rule toggles for path: ${rulesDirectoryPath}`, error)
 	}
 
+	Logger.debug(
+		`[CapabilityPerf] phase=rule_toggle_scan durationMs=${Math.round(performance.now() - startedAt)} kind=${pathKind} files=${discoveredFiles} toggles=${Object.keys(updatedToggles).length} extension=${allowedFileExtension || "any"}`,
+	)
 	return updatedToggles
 }
 

@@ -1,4 +1,4 @@
-import { ClineIgnoreController } from "@core/ignore/ClineIgnoreController"
+import type { IgnoreController } from "@core/ignore/IgnoreController"
 import type { FileInfo } from "@services/glob/list-files"
 import { listFiles } from "@services/glob/list-files"
 import { fileExistsAtPath, isDirectory } from "@utils/fs"
@@ -10,7 +10,7 @@ import { LanguageParser, loadRequiredLanguageParsers } from "./languageParser"
 // TODO: implement caching behavior to avoid having to keep analyzing project for new tasks.
 export async function parseSourceCodeForDefinitionsTopLevel(
 	dirPath: string,
-	clineIgnoreController?: ClineIgnoreController,
+	ignoreController?: IgnoreController,
 ): Promise<string> {
 	// ensure input is a directory before listing files
 	const resolvedPath = path.resolve(dirPath)
@@ -21,8 +21,8 @@ export async function parseSourceCodeForDefinitionsTopLevel(
 		return "This directory does not exist or you do not have permission to access it."
 	}
 
-	// Get all files at top level (not gitignored)
-	const [allFiles, _] = await listFiles(dirPath, false, 200)
+	// Get all files at top level (workspace rules already applied)
+	const [allFiles, _] = await listFiles(dirPath, false, 200, { ignoreController })
 
 	let result = ""
 
@@ -32,11 +32,11 @@ export async function parseSourceCodeForDefinitionsTopLevel(
 	const languageParsers = await loadRequiredLanguageParsers(filesToParse)
 
 	// Parse specific files we have language parsers for
-	const allowedFilesToParse = clineIgnoreController ? clineIgnoreController.filterPaths(filesToParse) : filesToParse
-	const excludedByClineignore = filesToParse.length - allowedFilesToParse.length
+	const allowedFilesToParse = ignoreController ? ignoreController.filterPaths(filesToParse, "agent") : filesToParse
+	const excludedByIgnoreRules = filesToParse.length - allowedFilesToParse.length
 
 	for (const filePath of allowedFilesToParse) {
-		const definitions = await parseFile(filePath, languageParsers, clineIgnoreController)
+		const definitions = await parseFile(filePath, languageParsers, ignoreController)
 		if (definitions) {
 			result += `${path.relative(dirPath, filePath).toPosix()}\n${definitions}\n`
 		}
@@ -56,11 +56,11 @@ export async function parseSourceCodeForDefinitionsTopLevel(
 	if (parseableFileCount === 0) {
 		return `No source code definitions found. No files with supported extensions found in this directory (supported: .js, .ts, .py, .rs, .go, .c/.h, .cpp/.hpp, .cs, .rb, .java, .php, .swift, .kt). Among ${totalFileCount} total files.`
 	}
-	if (excludedByClineignore > 0 && allowedFilesToParse.length === 0) {
-		return `No source code definitions found. All ${parseableFileCount} parseable files were excluded by .clineignore rules.`
+	if (excludedByIgnoreRules > 0 && allowedFilesToParse.length === 0) {
+		return `No source code definitions found. All ${parseableFileCount} parseable files were excluded by the workspace ignore rules.`
 	}
-	if (excludedByClineignore > 0) {
-		return `No source code definitions found. ${excludedByClineignore} of ${parseableFileCount} parseable files were excluded by .clineignore rules, and the remaining files contained no definitions.`
+	if (excludedByIgnoreRules > 0) {
+		return `No source code definitions found. ${excludedByIgnoreRules} of ${parseableFileCount} parseable files were excluded by the workspace ignore rules, and the remaining files contained no definitions.`
 	}
 	return `No source code definitions found. ${parseableFileCount} parseable files were scanned but none contained recognizable definitions.`
 }
@@ -97,9 +97,9 @@ function separateFiles(allFiles: FileInfo[]): {
 async function parseFile(
 	filePath: string,
 	languageParsers: LanguageParser,
-	clineIgnoreController?: ClineIgnoreController,
+	ignoreController?: IgnoreController,
 ): Promise<string | null> {
-	if (clineIgnoreController && !clineIgnoreController.validateAccess(filePath)) {
+	if (ignoreController && !ignoreController.validateAccess(filePath, "read")) {
 		return null
 	}
 	const fileContent = await fs.readFile(filePath, "utf8")

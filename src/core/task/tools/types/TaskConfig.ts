@@ -3,7 +3,7 @@ import type { WebSearchRoutingPlan } from "@core/api/server-tools"
 import type { IdentityFactory } from "@core/api/transform/block-identity"
 import type { CompactionPassIdentity } from "@core/context/context-management/target-window-fitting"
 import type { FileContextTracker } from "@core/context/context-tracking/FileContextTracker"
-import type { ClineIgnoreController } from "@core/ignore/ClineIgnoreController"
+import type { IgnoreController } from "@core/ignore/IgnoreController"
 import type { CommandPermissionController } from "@core/permissions"
 import type { ExplicitInstructionAuthorization, ExplicitInstructionConsumePort } from "@core/task/explicit-instructions/types"
 import type { TaskFileTracker } from "@integrations/checkpoints/TaskFileTracker"
@@ -140,7 +140,7 @@ export interface TaskServices {
 	diffViewProvider: DiffViewProvider
 	fileContextTracker: FileContextTracker
 	taskFileTracker: TaskFileTracker
-	clineIgnoreController: ClineIgnoreController
+	ignoreController: IgnoreController
 	commandPermissionController: CommandPermissionController
 	contextManager: ContextManager
 	stateManager: StateManager

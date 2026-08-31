@@ -9,6 +9,7 @@ import { HostProvider } from "@/hosts/host-provider"
 import { Logger } from "@/shared/services/Logger"
 import { fileExistsAtPath, isDirectory } from "@/utils/fs"
 import { Controller } from ".."
+import { coalesceCapabilityScan } from "./refresh-coalescing"
 
 /**
  * Scan a directory for skill subdirectories containing SKILL.md files.
@@ -71,7 +72,16 @@ async function scanSkillsDirectory(dirPath: string): Promise<SkillInfo[]> {
  * is reserved for explicit user toggles, so this stays off the storage write
  * path and never contends for the cross-process settings lock.
  */
-export async function refreshSkills(controller: Controller): Promise<RefreshedSkills> {
+export function refreshSkills(controller: Controller): Promise<RefreshedSkills> {
+	// The skills tab polls this RPC directly while refreshRules() scans the same
+	// directories on its own timer. Both entry points share one in-flight scan so
+	// the panel cannot multiply filesystem walks on a large workspace.
+	return coalesceCapabilityScan(controller, "skills", () => scanSkills(controller))
+}
+
+async function scanSkills(controller: Controller): Promise<RefreshedSkills> {
+	const startedAt = performance.now()
+	let scannedDirectories = 0
 	// Get workspace paths for local skills
 	const workspacePaths = await HostProvider.workspace.getWorkspacePaths({})
 	const primaryWorkspace = workspacePaths.paths[0]
@@ -82,6 +92,7 @@ export async function refreshSkills(controller: Controller): Promise<RefreshedSk
 	if (primaryWorkspace) {
 		const scanDirs = getSkillsDirectoriesForScan(primaryWorkspace)
 		for (const dir of scanDirs) {
+			scannedDirectories++
 			const skills = await scanSkillsDirectory(dir.path)
 			if (dir.source === "global") {
 				globalSkills.push(...skills)
@@ -93,6 +104,7 @@ export async function refreshSkills(controller: Controller): Promise<RefreshedSk
 		const scanDirs = getSkillsDirectoriesForScan("")
 		for (const dir of scanDirs) {
 			if (dir.source !== "global") continue
+			scannedDirectories++
 			const skills = await scanSkillsDirectory(dir.path)
 			globalSkills.push(...skills)
 		}
@@ -137,6 +149,9 @@ export async function refreshSkills(controller: Controller): Promise<RefreshedSk
 		skill.enabled = localToggles[skill.path] !== false
 	}
 
+	Logger.debug(
+		`[CapabilityPerf] phase=skills_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} directories=${scannedDirectories} global=${globalSkills.length} local=${localSkills.length} remote=${validatedRemoteSkills.length}`,
+	)
 	return RefreshedSkills.create({
 		globalSkills,
 		localSkills,

@@ -108,7 +108,7 @@ describe("resolveProfileModelInfo", () => {
 		expect(result.capabilities?.supportsReasoning).to.equal(true)
 	})
 
-	it("enables the 1M long context by default for Anthropic profiles without an explicit flag", () => {
+	it("uses the native 1M context for Anthropic profiles without an explicit flag", () => {
 		const profile = ApiProfile.create({
 			provider: "anthropic",
 			modelId: "claude-sonnet-4-6",
@@ -123,10 +123,10 @@ describe("resolveProfileModelInfo", () => {
 		expect(result.capabilities?.contextWindow).to.equal(1_000_000)
 	})
 
-	it("uses the selected tier window instead of a legacy standalone context override", () => {
+	it("uses the selected tier window instead of a standalone context override for custom models", () => {
 		const profile = ApiProfile.create({
 			provider: "anthropic",
-			modelId: "claude-sonnet-4-6",
+			modelId: "vendor-tiered",
 			anthropic: AnthropicProviderConfig.create({
 				enableLongContext: false,
 				capabilities: {
@@ -139,18 +139,15 @@ describe("resolveProfileModelInfo", () => {
 			}),
 		})
 
-		const result = resolveProfileModelInfo(profile, {
-			models: anthropicModels,
-			defaultModelId: "claude-sonnet-4-6",
-		})
+		const result = resolveProfileModelInfo(profile)
 
 		expect(result.capabilities?.contextWindow).to.equal(160_000)
 	})
 
-	it("allows the selected long tier window to exceed one million tokens", () => {
+	it("allows a custom selected long tier window to exceed one million tokens", () => {
 		const profile = ApiProfile.create({
 			provider: "anthropic",
-			modelId: "claude-sonnet-4-6",
+			modelId: "vendor-tiered",
 			anthropic: AnthropicProviderConfig.create({
 				enableLongContext: true,
 				capabilities: {
@@ -162,25 +159,27 @@ describe("resolveProfileModelInfo", () => {
 			}),
 		})
 
-		const result = resolveProfileModelInfo(profile, {
-			models: anthropicModels,
-			defaultModelId: "claude-sonnet-4-6",
-		})
+		const result = resolveProfileModelInfo(profile)
 
 		expect(result.capabilities?.contextWindow).to.equal(1_500_000)
 	})
 
-	it("falls back to the standard 200K tier when long context is explicitly disabled", () => {
+	it("falls back to a custom standard tier when long context is explicitly disabled", () => {
 		const profile = ApiProfile.create({
 			provider: "anthropic",
-			modelId: "claude-sonnet-4-6",
-			anthropic: AnthropicProviderConfig.create({ enableLongContext: false }),
+			modelId: "vendor-tiered",
+			anthropic: AnthropicProviderConfig.create({
+				enableLongContext: false,
+				capabilities: {
+					contextWindowTiers: [
+						{ id: "standard", contextWindow: 200_000, label: "200K" },
+						{ id: "long", contextWindow: 1_000_000, label: "1M", apiModelSuffix: ":1m" },
+					],
+				},
+			}),
 		})
 
-		const result = resolveProfileModelInfo(profile, {
-			models: anthropicModels,
-			defaultModelId: "claude-sonnet-4-6",
-		})
+		const result = resolveProfileModelInfo(profile)
 
 		expect(result.capabilities?.contextWindow).to.equal(200_000)
 	})

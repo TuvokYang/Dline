@@ -168,7 +168,7 @@ describe("ContextCompactionSession", () => {
 		expect(ports.reprojectTarget).toHaveBeenCalledOnce()
 	})
 
-	it("admits one complete 450K multi-tool logical turn when the full hidden request fits the 472K Provider window", async () => {
+	it("admits one complete multi-tool logical turn that passes the trigger but fits the borrowed concession", async () => {
 		const createSourceHistory = (payload: string): ClineStorageMessage[] => [
 			{ role: "user", content: [{ type: "text", text: "Inspect both large files without splitting this logical turn." }] },
 			{
@@ -215,18 +215,18 @@ describe("ContextCompactionSession", () => {
 			serverTools: [],
 			providerOutputCap: 20_000,
 		})
-		const targetInputTokens = 450_000
+		const targetInputTokens = 448_000
 		const emptyPayloadTokens = estimateContextWindowCandidate(createProviderInput(createSourceHistory("")))
 		const sourceHistory = createSourceHistory("x".repeat((targetInputTokens - emptyPayloadTokens) * 4))
 		const fullRequestTokens = estimateContextWindowCandidate(createProviderInput(sourceHistory))
-		const passInputCeiling = resolveCompactTriggerPolicy(472_000, computeSummarizeBudget(), {
+		const policy = resolveCompactTriggerPolicy(472_000, computeSummarizeBudget(), {
 			triggerPercent: 95,
 			minReserveTokens: 5_000,
 			maxReserveTokens: 30_000,
 			maxContextTokens: 0,
-		}).passInputCeilingTokens
+		})
 		const ports = createPorts()
-		ports.getPassInputCeiling = () => passInputCeiling
+		ports.getPassInputCeiling = () => policy.passInputCeilingTokens
 		ports.estimatePassInput = async (_input, passHistory) => estimateContextWindowCandidate(createProviderInput(passHistory))
 		ports.buildPassRequest = vi.fn(async (_input, state) => {
 			const explicitInstructions = new ExplicitInstructionRequestScope(new ExplicitInstructionRegistry(), {
@@ -248,9 +248,11 @@ describe("ContextCompactionSession", () => {
 		const session = new ContextCompactionSession(ports, { maxRetryAttempts: 1 })
 		useSuccessfulCompactionStream()
 
+		// The range already passed the compaction trigger, so only the borrowed concession keeps it
+		// in one Pass instead of stranding its tail for the first post-compaction request.
 		expect(fullRequestTokens).toBe(targetInputTokens)
-		expect(fullRequestTokens).toBeGreaterThan(446_400)
-		expect(fullRequestTokens).toBeLessThan(472_000)
+		expect(fullRequestTokens).toBeGreaterThan(policy.projectedUsageTriggerTokens)
+		expect(fullRequestTokens).toBeLessThanOrEqual(policy.passInputCeilingTokens)
 
 		const result = await session.run({
 			operationId: "operation-large-complete-turn",

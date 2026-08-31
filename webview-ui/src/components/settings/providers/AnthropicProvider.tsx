@@ -9,7 +9,11 @@ import {
 	selectContextTier,
 	updateSelectedContextWindow,
 } from "@shared/providers/effective-model-info"
-import { ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS } from "@shared/utils/reasoning-support"
+import {
+	ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS,
+	canDisableClaudeAdaptiveThinking,
+	isClaudeAdaptiveThinkingEnabledByDefault,
+} from "@shared/utils/reasoning-support"
 import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
 import { useState } from "react"
 import styled from "styled-components"
@@ -78,6 +82,8 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 		modelInfo.capabilities?.thinking?.supported === true &&
 		modelInfo.capabilities.thinking.mode === "effort" &&
 		adaptiveEffortOptions.length > 0
+	const adaptiveThinkingDefaultEnabled = !useCustomModel && isClaudeAdaptiveThinkingEnabledByDefault(modelId)
+	const adaptiveThinkingDisableSupported = useCustomModel || canDisableClaudeAdaptiveThinking(modelId)
 
 	// --- Handlers ---
 	const handleModelChange = (newModelId: string) => {
@@ -210,7 +216,7 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 									capabilities: [
 										"maxTokens",
 										"contextWindow",
-										"contextWindowTiers",
+										...(contextWindowTiersEnabled ? (["contextWindowTiers"] as const) : []),
 										"supportsImages",
 										"supportsWebSearch",
 										"supportsBrowserAction",
@@ -233,7 +239,14 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 					{/* ThinkingControl - for predefined models only (custom model has it in CustomModelConfig) */}
 					{!useCustomModel && isAdaptiveThinkingModel && (
 						<ThinkingControl
-							effortDescription="Use None to disable adaptive thinking. Higher effort increases response detail and token usage."
+							defaultEnabled={adaptiveThinkingDefaultEnabled}
+							defaultEffort={adaptiveThinkingDefaultEnabled ? "high" : undefined}
+							disableSupported={adaptiveThinkingDisableSupported}
+							effortDescription={
+								adaptiveThinkingDisableSupported
+									? "Use None to disable adaptive thinking. Higher effort increases response detail and token usage."
+									: "Adaptive thinking is always enabled for this model. Higher effort increases response detail and token usage."
+							}
 							effortLabel="Adaptive Thinking"
 							effortOptions={adaptiveEffortOptions}
 							mode="effort-only"

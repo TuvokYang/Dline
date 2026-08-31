@@ -1,17 +1,25 @@
 import { ApiProfile } from "@shared/proto/dline/profile"
-import { renderHook, waitFor } from "@testing-library/react"
+import { act, renderHook, waitFor } from "@testing-library/react"
 import React, { type PropsWithChildren } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { ExtensionStateContext, type ExtensionStateContextType } from "../../../context/ExtensionStateContext"
-import { applyProfileUpdate, buildProfileSettings, shouldUseTaskProfileSettings, useApiProfiles } from "./useApiProfiles"
+import {
+	applyProfileUpdate,
+	buildProfileSettings,
+	reorderProfilesById,
+	shouldUseTaskProfileSettings,
+	useApiProfiles,
+} from "./useApiProfiles"
 
 const mocks = vi.hoisted(() => ({
 	getApiProfiles: vi.fn(),
+	updateApiProfiles: vi.fn(),
 }))
 
 vi.mock("../../../services/grpc-client", () => ({
 	FileServiceClient: {
 		getApiProfiles: mocks.getApiProfiles,
+		updateApiProfiles: mocks.updateApiProfiles,
 	},
 	StateServiceClient: {
 		requestProfileSwitch: vi.fn(),
@@ -21,6 +29,29 @@ vi.mock("../../../services/grpc-client", () => ({
 describe("useApiProfiles", () => {
 	beforeEach(() => {
 		mocks.getApiProfiles.mockReset()
+		mocks.updateApiProfiles.mockReset().mockResolvedValue({})
+	})
+
+	it("creates a Profile and exposes its shared expanded identity", async () => {
+		mocks.getApiProfiles.mockResolvedValue({ profiles: [] })
+		const wrapper = ({ children }: PropsWithChildren) =>
+			React.createElement(
+				ExtensionStateContext.Provider,
+				{ value: { profileCatalogRevision: 200 } as ExtensionStateContextType },
+				children,
+			)
+		const { result } = renderHook(() => useApiProfiles(), { wrapper })
+
+		await waitFor(() => expect(result.current.loaded).to.equal(true))
+		let profileId: string | undefined
+		act(() => {
+			profileId = result.current.addProfile()
+		})
+
+		expect(profileId).to.be.a("string")
+		await waitFor(() => expect(result.current.expandedId).to.equal(profileId))
+		expect(result.current.profiles).to.have.length(1)
+		expect(result.current.profiles[0]?.id).to.equal(profileId)
 	})
 
 	it("reloads the shared Catalog when profileCatalogRevision changes", async () => {
@@ -96,6 +127,24 @@ describe("applyProfileUpdate", () => {
 
 		expect(result.changed).to.equal(true)
 		expect(result.profiles[0]?.name).to.equal("openai:custom")
+	})
+})
+
+describe("reorderProfilesById", () => {
+	const profiles = ["a", "b", "c"].map((id) => ApiProfile.create({ id, name: id, enabled: true }))
+
+	it("moves a Profile by stable ID without recreating unaffected entries", () => {
+		const result = reorderProfilesById(profiles, "a", "c")
+
+		expect(result.map((profile) => profile.id)).to.deep.equal(["b", "c", "a"])
+		expect(result[0]).to.equal(profiles[1])
+		expect(result[1]).to.equal(profiles[2])
+	})
+
+	it("returns the original array for an invalid or unchanged drop", () => {
+		expect(reorderProfilesById(profiles, "missing", "c")).to.equal(profiles)
+		expect(reorderProfilesById(profiles, "a", "missing")).to.equal(profiles)
+		expect(reorderProfilesById(profiles, "b", "b")).to.equal(profiles)
 	})
 })
 

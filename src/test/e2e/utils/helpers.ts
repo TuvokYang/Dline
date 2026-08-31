@@ -19,6 +19,12 @@ import { _electron } from "playwright"
 import { ClineApiServerMock } from "../fixtures/server"
 import { type E2EProfileMode, type PreparedE2EState, prepareE2EState } from "./api-profile"
 import { E2E_OUTPUT_ROOT as E2E_OUTPUT_ROOT_PATH, E2E_RUN_ID as E2E_RUN_NAMESPACE } from "./run-context"
+import {
+	createLaunchIsolation,
+	createWorkerExtensionsDir,
+	portableEnvironment,
+	type VSCodeLaunchIsolation,
+} from "./vscode-launch-isolation"
 import { resolveVSCodeDownloadPlatform, resolveVSCodeDownloadVersion } from "./vscode-version-resolver"
 
 interface E2ETaskDirectories {
@@ -30,6 +36,7 @@ interface E2ETestDirectories {
 	testDirectories: E2ETaskDirectories
 	workspaceDir: string
 	multiRootWorkspaceDir: string
+	launchIsolation: VSCodeLaunchIsolation
 	userDataDir: string
 	dlineDir: string
 	dlineHomeDir: string
@@ -46,6 +53,7 @@ interface E2EWorkerFixtures {
 	server: ClineApiServerMock
 	workerDirectories: E2EWorkerDirectories
 	dlineStateTemplateDir: string
+	extensionsDir: string
 	preparedE2EState: PreparedE2EState
 	profileMode: E2EProfileMode
 }
@@ -452,6 +460,17 @@ export const e2e = test
 		testDirectories: async ({ workerDirectories }, use, testInfo) => {
 			await use(E2ETestHelper.getTestDirectories(workerDirectories, testInfo.testId, testInfo.retry))
 		},
+		extensionsDir: [
+			async ({}, use, workerInfo) => {
+				const extensionsDir = createWorkerExtensionsDir(workerInfo.workerIndex)
+				try {
+					await use(extensionsDir)
+				} finally {
+					await E2ETestHelper.rmForRetries(extensionsDir, { recursive: true, force: true })
+				}
+			},
+			{ scope: "worker" },
+		],
 		server: [
 			async ({}, use) => {
 				const server = await ClineApiServerMock.startGlobalServer()
@@ -519,10 +538,11 @@ export const e2e = test
 				await E2ETestHelper.rmForRetries(temporaryRoot, { recursive: true, force: true })
 			}
 		},
-		userDataDir: async ({}, use, testInfo) => {
-			const userDataDir = mkdtempSync(path.join(os.tmpdir(), "dline-e2e-user-data-"))
+		launchIsolation: async ({}, use, testInfo) => {
+			const isolation = createLaunchIsolation("dline-e2e-user-data-")
+			const { portableRoot, userDataDir } = isolation
 			try {
-				await use(userDataDir)
+				await use(isolation)
 			} finally {
 				const logsDir = path.join(userDataDir, "logs")
 				if (testInfo.status !== testInfo.expectedStatus) {
@@ -545,8 +565,12 @@ export const e2e = test
 						})
 					}
 				}
-				await E2ETestHelper.rmForRetries(userDataDir, { recursive: true, force: true })
+				// Removing the portable root also removes user data, argv.json, and shared data.
+				await E2ETestHelper.rmForRetries(portableRoot, { recursive: true, force: true })
 			}
+		},
+		userDataDir: async ({ launchIsolation }, use) => {
+			await use(launchIsolation.userDataDir)
 		},
 		dlineDir: async ({ dlineStateTemplateDir, server, testDirectories }, use, testInfo) => {
 			const { dlineDir, dlineDocsDir } = testDirectories
@@ -589,7 +613,9 @@ export const e2e = test
 	.extend<{ openVSCode: (workspacePath: string) => Promise<ElectronApplication> }>({
 		openVSCode: async (
 			{
+				launchIsolation,
 				userDataDir,
+				extensionsDir,
 				dlineDir,
 				dlineHomeDir,
 				dlineDocsDir,
@@ -615,7 +641,7 @@ export const e2e = test
 				cachePath: vscodeCachePath,
 				reporter: new SilentReporter(),
 			})
-			const electronEnvironment = { ...process.env }
+			const electronEnvironment = { ...process.env, ...portableEnvironment(launchIsolation) }
 			delete electronEnvironment.ELECTRON_RUN_AS_NODE
 			// Keep E2E terminals independent from the developer's active Conda session and profile auto-activation.
 			for (const name of Object.keys(electronEnvironment)) {
@@ -685,7 +711,8 @@ export const e2e = test
 						"--disable-extensions", // Run VS Code with all extensions disabled other than the one under test.
 						"--skip-welcome",
 						"--skip-release-notes",
-						`--user-data-dir=${userDataDir}`,
+						// User data comes from VSCODE_PORTABLE, which outranks --user-data-dir.
+						`--extensions-dir=${extensionsDir}`,
 						...(installVsix
 							? [`--install-extension=${path.join(E2ETestHelper.CODEBASE_ROOT_DIR, "dist", "e2e.vsix")}`]
 							: []),

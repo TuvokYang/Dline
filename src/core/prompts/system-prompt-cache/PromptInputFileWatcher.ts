@@ -2,15 +2,22 @@ import path from "node:path"
 import { Logger } from "@shared/services/Logger"
 import chokidar, { type ChokidarOptions, type FSWatcher } from "chokidar"
 
-const IGNORED_DIRECTORY_NAMES = new Set([".git", ".svn", ".hg", "node_modules", "dist", "out", "build", "coverage"])
-
 export interface PromptInputFileWatcherDeps {
+	readonly taskId?: string
 	readonly cwd: string
 	readonly globalRulesDirectory: string
 	readonly workflowDirectories: readonly string[]
 	readonly skillDirectories: readonly string[]
 	readonly subagentDirectories: readonly string[]
 	readonly invalidate: () => void
+	/**
+	 * Workspace exclusion rules, normally backed by the agent scope of `IgnoreController`.
+	 *
+	 * The watcher traverses `cwd` recursively, so an unpruned subtree costs one
+	 * descriptor and one event stream per file in the workspace. Callers must
+	 * supply the real rules; the default only keeps unit tests self-contained.
+	 */
+	readonly shouldIgnoreDirectory?: (absolutePath: string) => boolean
 	readonly watch?: (paths: readonly string[], options: ChokidarOptions) => FSWatcher
 }
 
@@ -30,8 +37,12 @@ function resolveUnique(paths: readonly string[]): string[] {
 	return Array.from(new Set(paths.map((candidate) => path.resolve(candidate))))
 }
 
+type PromptInputKind = "rule" | "workflow" | "skill" | "subagent"
+type PromptInputEvent = "add" | "change" | "unlink"
+
 /** Watch local files whose canonical discovery projection can affect a frozen prompt or tool snapshot. */
 export class PromptInputFileWatcher {
+	private readonly taskId: string
 	private readonly cwd: string
 	private readonly globalRulesDirectory: string
 	private readonly workflowDirectories: readonly string[]
@@ -40,11 +51,17 @@ export class PromptInputFileWatcher {
 	private readonly protectedDirectories: readonly string[]
 	private readonly watchRoots: readonly string[]
 	private readonly invalidate: () => void
+	private readonly isIgnoredDirectory: (absolutePath: string) => boolean
 	private readonly watch: (paths: readonly string[], options: ChokidarOptions) => FSWatcher
 	private watcher?: FSWatcher
 	private disposed = false
+	private eventLogTimer?: NodeJS.Timeout
+	private totalRelevantEvents = 0
+	private pendingEventCounts: Record<PromptInputKind, number> = { rule: 0, workflow: 0, skill: 0, subagent: 0 }
+	private pendingEventTypes: Record<PromptInputEvent, number> = { add: 0, change: 0, unlink: 0 }
 
 	constructor(deps: PromptInputFileWatcherDeps) {
+		this.taskId = deps.taskId ?? "unknown"
 		this.cwd = path.resolve(deps.cwd)
 		this.globalRulesDirectory = path.resolve(deps.globalRulesDirectory)
 		this.workflowDirectories = resolveUnique(deps.workflowDirectories)
@@ -66,11 +83,16 @@ export class PromptInputFileWatcher {
 			...this.subagentDirectories,
 		])
 		this.invalidate = deps.invalidate
+		this.isIgnoredDirectory = deps.shouldIgnoreDirectory ?? (() => false)
 		this.watch = deps.watch ?? ((paths, options) => chokidar.watch([...paths], options))
 	}
 
 	async start(): Promise<void> {
 		if (this.disposed || this.watcher) return
+		const startedAt = performance.now()
+		Logger.debug(
+			`[PromptInputWatcherPerf] phase=start taskId=${this.taskId} roots=${this.watchRoots.length} protectedRoots=${this.protectedDirectories.length} includesWorkspaceRoot=${this.watchRoots.includes(this.cwd)}`,
+		)
 		const watcher = this.watch(this.watchRoots, {
 			persistent: true,
 			ignoreInitial: true,
@@ -79,14 +101,22 @@ export class PromptInputFileWatcher {
 			ignored: (candidate, stats) => stats?.isDirectory() === true && this.shouldIgnoreDirectory(candidate),
 		})
 		this.watcher = watcher
-		const handle = (candidate: unknown) => {
-			if (this.disposed || typeof candidate !== "string" || !this.isPromptVisibleInput(candidate)) return
+		const handle = (event: PromptInputEvent, candidate: unknown) => {
+			if (this.disposed || typeof candidate !== "string") return
+			const kind = this.getPromptInputKind(candidate)
+			if (!kind) return
+			this.recordEvent(event, kind)
 			this.invalidate()
 		}
 		watcher
-			.on("add", handle)
-			.on("change", handle)
-			.on("unlink", handle)
+			.on("add", (candidate) => handle("add", candidate))
+			.on("change", (candidate) => handle("change", candidate))
+			.on("unlink", (candidate) => handle("unlink", candidate))
+			.on("ready", () => {
+				Logger.debug(
+					`[PromptInputWatcherPerf] phase=ready taskId=${this.taskId} durationMs=${Math.round(performance.now() - startedAt)} roots=${this.watchRoots.length}`,
+				)
+			})
 			.on("error", (error) => {
 				Logger.error("[PromptInputFileWatcher] Failed to watch prompt-visible inputs:", error)
 			})
@@ -94,26 +124,64 @@ export class PromptInputFileWatcher {
 
 	async dispose(): Promise<void> {
 		if (this.disposed) return
+		const startedAt = performance.now()
 		this.disposed = true
+		if (this.eventLogTimer) {
+			clearTimeout(this.eventLogTimer)
+			this.eventLogTimer = undefined
+			this.logPendingEvents()
+		}
 		const watcher = this.watcher
 		this.watcher = undefined
 		if (watcher) await watcher.close()
-	}
-
-	private shouldIgnoreDirectory(candidate: string): boolean {
-		if (!IGNORED_DIRECTORY_NAMES.has(path.basename(candidate).toLowerCase())) return false
-		const resolved = path.resolve(candidate)
-		return !this.protectedDirectories.some((directory) => isWithin(directory, resolved))
-	}
-
-	private isPromptVisibleInput(candidate: string): boolean {
-		const resolved = path.resolve(candidate)
-		return (
-			this.isRuleInput(resolved) ||
-			this.isWorkflowInput(resolved) ||
-			this.isSkillInput(resolved) ||
-			this.isSubagentInput(resolved)
+		Logger.debug(
+			`[PromptInputWatcherPerf] phase=dispose taskId=${this.taskId} durationMs=${Math.round(performance.now() - startedAt)} totalEvents=${this.totalRelevantEvents}`,
 		)
+	}
+
+	private recordEvent(event: PromptInputEvent, kind: PromptInputKind): void {
+		this.totalRelevantEvents++
+		this.pendingEventTypes[event]++
+		this.pendingEventCounts[kind]++
+		if (this.eventLogTimer) return
+		this.eventLogTimer = setTimeout(() => {
+			this.eventLogTimer = undefined
+			this.logPendingEvents()
+		}, 250)
+		this.eventLogTimer.unref?.()
+	}
+
+	private logPendingEvents(): void {
+		const batchEvents = Object.values(this.pendingEventTypes).reduce((total, count) => total + count, 0)
+		if (batchEvents === 0) return
+		Logger.debug(
+			`[PromptInputWatcherPerf] phase=event_batch taskId=${this.taskId} events=${batchEvents} totalEvents=${this.totalRelevantEvents} add=${this.pendingEventTypes.add} change=${this.pendingEventTypes.change} unlink=${this.pendingEventTypes.unlink} rules=${this.pendingEventCounts.rule} workflows=${this.pendingEventCounts.workflow} skills=${this.pendingEventCounts.skill} subagents=${this.pendingEventCounts.subagent}`,
+		)
+		this.pendingEventCounts = { rule: 0, workflow: 0, skill: 0, subagent: 0 }
+		this.pendingEventTypes = { add: 0, change: 0, unlink: 0 }
+	}
+
+	/**
+	 * Prune a directory unless it contains inputs this watcher must observe.
+	 *
+	 * Protected directories win over the workspace rules: rule, workflow, skill
+	 * and subagent roots stay watched even when a broad pattern would exclude them.
+	 */
+	private shouldIgnoreDirectory(candidate: string): boolean {
+		const resolved = path.resolve(candidate)
+		if (this.protectedDirectories.some((directory) => isWithin(directory, resolved) || isWithin(resolved, directory))) {
+			return false
+		}
+		return this.isIgnoredDirectory(resolved)
+	}
+
+	private getPromptInputKind(candidate: string): PromptInputKind | undefined {
+		const resolved = path.resolve(candidate)
+		if (this.isRuleInput(resolved)) return "rule"
+		if (this.isWorkflowInput(resolved)) return "workflow"
+		if (this.isSkillInput(resolved)) return "skill"
+		if (this.isSubagentInput(resolved)) return "subagent"
+		return undefined
 	}
 
 	private isRuleInput(candidate: string): boolean {

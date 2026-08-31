@@ -1,20 +1,10 @@
 import type { ContextWindowTier, PricingTier } from "@shared/proto/dline/models/metadata"
 import { VSCodeButton } from "@vscode/webview-ui-toolkit/react"
+import { type ReactNode, useId } from "react"
+import { ProfileActionRow, ProfileField, ProfileInlineGrid, ProfileSectionTitle } from "../profile-ui"
 import { DebouncedTextField } from "./DebouncedTextField"
 
-const tierTitleStyle = {
-	color: "var(--vscode-descriptionForeground)",
-	fontSize: "11px",
-	fontWeight: 600,
-	letterSpacing: "0.02em",
-	textTransform: "uppercase",
-} as const
-
-const tierLabelStyle = {
-	color: "var(--vscode-descriptionForeground)",
-	fontSize: "12px",
-	fontWeight: 400,
-} as const
+const fieldControlClass = "min-h-7 w-full"
 
 /**
  * Build the alternating visual style for a tier card.
@@ -22,17 +12,47 @@ const tierLabelStyle = {
  * @param index Tier position in the displayed list.
  * @returns Inline style that visually separates adjacent tiers.
  */
-function getTierStyle(index: number): React.CSSProperties {
-	return {
-		background: index % 2 === 0 ? "var(--vscode-editor-background)" : "var(--vscode-sideBar-background)",
-		border: "1px solid var(--vscode-widget-border)",
-		borderRadius: 4,
-		display: "flex",
-		flexDirection: "column",
-		gap: 6,
-		marginTop: 6,
-		padding: 8,
-	}
+function getTierClassName(index: number): string {
+	return `flex min-w-0 flex-col gap-2 rounded-xs border border-editor-widget-border p-2 ${
+		index % 2 === 0 ? "bg-(--vscode-editor-background)" : "bg-(--vscode-sideBar-background)"
+	}`
+}
+
+interface TierFieldProps {
+	id: string
+	label: string
+	value: string
+	onChange: (value: string) => void
+}
+
+/** Render one tier value with the shared Profile settings field hierarchy. */
+function TierField({ id, label, value, onChange }: TierFieldProps) {
+	return (
+		<ProfileField htmlFor={id} label={label}>
+			<DebouncedTextField
+				ariaLabel={label}
+				className={fieldControlClass}
+				id={id}
+				initialValue={value}
+				onChange={onChange}
+			/>
+		</ProfileField>
+	)
+}
+
+interface TierHeaderProps {
+	action?: ReactNode
+	title: string
+}
+
+/** Render a tier editor heading with an optional action. */
+function TierHeader({ action, title }: TierHeaderProps) {
+	return (
+		<div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+			<ProfileSectionTitle className="text-xs uppercase tracking-wide text-description">{title}</ProfileSectionTitle>
+			{action ? <ProfileActionRow>{action}</ProfileActionRow> : null}
+		</div>
+	)
 }
 
 /**
@@ -59,6 +79,8 @@ interface ContextTierEditorProps {
  * @returns Context tier editor section.
  */
 export function ContextTierEditor({ tiers, editable, onChange }: ContextTierEditorProps) {
+	const baseId = useId()
+
 	/** Add a default editable context tier. */
 	const addTier = () => {
 		onChange([...tiers, { id: "standard", contextWindow: 128_000, label: "128K", apiModelSuffix: "" }])
@@ -75,44 +97,54 @@ export function ContextTierEditor({ tiers, editable, onChange }: ContextTierEdit
 	}
 
 	return (
-		<div style={{ marginTop: 10 }}>
-			<div style={{ alignItems: "center", display: "flex", justifyContent: "space-between" }}>
-				<span style={tierTitleStyle}>Context Tiers</span>
-				{editable ? <VSCodeButton onClick={addTier}>Add Context Tier</VSCodeButton> : null}
-			</div>
+		<div className="flex min-w-0 flex-col gap-2">
+			<TierHeader
+				action={editable ? <VSCodeButton onClick={addTier}>Add Context Tier</VSCodeButton> : undefined}
+				title="Context Tiers"
+			/>
 			{tiers.map((tier, index) => (
-				<div key={`${tier.id}-${index}`} style={getTierStyle(index)}>
+				<div className={getTierClassName(index)} key={`${tier.id}-${index}`}>
 					{editable ? (
 						<>
-							<DebouncedTextField initialValue={tier.id} onChange={(value) => updateTier(index, { id: value })}>
-								<span style={tierLabelStyle}>Context Tier ID</span>
-							</DebouncedTextField>
-							<DebouncedTextField
-								initialValue={String(tier.contextWindow)}
-								onChange={(value) => updateTier(index, { contextWindow: parseTierNumber(value) })}>
-								<span style={tierLabelStyle}>Context Tier Window</span>
-							</DebouncedTextField>
-							<DebouncedTextField
-								initialValue={tier.label ?? ""}
-								onChange={(value) => updateTier(index, { label: value })}>
-								<span style={tierLabelStyle}>Context Tier Label</span>
-							</DebouncedTextField>
-							<DebouncedTextField
-								initialValue={tier.apiModelSuffix ?? ""}
-								onChange={(value) => updateTier(index, { apiModelSuffix: value })}>
-								<span style={tierLabelStyle}>API Model Suffix</span>
-							</DebouncedTextField>
-							<VSCodeButton appearance="secondary" onClick={() => removeTier(index)}>
-								Remove Context Tier
-							</VSCodeButton>
+							<ProfileInlineGrid>
+								<TierField
+									id={`${baseId}-${index}-id`}
+									label="Context Tier ID"
+									onChange={(value) => updateTier(index, { id: value })}
+									value={tier.id}
+								/>
+								<TierField
+									id={`${baseId}-${index}-window`}
+									label="Context Tier Window"
+									onChange={(value) => updateTier(index, { contextWindow: parseTierNumber(value) })}
+									value={String(tier.contextWindow)}
+								/>
+								<TierField
+									id={`${baseId}-${index}-label`}
+									label="Context Tier Label"
+									onChange={(value) => updateTier(index, { label: value })}
+									value={tier.label ?? ""}
+								/>
+								<TierField
+									id={`${baseId}-${index}-suffix`}
+									label="API Model Suffix"
+									onChange={(value) => updateTier(index, { apiModelSuffix: value })}
+									value={tier.apiModelSuffix ?? ""}
+								/>
+							</ProfileInlineGrid>
+							<ProfileActionRow>
+								<VSCodeButton appearance="secondary" onClick={() => removeTier(index)}>
+									Remove Context Tier
+								</VSCodeButton>
+							</ProfileActionRow>
 						</>
 					) : (
-						<>
+						<div className="flex flex-col gap-1 text-sm">
 							<strong>{tier.id}</strong>
 							<span>{tier.label ?? tier.contextWindow.toLocaleString()}</span>
 							<span>{tier.contextWindow.toLocaleString()} tokens</span>
 							{tier.apiModelSuffix ? <span>API suffix: {tier.apiModelSuffix}</span> : null}
-						</>
+						</div>
 					)}
 				</div>
 			))}
@@ -138,6 +170,8 @@ interface PricingTierEditorProps {
  * @returns Pricing tier editor section.
  */
 export function PricingTierEditor({ tiers, editable, currencySymbol, showCachePrices, onChange }: PricingTierEditorProps) {
+	const baseId = useId()
+
 	/** Add a default editable pricing tier. */
 	const addTier = () => {
 		onChange([...tiers, { contextWindow: 128_000, inputPrice: 0, outputPrice: 0, cacheWritesPrice: 0, cacheReadsPrice: 0 }])
@@ -154,50 +188,59 @@ export function PricingTierEditor({ tiers, editable, currencySymbol, showCachePr
 	}
 
 	return (
-		<div style={{ marginTop: 10 }}>
-			<div style={{ alignItems: "center", display: "flex", justifyContent: "space-between" }}>
-				<span style={tierTitleStyle}>Pricing Tiers</span>
-				{editable ? <VSCodeButton onClick={addTier}>Add Pricing Tier</VSCodeButton> : null}
-			</div>
+		<div className="flex min-w-0 flex-col gap-2">
+			<TierHeader
+				action={editable ? <VSCodeButton onClick={addTier}>Add Pricing Tier</VSCodeButton> : undefined}
+				title="Pricing Tiers"
+			/>
 			{tiers.map((tier, index) => (
-				<div key={`${tier.contextWindow}-${index}`} style={getTierStyle(index)}>
+				<div className={getTierClassName(index)} key={`${tier.contextWindow}-${index}`}>
 					{editable ? (
 						<>
-							<DebouncedTextField
-								initialValue={String(tier.contextWindow)}
-								onChange={(value) => updateTier(index, { contextWindow: parseTierNumber(value) })}>
-								<span style={tierLabelStyle}>Up To Input Tokens</span>
-							</DebouncedTextField>
-							<DebouncedTextField
-								initialValue={String(tier.inputPrice ?? 0)}
-								onChange={(value) => updateTier(index, { inputPrice: parseTierNumber(value) })}>
-								<span style={tierLabelStyle}>Tier Input Price ({currencySymbol}/1M)</span>
-							</DebouncedTextField>
-							<DebouncedTextField
-								initialValue={String(tier.outputPrice ?? 0)}
-								onChange={(value) => updateTier(index, { outputPrice: parseTierNumber(value) })}>
-								<span style={tierLabelStyle}>Tier Output Price ({currencySymbol}/1M)</span>
-							</DebouncedTextField>
-							{showCachePrices ? (
-								<>
-									<DebouncedTextField
-										initialValue={String(tier.cacheWritesPrice ?? 0)}
-										onChange={(value) => updateTier(index, { cacheWritesPrice: parseTierNumber(value) })}>
-										<span style={tierLabelStyle}>Tier Cache Writes ({currencySymbol}/1M)</span>
-									</DebouncedTextField>
-									<DebouncedTextField
-										initialValue={String(tier.cacheReadsPrice ?? 0)}
-										onChange={(value) => updateTier(index, { cacheReadsPrice: parseTierNumber(value) })}>
-										<span style={tierLabelStyle}>Tier Cache Reads ({currencySymbol}/1M)</span>
-									</DebouncedTextField>
-								</>
-							) : null}
-							<VSCodeButton appearance="secondary" onClick={() => removeTier(index)}>
-								Remove Pricing Tier
-							</VSCodeButton>
+							<ProfileInlineGrid>
+								<TierField
+									id={`${baseId}-${index}-threshold`}
+									label="Up To Input Tokens"
+									onChange={(value) => updateTier(index, { contextWindow: parseTierNumber(value) })}
+									value={String(tier.contextWindow)}
+								/>
+								<TierField
+									id={`${baseId}-${index}-input`}
+									label={`Tier Input Price (${currencySymbol}/1M)`}
+									onChange={(value) => updateTier(index, { inputPrice: parseTierNumber(value) })}
+									value={String(tier.inputPrice ?? 0)}
+								/>
+								<TierField
+									id={`${baseId}-${index}-output`}
+									label={`Tier Output Price (${currencySymbol}/1M)`}
+									onChange={(value) => updateTier(index, { outputPrice: parseTierNumber(value) })}
+									value={String(tier.outputPrice ?? 0)}
+								/>
+								{showCachePrices ? (
+									<>
+										<TierField
+											id={`${baseId}-${index}-cache-writes`}
+											label={`Tier Cache Writes (${currencySymbol}/1M)`}
+											onChange={(value) => updateTier(index, { cacheWritesPrice: parseTierNumber(value) })}
+											value={String(tier.cacheWritesPrice ?? 0)}
+										/>
+										<TierField
+											id={`${baseId}-${index}-cache-reads`}
+											label={`Tier Cache Reads (${currencySymbol}/1M)`}
+											onChange={(value) => updateTier(index, { cacheReadsPrice: parseTierNumber(value) })}
+											value={String(tier.cacheReadsPrice ?? 0)}
+										/>
+									</>
+								) : null}
+							</ProfileInlineGrid>
+							<ProfileActionRow>
+								<VSCodeButton appearance="secondary" onClick={() => removeTier(index)}>
+									Remove Pricing Tier
+								</VSCodeButton>
+							</ProfileActionRow>
 						</>
 					) : (
-						<>
+						<div className="flex flex-col gap-1 text-sm">
 							<strong>{tier.contextWindow.toLocaleString()} tokens</strong>
 							<span>
 								Input: {currencySymbol}
@@ -214,7 +257,7 @@ export function PricingTierEditor({ tiers, editable, currencySymbol, showCachePr
 									{tier.cacheReadsPrice ?? 0} read
 								</span>
 							) : null}
-						</>
+						</div>
 					)}
 				</div>
 			))}

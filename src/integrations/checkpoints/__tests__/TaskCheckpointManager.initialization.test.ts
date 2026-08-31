@@ -130,6 +130,31 @@ describe("TaskCheckpointManager checkpoint initialization", () => {
 		}
 	})
 
+	it("reuses the timed-out attempt on retry instead of starting a second tracker", async () => {
+		vi.useFakeTimers()
+		try {
+			const tracker = { setTaskFileTracker: vi.fn() } as never
+			// Resolves after the 55s attempt timeout but well within the retry wait:
+			// the first attempt times out, the retry must join this same promise.
+			const slowTracker = new Promise<CheckpointTracker | undefined>((resolve) =>
+				setTimeout(() => resolve(tracker), 60_000),
+			)
+			const create = vi.fn<CreateCheckpointTracker>(() => slowTracker)
+			const harness = createManager(create)
+
+			const initialization = harness.manager.retryCheckpointInitialization()
+			await vi.advanceTimersByTimeAsync(60_100)
+
+			await expect(initialization).resolves.toBe(true)
+			// A second create would have raced the first for the shadow-repo mutex
+			// and repeated the full baseline scan.
+			expect(create).toHaveBeenCalledOnce()
+			expect(harness.setCheckpointTracker).toHaveBeenCalledWith(tracker)
+		} finally {
+			vi.useRealTimers()
+		}
+	})
+
 	it("creates a chat-only checkpoint when Git initialization is unavailable", async () => {
 		const messages: ClineMessage[] = []
 		const create = vi.fn<CreateCheckpointTracker>().mockRejectedValue(new Error("Git must be installed to use checkpoints."))

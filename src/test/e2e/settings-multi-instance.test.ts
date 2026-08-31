@@ -58,18 +58,19 @@ async function setTerminalOutputLimit(surface: MultiInstanceSurface, value: stri
 async function createLauncher(
 	dlineDir: string,
 	dlineDocsDir: string,
+	extensionsDir: string,
 	server: Parameters<typeof MultiInstanceLauncher>[0]["server"],
 	testInfo: Parameters<typeof MultiInstanceLauncher>[0]["testInfo"],
 	workspaceDir: string,
 ): Promise<MultiInstanceLauncher> {
-	return new MultiInstanceLauncher({ dlineDir, dlineDocsDir, server, testInfo, workspaceDir })
+	return new MultiInstanceLauncher({ dlineDir, dlineDocsDir, extensionsDir, server, testInfo, workspaceDir })
 }
 
 e2e(
 	"Settings authoritative RED - a committed setting must converge to a second running VS Code instance",
-	async ({ dlineDir, dlineDocsDir, server, workspaceDir }, testInfo) => {
+	async ({ dlineDir, dlineDocsDir, extensionsDir, server, workspaceDir }, testInfo) => {
 		e2e.setTimeout(240_000)
-		const launcher = await createLauncher(dlineDir, dlineDocsDir, server, testInfo, workspaceDir)
+		const launcher = await createLauncher(dlineDir, dlineDocsDir, extensionsDir, server, testInfo, workspaceDir)
 		try {
 			const instanceA = await launcher.launch("instance-a")
 			const instanceB = await launcher.launch("instance-b")
@@ -106,9 +107,9 @@ e2e(
 
 e2e(
 	"Settings authoritative RED - interleaved different-key edits must not lose either committed value",
-	async ({ dlineDir, dlineDocsDir, server, workspaceDir }, testInfo) => {
+	async ({ dlineDir, dlineDocsDir, extensionsDir, server, workspaceDir }, testInfo) => {
 		e2e.setTimeout(240_000)
-		const launcher = await createLauncher(dlineDir, dlineDocsDir, server, testInfo, workspaceDir)
+		const launcher = await createLauncher(dlineDir, dlineDocsDir, extensionsDir, server, testInfo, workspaceDir)
 		try {
 			const instanceA = await launcher.launch("instance-a")
 			const instanceB = await launcher.launch("instance-b")
@@ -136,9 +137,9 @@ e2e(
 
 e2e(
 	"Settings authoritative RED - a successful UI update followed by immediate VS Code exit must survive restart",
-	async ({ dlineDir, dlineDocsDir, server, workspaceDir }, testInfo) => {
+	async ({ dlineDir, dlineDocsDir, extensionsDir, server, workspaceDir }, testInfo) => {
 		e2e.setTimeout(240_000)
-		const launcher = await createLauncher(dlineDir, dlineDocsDir, server, testInfo, workspaceDir)
+		const launcher = await createLauncher(dlineDir, dlineDocsDir, extensionsDir, server, testInfo, workspaceDir)
 		try {
 			const instanceA = await launcher.launch("instance-a")
 			await openSettings(instanceA)

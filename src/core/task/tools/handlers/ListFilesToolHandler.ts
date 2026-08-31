@@ -163,13 +163,15 @@ export class ListFilesToolHandler implements IFullyManagedTool {
 		let fileInfos: import("@services/glob/list-files").FileInfo[]
 		let didHitLimit: boolean
 		try {
-			;[fileInfos, didHitLimit] = await listFiles(absolutePath, recursive, 200)
+			;[fileInfos, didHitLimit] = await listFiles(absolutePath, recursive, 200, {
+				ignoreController: config.services.ignoreController,
+			})
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : String(error)
 			return formatResponse.toolError(`Error listing files: ${errorMessage}`)
 		}
 
-		const result = formatResponse.formatFilesList(absolutePath, fileInfos, didHitLimit, config.services.clineIgnoreController)
+		const result = formatResponse.formatFilesList(absolutePath, fileInfos, didHitLimit, config.services.ignoreController)
 		config.taskState.consecutiveMistakeCount = 0
 
 		if (!config.isSubagentExecution) {

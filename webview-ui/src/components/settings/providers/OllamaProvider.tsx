@@ -1,5 +1,6 @@
 import { StringRequest } from "@shared/proto/dline/common"
 import { OllamaProviderConfig } from "@shared/proto/dline/provider/ollama"
+import { mergeCapabilities } from "@shared/providers/effective-model-info"
 // Mode import removed — no longer needed in profile-driven architecture
 import { VSCodeLink } from "@vscode/webview-ui-toolkit/react"
 import { useCallback, useEffect, useState } from "react"
@@ -11,7 +12,9 @@ import { ApiKeyField } from "../common/ApiKeyField"
 import { BaseUrlField } from "../common/BaseUrlField"
 import { DebouncedTextField } from "../common/DebouncedTextField"
 import OllamaModelPicker from "../OllamaModelPicker"
+import { ProfileNotice } from "../profile-ui"
 import { useApiConfigurationHandlers } from "../utils/useApiConfigurationHandlers"
+import { getModelCompatibilityNotice } from "./modelCompatibilityNotice"
 import type { ApiProfile } from "./ProviderProfile"
 
 interface OllamaProviderProps {
@@ -29,6 +32,12 @@ export const OllamaProvider = ({ showModelOptions, isPopup: _isPopup, profile, o
 
 	const [ollamaModels, setOllamaModels] = useState<string[]>([])
 	const baseUrl = profile.baseUrl || ""
+	const contextWindow = Number.parseInt(pc.ollamaApiOptionsCtxNum || "32768", 10)
+	const compatibilityCapabilities = mergeCapabilities(profile.modelInfo?.capabilities, {
+		...(pc.capabilities ?? {}),
+		...(Number.isSafeInteger(contextWindow) && contextWindow > 0 ? { contextWindow } : {}),
+	})
+	const compatibilityNotice = getModelCompatibilityNotice({ capabilities: compatibilityCapabilities })
 
 	const requestOllamaModels = useCallback(async () => {
 		try {
@@ -100,18 +109,19 @@ export const OllamaProvider = ({ showModelOptions, isPopup: _isPopup, profile, o
 				</>
 			)}
 			<UseCustomPromptCheckbox providerId="ollama" />
-			<p style={{ fontSize: "12px", marginTop: "5px", color: "var(--vscode-descriptionForeground)" }}>
+			<p className="text-xs text-description">
 				Ollama allows you to run models locally on your computer. See their{" "}
 				<VSCodeLink
 					href="https://github.com/ollama/ollama/blob/main/README.md"
 					style={{ display: "inline", fontSize: "inherit" }}>
 					quickstart guide.
-				</VSCodeLink>{" "}
-				<span style={{ color: "var(--vscode-errorForeground)" }}>
-					(<span style={{ fontWeight: 500 }}>Note:</span> Dline uses complex prompts. Verify your model's capability
-					before use.)
-				</span>
+				</VSCodeLink>
 			</p>
+			{compatibilityNotice ? (
+				<ProfileNotice title={compatibilityNotice.title} variant={compatibilityNotice.variant}>
+					{compatibilityNotice.message}
+				</ProfileNotice>
+			) : null}
 		</div>
 	)
 }

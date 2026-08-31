@@ -26,13 +26,53 @@ describe("resolveProfileReference", () => {
 		})
 	})
 
-	it("rejects an ambiguous legacy name without selecting a fallback", () => {
+	it("resolves a unique historical name after a Profile rename", () => {
+		const profiles = [
+			{ id: "profile-a", name: "Renamed Alpha", legacyNames: ["Alpha"], enabled: true } as ApiProfile,
+			PROFILES[1],
+		]
+
+		expect(resolveProfileReference(profiles, "Alpha")).toMatchObject({
+			status: "resolved",
+			profileId: "profile-a",
+			profileName: "Renamed Alpha",
+			migratedFromLegacyName: true,
+		})
+	})
+
+	it("rejects an ambiguous current name without selecting a fallback", () => {
 		const profiles = [...PROFILES, { id: "profile-c", name: "Alpha", enabled: true } as ApiProfile]
 
 		expect(resolveProfileReference(profiles, "Alpha")).toEqual({
 			status: "invalid",
 			reason: "ambiguous",
-			error: 'Profile not valid: legacy name "Alpha" matches multiple Profiles.',
+			error: 'Profile not valid: current name "Alpha" matches multiple Profiles.',
+		})
+	})
+
+	it("rejects an ambiguous historical name without selecting a fallback", () => {
+		const profiles = [
+			{ id: "profile-a", name: "Renamed Alpha", legacyNames: ["Alpha"], enabled: true } as ApiProfile,
+			{ id: "profile-b", name: "Other", legacyNames: ["Alpha"], enabled: true } as ApiProfile,
+		]
+
+		expect(resolveProfileReference(profiles, "Alpha")).toEqual({
+			status: "invalid",
+			reason: "ambiguous",
+			error: 'Profile not valid: historical name "Alpha" matches multiple Profiles.',
+		})
+	})
+
+	it("prefers a unique current name over historical aliases", () => {
+		const profiles = [
+			{ id: "profile-a", name: "Alpha", enabled: true } as ApiProfile,
+			{ id: "profile-b", name: "Beta", legacyNames: ["Alpha"], enabled: true } as ApiProfile,
+		]
+
+		expect(resolveProfileReference(profiles, "Alpha")).toMatchObject({
+			status: "resolved",
+			profileId: "profile-a",
+			profileName: "Alpha",
 		})
 	})
 

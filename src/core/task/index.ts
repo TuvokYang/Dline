@@ -74,7 +74,7 @@ import { getHookModelContext } from "@core/hooks/hook-model-context"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import * as NotificationHook from "@core/hooks/notification-hook"
 import { executePreCompactHookWithCleanup, HookCancellationError, HookExecution } from "@core/hooks/precompact-executor"
-import { ClineIgnoreController } from "@core/ignore/ClineIgnoreController"
+import { IgnoreController } from "@core/ignore/IgnoreController"
 import { parseMentions } from "@core/mentions"
 import { CommandPermissionController } from "@core/permissions"
 import { summarizeTask } from "@core/prompts/contextManagement"
@@ -338,6 +338,8 @@ type TaskParams = {
 	defaultTerminalProfile: string
 	vscodeTerminalExecutionMode: "vscodeTerminal" | "backgroundExec"
 	cwd: string
+	/** Workspace-level exclusion rules owned by the Controller. */
+	ignoreController: IgnoreController
 	stateManager: StateManager
 	workspaceManager?: WorkspaceRootManager
 	task?: string
@@ -495,7 +497,7 @@ export class Task {
 	private diffViewProvider: DiffViewProvider
 	public checkpointManager?: ICheckpointManager
 	private initialCheckpointCommitPromise?: Promise<string | undefined>
-	private clineIgnoreController: ClineIgnoreController
+	private ignoreController: IgnoreController
 	private commandPermissionController: CommandPermissionController
 	private toolExecutor: ToolExecutor
 	readonly activityStore: TaskActivityStore
@@ -628,6 +630,7 @@ export class Task {
 			defaultTerminalProfile,
 			vscodeTerminalExecutionMode,
 			cwd,
+			ignoreController,
 			stateManager,
 			workspaceManager,
 			task,
@@ -702,7 +705,9 @@ export class Task {
 		})
 		this.reinitExistingTaskFromId = reinitExistingTaskFromId
 		this.cancelTask = cancelTask
-		this.clineIgnoreController = new ClineIgnoreController(cwd)
+		// Workspace-scoped and owned by the Controller: a Task must not create or
+		// dispose these rules, or sibling Tasks would each rebuild the same watchers.
+		this.ignoreController = ignoreController
 		this.commandPermissionController = new CommandPermissionController()
 		// Determine terminal execution mode and create appropriate terminal manager
 		this.terminalExecutionMode = vscodeTerminalExecutionMode || "vscodeTerminal"
@@ -917,6 +922,7 @@ export class Task {
 		})
 		this.systemPromptCacheService = new SystemPromptCacheService({ taskId: this.taskId })
 		this.promptFreshnessInvalidationCoordinator = new PromptFreshnessInvalidationCoordinator({
+			taskId: this.taskId,
 			reevaluate: () => this.reevaluatePromptFreshness(),
 			publishState: () => this.postStateToWebview({ immediate: true }),
 		})
@@ -1339,7 +1345,7 @@ export class Task {
 			this.mcpHub,
 			this.fileContextTracker,
 			this.taskFileTracker,
-			this.clineIgnoreController,
+			this.ignoreController,
 			this.commandPermissionController,
 			this.contextManager,
 			this.stateManager,
@@ -2296,14 +2302,6 @@ export class Task {
 						this.getAutoCondenseTriggerOptions(),
 					).passInputCeilingTokens
 				},
-				getSingleTurnInputCeiling: (input) => {
-					const { contextWindow } = getContextWindowInfo(input.compactionApi)
-					return resolveCompactTriggerPolicy(
-						contextWindow,
-						computeSummarizeBudget(),
-						this.getAutoCondenseTriggerOptions(),
-					).singleTurnInputCeilingTokens
-				},
 				estimatePassInput: async (input, passHistory) => {
 					const request = await this.buildContextCompactionPassRequest(
 						input,
@@ -2527,7 +2525,6 @@ export class Task {
 			)
 			const resolvedBudget = resolveCompactionWindowBudget({
 				contextWindow: policy.hardPassContextWindowTokens,
-				concessionTokens: policy.passInputCeilingAllowanceTokens,
 				maxOutputTokens: requestScope.providerInfo.model.info.capabilities?.maxTokens,
 				summaryOutputLimitTokens,
 				systemPrompt: providerInput.systemPrompt,
@@ -4623,12 +4620,7 @@ export class Task {
 		const startTaskBeganAt = performance.now()
 		await this.ensureApiRateMetricsInitialized()
 		const rateMetricsReadyAt = performance.now()
-		try {
-			await this.clineIgnoreController.initialize()
-		} catch (error) {
-			Logger.error("Failed to initialize ClineIgnoreController:", error)
-			// Optionally, inform the user or handle the error appropriately
-		}
+		// Ignore rules are already loaded by the Controller that owns this workspace.
 		const ignoreControllerReadyAt = performance.now()
 		this.startContextWindowEnvironmentRefresh()
 		// The stable indicator only refreshes a header readout. Nothing below reads
@@ -4671,6 +4663,7 @@ export class Task {
 		if (!initializing.accepted) {
 			throw new Error(`Task initialization rejected: ${initializing.error?.code ?? "invalid_runtime_event"}`)
 		}
+		const initializeDispatchedAt = performance.now()
 
 		const imageBlocks: ClineImageContentBlock[] = formatResponse.imageBlocks(images)
 
@@ -4699,6 +4692,7 @@ export class Task {
 				})
 			}
 		}
+		const filesProcessedAt = performance.now()
 
 		userContent.push(...cloneDeep(initialUserContent))
 
@@ -4748,6 +4742,8 @@ export class Task {
 			}
 		}
 
+		const taskStartHookAt = performance.now()
+
 		// Defensive check: Verify task wasn't aborted during hook execution before continuing
 		// Must be OUTSIDE the hooksEnabled block to prevent UserPromptSubmit from running
 		if (this.taskState.abort) {
@@ -4756,6 +4752,7 @@ export class Task {
 
 		// Run UserPromptSubmit hook for initial task (after TaskStart for UI ordering)
 		const userPromptHookResult = await this.runUserPromptSubmitHook(userContent, "initial_task")
+		const userPromptHookAt = performance.now()
 
 		// Defensive check: Verify task wasn't aborted during hook execution (handles async cancellation)
 		if (this.taskState.abort) {
@@ -4783,6 +4780,7 @@ export class Task {
 		} catch (error) {
 			Logger.error("Failed to record environment metadata:", error)
 		}
+		const environmentRecordedAt = performance.now()
 
 		const initialized = await this.dispatchRuntime({
 			type: "TASK_INITIALIZED",
@@ -4792,6 +4790,20 @@ export class Task {
 		if (!initialized.accepted) {
 			throw new Error(`Task initialization commit rejected: ${initialized.error?.code ?? "invalid_runtime_event"}`)
 		}
+		const initializedDispatchedAt = performance.now()
+
+		// Everything above is awaited before the first API request can start, so an
+		// unattributed stall here is invisible unless each stage reports its own cost.
+		Logger.debug(
+			`[Task ${this.taskId}] startTask admission timing: ` +
+				`initializeDispatch=${Math.round(initializeDispatchedAt - taskSaidAt)}ms, ` +
+				`processFiles=${Math.round(filesProcessedAt - initializeDispatchedAt)}ms, ` +
+				`taskStartHook=${Math.round(taskStartHookAt - filesProcessedAt)}ms, ` +
+				`userPromptHook=${Math.round(userPromptHookAt - taskStartHookAt)}ms, ` +
+				`recordEnvironment=${Math.round(environmentRecordedAt - userPromptHookAt)}ms, ` +
+				`initializedDispatch=${Math.round(initializedDispatchedAt - environmentRecordedAt)}ms, ` +
+				`totalMs=${Math.round(initializedDispatchedAt - taskSaidAt)}, hooksEnabled=${hooksEnabled}`,
+		)
 
 		// Mark task as initialized so checkpoint restore can proceed
 		this.taskState.isInitialized = true
@@ -5033,11 +5045,7 @@ export class Task {
 	 */
 	public async displayHistory(): Promise<void> {
 		await this.ensureApiRateMetricsInitialized()
-		try {
-			await this.clineIgnoreController.initialize()
-		} catch (error) {
-			Logger.error("Failed to initialize ClineIgnoreController:", error)
-		}
+		// Ignore rules are already loaded by the Controller that owns this workspace.
 
 		// UIMessage and ApiConversation were opened before Task construction and are
 		// already the authoritative in-memory views. Metadata refresh is deferred until
@@ -5407,6 +5415,15 @@ export class Task {
 	}
 
 	async terminate(options?: { preserveCompletedState?: boolean }) {
+		const terminateStartedAt = performance.now()
+		let stageStartedAt = terminateStartedAt
+		const logTerminateStage = (phase: string, details = "") => {
+			const now = performance.now()
+			Logger.debug(
+				`[TaskClosePerf] phase=${phase} taskId=${this.taskId} durationMs=${Math.round(now - stageStartedAt)} elapsedMs=${Math.round(now - terminateStartedAt)}${details ? ` ${details}` : ""}`,
+			)
+			stageStartedAt = now
+		}
 		this.stopContextWindowEnvironmentRefresh()
 		this.promptFreshnessDisposed = true
 		this.promptFreshnessInvalidationCoordinator.dispose()
@@ -5423,6 +5440,7 @@ export class Task {
 			this.modeSwitchCompaction.abort()
 			// PHASE 1: Check if TaskCancel should run BEFORE any cleanup
 			const shouldRunTaskCancelHook = await this.shouldRunTaskCancelHook()
+			logTerminateStage("cancel_hook_check", `shouldRun=${shouldRunTaskCancelHook}`)
 
 			// PHASE 2: Commit the canonical terminal cleanup boundary before setting abort.
 			const runtimePhase = this.taskRuntime.getState().phase
@@ -5434,6 +5452,10 @@ export class Task {
 					Logger.warn(`Task termination transition rejected: ${terminating.error?.code ?? "invalid_runtime_event"}`)
 				}
 			}
+			logTerminateStage(
+				"runtime_transition",
+				`preserveCompleted=${preserveCompletedState} initialPhase=${initialRuntimeState.phase}`,
+			)
 
 			// PHASE 3: Fence every old continuation and stop the provider transport.
 			this.taskState.abort = true
@@ -5477,6 +5499,10 @@ export class Task {
 					).catch((error) => Logger.error("Failed to cancel task activities during terminate", error))
 				})(),
 			])
+			logTerminateStage(
+				"cancel_operations",
+				`activities=${activeActivityIds.length} activeHook=${activeHook !== undefined}`,
+			)
 
 			// Wait for the provider stream and every already-admitted continuation
 			// before taking the final persistence snapshot. Timed-out work is fenced
@@ -5495,6 +5521,7 @@ export class Task {
 					"taskTerminate.waitForSupersededOperations",
 				),
 			])
+			logTerminateStage("wait_superseded_operations")
 
 			const hooksEnabled = getHooksEnabledSafe(this.stateManager.getGlobalSettingsKey("hooksEnabled"))
 			let taskCancelHookPromise = Promise.resolve()
@@ -5527,8 +5554,11 @@ export class Task {
 
 			// Save state before cleanup
 			await this.flushTaskSnapshot()
+			logTerminateStage("snapshot_flush")
 			await this.messageStateHandler.updateTaskHistory()
+			logTerminateStage("history_update")
 			await this.postStateToWebview()
+			logTerminateStage("intermediate_state_publish")
 
 			// PHASE 6: Check for incomplete progress (focus chain)
 			const currentProviderInfo = this.getCurrentProviderInfo()
@@ -5555,9 +5585,6 @@ export class Task {
 				},
 				() => {
 					this.urlContentFetcher.closeBrowser()
-				},
-				() => {
-					this.clineIgnoreController.dispose()
 				},
 				() => {
 					try {
@@ -5602,6 +5629,7 @@ export class Task {
 
 			// Wait for async cleanups with timeouts
 			await Promise.allSettled(asyncCleanups)
+			logTerminateStage("resource_cleanup")
 		} finally {
 			try {
 				try {
@@ -5610,13 +5638,16 @@ export class Task {
 						this.messageStateHandler.flushApiConversationHistory(),
 						this.messageStateHandler.flushUiMessages(),
 					])
+					logTerminateStage("final_flush")
 					await this.postStateToWebview()
+					logTerminateStage("final_state_publish")
 				} catch (error) {
 					Logger.error("Failed to post final state after terminate", error)
 				}
 				// Store close is the durability boundary and must not be best-effort:
 				// Controller.clearTask releases the task lock only after this resolves.
 				await this.messageStateHandler.close()
+				logTerminateStage("stores_close")
 			} finally {
 				this.interactionCoordinator.completeCancellation(cancellationGeneration)
 			}
@@ -5732,11 +5763,17 @@ export class Task {
 
 	/** Re-evaluate the active frozen prompt against current prompt inputs without refreshing it. */
 	async reevaluatePromptFreshness(): Promise<void> {
+		const startedAt = performance.now()
 		const providerInfo = this.getCurrentProviderInfo()
 		const webToolsEnabled = this.stateManager.getGlobalSettingsKey("clineWebToolsEnabled") === true
 		const webSearchRoutingPlan = resolveRequestWebSearchRoutingPlan(this.api, webToolsEnabled)
 		const promptContext = await this.buildPromptContext(providerInfo, webToolsEnabled, webSearchRoutingPlan)
+		const buildMs = Math.round(performance.now() - startedAt)
+		const cacheStartedAt = performance.now()
 		await this.systemPromptCacheService.reevaluateFreshness({ promptContext })
+		Logger.debug(
+			`[PromptFreshnessPerf] phase=reevaluate taskId=${this.taskId} buildMs=${buildMs} cacheMs=${Math.round(performance.now() - cacheStartedAt)} totalMs=${Math.round(performance.now() - startedAt)}`,
+		)
 	}
 
 	private async initializePromptInputFileWatcher(): Promise<void> {
@@ -5744,12 +5781,16 @@ export class Task {
 			const globalRulesDirectory = await ensureRulesDirectoryExists()
 			if (this.promptFreshnessDisposed) return
 			const watcher = new PromptInputFileWatcher({
+				taskId: this.taskId,
 				cwd: this.cwd,
 				globalRulesDirectory,
 				workflowDirectories: getWorkflowsScanDirectories(this.cwd).map((directory) => directory.path),
 				skillDirectories: getSkillsDirectoriesForScan(this.cwd).map((directory) => directory.path),
 				subagentDirectories: getSubagentsScanDirectories(this.cwd).map((directory) => directory.path),
 				invalidate: () => this.invalidatePromptFreshness("prompt_input_file"),
+				// Prune with the same agent rules the tools use, so the recursive
+				// workspace watch never descends into excluded trees.
+				shouldIgnoreDirectory: (absolutePath) => this.ignoreController.shouldIgnoreDirectory(absolutePath, "agent"),
 			})
 			this.promptInputFileWatcher = watcher
 			await watcher.start()
@@ -6298,7 +6339,10 @@ export class Task {
 		webToolsEnabled: boolean,
 		webSearchRoutingPlan: WebSearchRoutingPlan,
 	): Promise<SystemPromptContext> {
+		const startedAt = performance.now()
+		let stageStartedAt = startedAt
 		const host = await HostProvider.env.getHostVersion({})
+		const hostMs = Math.round(performance.now() - stageStartedAt)
 		const ide = host?.platform || "Unknown"
 		const isCliEnvironment = host.clineType === ClineClient.Cli
 		const browserSettings = this.stateManager.getGlobalSettingsKey("browserSettings")
@@ -6317,14 +6361,24 @@ export class Task {
 				? `# Preferred Language\n\nSpeak in ${preferredLanguage}.`
 				: ""
 
+		stageStartedAt = performance.now()
 		const { globalToggles, localToggles } = await refreshClineRulesToggles(this.controller, this.cwd)
+		const dlineRulesDiscoveryMs = Math.round(performance.now() - stageStartedAt)
+		stageStartedAt = performance.now()
 		const { windsurfLocalToggles, cursorLocalToggles, agentsLocalToggles } = await refreshExternalRulesToggles(
 			this.controller,
 			this.cwd,
 		)
+		const externalRulesDiscoveryMs = Math.round(performance.now() - stageStartedAt)
+		stageStartedAt = performance.now()
 		const { globalWorkflowToggles, localWorkflowToggles } = await refreshWorkflowToggles(this.controller, this.cwd)
+		const workflowsDiscoveryMs = Math.round(performance.now() - stageStartedAt)
+		stageStartedAt = performance.now()
 		const refreshedSkills = await refreshSkills(this.controller)
+		const skillsRefreshMs = Math.round(performance.now() - stageStartedAt)
+		stageStartedAt = performance.now()
 		const refreshedSubagents = await refreshSubagents(this.controller)
+		const subagentsRefreshMs = Math.round(performance.now() - stageStartedAt)
 		const remoteConfigSettings = this.stateManager.getRemoteConfigSettings()
 		const remoteRulesToggles = this.stateManager.getGlobalStateKey("remoteRulesToggles") ?? {}
 		const remoteWorkflowToggles = this.stateManager.getGlobalStateKey("remoteWorkflowToggles") ?? {}
@@ -6376,17 +6430,21 @@ export class Task {
 			this.taskSm.setTaskCapabilityToggles(serializedTaskToggles)
 		}
 
+		stageStartedAt = performance.now()
 		const evaluationContext = await RuleContextBuilder.buildEvaluationContext({
 			cwd: this.cwd,
 			messageStateHandler: this.messageStateHandler,
 			workspaceManager: this.workspaceManager,
 		})
+		const evaluationContextMs = Math.round(performance.now() - stageStartedAt)
 
+		stageStartedAt = performance.now()
 		const globalClineRulesFilePath = await ensureRulesDirectoryExists()
 		const globalRules = await getGlobalClineRules(globalClineRulesFilePath, taskCapabilityToggles.globalClineRulesToggles, {
 			evaluationContext,
 			remoteToggles: taskCapabilityToggles.remoteRulesToggles,
 		})
+		const globalRulesLoadMs = Math.round(performance.now() - stageStartedAt)
 		let globalClineRulesFileInstructions = globalRules.instructions
 
 		// Inject Lazy Teammate Mode rules if enabled
@@ -6400,6 +6458,7 @@ export class Task {
 
 		const primaryRoot = this.workspaceManager?.getPrimaryRoot()
 		const workspaceName = this.getPrimaryWorkspaceName(primaryRoot)
+		stageStartedAt = performance.now()
 		const localRules = await getLocalClineRules(this.cwd, taskCapabilityToggles.localClineRulesToggles, workspaceName, {
 			evaluationContext,
 		})
@@ -6416,12 +6475,14 @@ export class Task {
 		const localAgentsRulesFileInstructions = await getLocalAgentsRules(
 			this.cwd,
 			taskCapabilityToggles.localAgentsRulesToggles,
+			this.ignoreController,
 		)
+		const localRulesLoadMs = Math.round(performance.now() - stageStartedAt)
 
-		const clineIgnoreContent = this.clineIgnoreController.clineIgnoreContent
+		const agentIgnoreContent = this.ignoreController.getIgnoreContent("agent")
 		let clineIgnoreInstructions: string | undefined
-		if (clineIgnoreContent) {
-			clineIgnoreInstructions = formatResponse.clineIgnoreInstructions(clineIgnoreContent)
+		if (agentIgnoreContent) {
+			clineIgnoreInstructions = formatResponse.clineIgnoreInstructions(agentIgnoreContent)
 		}
 
 		// Prepare multi-root workspace information if enabled
@@ -6449,7 +6510,12 @@ export class Task {
 			subagentToggles: taskCapabilityToggles.localSubagentsToggles,
 			globalSubagentToggles: taskCapabilityToggles.globalSubagentsToggles,
 		}
+		stageStartedAt = performance.now()
 		const availableSkills = await discoverAvailableSkills(this.cwd, capabilityToggleState)
+		const duplicateSkillsDiscoveryMs = Math.round(performance.now() - stageStartedAt)
+		Logger.debug(
+			`[PromptBuildPerf] phase=capability_context taskId=${this.taskId} hostMs=${hostMs} dlineRulesDiscoveryMs=${dlineRulesDiscoveryMs} externalRulesDiscoveryMs=${externalRulesDiscoveryMs} workflowsDiscoveryMs=${workflowsDiscoveryMs} skillsRefreshMs=${skillsRefreshMs} subagentsRefreshMs=${subagentsRefreshMs} evaluationContextMs=${evaluationContextMs} globalRulesLoadMs=${globalRulesLoadMs} localRulesLoadMs=${localRulesLoadMs} duplicateSkillsDiscoveryMs=${duplicateSkillsDiscoveryMs} totalMs=${Math.round(performance.now() - startedAt)} rules=${Object.keys(globalToggles).length + Object.keys(localToggles).length} workflows=${Object.keys(globalWorkflowToggles).length + Object.keys(localWorkflowToggles).length} skills=${refreshedSkills.globalSkills.length + refreshedSkills.localSkills.length} availableSkills=${availableSkills.length} subagents=${refreshedSubagents.globalSubagents.length + refreshedSubagents.localSubagents.length}`,
+		)
 
 		// Disable spawn_task for child tasks to prevent recursive spawn explosion.
 		// A spawned task inherits the parent's provider and should focus on its
@@ -9443,9 +9509,9 @@ export class Task {
 				options.preview ? undefined : this.fileContextTracker,
 				this.workspaceManager,
 				{
-					validateFileAccess: (filePath, baseDir) => this.clineIgnoreController.validateAccess(filePath, baseDir),
+					validateFileAccess: (filePath, baseDir) => this.ignoreController.validateAccess(filePath, "agent", baseDir),
 					validateDirectoryAccess: (directoryPath, baseDir) =>
-						this.clineIgnoreController.validateDirectoryAccess(directoryPath, baseDir),
+						this.ignoreController.validateDirectoryAccess(directoryPath, "agent", baseDir),
 				},
 			)
 			if (!parseCommands) return parsedText
@@ -9778,7 +9844,7 @@ export class Task {
 		const visibleFilePaths = filteredVisiblePaths.map((absolutePath) => path.relative(this.cwd, absolutePath))
 
 		// Filter paths through clineIgnoreController
-		const allowedVisibleFiles = this.clineIgnoreController
+		const allowedVisibleFiles = this.ignoreController
 			.filterPaths(visibleFilePaths)
 			.map((p) => p.toPosix())
 			.join("\n")
@@ -9795,7 +9861,7 @@ export class Task {
 		const openTabPaths = filteredOpenTabPaths.map((absolutePath) => path.relative(this.cwd, absolutePath))
 
 		// Filter paths through clineIgnoreController
-		const allowedOpenTabs = this.clineIgnoreController
+		const allowedOpenTabs = this.ignoreController
 			.filterPaths(openTabPaths)
 			.map((p) => p.toPosix())
 			.join("\n")
@@ -9875,8 +9941,10 @@ export class Task {
 				// don't want to immediately access desktop since it would show permission popup
 				details += "(Desktop files not shown automatically. Use list_files to explore if needed.)"
 			} else {
-				const [fileInfos, didHitLimit] = await listFiles(this.cwd, true, 200)
-				const result = formatResponse.formatFilesList(this.cwd, fileInfos, didHitLimit, this.clineIgnoreController)
+				const [fileInfos, didHitLimit] = await listFiles(this.cwd, true, 200, {
+					ignoreController: this.ignoreController,
+				})
+				const result = formatResponse.formatFilesList(this.cwd, fileInfos, didHitLimit, this.ignoreController)
 				details += result
 			}
 

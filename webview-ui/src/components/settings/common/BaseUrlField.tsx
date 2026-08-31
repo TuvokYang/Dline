@@ -38,24 +38,25 @@ export const BaseUrlField = ({
 	}
 
 	return (
-		<div>
-			<div className="flex items-center gap-2">
-				<VSCodeCheckbox checked={isEnabled} disabled={disabled} onChange={handleToggle}>
+		<div className="flex min-w-0 flex-col gap-1">
+			<div className="flex min-w-0 items-center gap-2">
+				<VSCodeCheckbox className="text-sm" checked={isEnabled} disabled={disabled} onChange={handleToggle}>
 					{label}
 				</VSCodeCheckbox>
 				{showLockIcon && <i className="codicon codicon-lock text-(--vscode-descriptionForeground) text-sm" />}
 			</div>
 
-			{isEnabled && (
+			{isEnabled ? (
 				<VSCodeTextField
+					aria-label={label.replace(/^Use /, "")}
+					className="min-h-7 w-full"
 					disabled={disabled}
 					onInput={(e: any) => setLocalValue(e.target.value.trim())}
 					placeholder={placeholder}
-					style={{ width: "100%", marginTop: 3 }}
 					type="text"
 					value={localValue}
 				/>
-			)}
+			) : null}
 		</div>
 	)
 }

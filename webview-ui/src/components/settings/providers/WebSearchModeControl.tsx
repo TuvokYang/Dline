@@ -1,4 +1,6 @@
 import { WebSearchMode } from "@shared/proto/dline/provider/common"
+import { useId } from "react"
+import { ProfileField } from "../profile-ui"
 
 interface WebSearchModeControlProps {
 	value?: WebSearchMode
@@ -15,13 +17,14 @@ const WEB_SEARCH_MODE_OPTIONS = [
 /** Per-profile routing policy for Web Search. Changes are persisted by the profile owner. */
 export function WebSearchModeControl({ value, onChange }: WebSearchModeControlProps) {
 	const selectedValue = value ?? WebSearchMode.WEB_SEARCH_MODE_AUTO
+	const inputId = useId()
 
 	return (
-		<label className="block mb-2">
-			<span className="text-xs font-medium text-description block mb-0.5">Web Search</span>
+		<ProfileField htmlFor={inputId} label="Web Search">
 			<select
 				aria-label="Web Search mode"
-				className="w-full text-xs p-1 rounded bg-input-background border border-input-border"
+				className="min-h-7 w-full rounded-xs border border-input-border bg-input-background px-2 text-sm"
+				id={inputId}
 				onChange={(event) => onChange(Number(event.target.value) as WebSearchMode)}
 				value={selectedValue}>
 				{WEB_SEARCH_MODE_OPTIONS.map((option) => (
@@ -30,6 +33,6 @@ export function WebSearchModeControl({ value, onChange }: WebSearchModeControlPr
 					</option>
 				))}
 			</select>
-		</label>
+		</ProfileField>
 	)
 }

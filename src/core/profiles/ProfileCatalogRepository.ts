@@ -28,6 +28,46 @@ function profileHash(profiles: readonly ApiProfile[]): string {
 	return createHash("sha256").update(JSON.stringify(profiles)).digest("hex")
 }
 
+function mergeLegacyNames(
+	currentName: string,
+	baseline: ApiProfile | undefined,
+	requested: ApiProfile,
+	latest: ApiProfile | undefined,
+): string[] {
+	const candidates = [
+		...(latest?.legacyNames ?? []),
+		...(baseline?.legacyNames ?? []),
+		...(requested.legacyNames ?? []),
+		...(baseline && baseline.name !== requested.name ? [baseline.name] : []),
+		...(latest && latest.name !== requested.name ? [latest.name] : []),
+	]
+	return [...new Set(candidates.filter((name) => name && name !== currentName))]
+}
+
+function hasRequestedOrderChange(baseline: readonly ApiProfile[], requested: readonly ApiProfile[]): boolean {
+	const baselineIds = new Set(baseline.map(({ id }) => id))
+	const requestedIds = requested.map(({ id }) => id)
+	const requestedIdSet = new Set(requestedIds)
+	const unchangedOrder = [
+		...baseline.filter(({ id }) => requestedIdSet.has(id)).map(({ id }) => id),
+		...requestedIds.filter((id) => !baselineIds.has(id)),
+	]
+	return requestedIds.some((id, index) => id !== unchangedOrder[index])
+}
+
+function applyRequestedOrder(merged: ApiProfile[], requested: readonly ApiProfile[]): ApiProfile[] {
+	const mergedById = new Map(merged.map((profile) => [profile.id, profile]))
+	const requestedIds = requested.map(({ id }) => id).filter((id) => mergedById.has(id))
+	const requestedIdSet = new Set(requestedIds)
+	let requestedIndex = 0
+
+	return merged.map((profile) => {
+		if (!requestedIdSet.has(profile.id)) return profile
+		const requestedId = requestedIds[requestedIndex++]
+		return (requestedId && mergedById.get(requestedId)) || profile
+	})
+}
+
 /** Apply one client's stable-ID diff to the latest disk Catalog. */
 export function mergeProfileCatalog(
 	baseline: readonly ApiProfile[],
@@ -37,9 +77,16 @@ export function mergeProfileCatalog(
 	const baselineById = new Map(baseline.map((profile) => [profile.id, profile]))
 	const requestedById = new Map(requested.map((profile) => [profile.id, profile]))
 	const removedIds = new Set([...baselineById.keys()].filter((id) => !requestedById.has(id)))
+	const latestById = new Map(latest.map((profile) => [profile.id, profile]))
 	const changedById = new Map<string, ApiProfile>()
 	for (const [id, profile] of requestedById) {
-		if (JSON.stringify(baselineById.get(id)) !== JSON.stringify(profile)) changedById.set(id, profile)
+		const baselineProfile = baselineById.get(id)
+		if (JSON.stringify(baselineProfile) !== JSON.stringify(profile)) {
+			changedById.set(id, {
+				...profile,
+				legacyNames: mergeLegacyNames(profile.name, baselineProfile, profile, latestById.get(id)),
+			})
+		}
 	}
 
 	const merged: ApiProfile[] = []
@@ -53,7 +100,7 @@ export function mergeProfileCatalog(
 	for (const [id, profile] of changedById) {
 		if (!appliedIds.has(id)) merged.push(structuredClone(profile))
 	}
-	return merged
+	return hasRequestedOrderChange(baseline, requested) ? applyRequestedOrder(merged, requested) : merged
 }
 
 /** Cross-process transactional repository for the Profile Catalog array. */
@@ -73,19 +120,28 @@ export class ProfileCatalogRepository {
 
 	async initialize(): Promise<ApiProfile[]> {
 		if (this.initialized) return cloneProfiles(this.snapshot)
+		const startedAt = performance.now()
 		this.snapshot = await this.options.read()
 		this.snapshotHash = profileHash(this.snapshot)
 		this.initialized = true
 		if (this.watchEnabled) await this.startWatcher()
+		Logger.debug(
+			`[ProfilePerf] phase=catalog_initialize durationMs=${Math.round(performance.now() - startedAt)} profiles=${this.snapshot.length} watch=${this.watchEnabled}`,
+		)
 		return cloneProfiles(this.snapshot)
 	}
 
 	async mutate(baseline: readonly ApiProfile[], requested: readonly ApiProfile[]): Promise<ProfileCatalogCommit> {
+		const requestedAt = performance.now()
 		return this.enqueue(async () => {
+			const queueMs = Math.round(performance.now() - requestedAt)
 			await this.initialize()
 			await fs.mkdir(path.dirname(this.options.filePath), { recursive: true })
 			let commit: ProfileCatalogCommit | undefined
+			const lockRequestedAt = performance.now()
+			let lockAcquiredAt = lockRequestedAt
 			await this.fileLock.withLock(this.options.filePath, async () => {
+				lockAcquiredAt = performance.now()
 				const latest = await this.options.read()
 				const profiles = mergeProfileCatalog(baseline, requested, latest)
 				await this.options.write(profiles)
@@ -94,6 +150,9 @@ export class ProfileCatalogRepository {
 				commit = { previous: cloneProfiles(latest), profiles: cloneProfiles(profiles) }
 			})
 			if (!commit) throw new Error("Profile Catalog transaction completed without a commit")
+			Logger.debug(
+				`[ProfilePerf] phase=catalog_mutate queueMs=${queueMs} lockWaitMs=${Math.round(lockAcquiredAt - lockRequestedAt)} transactionMs=${Math.round(performance.now() - lockAcquiredAt)} totalMs=${Math.round(performance.now() - requestedAt)} baseline=${baseline.length} requested=${requested.length} committed=${commit.profiles.length}`,
+			)
 			return commit
 		})
 	}
@@ -139,6 +198,7 @@ export class ProfileCatalogRepository {
 	}
 
 	private async reconcileFromDisk(): Promise<void> {
+		const startedAt = performance.now()
 		const profiles = await this.options.read()
 		const nextHash = profileHash(profiles)
 		if (nextHash === this.snapshotHash) return
@@ -146,5 +206,8 @@ export class ProfileCatalogRepository {
 		this.snapshot = cloneProfiles(profiles)
 		this.snapshotHash = nextHash
 		for (const listener of this.listeners) await listener({ previous, profiles: cloneProfiles(profiles) })
+		Logger.debug(
+			`[ProfilePerf] phase=catalog_reconcile durationMs=${Math.round(performance.now() - startedAt)} profiles=${profiles.length} listeners=${this.listeners.size}`,
+		)
 	}
 }

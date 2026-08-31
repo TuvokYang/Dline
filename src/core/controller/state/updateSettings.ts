@@ -48,6 +48,8 @@ function getStringConfigField(config: unknown, field: string): string | undefine
  * @returns An empty response
  */
 export async function updateSettings(controller: Controller, request: UpdateSettingsRequest): Promise<Empty> {
+	const startedAt = performance.now()
+	const fields = Object.keys(request).sort()
 	try {
 		const localWebSearchEngine = request.localWebSearchEngine
 		if (localWebSearchEngine !== undefined && !isLocalSearchEngineId(localWebSearchEngine)) {
@@ -499,15 +501,26 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		// A successful Settings RPC is a durable commit boundary. Reconfigure
 		// runtime components and publish the new state only after every pending
 		// storage write has completed successfully.
+		const flushStartedAt = performance.now()
 		await controller.stateManager.flushPendingState()
+		const flushMs = Math.round(performance.now() - flushStartedAt)
+		const configureStartedAt = performance.now()
 		await controller.configureGlobalComponents()
+		const configureMs = Math.round(performance.now() - configureStartedAt)
 
 		// Post updated state to webview
+		const publishStartedAt = performance.now()
 		await controller.postStateToWebview()
+		Logger.debug(
+			`[SettingsPerf] phase=rpc_complete taskId=${controller.task?.taskId ?? "none"} fields=${fields.join(",") || "none"} flushMs=${flushMs} configureMs=${configureMs} publishMs=${Math.round(performance.now() - publishStartedAt)} totalMs=${Math.round(performance.now() - startedAt)}`,
+		)
 
 		return Empty.create()
 	} catch (error) {
 		Logger.error("Failed to update settings:", error)
+		Logger.debug(
+			`[SettingsPerf] phase=rpc_error taskId=${controller.task?.taskId ?? "none"} fields=${fields.join(",") || "none"} totalMs=${Math.round(performance.now() - startedAt)}`,
+		)
 		throw error
 	}
 }

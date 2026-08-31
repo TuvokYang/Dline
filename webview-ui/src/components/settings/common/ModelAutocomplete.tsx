@@ -4,6 +4,7 @@ import Fuse from "fuse.js"
 import { KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from "react"
 import styled from "styled-components"
 import { highlight } from "../../history/HistoryView"
+import { ProfileField } from "../profile-ui"
 
 interface ModelAutocompleteProps {
 	models: Record<string, ModelInfo>
@@ -145,7 +146,7 @@ export const ModelAutocomplete = ({
 	const activeDescendantId = selectedIndex >= 0 ? `${listboxId}-option-${selectedIndex}` : undefined
 
 	return (
-		<div style={{ width: "100%", paddingBottom: 2 }}>
+		<ProfileField htmlFor={inputId} label={label}>
 			<style>
 				{`
 				.model-item-highlight {
@@ -154,19 +155,15 @@ export const ModelAutocomplete = ({
 				}
 				`}
 			</style>
-			<div style={{ display: "flex", flexDirection: "column" }}>
-				<label htmlFor={inputId}>
-					<span style={{ fontWeight: 500 }}>{label}</span>
-				</label>
-
-				<DropdownWrapper ref={dropdownRef}>
-					<VSCodeTextField
-						aria-activedescendant={activeDescendantId}
-						aria-autocomplete="list"
-						aria-controls={isDropdownVisible ? listboxId : undefined}
-						aria-expanded={isDropdownVisible}
-						id={inputId}
-						onBlur={() => {
+			<DropdownWrapper ref={dropdownRef}>
+				<VSCodeTextField
+					aria-activedescendant={activeDescendantId}
+					aria-label={label}
+					aria-autocomplete="list"
+					aria-controls={isDropdownVisible ? listboxId : undefined}
+					aria-expanded={isDropdownVisible}
+					id={inputId}
+					onBlur={() => {
 							// Delay to allow click events on dropdown items to fire first
 							setTimeout(() => {
 								if (!isSelectingRef.current && searchTerm !== selectedModelId) {
@@ -175,24 +172,21 @@ export const ModelAutocomplete = ({
 								isSelectingRef.current = false
 							}, 150)
 						}}
-						onFocus={() => {
+					onFocus={() => {
 							setIsDropdownVisible(true)
 							onOpen?.()
 						}}
-						onInput={(e) => {
+					onInput={(e) => {
 							setSearchTerm((e.target as HTMLInputElement)?.value || "")
 							setIsDropdownVisible(true)
 						}}
-						onKeyDown={handleKeyDown}
-						placeholder={placeholder}
-						role="combobox"
-						style={{
-							width: "100%",
-							zIndex: zIndex,
-							position: "relative",
-						}}
-						value={searchTerm}>
-						{searchTerm && (
+					onKeyDown={handleKeyDown}
+					className="min-h-7 w-full"
+					placeholder={placeholder}
+					role="combobox"
+					style={{ zIndex, position: "relative" }}
+					value={searchTerm}>
+					{searchTerm && (
 							<div
 								aria-label="Clear search"
 								className="input-icon-button codicon codicon-close"
@@ -208,9 +202,9 @@ export const ModelAutocomplete = ({
 									height: "100%",
 								}}
 							/>
-						)}
-					</VSCodeTextField>
-					{isDropdownVisible && (
+					)}
+				</VSCodeTextField>
+				{isDropdownVisible && (
 						<DropdownList
 							aria-label="Model suggestions"
 							id={listboxId}
@@ -237,10 +231,9 @@ export const ModelAutocomplete = ({
 								</DropdownItem>
 							))}
 						</DropdownList>
-					)}
-				</DropdownWrapper>
-			</div>
-		</div>
+				)}
+			</DropdownWrapper>
+		</ProfileField>
 	)
 }
 

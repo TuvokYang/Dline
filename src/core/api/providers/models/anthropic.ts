@@ -7,6 +7,7 @@ import { ServerTool, type ThinkingConfig } from "@shared/proto/dline/models/meta
 import {
 	ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS,
 	ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS_WITHOUT_XHIGH,
+	ANTHROPIC_REQUIRED_ADAPTIVE_REASONING_EFFORT_OPTIONS,
 } from "@shared/utils/reasoning-support"
 
 // Tiers used for building 1M variant model pricing (also used by refresh scripts)
@@ -49,24 +50,6 @@ function adaptiveThinking(effortLevels: readonly string[]): ThinkingConfig {
 	return { supported: true, mode: "effort", effortLevels: [...effortLevels] }
 }
 
-// Fable 5 1M context tiers
-const CLAUDE_FABLE_1M_TIERS = [
-	{
-		contextWindow: 200000,
-		inputPrice: 10.0,
-		outputPrice: 50,
-		cacheWritesPrice: 12.5,
-		cacheReadsPrice: 1.0,
-	},
-	{
-		contextWindow: 1_000_000,
-		inputPrice: 20,
-		outputPrice: 75,
-		cacheWritesPrice: 25,
-		cacheReadsPrice: 2.0,
-	},
-]
-
 export const anthropicModels: Record<string, ModelInfo> = {
 	"claude-opus-5": {
 		id: "claude-opus-5",
@@ -95,11 +78,109 @@ export const anthropicModels: Record<string, ModelInfo> = {
 			supportsTools: true,
 			tools: [ServerTool.WEB_SEARCH],
 			maxTokens: 128_000,
-			contextWindow: 200_000,
-			contextWindowTiers: [
-				{ id: "standard", contextWindow: 200_000, label: "200K" },
-				{ id: "long", contextWindow: 1_000_000, label: "1M", apiModelSuffix: ":1m" },
-			],
+			contextWindow: 1_000_000,
+			supportsImages: true,
+			supportsPromptCache: true,
+			supportsReasoning: true,
+			thinking: adaptiveThinking(ANTHROPIC_REQUIRED_ADAPTIVE_REASONING_EFFORT_OPTIONS),
+		},
+		pricing: {
+			inputPrice: 10.0,
+			outputPrice: 50.0,
+			cacheWritesPrice: 12.5,
+			cacheReadsPrice: 1.0,
+		},
+	},
+	"claude-opus-4-8": {
+		id: "claude-opus-4-8",
+		name: "claude-opus-4-8",
+		capabilities: {
+			supportsTools: true,
+			tools: [ServerTool.WEB_SEARCH],
+			maxTokens: 128_000,
+			contextWindow: 1_000_000,
+			supportsImages: true,
+			supportsPromptCache: true,
+			supportsReasoning: true,
+			thinking: adaptiveThinking(ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS),
+		},
+		pricing: {
+			inputPrice: 5.0,
+			outputPrice: 25.0,
+			cacheWritesPrice: 6.25,
+			cacheReadsPrice: 0.5,
+		},
+	},
+	"claude-sonnet-5": {
+		id: "claude-sonnet-5",
+		name: "claude-sonnet-5",
+		capabilities: {
+			supportsTools: true,
+			tools: [ServerTool.WEB_SEARCH],
+			maxTokens: 128_000,
+			contextWindow: 1_000_000,
+			supportsImages: true,
+			supportsPromptCache: true,
+			supportsReasoning: true,
+			thinking: adaptiveThinking(ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS),
+		},
+		pricing: {
+			inputPrice: 2.0,
+			outputPrice: 10.0,
+			cacheWritesPrice: 2.5,
+			cacheReadsPrice: 0.2,
+		},
+	},
+	"claude-sonnet-4-6": {
+		id: "claude-sonnet-4-6",
+		name: "claude-sonnet-4-6",
+		capabilities: {
+			supportsTools: true,
+			tools: [ServerTool.WEB_SEARCH],
+			maxTokens: 128_000,
+			contextWindow: 1_000_000,
+			supportsImages: true,
+			supportsPromptCache: true,
+			supportsReasoning: true,
+			thinking: adaptiveThinking(ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS_WITHOUT_XHIGH),
+		},
+		pricing: {
+			inputPrice: 3.0,
+			outputPrice: 15.0,
+			cacheWritesPrice: 3.75,
+			cacheReadsPrice: 0.3,
+		},
+	},
+	"claude-opus-4-6": {
+		id: "claude-opus-4-6",
+		name: "claude-opus-4-6",
+		capabilities: {
+			supportsTools: true,
+			tools: [ServerTool.WEB_SEARCH],
+			maxTokens: 128_000,
+			contextWindow: 1_000_000,
+			supportsImages: true,
+			supportsPromptCache: true,
+			supportsReasoning: true,
+			thinking: adaptiveThinking(ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS_WITHOUT_XHIGH),
+		},
+		pricing: {
+			inputPrice: 5.0,
+			outputPrice: 25.0,
+			cacheWritesPrice: 6.25,
+			cacheReadsPrice: 0.5,
+		},
+	},
+	"claude-opus-5:fast": {
+		id: "claude-opus-5:fast",
+		name: "claude-opus-5:fast",
+		description:
+			"Anthropic fast mode for Claude Opus 5. Same model and capabilities with higher output token speed at premium pricing. Requires fast mode access on your Anthropic account.",
+		capabilities: {
+			supportsTools: true,
+			tools: [ServerTool.WEB_SEARCH],
+			maxTokens: 128_000,
+			contextWindow: 1_000_000,
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,
@@ -110,133 +191,28 @@ export const anthropicModels: Record<string, ModelInfo> = {
 			outputPrice: 50.0,
 			cacheWritesPrice: 12.5,
 			cacheReadsPrice: 1.0,
-			tiers: CLAUDE_FABLE_1M_TIERS,
 		},
 	},
-	"claude-opus-4-8": {
-		id: "claude-opus-4-8",
-		name: "claude-opus-4-8",
-		capabilities: {
-			supportsTools: true,
-			tools: [ServerTool.WEB_SEARCH],
-			maxTokens: 128_000,
-			contextWindow: 200_000,
-			contextWindowTiers: [
-				{ id: "standard", contextWindow: 200_000, label: "200K" },
-				{ id: "long", contextWindow: 1_000_000, label: "1M", apiModelSuffix: ":1m" },
-			],
-			supportsImages: true,
-			supportsPromptCache: true,
-			supportsReasoning: true,
-			thinking: adaptiveThinking(ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS),
-		},
-		pricing: {
-			inputPrice: 5.0,
-			outputPrice: 25.0,
-			cacheWritesPrice: 6.25,
-			cacheReadsPrice: 0.5,
-			tiers: CLAUDE_OPUS_1M_TIERS,
-		},
-	},
-	"claude-sonnet-5": {
-		id: "claude-sonnet-5",
-		name: "claude-sonnet-5",
-		capabilities: {
-			supportsTools: true,
-			tools: [ServerTool.WEB_SEARCH],
-			maxTokens: 128_000,
-			contextWindow: 200_000,
-			contextWindowTiers: [
-				{ id: "standard", contextWindow: 200_000, label: "200K" },
-				{ id: "long", contextWindow: 1_000_000, label: "1M", apiModelSuffix: ":1m" },
-			],
-			supportsImages: true,
-			supportsPromptCache: true,
-			supportsReasoning: true,
-			thinking: adaptiveThinking(ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS),
-		},
-		pricing: {
-			inputPrice: 3.0,
-			outputPrice: 15.0,
-			cacheWritesPrice: 3.75,
-			cacheReadsPrice: 0.3,
-			tiers: CLAUDE_SONNET_1M_TIERS,
-		},
-	},
-	"claude-sonnet-4-6": {
-		id: "claude-sonnet-4-6",
-		name: "claude-sonnet-4-6",
-		capabilities: {
-			supportsTools: true,
-			tools: [ServerTool.WEB_SEARCH],
-			maxTokens: 64_000,
-			contextWindow: 200_000,
-			contextWindowTiers: [
-				{ id: "standard", contextWindow: 200_000, label: "200K" },
-				{ id: "long", contextWindow: 1_000_000, label: "1M", apiModelSuffix: ":1m" },
-			],
-			supportsImages: true,
-			supportsPromptCache: true,
-			supportsReasoning: true,
-			thinking: adaptiveThinking(ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS_WITHOUT_XHIGH),
-		},
-		pricing: {
-			inputPrice: 3.0,
-			outputPrice: 15.0,
-			cacheWritesPrice: 3.75,
-			cacheReadsPrice: 0.3,
-			tiers: CLAUDE_SONNET_1M_TIERS,
-		},
-	},
-	"claude-opus-4-6": {
-		id: "claude-opus-4-6",
-		name: "claude-opus-4-6",
-		capabilities: {
-			supportsTools: true,
-			tools: [ServerTool.WEB_SEARCH],
-			maxTokens: 128_000,
-			contextWindow: 200_000,
-			contextWindowTiers: [
-				{ id: "standard", contextWindow: 200_000, label: "200K" },
-				{ id: "long", contextWindow: 1_000_000, label: "1M", apiModelSuffix: ":1m" },
-			],
-			supportsImages: true,
-			supportsPromptCache: true,
-			supportsReasoning: true,
-			thinking: adaptiveThinking(ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS_WITHOUT_XHIGH),
-		},
-		pricing: {
-			inputPrice: 5.0,
-			outputPrice: 25.0,
-			cacheWritesPrice: 6.25,
-			cacheReadsPrice: 0.5,
-			tiers: CLAUDE_OPUS_1M_TIERS,
-		},
-	},
-	"claude-opus-4-6:fast": {
-		id: "claude-opus-4-6:fast",
-		name: "claude-opus-4-6:fast",
+	"claude-opus-4-8:fast": {
+		id: "claude-opus-4-8:fast",
+		name: "claude-opus-4-8:fast",
 		description:
-			"Anthropic fast mode preview for Claude Opus 4.6. Same model and capabilities with higher output token speed at premium pricing. Requires fast mode access on your Anthropic account.",
+			"Anthropic fast mode for Claude Opus 4.8. Same model and capabilities with higher output token speed at premium pricing. Requires fast mode access on your Anthropic account.",
 		capabilities: {
 			supportsTools: true,
 			tools: [ServerTool.WEB_SEARCH],
 			maxTokens: 128_000,
-			contextWindow: 200_000,
-			contextWindowTiers: [
-				{ id: "standard", contextWindow: 200_000, label: "200K" },
-				{ id: "long", contextWindow: 1_000_000, label: "1M", apiModelSuffix: ":1m" },
-			],
+			contextWindow: 1_000_000,
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,
-			thinking: adaptiveThinking(ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS_WITHOUT_XHIGH),
+			thinking: adaptiveThinking(ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS),
 		},
 		pricing: {
-			inputPrice: 30.0,
-			outputPrice: 150.0,
-			cacheWritesPrice: 37.5,
-			cacheReadsPrice: 3.0,
+			inputPrice: 10.0,
+			outputPrice: 50.0,
+			cacheWritesPrice: 12.5,
+			cacheReadsPrice: 1.0,
 		},
 	},
 	"claude-opus-4-7": {
@@ -246,11 +222,7 @@ export const anthropicModels: Record<string, ModelInfo> = {
 			supportsTools: true,
 			tools: [ServerTool.WEB_SEARCH],
 			maxTokens: 128_000,
-			contextWindow: 200_000,
-			contextWindowTiers: [
-				{ id: "standard", contextWindow: 200_000, label: "200K" },
-				{ id: "long", contextWindow: 1_000_000, label: "1M", apiModelSuffix: ":1m" },
-			],
+			contextWindow: 1_000_000,
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,
@@ -261,7 +233,6 @@ export const anthropicModels: Record<string, ModelInfo> = {
 			outputPrice: 25.0,
 			cacheWritesPrice: 6.25,
 			cacheReadsPrice: 0.5,
-			tiers: CLAUDE_OPUS_1M_TIERS,
 		},
 	},
 }

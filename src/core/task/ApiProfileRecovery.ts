@@ -4,11 +4,12 @@ import path from "node:path"
 import type { ApiHandler } from "@core/api"
 import type { ApiStream } from "@core/api/transform/stream"
 import { PROVIDER_API_KEY_MAP, readApiProfiles, readApiProfilesFresh } from "@core/controller/file/getApiProfiles"
+import { resolveProfileReference } from "@core/profiles/profile-binding"
 import type { ApiConfiguration } from "@shared/api"
 import type { ApiProfile } from "@shared/proto/dline/profile"
 import type { Mode } from "@shared/storage/types"
 
-export type ApiProfileInvalidReason = "missing" | "disabled" | "credential_unavailable" | "configuration_invalid"
+export type ApiProfileInvalidReason = "missing" | "ambiguous" | "disabled" | "credential_unavailable" | "configuration_invalid"
 
 export interface ApiProfileValidity {
 	status: "valid" | "invalid"
@@ -297,22 +298,19 @@ export function resolveTaskApiProfile(
 ): ApiProfileRecoveryResult {
 	const requestedProfile = profileForMode(configuration, mode)
 	const requestedProfileId = profileIdForMode(configuration, mode)
-	const selectedProfile = requestedProfileId
-		? profiles.find((profile) => profile.id === requestedProfileId)
-		: requestedProfile
-			? profiles.find((profile) => profile.name === requestedProfile)
-			: undefined
 
 	if (requestedProfileId || requestedProfile) {
-		if (!selectedProfile) {
+		const referenceResolution = resolveProfileReference(profiles, requestedProfileId ?? requestedProfile)
+		if (referenceResolution.status === "invalid") {
 			return invalidResult(configuration, requestedProfile, requestedProfileId, {
 				status: "invalid",
 				profileId: requestedProfileId,
 				displayName: requestedProfile,
-				reason: "missing",
-				message: `Profile not valid: "${requestedProfile ?? requestedProfileId}" no longer exists.`,
+				reason: referenceResolution.reason,
+				message: referenceResolution.error,
 			})
 		}
+		const selectedProfile = referenceResolution.profile
 
 		const validity = validateProfile(selectedProfile)
 		if (validity.status === "invalid") {

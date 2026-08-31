@@ -123,12 +123,20 @@ export class SettingsRepository {
 		resolvePatch: (values: Readonly<Settings>) => Partial<Settings>,
 		sourceId = this.sourceId,
 	): Promise<SettingsCommit> {
+		const requestedAt = performance.now()
 		return this.enqueue(async () => {
+			const queueMs = Math.round(performance.now() - requestedAt)
 			this.ensureAvailable()
 			await fs.mkdir(path.dirname(this.filePath), { recursive: true })
 			let commit: SettingsCommit | undefined
+			const lockRequestedAt = performance.now()
+			let lockAcquiredAt = lockRequestedAt
+			let readMs = 0
+			let writeMs = 0
 			await this.fileLock.withLock(this.filePath, async () => {
+				lockAcquiredAt = performance.now()
 				const parsed = parseSettingsDocument(await readDocument(this.filePath))
+				readMs = Math.round(performance.now() - lockAcquiredAt)
 				const nextValues = applySettingsPatch(parsed.values, resolvePatch(parsed.values))
 				const keys = changedKeys(parsed.values, nextValues)
 				if (isDeepStrictEqual(parsed.values, nextValues)) {
@@ -142,12 +150,18 @@ export class SettingsRepository {
 					return
 				}
 				const revision = Math.max(parsed.revision, this.currentSnapshot.revision) + 1
+				const writeStartedAt = performance.now()
 				await atomicWriteDocument(this.filePath, buildPersistedSettingsDocument(nextValues, revision, sourceId))
+				writeMs = Math.round(performance.now() - writeStartedAt)
 				this.currentSnapshot = snapshot(nextValues, revision)
 				commit = { revision, changedKeys: keys, snapshot: this.currentSnapshot, sourceId }
 			})
 			if (!commit) throw new Error("Settings transaction completed without a commit")
+			const publishStartedAt = performance.now()
 			if (commit.changedKeys.length > 0) await this.publish(commit)
+			Logger.debug(
+				`[SettingsRepositoryPerf] phase=mutate_complete queueMs=${queueMs} lockWaitMs=${Math.round(lockAcquiredAt - lockRequestedAt)} transactionMs=${Math.round(publishStartedAt - lockAcquiredAt)} readMs=${readMs} writeMs=${writeMs} publishMs=${Math.round(performance.now() - publishStartedAt)} totalMs=${Math.round(performance.now() - requestedAt)} revision=${commit.revision} changedKeys=${commit.changedKeys.join(",") || "none"} listeners=${this.listeners.size} path=${path.basename(path.dirname(this.filePath))}/${path.basename(this.filePath)}`,
+			)
 			return commit
 		})
 	}
@@ -213,6 +227,7 @@ export class SettingsRepository {
 
 	private async reconcileFromDisk(): Promise<void> {
 		if (this.disposed) return
+		const startedAt = performance.now()
 		const parsed = parseSettingsDocument(await readDocument(this.filePath))
 		const diskHash = contentHash(parsed.values)
 		if (diskHash === this.currentSnapshot.contentHash) return
@@ -228,15 +243,29 @@ export class SettingsRepository {
 			snapshot: this.currentSnapshot,
 			sourceId: parsed.sourceId,
 		})
+		Logger.debug(
+			`[SettingsRepositoryPerf] phase=reconcile durationMs=${Math.round(performance.now() - startedAt)} revision=${revision} changedKeys=${keys.join(",")} listeners=${this.listeners.size}`,
+		)
 	}
 
 	private async publish(commit: SettingsCommit): Promise<void> {
+		const startedAt = performance.now()
+		let index = 0
 		for (const listener of this.listeners) {
+			const listenerStartedAt = performance.now()
 			try {
 				await listener(commit)
 			} catch (error) {
 				Logger.error("[SettingsRepository] Commit listener failed:", error)
+			} finally {
+				Logger.debug(
+					`[SettingsRepositoryPerf] phase=listener index=${index} durationMs=${Math.round(performance.now() - listenerStartedAt)} revision=${commit.revision}`,
+				)
+				index++
 			}
 		}
+		Logger.debug(
+			`[SettingsRepositoryPerf] phase=publish durationMs=${Math.round(performance.now() - startedAt)} revision=${commit.revision} listeners=${this.listeners.size}`,
+		)
 	}
 }

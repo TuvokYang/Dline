@@ -99,7 +99,7 @@ function createConfig() {
 			browserSession: {},
 			urlContentFetcher: {},
 			diffViewProvider: {},
-			clineIgnoreController: { validateAccess: () => true },
+			ignoreController: { validateAccess: () => true },
 			commandPermissionController: {},
 			contextManager: {},
 		},

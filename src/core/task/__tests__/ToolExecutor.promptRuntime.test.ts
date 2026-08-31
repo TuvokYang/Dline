@@ -80,7 +80,7 @@ function buildExecutor(): ToolExecutor {
 		diffViewProvider: {},
 		fileContextTracker: {},
 		taskFileTracker: {},
-		clineIgnoreController: {},
+		ignoreController: {},
 		commandPermissionController: {},
 		contextManager: {},
 		hostedServerToolMessageTs: new Map(),

@@ -403,9 +403,9 @@ e2e(
 
 e2e(
 	"Subagent feature toggle - a stale second VS Code instance cannot roll an enabled active task back to disabled",
-	async ({ dlineDir, dlineDocsDir, server, workspaceDir }, testInfo) => {
+	async ({ dlineDir, dlineDocsDir, extensionsDir, server, workspaceDir }, testInfo) => {
 		e2e.setTimeout(300_000)
-		const launcher = new MultiInstanceLauncher({ dlineDir, dlineDocsDir, server, testInfo, workspaceDir })
+		const launcher = new MultiInstanceLauncher({ dlineDir, dlineDocsDir, extensionsDir, server, testInfo, workspaceDir })
 		try {
 			const instanceA = await launcher.launch("subagent-instance-a")
 			await setSubagentsEnabled(instanceA.page, instanceA.sidebar, false)

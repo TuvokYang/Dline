@@ -196,7 +196,10 @@ const baseConfig = {
 	sourcesContent: false,
 	platform: "node",
 	banner: {
-		js: "const _importMetaUrl=require('url').pathToFileURL(__filename)",
+		// The DLINE_BUILD_TYPE marker lets packaging scripts verify which build
+		// variant a bundle came from, so a dev VSIX can never silently ship a
+		// production bundle written by a concurrent build (or vice versa).
+		js: `/* DLINE_BUILD_TYPE:${production ? "production" : "dev"} */\nconst _importMetaUrl=require('url').pathToFileURL(__filename)`,
 	},
 }
 

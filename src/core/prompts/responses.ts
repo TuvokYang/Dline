@@ -2,7 +2,7 @@ import { Anthropic } from "@anthropic-ai/sdk"
 import type { FileInfo } from "@services/glob/list-files"
 import * as diff from "diff"
 import * as path from "path"
-import { ClineIgnoreController, LOCK_TEXT_SYMBOL } from "../ignore/ClineIgnoreController"
+import { type IgnoreController, LOCK_TEXT_SYMBOL } from "../ignore/IgnoreController"
 import { RuntimePromptGenerator } from "./generators/RuntimePromptGenerator"
 import { englishTemplateStore } from "./i18n/en"
 import type { PromptEnv } from "./template/types"
@@ -137,7 +137,7 @@ export const formatResponse = {
 		absolutePath: string,
 		fileInfos: FileInfo[],
 		didHitLimit: boolean,
-		clineIgnoreController?: ClineIgnoreController,
+		ignoreController?: IgnoreController,
 	): string => {
 		// Convert FileInfo to formatted strings with metadata
 		const formatted = fileInfos
@@ -187,10 +187,13 @@ export const formatResponse = {
 				return aParts.length - bParts.length
 			})
 
-		const clineIgnoreParsed = clineIgnoreController
+		const clineIgnoreParsed = ignoreController
 			? formatted.map(({ displayPath, metadata }) => {
 					const absoluteFilePath = path.resolve(absolutePath, displayPath)
-					const isIgnored = !clineIgnoreController.validateAccess(absoluteFilePath)
+					// The lock marks what the agent may not open, so it follows the
+					// read scope: a listed path excluded only by `.gitignore` is
+					// still readable and must not appear locked.
+					const isIgnored = !ignoreController.validateAccess(absoluteFilePath, "read")
 					if (isIgnored) {
 						return `${LOCK_TEXT_SYMBOL} ${displayPath}${metadata}`
 					}

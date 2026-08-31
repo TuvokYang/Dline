@@ -52,19 +52,38 @@ vi.mock("@vscode/webview-ui-toolkit/react", () => ({
 
 vi.mock("./DebouncedTextField", () => ({
 	DebouncedTextField: ({
+		ariaLabel,
 		children,
+		className,
+		id,
 		initialValue,
 		onChange,
 	}: {
+		ariaLabel?: string
 		children?: React.ReactNode
+		className?: string
+		id?: string
 		initialValue?: string
 		onChange: (value: string) => void
-	}) => (
-		<label>
-			{children}
-			<input defaultValue={initialValue} onChange={(event) => onChange(event.target.value)} />
-		</label>
-	),
+	}) => {
+		const input = (
+			<input
+				aria-label={ariaLabel}
+				className={className}
+				defaultValue={initialValue}
+				id={id}
+				onChange={(event) => onChange(event.target.value)}
+			/>
+		)
+		return children ? (
+			<label>
+				{children}
+				{input}
+			</label>
+		) : (
+			input
+		)
+	},
 }))
 
 describe("ModelConfiguration", () => {
@@ -467,7 +486,7 @@ describe("ModelConfiguration", () => {
 		expect(screen.getByLabelText("Max Output Tokens")).toHaveValue("16384")
 	})
 
-	it("uses weaker field labels than section titles", () => {
+	it("uses accessible VS Code settings hierarchy and responsive grids", () => {
 		render(
 			<ModelConfiguration
 				capabilities={{ contextWindow: 128_000 } as ModelCapabilities}
@@ -479,9 +498,13 @@ describe("ModelConfiguration", () => {
 
 		fireEvent.click(screen.getByRole("button", { name: /Model Configuration/i }))
 
-		expect(screen.getByText("Model Configuration")).toHaveStyle({ fontWeight: "700" })
-		expect(screen.getByText("Capabilities")).toHaveStyle({ fontWeight: "600" })
-		expect(screen.getByText("Context Window Size")).toHaveStyle({ fontWeight: "400" })
-		expect(screen.getByText("Context Window Size")).toHaveStyle({ fontSize: "12px" })
+		const disclosure = screen.getByRole("button", { name: "Model Configuration" })
+		expect(disclosure).toHaveClass("text-sm", "font-semibold")
+		expect(screen.getByText("Capabilities")).toHaveClass("text-xs", "font-semibold")
+		expect(screen.getByText("Context Window Size")).toHaveClass("text-sm", "font-medium")
+		expect(screen.getByLabelText("Context Window Size").closest(".profile-field")?.parentElement).toHaveClass(
+			"grid-cols-1",
+			"xs:grid-cols-2",
+		)
 	})
 })

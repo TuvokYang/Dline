@@ -25,6 +25,14 @@ Object.defineProperty(window, "matchMedia", {
 	})),
 })
 
+class TestResizeObserver implements ResizeObserver {
+	disconnect(): void {}
+	observe(_target: Element, _options?: ResizeObserverOptions): void {}
+	unobserve(_target: Element): void {}
+}
+
+globalThis.ResizeObserver ??= TestResizeObserver
+
 // Mock VSCode API for webview tests
 vi.stubGlobal("acquireVsCodeApi", () => ({
 	postMessage: vi.fn(),

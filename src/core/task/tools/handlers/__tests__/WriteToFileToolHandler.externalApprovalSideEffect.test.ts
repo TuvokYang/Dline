@@ -79,7 +79,7 @@ describe("WriteToFileToolHandler external approval side effects", () => {
 					trackFileContext: vi.fn(async () => undefined),
 				},
 				taskFileTracker: { trackModification: vi.fn() },
-				clineIgnoreController: { validateAccess: () => true },
+				ignoreController: { validateAccess: () => true },
 			},
 			autoApprovalSettings: {
 				...DEFAULT_AUTO_APPROVAL_SETTINGS,

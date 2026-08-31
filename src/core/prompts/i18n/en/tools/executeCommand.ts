@@ -39,7 +39,7 @@ const prompts: Record<string, string> = {
 	gemini3CommandInstruction:
 		"The CLI command to execute. This should be valid for the current operating system. Use workdirectory rather than prepending cd solely to select the execution directory. Do not use the ~ character or $HOME to refer to the home directory. Do not run search/grep commands that may return thousands of results.",
 	clineIgnoreError:
-		"Access to @PATH@ is blocked by the .clineignore file settings. You must try to continue in the task without using this file, or ask the user to update the .clineignore file.",
+		"Access to @PATH@ is blocked by the .agentignore file settings. You must try to continue in the task without using this file, or ask the user to update the .agentignore file.",
 	permissionDeniedError:
 		"Command execution blocked by DLINE_COMMAND_PERMISSIONS: @REASON@. You must try a different approach or ask the user to update the permission settings.",
 	executeCommandMissingCommandError: `The 'command' parameter was empty. Provide the shell command to execute.

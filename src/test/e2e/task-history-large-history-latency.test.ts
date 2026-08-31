@@ -81,7 +81,7 @@ e2e(
 		expect(await countHistoryRows(dlineDocsDir)).toBe(seededRows)
 		const seededSize = (await stat(historyPath(dlineDocsDir))).size
 
-		const launcher = new MultiInstanceLauncher({ dlineDir, dlineDocsDir, server, testInfo, workspaceDir })
+		const launcher = new MultiInstanceLauncher({ dlineDir, dlineDocsDir, extensionsDir, server, testInfo, workspaceDir })
 		try {
 			const instance = await launcher.launch("task-history-latency")
 
@@ -111,11 +111,11 @@ e2e(
 
 e2e(
 	"Concurrent instances update a large task history without lock starvation",
-	async ({ dlineDir, dlineDocsDir, server, workspaceDir }, testInfo) => {
+	async ({ dlineDir, dlineDocsDir, extensionsDir, server, workspaceDir }, testInfo) => {
 		e2e.setTimeout(300_000)
 		await seedLargeHistory(dlineDocsDir)
 
-		const launcher = new MultiInstanceLauncher({ dlineDir, dlineDocsDir, server, testInfo, workspaceDir })
+		const launcher = new MultiInstanceLauncher({ dlineDir, dlineDocsDir, extensionsDir, server, testInfo, workspaceDir })
 		try {
 			const [instanceA, instanceB] = await Promise.all([
 				launcher.launch("task-history-load-a"),

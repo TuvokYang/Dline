@@ -316,12 +316,22 @@ function expectCompactionBudgetFormula(requestBody: unknown): ParsedCompactionBu
 			? Math.min(budget.availableRemainder, Math.floor(declaredMaxOutput))
 			: budget.availableRemainder
 
+	// The recommended range is bounded by the remaining window and by the hard limit: advising a
+	// longer response than the request can emit would guarantee truncation.
+	const expectedRecommendedMax = Math.min(Math.floor(budget.availableRemainder * 0.9), 30_000, budget.hardLimit)
+	const expectedRecommendedMin = Math.min(
+		Math.floor(budget.availableRemainder * 0.8),
+		5_000,
+		expectedRecommendedMax,
+	)
+
 	expect(budget.availableRemainder).toBeGreaterThan(0)
 	expect(budget.hardLimit).toBe(expectedHardLimit)
-	expect(budget.recommendedMin).toBe(Math.min(Math.floor(budget.availableRemainder * 0.8), 5_000))
-	expect(budget.recommendedMax).toBe(Math.min(Math.floor(budget.availableRemainder * 0.9), 30_000))
+	expect(budget.recommendedMin).toBe(expectedRecommendedMin)
+	expect(budget.recommendedMax).toBe(expectedRecommendedMax)
 	expect(budget.recommendedMin).toBeLessThanOrEqual(budget.recommendedMax)
 	expect(budget.recommendedMax).toBeLessThanOrEqual(budget.availableRemainder)
+	expect(budget.recommendedMax).toBeLessThanOrEqual(budget.hardLimit)
 	expect(requestText).toContain("The recommended range is guidance, not a quota or a minimum output requirement")
 	expect(requestText).toContain("Do not expand the analysis or summary merely to fill the available range")
 	expect(requestText).toContain("Preserve all information required to continue the task accurately and completely")

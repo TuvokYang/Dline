@@ -94,15 +94,14 @@ describe("compaction Pass planner single-Pass selection", () => {
 		expect(result.plan.passEndTurnIndex).toBe(state.turns.length - 1)
 	})
 
-	it("accepts a full range that overshoots the ceiling within the reserve allowance", async () => {
+	it("keeps a full range that exactly reaches the ceiling in one Pass", async () => {
 		const state = startState(buildHistory())
-		// Small enough that the first turn still fits the strict ceiling on its own.
-		const overshootTokens = 100
 
+		// The caller already folded the reserve concession into the ceiling, so a range landing
+		// exactly on it must never be split into an extra Pass.
 		const result = await planNextCompactionPass({
 			state,
-			passInputCeiling: FULL_RANGE_TOKENS - overshootTokens,
-			passInputCeilingAllowance: overshootTokens,
+			passInputCeiling: FULL_RANGE_TOKENS,
 			estimateInputTokens,
 		})
 
@@ -112,14 +111,13 @@ describe("compaction Pass planner single-Pass selection", () => {
 		expect(result.plan.estimatedInputTokens).toBe(FULL_RANGE_TOKENS)
 	})
 
-	it("splits when the full range exceeds the ceiling even with the allowance", async () => {
+	it("splits when the full range exceeds the ceiling", async () => {
 		const state = startState(buildHistory())
 
 		const result = await planNextCompactionPass({
 			state,
 			// Only the expensive first turn plus a few cheap turns can fit.
 			passInputCeiling: REQUEST_ENVELOPE_TOKENS + 2 * EXPENSIVE_MESSAGE_TOKENS + 4 * CHEAP_MESSAGE_TOKENS,
-			passInputCeilingAllowance: 20,
 			estimateInputTokens,
 		})
 

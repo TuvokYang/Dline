@@ -71,13 +71,13 @@ describe("AnthropicHandler", () => {
 
 		it("should return the fast mode model when configured", () => {
 			const handler = new AnthropicHandler({
-				profile: ApiProfile.create({ provider: "anthropic", apiKey: "test-api-key", modelId: "claude-opus-4-6:fast" }),
+				profile: ApiProfile.create({ provider: "anthropic", apiKey: "test-api-key", modelId: "claude-opus-5:fast" }),
 				mode: "act",
 			})
 
 			const result = handler.getModel()
 
-			result.id.should.equal("claude-opus-4-6:fast")
+			result.id.should.equal("claude-opus-5:fast")
 			should(result.info.capabilities?.contextWindow).equal(1_000_000)
 			result.info.apiFormats?.should.deepEqual([ApiFormat.ANTHROPIC_CHAT])
 		})
@@ -249,7 +249,7 @@ describe("AnthropicHandler", () => {
 
 		it("should route fast mode requests through the beta messages API", async () => {
 			const handler = new AnthropicHandler({
-				profile: ApiProfile.create({ provider: "anthropic", apiKey: "test-api-key", modelId: "claude-opus-4-6:fast" }),
+				profile: ApiProfile.create({ provider: "anthropic", apiKey: "test-api-key", modelId: "claude-opus-5:fast" }),
 				mode: "act",
 			})
 
@@ -277,19 +277,18 @@ describe("AnthropicHandler", () => {
 			expect(standardCreate)
 			expect(betaCreate)
 			const callArgs = betaCreate.mock.calls[0]?.[0] as Record<string, unknown> | undefined
-			// Long context defaults to on, so fast mode also resolves to the 1M model.
-			expect(callArgs?.model).to.equal("claude-opus-4-6:1m")
-			expect(callArgs?.betas).to.deep.equal([ANTHROPIC_FAST_MODE_BETA, "context-1m-2025-08-07"])
+			expect(callArgs?.model).to.equal("claude-opus-5")
+			expect(callArgs?.betas).to.deep.equal([ANTHROPIC_FAST_MODE_BETA])
 			expect(callArgs?.speed).to.equal("fast")
 			expect(callArgs?.stream).to.equal(true)
 		})
 
-		it("should append the long-context suffix for fast mode API requests", async () => {
+		it("should keep the native model id for Opus 4.8 fast mode", async () => {
 			const handler = new AnthropicHandler({
 				profile: ApiProfile.create({
 					provider: "anthropic",
 					apiKey: "test-api-key",
-					modelId: "claude-opus-4-6:fast",
+					modelId: "claude-opus-4-8:fast",
 					anthropic: { enableLongContext: true },
 				}),
 				mode: "act",
@@ -319,8 +318,8 @@ describe("AnthropicHandler", () => {
 			expect(standardCreate)
 			expect(betaCreate)
 			const callArgs = betaCreate.mock.calls[0]?.[0] as Record<string, unknown> | undefined
-			expect(callArgs?.model).to.equal("claude-opus-4-6:1m")
-			expect(callArgs?.betas).to.deep.equal([ANTHROPIC_FAST_MODE_BETA, "context-1m-2025-08-07"])
+			expect(callArgs?.model).to.equal("claude-opus-4-8")
+			expect(callArgs?.betas).to.deep.equal([ANTHROPIC_FAST_MODE_BETA])
 			expect(callArgs?.speed).to.equal("fast")
 			expect(callArgs?.stream).to.equal(true)
 		})
@@ -362,7 +361,7 @@ describe("AnthropicHandler", () => {
 			should(standardCreate.mock.calls[0]?.[1]).equal(undefined)
 		})
 
-		it("should omit the long-context suffix and beta header when the standard tier is selected", async () => {
+		it("should ignore stale context tiers on official native-1M models", async () => {
 			const handler = new AnthropicHandler({
 				profile: ApiProfile.create({
 					provider: "anthropic",
@@ -391,20 +390,28 @@ describe("AnthropicHandler", () => {
 
 			const requestBody = standardCreate.mock.calls[0]?.[0] as Record<string, unknown> | undefined
 			expect(requestBody?.model).to.equal("claude-opus-4-7")
-			expect(handler.getModel().info.capabilities?.contextWindow).to.equal(160_000)
+			expect(handler.getModel().info.capabilities?.contextWindow).to.equal(1_000_000)
+			expect(handler.getModel().info.capabilities?.contextWindowTiers).to.equal(undefined)
 			should(standardCreate.mock.calls[0]?.[1]).equal(undefined)
 		})
 
-		it("should append the long-context suffix and beta header at the API boundary", async () => {
+		it("should append an explicitly configured custom long-context suffix at the API boundary", async () => {
 			const handler = new AnthropicHandler({
 				profile: ApiProfile.create({
 					provider: "anthropic",
 					apiKey: "test-api-key",
-					modelId: "claude-opus-4-7",
+					modelId: "vendor-tiered",
 					anthropic: {
+						customModelEnabled: true,
 						enableLongContext: true,
 						reasoning: { effort: "high" },
 						capabilities: {
+							supportsReasoning: true,
+							thinking: {
+								supported: true,
+								mode: "effort",
+								effortLevels: ["none", "low", "medium", "high"],
+							},
 							contextWindowTiers: [
 								{ id: "standard", contextWindow: 200_000, label: "200K" },
 								{ id: "long", contextWindow: 1_500_000, label: "1.5M", apiModelSuffix: ":1m" },
@@ -435,7 +442,7 @@ describe("AnthropicHandler", () => {
 			expect(standardCreate)
 			const requestBody = standardCreate.mock.calls[0][0] as { model: string; thinking: { type: string } }
 			const requestOptions = standardCreate.mock.calls[0][1] as { headers: Record<string, string> }
-			requestBody.model.should.equal("claude-opus-4-7:1m")
+			requestBody.model.should.equal("vendor-tiered:1m")
 			expect(handler.getModel().info.capabilities?.contextWindow).to.equal(1_500_000)
 			requestBody.thinking.should.deepEqual({ type: "adaptive" })
 			requestOptions.should.deepEqual({
@@ -443,6 +450,57 @@ describe("AnthropicHandler", () => {
 					"anthropic-beta": "context-1m-2025-08-07",
 				},
 			})
+		})
+
+		it.each(["claude-opus-5", "claude-sonnet-5"])(
+			"should send explicit disabled thinking when %s is configured with none",
+			async (modelId) => {
+				const handler = new AnthropicHandler({
+					profile: ApiProfile.create({
+						provider: "anthropic",
+						apiKey: "test-api-key",
+						modelId,
+						anthropic: { reasoning: { enableThinking: false, effort: "none" } },
+					}),
+					mode: "act",
+				})
+				const standardCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+				vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+					messages: { create: standardCreate },
+					beta: { messages: { _client: {}, create: vi.fn().mockResolvedValue(createAsyncIterable()) } },
+				})
+
+				for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+				}
+
+				const requestBody = standardCreate.mock.calls[0]?.[0] as Record<string, unknown> | undefined
+				expect(requestBody?.thinking).to.deep.equal({ type: "disabled" })
+				expect(requestBody?.output_config).to.equal(undefined)
+			},
+		)
+
+		it("should keep Fable 5 adaptive thinking enabled when a stale profile requests none", async () => {
+			const handler = new AnthropicHandler({
+				profile: ApiProfile.create({
+					provider: "anthropic",
+					apiKey: "test-api-key",
+					modelId: "claude-fable-5",
+					anthropic: { reasoning: { enableThinking: false, effort: "none" } },
+				}),
+				mode: "act",
+			})
+			const standardCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				messages: { create: standardCreate },
+				beta: { messages: { _client: {}, create: vi.fn().mockResolvedValue(createAsyncIterable()) } },
+			})
+
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+			}
+
+			const requestBody = standardCreate.mock.calls[0]?.[0] as Record<string, unknown> | undefined
+			expect(requestBody?.thinking).to.deep.equal({ type: "adaptive" })
+			expect(requestBody?.output_config).to.equal(undefined)
 		})
 
 		it("should use adaptive thinking and output_config for Claude Opus adaptive models", async () => {
