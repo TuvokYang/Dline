@@ -117,8 +117,11 @@ describe("StandaloneTerminalProcess output streams", () => {
 				getShellArgs(shell: string, command: string): string[]
 			}
 
+			const args = internals.getShellArgs(internals.getDefaultShell(), "Get-Location")
+
 			assert.equal(internals.getDefaultShell(), WINDOWS_POWERSHELL_LEGACY_PATH)
-			assert.deepEqual(internals.getShellArgs(internals.getDefaultShell(), "Get-Location"), ["-Command", "Get-Location"])
+			assert.equal(args[0], "-Command")
+			assert.ok(args[1].endsWith("Get-Location"))
 		} finally {
 			Object.defineProperty(process, "platform", { value: originalPlatform })
 		}
@@ -133,7 +136,9 @@ describe("StandaloneTerminalProcess output streams", () => {
 				terminalProcess as unknown as { getShellArgs(shell: string, command: string): string[] }
 			).getShellArgs.bind(terminalProcess)
 
-			assert.deepEqual(getShellArgs("C:\\Windows\\System32\\cmd.exe", "echo ready"), ["/c", "echo ready"])
+			const cmdArgs = getShellArgs("C:\\Windows\\System32\\cmd.exe", "echo ready")
+			assert.equal(cmdArgs[0], "/c")
+			assert.ok(cmdArgs[1].endsWith("echo ready"))
 			assert.deepEqual(getShellArgs("D:\\Git\\bin\\bash.exe", "echo ready"), ["-l", "-c", "echo ready"])
 			assert.deepEqual(getShellArgs("C:\\Windows\\System32\\wsl.exe", "echo ready"), [
 				"--exec",

@@ -136,6 +136,20 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 	private static readonly STRICT_UTF8_DECODER = new TextDecoder("utf-8", { fatal: true })
 
 	/**
+	 * Force UTF-8 on the child shell's console before the user command runs.
+	 *
+	 * Child shells are spawned with piped stdio, so Windows falls back to the system ANSI code
+	 * page instead of UTF-8. A user command that pipes a UTF-8 emitting process through the shell
+	 * (`biome check ... | Select-Object ...`) would otherwise have its bytes decoded with the wrong
+	 * code page inside the shell itself, before Dline reads them. That corruption is lossy and
+	 * cannot be repaired downstream, so it must be prevented at the shell boundary.
+	 */
+	private static readonly POWERSHELL_UTF8_PRELUDE =
+		"[Console]::OutputEncoding = [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false); " +
+		"$OutputEncoding = [Console]::OutputEncoding; "
+	private static readonly CMD_UTF8_PRELUDE = "chcp 65001>nul & "
+
+	/**
 	 * Decode one output chunk without treating an incomplete multibyte character as corrupt data.
 	 * Encoding selection is independent for stdout and stderr because the streams can split at
 	 * different byte boundaries.
@@ -519,11 +533,12 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 		if (process.platform === "win32") {
 			const normalizedShell = shell.toLowerCase()
 			if (normalizedShell.includes("powershell") || normalizedShell.includes("pwsh")) {
-				return ["-Command", command]
+				return ["-Command", StandaloneTerminalProcess.POWERSHELL_UTF8_PRELUDE + command]
 			}
+			// WSL and Git Bash already default to UTF-8, so they need no code page prelude.
 			if (normalizedShell.includes("wsl")) return ["--exec", "bash", "-lc", command]
 			if (normalizedShell.includes("bash")) return ["-l", "-c", command]
-			return ["/c", command]
+			return ["/c", StandaloneTerminalProcess.CMD_UTF8_PRELUDE + command]
 		}
 		// Use -l for login shell, -c for command
 		return ["-l", "-c", command]
