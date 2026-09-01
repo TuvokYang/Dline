@@ -1,4 +1,10 @@
 import { parseRemoteSkillEntries } from "@core/context/instructions/user-instructions/skills"
+import {
+	type CapabilityScanResult,
+	completeScan,
+	incompleteScan,
+	mergeScans,
+} from "@core/storage/settings/capability-scan-result"
 import { resolveCapabilityToggles } from "@core/storage/settings/capability-toggle-store"
 import { RefreshedSkills, SkillInfo } from "@shared/proto/dline/file"
 import fs from "fs/promises"
@@ -13,12 +19,16 @@ import { coalesceCapabilityScan } from "./refresh-coalescing"
 
 /**
  * Scan a directory for skill subdirectories containing SKILL.md files.
+ *
+ * Reports whether the directory could be read. A missing directory is a
+ * complete answer ("no skills here"), but an unreadable one is not: treating
+ * the two alike would let a transient failure look like a deletion.
  */
-async function scanSkillsDirectory(dirPath: string): Promise<SkillInfo[]> {
+async function scanSkillsDirectory(dirPath: string): Promise<CapabilityScanResult<SkillInfo>> {
 	const skills: SkillInfo[] = []
 
 	if (!(await fileExistsAtPath(dirPath)) || !(await isDirectory(dirPath))) {
-		return skills
+		return completeScan(skills)
 	}
 
 	try {
@@ -57,11 +67,12 @@ async function scanSkillsDirectory(dirPath: string): Promise<SkillInfo[]> {
 				// Skip invalid skills
 			}
 		}
-	} catch {
-		// Directory read error, skip
+	} catch (error) {
+		Logger.warn(`[CapabilityScan] Skills directory could not be read: ${dirPath}`, error)
+		return incompleteScan(skills)
 	}
 
-	return skills
+	return completeScan(skills)
 }
 
 /**
@@ -86,29 +97,27 @@ async function scanSkills(controller: Controller): Promise<RefreshedSkills> {
 	const workspacePaths = await HostProvider.workspace.getWorkspacePaths({})
 	const primaryWorkspace = workspacePaths.paths[0]
 
-	const globalSkills: SkillInfo[] = []
-	const localSkills: SkillInfo[] = []
+	const globalScans: CapabilityScanResult<SkillInfo>[] = []
+	const localScans: CapabilityScanResult<SkillInfo>[] = []
 
-	if (primaryWorkspace) {
-		const scanDirs = getSkillsDirectoriesForScan(primaryWorkspace)
-		for (const dir of scanDirs) {
-			scannedDirectories++
-			const skills = await scanSkillsDirectory(dir.path)
-			if (dir.source === "global") {
-				globalSkills.push(...skills)
-			} else {
-				localSkills.push(...skills)
-			}
-		}
-	} else {
-		const scanDirs = getSkillsDirectoriesForScan("")
-		for (const dir of scanDirs) {
-			if (dir.source !== "global") continue
-			scannedDirectories++
-			const skills = await scanSkillsDirectory(dir.path)
-			globalSkills.push(...skills)
+	const scanDirs = getSkillsDirectoriesForScan(primaryWorkspace ?? "")
+	for (const dir of scanDirs) {
+		// Without an open workspace the local roots are not addressable, so
+		// skipping them is a complete answer rather than a degraded scan.
+		if (!primaryWorkspace && dir.source !== "global") continue
+		scannedDirectories++
+		const scan = await scanSkillsDirectory(dir.path)
+		if (dir.source === "global") {
+			globalScans.push(scan)
+		} else {
+			localScans.push(scan)
 		}
 	}
+
+	const globalScan = mergeScans(globalScans)
+	const localScan = mergeScans(localScans)
+	const globalSkills: SkillInfo[] = [...globalScan.items]
+	const localSkills: SkillInfo[] = [...localScan.items]
 
 	// Resolve the discovered skills against the stored preferences without writing
 	// them back. Remote entries use a separate name-keyed map and are handled below.
@@ -150,7 +159,7 @@ async function scanSkills(controller: Controller): Promise<RefreshedSkills> {
 	}
 
 	Logger.debug(
-		`[CapabilityPerf] phase=skills_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} directories=${scannedDirectories} global=${globalSkills.length} local=${localSkills.length} remote=${validatedRemoteSkills.length}`,
+		`[CapabilityPerf] phase=skills_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} directories=${scannedDirectories} global=${globalSkills.length} local=${localSkills.length} remote=${validatedRemoteSkills.length} complete=${globalScan.complete && localScan.complete}`,
 	)
 	return RefreshedSkills.create({
 		globalSkills,

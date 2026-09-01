@@ -208,6 +208,18 @@ message Settings {
   optional string task_workflow_toggles = 221;
   optional string task_skills_toggles = 222;
   optional string task_subagents_toggles = 223;
+  optional string global_cursor_rules_toggles = 224;
+  optional string global_windsurf_rules_toggles = 225;
+  optional string global_agents_rules_toggles = 226;
+  optional string global_mcp_toggles = 227;
+  optional string workspace_cursor_rules_toggles = 228;
+  optional string workspace_windsurf_rules_toggles = 229;
+  optional string workspace_agents_rules_toggles = 230;
+  optional string workspace_mcp_toggles = 231;
+  optional string task_cursor_rules_toggles = 232;
+  optional string task_windsurf_rules_toggles = 233;
+  optional string task_agents_rules_toggles = 234;
+  optional string task_mcp_toggles = 235;
 }
 
 // Account usage quota for rate-limited providers (e.g., Codex, Copilot)

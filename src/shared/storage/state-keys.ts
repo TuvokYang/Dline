@@ -131,16 +131,28 @@ const USER_SETTINGS_FIELDS = {
 	globalWorkflowToggles: { default: {} as ClineRulesToggles },
 	globalSkillsToggles: { default: {} as Record<string, boolean> },
 	globalSubagentsToggles: { default: {} as Record<string, boolean> },
+	globalCursorRulesToggles: { default: {} as ClineRulesToggles },
+	globalWindsurfRulesToggles: { default: {} as ClineRulesToggles },
+	globalAgentsRulesToggles: { default: {} as ClineRulesToggles },
+	globalMcpToggles: { default: {} as Record<string, boolean> },
 	/** Workspace-scoped overrides. Stored in workspaces/<hash>/settings.json. */
 	workspaceRulesToggles: { default: {} as ClineRulesToggles },
 	workspaceWorkflowToggles: { default: {} as ClineRulesToggles },
 	workspaceSkillsToggles: { default: {} as Record<string, boolean> },
 	workspaceSubagentsToggles: { default: {} as Record<string, boolean> },
+	workspaceCursorRulesToggles: { default: {} as ClineRulesToggles },
+	workspaceWindsurfRulesToggles: { default: {} as ClineRulesToggles },
+	workspaceAgentsRulesToggles: { default: {} as ClineRulesToggles },
+	workspaceMcpToggles: { default: {} as Record<string, boolean> },
 	/** Task-scoped overrides. Stored in tasks/<taskId>/settings.json. */
 	taskRulesToggles: { default: {} as ClineRulesToggles },
 	taskWorkflowToggles: { default: {} as ClineRulesToggles },
 	taskSkillsToggles: { default: {} as Record<string, boolean> },
 	taskSubagentsToggles: { default: {} as Record<string, boolean> },
+	taskCursorRulesToggles: { default: {} as ClineRulesToggles },
+	taskWindsurfRulesToggles: { default: {} as ClineRulesToggles },
+	taskAgentsRulesToggles: { default: {} as ClineRulesToggles },
+	taskMcpToggles: { default: {} as Record<string, boolean> },
 	/** Serialized TaskCapabilityToggles snapshot. Only task settings use this field. */
 	taskCapabilityToggles: { default: undefined as string | undefined },
 	/** Task-local reasoning override fields. These never become global defaults. */

@@ -10,8 +10,22 @@ import {
 	withToggleOverride,
 } from "./capability-toggle-scopes"
 
-/** The capability families that carry per-scope toggles. */
-export type CapabilityKind = "rules" | "workflows" | "skills" | "subagents"
+/**
+ * The capability families that carry per-scope toggles.
+ *
+ * "rules" covers Dline's own rule files. Editor-specific rule families keep
+ * their own kind because they are discovered from different directories and a
+ * user disabling a Cursor rule must not affect a Dline rule with the same name.
+ */
+export type CapabilityKind =
+	| "rules"
+	| "workflows"
+	| "skills"
+	| "subagents"
+	| "cursorRules"
+	| "windsurfRules"
+	| "agentsRules"
+	| "mcp"
 
 /** Settings keys holding the sparse override map for one capability kind per scope. */
 const SCOPE_KEYS: Record<CapabilityKind, Record<CapabilityScope, SettingsKey>> = {
@@ -34,6 +48,26 @@ const SCOPE_KEYS: Record<CapabilityKind, Record<CapabilityScope, SettingsKey>> =
 		global: "globalSubagentsToggles",
 		workspace: "workspaceSubagentsToggles",
 		task: "taskSubagentsToggles",
+	},
+	cursorRules: {
+		global: "globalCursorRulesToggles",
+		workspace: "workspaceCursorRulesToggles",
+		task: "taskCursorRulesToggles",
+	},
+	windsurfRules: {
+		global: "globalWindsurfRulesToggles",
+		workspace: "workspaceWindsurfRulesToggles",
+		task: "taskWindsurfRulesToggles",
+	},
+	agentsRules: {
+		global: "globalAgentsRulesToggles",
+		workspace: "workspaceAgentsRulesToggles",
+		task: "taskAgentsRulesToggles",
+	},
+	mcp: {
+		global: "globalMcpToggles",
+		workspace: "workspaceMcpToggles",
+		task: "taskMcpToggles",
 	},
 }
 

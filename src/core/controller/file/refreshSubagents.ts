@@ -1,4 +1,10 @@
 import { getSubagentsScanDirectories } from "@core/storage/disk"
+import {
+	type CapabilityScanResult,
+	completeScan,
+	incompleteScan,
+	mergeScans,
+} from "@core/storage/settings/capability-scan-result"
 import { resolveCapabilityToggles } from "@core/storage/settings/capability-toggle-store"
 import { parseAgentConfigFromYaml } from "@core/task/tools/subagent/AgentConfigLoader"
 import { RefreshedSubagents, SubagentInfo } from "@shared/proto/dline/file"
@@ -16,11 +22,15 @@ import { Controller } from ".."
 /** Track already-warned file paths to avoid log flooding during polling. */
 const warnedPaths = new Set<string>()
 
-async function scanSubagentsDirectory(dirPath: string): Promise<SubagentInfo[]> {
+/**
+ * Reports whether the directory could be read. A missing directory is a
+ * complete answer ("no subagents here"), but an unreadable one is not.
+ */
+async function scanSubagentsDirectory(dirPath: string): Promise<CapabilityScanResult<SubagentInfo>> {
 	const subagents: SubagentInfo[] = []
 
 	if (!(await fileExistsAtPath(dirPath)) || !(await isDirectory(dirPath))) {
-		return subagents
+		return completeScan(subagents)
 	}
 
 	try {
@@ -57,9 +67,10 @@ async function scanSubagentsDirectory(dirPath: string): Promise<SubagentInfo[]> 
 		}
 	} catch (error) {
 		Logger.warn(`Failed to read subagents directory: ${dirPath}`, error)
+		return incompleteScan(subagents)
 	}
 
-	return subagents
+	return completeScan(subagents)
 }
 
 /**
@@ -78,29 +89,27 @@ export async function refreshSubagents(controller: Controller): Promise<Refreshe
 		const workspacePaths = await HostProvider.workspace.getWorkspacePaths({})
 		const primaryWorkspace = workspacePaths.paths[0]
 
-		const globalSubagents: SubagentInfo[] = []
-		const localSubagents: SubagentInfo[] = []
+		const globalScans: CapabilityScanResult<SubagentInfo>[] = []
+		const localScans: CapabilityScanResult<SubagentInfo>[] = []
 
-		if (primaryWorkspace) {
-			const scanDirs = getSubagentsScanDirectories(primaryWorkspace)
-			for (const dir of scanDirs) {
-				scannedDirectories++
-				const agents = await scanSubagentsDirectory(dir.path)
-				if (dir.source === "global") {
-					globalSubagents.push(...agents)
-				} else {
-					localSubagents.push(...agents)
-				}
-			}
-		} else {
-			const scanDirs = getSubagentsScanDirectories("")
-			for (const dir of scanDirs) {
-				if (dir.source !== "global") continue
-				scannedDirectories++
-				const agents = await scanSubagentsDirectory(dir.path)
-				globalSubagents.push(...agents)
+		const scanDirs = getSubagentsScanDirectories(primaryWorkspace ?? "")
+		for (const dir of scanDirs) {
+			// Without an open workspace the local roots are not addressable, so
+			// skipping them is a complete answer rather than a degraded scan.
+			if (!primaryWorkspace && dir.source !== "global") continue
+			scannedDirectories++
+			const scan = await scanSubagentsDirectory(dir.path)
+			if (dir.source === "global") {
+				globalScans.push(scan)
+			} else {
+				localScans.push(scan)
 			}
 		}
+
+		const globalScan = mergeScans(globalScans)
+		const localScan = mergeScans(localScans)
+		const globalSubagents: SubagentInfo[] = [...globalScan.items]
+		const localSubagents: SubagentInfo[] = [...localScan.items]
 
 		// Resolve the filesystem snapshot against the stored preferences in memory.
 		// Newly discovered files get the same default as the existing capability
@@ -121,7 +130,7 @@ export async function refreshSubagents(controller: Controller): Promise<Refreshe
 		}
 
 		Logger.debug(
-			`[CapabilityPerf] phase=subagents_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} directories=${scannedDirectories} global=${visibleGlobalSubagents.length} local=${localSubagents.length} shadowedGlobal=${globalSubagents.length - visibleGlobalSubagents.length}`,
+			`[CapabilityPerf] phase=subagents_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} directories=${scannedDirectories} global=${visibleGlobalSubagents.length} local=${localSubagents.length} shadowedGlobal=${globalSubagents.length - visibleGlobalSubagents.length} complete=${globalScan.complete && localScan.complete}`,
 		)
 		return RefreshedSubagents.create({
 			globalSubagents: visibleGlobalSubagents,
