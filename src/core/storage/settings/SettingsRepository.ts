@@ -127,7 +127,9 @@ export class SettingsRepository {
 		return this.enqueue(async () => {
 			const queueMs = Math.round(performance.now() - requestedAt)
 			this.ensureAvailable()
+			const mkdirStartedAt = performance.now()
 			await fs.mkdir(path.dirname(this.filePath), { recursive: true })
+			const mkdirMs = Math.round(performance.now() - mkdirStartedAt)
 			let commit: SettingsCommit | undefined
 			const lockRequestedAt = performance.now()
 			let lockAcquiredAt = lockRequestedAt
@@ -160,7 +162,7 @@ export class SettingsRepository {
 			const publishStartedAt = performance.now()
 			if (commit.changedKeys.length > 0) await this.publish(commit)
 			Logger.debug(
-				`[SettingsRepositoryPerf] phase=mutate_complete queueMs=${queueMs} lockWaitMs=${Math.round(lockAcquiredAt - lockRequestedAt)} transactionMs=${Math.round(publishStartedAt - lockAcquiredAt)} readMs=${readMs} writeMs=${writeMs} publishMs=${Math.round(performance.now() - publishStartedAt)} totalMs=${Math.round(performance.now() - requestedAt)} revision=${commit.revision} changedKeys=${commit.changedKeys.join(",") || "none"} listeners=${this.listeners.size} path=${path.basename(path.dirname(this.filePath))}/${path.basename(this.filePath)}`,
+				`[SettingsRepositoryPerf] phase=mutate_complete queueMs=${queueMs} mkdirMs=${mkdirMs} lockWaitMs=${Math.round(lockAcquiredAt - lockRequestedAt)} transactionMs=${Math.round(publishStartedAt - lockAcquiredAt)} readMs=${readMs} writeMs=${writeMs} publishMs=${Math.round(performance.now() - publishStartedAt)} totalMs=${Math.round(performance.now() - requestedAt)} revision=${commit.revision} changedKeys=${commit.changedKeys.join(",") || "none"} listeners=${this.listeners.size} path=${path.basename(path.dirname(this.filePath))}/${path.basename(this.filePath)}`,
 			)
 			return commit
 		})

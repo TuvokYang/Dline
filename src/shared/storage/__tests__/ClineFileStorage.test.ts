@@ -101,4 +101,47 @@ describe("ClineFileStorage", () => {
 		expect(storage.get("profile")).toBeUndefined()
 		expect(fs.existsSync(storagePath)).toBe(false)
 	})
+
+	it("commits asynchronous values only after the durable write succeeds", async () => {
+		const storagePath = path.join(tempDir, "settings.json")
+		const storage = new ClineFileStorage<string>(storagePath, "SettingsStore")
+
+		const pendingWrite = storage.setBatchAsync({ theme: "dark" })
+
+		expect(storage.get("theme")).toBeUndefined()
+		await pendingWrite
+		expect(storage.get("theme")).toBe("dark")
+		expect(JSON.parse(await fsPromises.readFile(storagePath, "utf8"))).toEqual({ theme: "dark" })
+	})
+
+	it("serializes queued asynchronous writes without losing keys", async () => {
+		const storagePath = path.join(tempDir, "settings.json")
+		const storage = new ClineFileStorage<string>(storagePath, "SettingsStore")
+
+		const firstWrite = storage.setBatchAsync({ theme: "dark" })
+		const secondWrite = storage.setBatchAsync({ locale: "en" })
+		await Promise.all([firstWrite, secondWrite])
+
+		expect(JSON.parse(await fsPromises.readFile(storagePath, "utf8"))).toEqual({
+			theme: "dark",
+			locale: "en",
+		})
+	})
+
+	it("continues asynchronous writes after an earlier durable failure", async () => {
+		const blockedDirectory = path.join(tempDir, "blocked")
+		await fsPromises.writeFile(blockedDirectory, "not a directory")
+		const storagePath = path.join(blockedDirectory, "settings.json")
+		const storage = new ClineFileStorage<string>(storagePath, "SettingsStore")
+
+		await expect(storage.setBatchAsync({ theme: "dark" })).rejects.toThrow()
+		expect(storage.get("theme")).toBeUndefined()
+
+		await fsPromises.unlink(blockedDirectory)
+		await fsPromises.mkdir(blockedDirectory)
+		await storage.setBatchAsync({ locale: "en" })
+
+		expect(storage.get("locale")).toBe("en")
+		expect(JSON.parse(await fsPromises.readFile(storagePath, "utf8"))).toEqual({ locale: "en" })
+	})
 })

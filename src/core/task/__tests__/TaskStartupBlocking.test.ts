@@ -48,11 +48,11 @@ describe("Task startup blocking", () => {
 
 	/**
 	 * The checkpoint baseline must capture the workspace before the model can edit
-	 * any file. Making initialization non-blocking would let the first restore
-	 * point contain model edits, so it stops representing the pre-task state.
-	 * This is a correctness constraint, not a performance trade-off.
+	 * any file, but provider inference itself is read-only. Initialization can run
+	 * concurrently with the first request as long as every mutating tool awaits the
+	 * durable baseline promise before execution.
 	 */
-	it("still awaits checkpoint initialization before the first provider request", async () => {
+	it("does not await checkpoint initialization before the first provider request", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const start = source.indexOf("async recursivelyMakeClineRequests(")
 		expect(start).toBeGreaterThan(-1)
@@ -60,13 +60,16 @@ describe("Task startup blocking", () => {
 		expect(end).toBeGreaterThan(start)
 		const method = source.slice(start, end)
 
-		expect(method).toContain("await ensureCheckpointInitialized({ checkpointManager: this.checkpointManager })")
-		expect(method).not.toContain("ensureCheckpointInitialized({ checkpointManager })\n\t\t\t\t.then(")
+		expect(method).toContain("checkpointInitializationPromise = ensureCheckpointInitialized({ checkpointManager })")
+		expect(method).not.toContain("await ensureCheckpointInitialized(")
+		expect(method).toContain("this.initialCheckpointCommitPromise = persistCommitPromise")
+	})
 
-		// Initialization must precede the request path that follows this block.
-		const initIndex = method.indexOf("await ensureCheckpointInitialized(")
-		const chatCheckpointIndex = method.indexOf('await this.say("checkpoint_created")')
-		expect(initIndex).toBeGreaterThan(-1)
-		expect(chatCheckpointIndex).toBeGreaterThan(initIndex)
+	it("still awaits the initial checkpoint before a non-read-only tool executes", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const gate = source.indexOf("if (this.initialCheckpointCommitPromise && !READ_ONLY_TOOLS.includes")
+		expect(gate).toBeGreaterThan(-1)
+		const awaitCommit = source.indexOf("await this.initialCheckpointCommitPromise", gate)
+		expect(awaitCommit).toBeGreaterThan(gate)
 	})
 })

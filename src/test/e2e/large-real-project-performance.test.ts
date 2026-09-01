@@ -296,13 +296,25 @@ e2e(
 			)
 
 			const firstSubmittedAtMs = await sendTask(sidebar, TASK_TEXT)
+			await expect
+				.poll(() => server.getRequestCount("openai-compatible-chat"), {
+					timeout: 120_000,
+					message: "large-project Task did not reach the first Provider request within 120000ms",
+				})
+				.toBeGreaterThanOrEqual(1)
+			const firstRequest = server.getMockConsumptions("openai-compatible-chat")[0]
+			if (!firstRequest) throw new Error("Large-project Task reached the Provider without a recorded consumption")
+			const firstRequestLatencyMs = firstRequest.receivedAtMs - firstSubmittedAtMs
+			expect(
+				firstRequestLatencyMs,
+				`task-submit-to-first-provider-request must stay under ${TOOL_ROUND_TRIP_BUDGET_MS}ms`,
+			).toBeLessThan(TOOL_ROUND_TRIP_BUDGET_MS)
 			await expect(sidebar.getByText(COMPLETION_TEXT, { exact: false }).last()).toBeVisible({ timeout: 120_000 })
 			await expect.poll(() => server.getRequestCount("openai-compatible-chat"), { timeout: 120_000 }).toBe(4)
 			await expect.poll(() => server.getRequestCount("openai-compatible-responses"), { timeout: 120_000 }).toBe(3)
 
 			const firstTurnConsumptions = server.getMockConsumptions("openai-compatible-chat")
 			const childConsumptions = server.getMockConsumptions("openai-compatible-responses")
-			const firstRequestLatencyMs = firstTurnConsumptions[0]!.receivedAtMs - firstSubmittedAtMs
 			const firstTurnTimings: TimingSample[] = [
 				{
 					budgetMs: TOOL_ROUND_TRIP_BUDGET_MS,

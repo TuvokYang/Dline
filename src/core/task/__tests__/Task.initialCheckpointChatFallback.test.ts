@@ -20,14 +20,16 @@ describe("Task initial chat checkpoint fallback", () => {
 		const chatCheckpointIndex = requestBoundary.indexOf('await this.say("checkpoint_created")')
 		const chatCheckpointGuardStart = requestBoundary.lastIndexOf("\n\t\tif (", chatCheckpointIndex)
 		const chatCheckpointGuard = requestBoundary.slice(chatCheckpointGuardStart, chatCheckpointIndex)
+		const fileCommitGuardStart = requestBoundary.indexOf("if (checkpointInitializationPromise)", chatCheckpointIndex)
 		const fileCommitGuard = requestBoundary.slice(
-			requestBoundary.indexOf("if (lastCheckpointMessageIndex !== -1", chatCheckpointIndex),
-			requestBoundary.indexOf("const commitPromise", chatCheckpointIndex),
+			fileCommitGuardStart,
+			requestBoundary.indexOf("const persistCommitPromise", fileCommitGuardStart),
 		)
 
 		expect(chatCheckpointIndex).toBeGreaterThanOrEqual(0)
-		expect(chatCheckpointGuard).toContain("this.checkpointManager")
+		expect(chatCheckpointGuard).toContain("checkpointsEnabled && checkpointManager")
 		expect(chatCheckpointGuard).not.toContain("checkpointManagerErrorMessage")
-		expect(fileCommitGuard).toContain("!this.taskState.checkpointManagerErrorMessage")
+		expect(fileCommitGuardStart).toBeGreaterThan(chatCheckpointIndex)
+		expect(fileCommitGuard).toContain("checkpointInitializationPromise")
 	})
 })

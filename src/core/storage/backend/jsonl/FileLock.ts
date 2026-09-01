@@ -128,11 +128,17 @@ export class FileLock {
 			try {
 				// `wx` is an atomic create-if-absent operation. Unlike stat + writeFile,
 				// it cannot let two windows or two lock instances both become owners.
+				const openStartedAt = performance.now()
 				const handle = await fs.open(lockPath, "wx")
+				const openedAt = performance.now()
+				let writtenAt = openedAt
+				let closedAt = openedAt
 				try {
 					await handle.writeFile(JSON.stringify(payload), "utf8")
+					writtenAt = performance.now()
 				} finally {
 					await handle.close()
+					closedAt = performance.now()
 				}
 				this.ownedLocks.set(jsonlPath, ownerId)
 				// Bounded retry caps contention at roughly one second, so a longer
@@ -141,7 +147,7 @@ export class FileLock {
 				const durationMs = Math.round(performance.now() - startedAt)
 				if (durationMs >= 250) {
 					Logger.debug(
-						`[FileLockPerf] phase=acquire path=${path.basename(lockPath)} attempts=${attempt} durationMs=${durationMs}`,
+						`[FileLockPerf] phase=acquire path=${path.basename(lockPath)} attempts=${attempt} openMs=${Math.round(openedAt - openStartedAt)} writeMs=${Math.round(writtenAt - openedAt)} closeMs=${Math.round(closedAt - writtenAt)} durationMs=${durationMs}`,
 					)
 				}
 				return
