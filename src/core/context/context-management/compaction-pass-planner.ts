@@ -36,6 +36,14 @@ export interface PlanNextCompactionPassInput {
 	 * applies it uniformly and never maintains a second, looser bound.
 	 */
 	passInputCeiling: number
+	/**
+	 * Highest logical turn index this Pass may still cover.
+	 *
+	 * The send side measures the built request independently of the planner's ceiling, so a refused
+	 * range has to be narrowed by range rather than by estimate. Clamping the search space is the
+	 * only signal that shrinks monotonically regardless of how the two sides measure tokens.
+	 */
+	maxEndTurnIndex?: number
 	estimateInputTokens(
 		messages: readonly ClineStorageMessage[],
 		purpose?: CompactionPassEstimatePurpose,
@@ -54,6 +62,7 @@ export async function planNextCompactionPass(input: PlanNextCompactionPassInput)
 	if (passStartTurnIndex >= input.state.turns.length) {
 		throw new Error("No uncovered logical turn is available for the next compaction Pass")
 	}
+	const maxEndTurnIndex = resolveMaxEndTurnIndex(input, passStartTurnIndex)
 
 	let candidateEstimateCount = 0
 	const estimateExactInput = async (
@@ -67,6 +76,7 @@ export async function planNextCompactionPass(input: PlanNextCompactionPassInput)
 	const exactCandidate = await selectExactCandidate(
 		input,
 		passStartTurnIndex,
+		maxEndTurnIndex,
 		passInputCeiling,
 		staticCosts,
 		estimateExactInput,
@@ -147,9 +157,22 @@ async function estimateStaticPassCosts(
 	}
 }
 
+/**
+ * Clamp the search space to the turns this Pass is still allowed to cover.
+ *
+ * The first uncovered turn always remains available: a Pass that covers nothing would leave the
+ * fitting loop without progress, and an unfittable single turn is reported as its own outcome.
+ */
+function resolveMaxEndTurnIndex(input: PlanNextCompactionPassInput, passStartTurnIndex: number): number {
+	const lastTurnIndex = input.state.turns.length - 1
+	if (input.maxEndTurnIndex === undefined) return lastTurnIndex
+	return Math.min(lastTurnIndex, Math.max(passStartTurnIndex, input.maxEndTurnIndex))
+}
+
 async function selectExactCandidate(
 	input: PlanNextCompactionPassInput,
 	passStartTurnIndex: number,
+	maxEndTurnIndex: number,
 	passInputCeiling: number,
 	staticCosts: StaticPassCosts,
 	estimateExactInput: (messages: readonly ClineStorageMessage[], purpose: CompactionPassEstimatePurpose) => Promise<number>,
@@ -171,7 +194,7 @@ async function selectExactCandidate(
 		breakdown: firstBreakdown,
 		tokenScale,
 	}
-	if (firstCombinedTokens > passInputCeiling || passStartTurnIndex === input.state.turns.length - 1) {
+	if (firstCombinedTokens > passInputCeiling || passStartTurnIndex === maxEndTurnIndex) {
 		return firstEstimate
 	}
 
@@ -180,7 +203,7 @@ async function selectExactCandidate(
 	// project the whole range as oversized and permanently lower the search bound.
 	// That split a conversation which fits in one Pass into several Passes and made
 	// the first post-compaction request carry far less context than the window allows.
-	const fullEndTurnIndex = input.state.turns.length - 1
+	const fullEndTurnIndex = maxEndTurnIndex
 	const fullPassHistory = buildCompactionPassHistoryForRange(input.state, passStartTurnIndex, fullEndTurnIndex)
 	const fullCombinedTokens = await estimateExactInput(fullPassHistory, "final_candidate")
 	// The ceiling already includes the reserve concession, so a complete range that fits it is
@@ -197,12 +220,13 @@ async function selectExactCandidate(
 
 	let bestEstimate = firstEstimate
 	let lowerEndTurnIndex = passStartTurnIndex + 1
-	let upperEndTurnIndex = input.state.turns.length - 1
+	let upperEndTurnIndex = maxEndTurnIndex
 	let calibrationOffsetTokens = 0
 	for (let attempt = 0; attempt < 4 && lowerEndTurnIndex <= upperEndTurnIndex; attempt++) {
 		const approximateEndTurnIndex = findApproximatePassEnd(
 			input.state,
 			passStartTurnIndex,
+			maxEndTurnIndex,
 			passInputCeiling - calibrationOffsetTokens,
 			staticCosts,
 			tokenScale,
@@ -233,13 +257,14 @@ async function selectExactCandidate(
 function findApproximatePassEnd(
 	state: TargetWindowFittingState,
 	passStartTurnIndex: number,
+	maxEndTurnIndex: number,
 	passInputCeiling: number,
 	staticCosts: StaticPassCosts,
 	tokenScale: number,
 ): number {
 	let acceptedEndTurnIndex = passStartTurnIndex
 	let low = passStartTurnIndex
-	let high = state.turns.length - 1
+	let high = maxEndTurnIndex
 	while (low <= high) {
 		const midpoint = Math.floor((low + high) / 2)
 		if (approximateCombinedTokens(state, passStartTurnIndex, midpoint, staticCosts, tokenScale) <= passInputCeiling) {

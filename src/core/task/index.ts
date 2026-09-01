@@ -12,6 +12,7 @@ import {
 	readCompletedCompactionCards,
 } from "@core/context/context-management/compaction-context-projection"
 import { createCompactionConversationRange } from "@core/context/context-management/compaction-conversation-range"
+import { CompactionPassBudgetError } from "@core/context/context-management/compaction-pass-budget-error"
 import { elapsedCompactionMs } from "@core/context/context-management/compaction-phase-timing"
 import { CompactionRetryPolicy } from "@core/context/context-management/compaction-retry-policy"
 import { isDeterministicToolPairingError } from "@core/context/context-management/compaction-retryability"
@@ -329,6 +330,7 @@ type TaskParams = {
 	mcpHub: McpHub
 	updateTaskHistory: (historyItem: HistoryItem) => Promise<HistoryItem[]>
 	persistTaskCompletionState: (taskId: string, isCompleted: boolean, revision: number) => Promise<boolean>
+	publishTaskHistoryClose: () => void
 	postStateToWebview: (options?: { immediate?: boolean }) => Promise<void>
 	reinitExistingTaskFromId: (taskId: string) => Promise<void>
 	cancelTask: () => Promise<void>
@@ -428,6 +430,7 @@ export class Task {
 	private interactionCoordinator: InteractionCoordinator
 	private resumeCoordinator: ResumeCoordinator
 	private readonly historyResumeMaintenance: HistoryResumeMaintenance
+	private historyPreparationPending = false
 
 	// ONE mutex for ALL state modifications to prevent race conditions
 	private stateMutex = new Mutex()
@@ -621,6 +624,7 @@ export class Task {
 			mcpHub,
 			updateTaskHistory,
 			persistTaskCompletionState,
+			publishTaskHistoryClose,
 			postStateToWebview,
 			reinitExistingTaskFromId,
 			cancelTask,
@@ -917,6 +921,7 @@ export class Task {
 				this.syncRetainedMachines()
 			},
 			publishView: async () => {
+				this.historyPreparationPending = false
 				await this.postStateToWebview({ immediate: true })
 			},
 		})
@@ -951,6 +956,7 @@ export class Task {
 			taskState: this.taskState,
 			taskIsFavorited: this.taskIsFavorited,
 			updateTaskHistory: this.updateTaskHistory,
+			publishTaskHistoryClose,
 			uiMessage,
 			apiConversation,
 		})
@@ -1896,15 +1902,35 @@ export class Task {
 	}
 
 	private ensureApiRateMetricsInitialized(): Promise<void> {
-		this.apiRateMetricsInitialization ??= Promise.all([
-			this.apiRateMetricsService.initialize(),
-			this.apiRequestRoundLifecycle.initializeRounds().catch((error) => {
-				Logger.warn(`[Task ${this.taskId}] Failed to recover API request round metrics`, error)
-			}),
-			this.apiRequestRoundLifecycle.initializeExecutions().catch((error) => {
-				Logger.warn(`[Task ${this.taskId}] Failed to recover API response execution metrics`, error)
-			}),
-		]).then(() => undefined)
+		this.apiRateMetricsInitialization ??= (() => {
+			const beganAt = performance.now()
+			const activeMetrics = this.apiRateMetricsService.initialize().finally(() => {
+				Logger.debug(
+					`[Task ${this.taskId}] API rate metrics initialization phase=active durationMs=${Math.round(performance.now() - beganAt)}`,
+				)
+			})
+			const roundMetrics = this.apiRequestRoundLifecycle
+				.initializeRounds()
+				.catch((error) => {
+					Logger.warn(`[Task ${this.taskId}] Failed to recover API request round metrics`, error)
+				})
+				.finally(() => {
+					Logger.debug(
+						`[Task ${this.taskId}] API rate metrics initialization phase=rounds durationMs=${Math.round(performance.now() - beganAt)}`,
+					)
+				})
+			const executionMetrics = this.apiRequestRoundLifecycle
+				.initializeExecutions()
+				.catch((error) => {
+					Logger.warn(`[Task ${this.taskId}] Failed to recover API response execution metrics`, error)
+				})
+				.finally(() => {
+					Logger.debug(
+						`[Task ${this.taskId}] API rate metrics initialization phase=executions durationMs=${Math.round(performance.now() - beganAt)}`,
+					)
+				})
+			return Promise.all([activeMetrics, roundMetrics, executionMetrics]).then(() => undefined)
+		})()
 		return this.apiRateMetricsInitialization
 	}
 
@@ -2531,14 +2557,24 @@ export class Task {
 				tools: providerInput.tools,
 				serverTools: providerInput.serverTools,
 				closureReserveTokens: COMPACTION_CLOSURE_RESERVE_TOKENS,
+				// The planner selects the Pass range with this same estimator. Measuring the request
+				// differently here would let it reject a range the planner cannot shrink further.
+				estimator: {
+					providerId: input.compactionApi.getProviderId?.() ?? DEFAULT_API_PROVIDER,
+					modelId: requestScope.providerInfo.model.id,
+				},
 				buildMessages: buildCandidateHistory,
 			})
 			if (resolvedBudget.budget.decision !== "ready" && purpose === "send") {
-				throw new Error(
-					`Compaction summary has no available output budget: the hidden Pass request itself does not fit ` +
-						`(input ${resolvedBudget.budget.estimatedInputTokens}, window ${policy.hardPassContextWindowTokens}, ` +
-						`available remainder ${resolvedBudget.budget.availableRemainder}).`,
-				)
+				// Structured so the session can shrink the next Pass range using the measurement that
+				// rejected this one instead of reproposing the range that just failed.
+				throw new CompactionPassBudgetError({
+					estimatedInputTokens: resolvedBudget.budget.estimatedInputTokens,
+					contextWindow: policy.hardPassContextWindowTokens,
+					availableRemainder: resolvedBudget.budget.availableRemainder,
+					estimatedTextTokens: resolvedBudget.budget.estimatedTextTokens,
+					estimatedImageTokens: resolvedBudget.budget.estimatedImageTokens,
+				})
 			}
 			return {
 				providerInput: {
@@ -4579,6 +4615,16 @@ export class Task {
 		this.syncRetainedMachines()
 	}
 
+	/** Mark an interactive historical Task as visible but not yet dispatchable. */
+	public beginHistoryPreparation(): void {
+		this.historyPreparationPending = true
+	}
+
+	/** Return whether the History surface is awaiting canonical Resume identity. */
+	public isHistoryPreparationPending(): boolean {
+		return this.historyPreparationPending
+	}
+
 	/** Return the read-only runtime aggregate for projection and migration tests. */
 	public getRuntimeState(): Readonly<TaskRuntimeState> {
 		return this.taskRuntime.getState()
@@ -4618,6 +4664,7 @@ export class Task {
 		initialUserContent: readonly ClineUserContent[] = [],
 	): Promise<void> {
 		const startTaskBeganAt = performance.now()
+		Logger.debug(`[Task ${this.taskId}] startTask entered`)
 		await this.ensureApiRateMetricsInitialized()
 		const rateMetricsReadyAt = performance.now()
 		// Ignore rules are already loaded by the Controller that owns this workspace.
@@ -4664,6 +4711,9 @@ export class Task {
 			throw new Error(`Task initialization rejected: ${initializing.error?.code ?? "invalid_runtime_event"}`)
 		}
 		const initializeDispatchedAt = performance.now()
+		Logger.debug(
+			`[Task ${this.taskId}] startTask admission phase=initializeDispatch elapsedMs=${Math.round(initializeDispatchedAt - taskSaidAt)}`,
+		)
 
 		const imageBlocks: ClineImageContentBlock[] = formatResponse.imageBlocks(images)
 
@@ -4693,6 +4743,9 @@ export class Task {
 			}
 		}
 		const filesProcessedAt = performance.now()
+		Logger.debug(
+			`[Task ${this.taskId}] startTask admission phase=processFiles elapsedMs=${Math.round(filesProcessedAt - taskSaidAt)}`,
+		)
 
 		userContent.push(...cloneDeep(initialUserContent))
 
@@ -4743,6 +4796,9 @@ export class Task {
 		}
 
 		const taskStartHookAt = performance.now()
+		Logger.debug(
+			`[Task ${this.taskId}] startTask admission phase=taskStartHook elapsedMs=${Math.round(taskStartHookAt - taskSaidAt)}`,
+		)
 
 		// Defensive check: Verify task wasn't aborted during hook execution before continuing
 		// Must be OUTSIDE the hooksEnabled block to prevent UserPromptSubmit from running
@@ -4753,6 +4809,9 @@ export class Task {
 		// Run UserPromptSubmit hook for initial task (after TaskStart for UI ordering)
 		const userPromptHookResult = await this.runUserPromptSubmitHook(userContent, "initial_task")
 		const userPromptHookAt = performance.now()
+		Logger.debug(
+			`[Task ${this.taskId}] startTask admission phase=userPromptHook elapsedMs=${Math.round(userPromptHookAt - taskSaidAt)}`,
+		)
 
 		// Defensive check: Verify task wasn't aborted during hook execution (handles async cancellation)
 		if (this.taskState.abort) {
@@ -4781,6 +4840,9 @@ export class Task {
 			Logger.error("Failed to record environment metadata:", error)
 		}
 		const environmentRecordedAt = performance.now()
+		Logger.debug(
+			`[Task ${this.taskId}] startTask admission phase=recordEnvironment elapsedMs=${Math.round(environmentRecordedAt - taskSaidAt)}`,
+		)
 
 		const initialized = await this.dispatchRuntime({
 			type: "TASK_INITIALIZED",
@@ -4791,6 +4853,9 @@ export class Task {
 			throw new Error(`Task initialization commit rejected: ${initialized.error?.code ?? "invalid_runtime_event"}`)
 		}
 		const initializedDispatchedAt = performance.now()
+		Logger.debug(
+			`[Task ${this.taskId}] startTask admission phase=initializedDispatch elapsedMs=${Math.round(initializedDispatchedAt - taskSaidAt)}`,
+		)
 
 		// Everything above is awaited before the first API request can start, so an
 		// unattributed stall here is invisible unless each stage reports its own cost.
@@ -5044,7 +5109,8 @@ export class Task {
 	 * Used for both readonly (locked task) and interactive resume scenarios.
 	 */
 	public async displayHistory(): Promise<void> {
-		await this.ensureApiRateMetricsInitialized()
+		// Metrics are a secondary projection and must not delay the historical surface.
+		// The request path initializes them on demand; History readiness starts them later.
 		// Ignore rules are already loaded by the Controller that owns this workspace.
 
 		// UIMessage and ApiConversation were opened before Task construction and are
@@ -5072,9 +5138,18 @@ export class Task {
 	 */
 	public async prepareFromHistory(options?: ResumeTaskFromHistoryOptions) {
 		this.taskState.abort = true
-		await this.resumeCoordinator.prepare(this.taskId)
+		try {
+			await this.resumeCoordinator.prepare(this.taskId)
+		} catch (error) {
+			this.historyPreparationPending = false
+			await this.postStateToWebview({ immediate: true })
+			throw error
+		}
 		this.startContextWindowEnvironmentRefresh()
 		await options?.onReadyToDisplay?.()
+		void this.ensureApiRateMetricsInitialized().catch((error) => {
+			Logger.debug(`[Task ${this.taskId}] Deferred API rate metrics initialization failed: ${error}`)
+		})
 		const isCurrent = options?.isCurrent ?? (() => true)
 		if (!isCurrent()) return
 
@@ -5555,8 +5630,8 @@ export class Task {
 			// Save state before cleanup
 			await this.flushTaskSnapshot()
 			logTerminateStage("snapshot_flush")
-			await this.messageStateHandler.updateTaskHistory()
-			logTerminateStage("history_update")
+			this.messageStateHandler.publishTaskHistoryClose()
+			logTerminateStage("history_event_enqueue")
 			await this.postStateToWebview()
 			logTerminateStage("intermediate_state_publish")
 
@@ -8015,40 +8090,39 @@ export class Task {
 		const isFirstRequest =
 			!persistedRequest && this.messageStateHandler.clineMessages.filter((m) => m.say === "api_req_started").length === 0
 
-		// Initialize the file checkpoint backend before creating the first chat checkpoint.
-		// This MUST stay blocking: the baseline has to capture the workspace before the
-		// model can touch any file, otherwise the first restore point already contains
-		// model edits and no longer represents the pre-task state.
-		if (
-			isFirstRequest &&
-			this.stateManager.getGlobalSettingsKey("enableCheckpointsSetting") &&
-			this.checkpointManager &&
-			!this.taskState.checkpointManagerErrorMessage
-		) {
-			try {
-				await ensureCheckpointInitialized({ checkpointManager: this.checkpointManager })
-			} catch (error) {
-				const errorMessage = error instanceof Error ? error.message : "Unknown error"
-				Logger.error("Failed to initialize checkpoint manager:", errorMessage)
-				this.taskState.checkpointManagerErrorMessage = errorMessage // will be displayed right away since we saveClineMessages next which posts state to webview
-				HostProvider.window.showMessage({
-					type: ShowMessageType.ERROR,
-					message: `Checkpoint initialization timed out: ${errorMessage}`,
+		const checkpointsEnabled = this.stateManager.getGlobalSettingsKey("enableCheckpointsSetting")
+		const checkpointManager = this.checkpointManager
+		let checkpointInitializationPromise: Promise<boolean> | undefined
+		if (isFirstRequest && checkpointsEnabled && checkpointManager && !this.taskState.checkpointManagerErrorMessage) {
+			// Initialization and baseline creation may overlap the first provider request.
+			// The first non-read-only tool still awaits initialCheckpointCommitPromise,
+			// so the model cannot modify the workspace before the baseline is durable.
+			checkpointInitializationPromise = ensureCheckpointInitialized({ checkpointManager })
+				.then(() => true)
+				.catch((error) => {
+					const errorMessage = error instanceof Error ? error.message : "Unknown error"
+					Logger.error("Failed to initialize checkpoint manager:", errorMessage)
+					this.taskState.checkpointManagerErrorMessage = errorMessage
+					HostProvider.window.showMessage({
+						type: ShowMessageType.ERROR,
+						message: `Checkpoint initialization timed out: ${errorMessage}`,
+					})
+					return false
 				})
-			}
 		}
 
 		// The chat checkpoint remains available even when the file checkpoint backend failed.
-		if (isFirstRequest && this.stateManager.getGlobalSettingsKey("enableCheckpointsSetting") && this.checkpointManager) {
+		if (isFirstRequest && checkpointsEnabled && checkpointManager) {
 			await this.say("checkpoint_created")
 			const lastCheckpointMessageIndex = findLastIndex(
 				this.messageStateHandler.clineMessages,
 				(m) => m.say === "checkpoint_created",
 			)
-			if (lastCheckpointMessageIndex !== -1 && !this.taskState.checkpointManagerErrorMessage) {
-				const commitPromise = this.checkpointManager.commit()
-				const persistCommitPromise = commitPromise.then(async (commitHash) => {
-					if (commitHash) {
+			if (checkpointInitializationPromise) {
+				const persistCommitPromise = checkpointInitializationPromise.then(async (initialized) => {
+					if (!initialized) return undefined
+					const commitHash = await checkpointManager.commit()
+					if (commitHash && lastCheckpointMessageIndex !== -1) {
 						await this.persistCheckpointHashToMessage(lastCheckpointMessageIndex, commitHash)
 					}
 					return commitHash

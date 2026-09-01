@@ -3,6 +3,23 @@ import { shouldCompactProjectedUsage } from "./context-window-utils"
 
 const TOKEN_ESTIMATE_BYTES = 4
 const OPENAI_IMAGE_PATCH_PIXELS = 32
+/** Anthropic documents image cost as width * height / 750; used as the conservative default. */
+const AREA_IMAGE_TOKENS_PER_PIXEL_DIVISOR = 750
+/**
+ * Conservative cost applied when image dimensions cannot be decoded.
+ *
+ * Charging the raw base64 payload as text instead would inflate a single screenshot by an order of
+ * magnitude and can push an otherwise feasible request past the context window.
+ */
+const IMAGE_TOKEN_FALLBACK = 1600
+
+/**
+ * How a provider prices an image once the canonical base64 block has been transformed.
+ *
+ * No supported provider charges the base64 string as text, so estimation always drops the payload
+ * and substitutes a dimension-derived cost regardless of provider.
+ */
+type ImageTokenModel = "openai_patch" | "area"
 
 export type ContextPressureSource = "provider" | "estimate" | "unavailable"
 
@@ -23,6 +40,12 @@ export interface EstimateContextWindowCandidateInput {
 export interface ContextWindowCandidateEstimator {
 	providerId?: string
 	modelId?: string
+}
+
+export interface ContextWindowCandidateBreakdown {
+	totalTokens: number
+	textTokens: number
+	imageTokens: number
 }
 
 export interface ResolveContextWindowProjectionInput {
@@ -49,15 +72,28 @@ export function estimateContextWindowCandidate(
 	input: EstimateContextWindowCandidateInput,
 	estimator: ContextWindowCandidateEstimator = {},
 ): number {
+	return estimateContextWindowCandidateBreakdown(input, estimator).totalTokens
+}
+
+/**
+ * Same estimate as {@link estimateContextWindowCandidate}, exposing its text/image split.
+ *
+ * The split is diagnostic only: it lets a failed budget report distinguish "the input really is too
+ * large" from "the estimate is dominated by image payloads".
+ */
+export function estimateContextWindowCandidateBreakdown(
+	input: EstimateContextWindowCandidateInput,
+	estimator: ContextWindowCandidateEstimator = {},
+): ContextWindowCandidateBreakdown {
+	const model = resolveImageTokenModel(estimator)
 	let imageTokens = 0
 	const normalized = JSON.stringify(input, (_key, value: unknown) => {
-		if (!isBase64ImageSource(value) || !isOpenAiPatchImageModel(estimator)) return value
-		const estimatedImageTokens = estimateOpenAiPatchImageTokens(value)
-		if (estimatedImageTokens === undefined) return value
-		imageTokens += estimatedImageTokens
+		if (!isBase64ImageSource(value)) return value
+		imageTokens += estimateImageTokens(value, model)
 		return { ...value, data: "" }
 	})
-	return Math.max(1, Math.ceil(Buffer.byteLength(normalized, "utf8") / TOKEN_ESTIMATE_BYTES) + imageTokens)
+	const textTokens = Math.ceil(Buffer.byteLength(normalized, "utf8") / TOKEN_ESTIMATE_BYTES)
+	return { totalTokens: Math.max(1, textTokens + imageTokens), textTokens, imageTokens }
 }
 
 /** Resolve reliable usage, uncovered sent growth, and the current unsent candidate into one pressure projection. */
@@ -157,18 +193,37 @@ function isBase64ImageSource(value: unknown): value is { type: "base64"; media_t
 	)
 }
 
-function estimateOpenAiPatchImageTokens(source: { type: "base64"; media_type: string; data: string }): number | undefined {
-	try {
-		const buffer = Buffer.from(source.data, "base64")
-		const dimensions = sizeOf(new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength))
-		if (!dimensions.width || !dimensions.height) return undefined
+function estimateImageTokens(source: { type: "base64"; media_type: string; data: string }, model: ImageTokenModel): number {
+	const dimensions = readImageDimensions(source.data)
+	if (dimensions === undefined) return IMAGE_TOKEN_FALLBACK
+	if (model === "openai_patch") {
 		return Math.max(
 			1,
 			Math.ceil(dimensions.width / OPENAI_IMAGE_PATCH_PIXELS) * Math.ceil(dimensions.height / OPENAI_IMAGE_PATCH_PIXELS),
 		)
+	}
+	return Math.max(1, Math.ceil((dimensions.width * dimensions.height) / AREA_IMAGE_TOKENS_PER_PIXEL_DIVISOR))
+}
+
+function readImageDimensions(data: string): { width: number; height: number } | undefined {
+	try {
+		const buffer = Buffer.from(data, "base64")
+		const dimensions = sizeOf(new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength))
+		if (!dimensions.width || !dimensions.height) return undefined
+		return { width: dimensions.width, height: dimensions.height }
 	} catch {
 		return undefined
 	}
+}
+
+/**
+ * Every provider gets a dimension-derived image cost; only the formula differs.
+ *
+ * The area model is the conservative default because it yields a slightly higher estimate than the
+ * patch model at common screenshot resolutions, which is the safer bias for unknown providers.
+ */
+function resolveImageTokenModel(estimator: ContextWindowCandidateEstimator): ImageTokenModel {
+	return isOpenAiPatchImageModel(estimator) ? "openai_patch" : "area"
 }
 
 function isOpenAiPatchImageModel(estimator: ContextWindowCandidateEstimator): boolean {

@@ -17,9 +17,10 @@ export const COMPACTION_CLOSURE_RESERVE_TOKENS = 3_000
  * The trailing complete logical turns routinely overshoot the trigger by a small margin.
  * Splitting that range into an extra Pass strands most of the context window and forces the
  * excluded tail to be replayed as a fresh prefix after compaction, destroying prompt-cache
- * reuse. Borrowing part of the reserve is far cheaper than that split.
+ * reuse. Borrowing part of the reserve is far cheaper than that split, so half of it is
+ * available; the closure reserve and the summary response stay guarded by the ceiling below.
  */
-const COMPACTION_CONCESSION_RATIO = 0.3
+const COMPACTION_CONCESSION_RATIO = 0.5
 /**
  * Smallest output space a hidden Pass request must leave inside the hard context window.
  *
@@ -185,11 +186,7 @@ export function resolveCompactTriggerPolicy(
 		0,
 		effectiveContextLimitTokens - normalizedInstructionBudget - COMPACTION_CLOSURE_RESERVE_TOKENS,
 	)
-	const concession = resolveCompactionConcession(
-		guardedReserveTokens,
-		projectedUsageTriggerTokens,
-		hardPassContextWindowTokens,
-	)
+	const concession = resolveCompactionConcession(guardedReserveTokens, projectedUsageTriggerTokens, hardPassContextWindowTokens)
 	return {
 		branch: "percentage_guarded",
 		guardedReserveTokens,

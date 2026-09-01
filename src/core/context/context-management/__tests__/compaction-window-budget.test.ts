@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest"
 import type { ClineStorageMessage } from "@/shared/messages"
 import { resolveCompactionWindowBudget } from "../compaction-window-budget"
+import { estimateContextWindowCandidate } from "../context-window-projection"
+
+const ONE_PIXEL_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z8WQAAAAASUVORK5CYII="
 
 function compactionMessages(budgetGuidance = ""): ClineStorageMessage[] {
 	return [
@@ -179,5 +182,59 @@ describe("compaction window budget", () => {
 
 		expect(large.budget.estimatedInputTokens).toBeGreaterThan(small.budget.estimatedInputTokens)
 		expect(large.budget.availableRemainder).toBeLessThan(small.budget.availableRemainder)
+	})
+
+	it("charges screenshots by dimensions so an image-bearing Pass still fits its window", () => {
+		// Three screenshot-sized payloads: ~300k base64 characters, i.e. ~75k tokens if charged as text.
+		const screenshot = `${ONE_PIXEL_PNG}${"A".repeat(100_000)}`
+		const buildMessages = (budgetGuidance: string): ClineStorageMessage[] => [
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "canonical history" },
+					...[0, 1, 2].map(() => ({
+						type: "image" as const,
+						source: { type: "base64" as const, media_type: "image/png" as const, data: screenshot },
+					})),
+				],
+			},
+			{ role: "user", content: [{ type: "text", text: `Summarize now.\n\n${budgetGuidance}` }] },
+		]
+
+		const result = resolveCompactionWindowBudget({
+			contextWindow: 60_000,
+			maxOutputTokens: 32_000,
+			systemPrompt: "system",
+			buildMessages,
+			estimator: { providerId: "anthropic", modelId: "claude-sonnet-4-5" },
+		})
+
+		expect(result.budget.estimatedInputTokens).toBeLessThan(10_000)
+		expect(result.budget.estimatedImageTokens).toBeGreaterThan(0)
+		expect(result.budget.estimatedTextTokens + result.budget.estimatedImageTokens).toBe(result.budget.estimatedInputTokens)
+		expect(result.budget.decision).toBe("ready")
+	})
+
+	it("measures the request exactly like the compaction planner and the context-window indicator", () => {
+		const systemPrompt = "system".repeat(50)
+		const tools = [{ type: "function", function: { name: "summarize_task" } }]
+		const serverTools = [{ type: "web_search" }]
+		const estimator = { providerId: "anthropic", modelId: "claude-sonnet-4-5" }
+
+		const result = resolveCompactionWindowBudget({
+			contextWindow: 64_000,
+			maxOutputTokens: 32_000,
+			systemPrompt,
+			tools,
+			serverTools,
+			estimator,
+			buildMessages: compactionMessages,
+		})
+		const plannerEstimate = estimateContextWindowCandidate(
+			{ systemPrompt, messages: result.messages, tools, serverTools },
+			estimator,
+		)
+
+		expect(result.budget.estimatedInputTokens).toBe(plannerEstimate)
 	})
 })

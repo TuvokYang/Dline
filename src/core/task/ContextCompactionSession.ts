@@ -1,5 +1,6 @@
 import type { ApiHandler } from "@core/api"
 import type { CanonicalMessageRange } from "@core/context/context-management/compaction-context-projection"
+import { isCompactionPassBudgetError } from "@core/context/context-management/compaction-pass-budget-error"
 import { planNextCompactionPass } from "@core/context/context-management/compaction-pass-planner"
 import { type ContextCompactionPhaseTiming, elapsedCompactionMs } from "@core/context/context-management/compaction-phase-timing"
 import { CompactionRetryPolicy } from "@core/context/context-management/compaction-retry-policy"
@@ -248,6 +249,21 @@ export interface ContextCompactionSessionOptions {
 	maxRetryAttempts: number
 }
 
+/**
+ * Bound on how often one Pass may be replanned against a narrower turn range.
+ *
+ * Each attempt drops at least one logical turn, so this only limits how long an unfittable history
+ * is probed before the measured failure is reported.
+ */
+const MAX_PASS_RANGE_NARROWING_ATTEMPTS = 8
+
+interface FittedCompactionPass {
+	planResult: Awaited<ReturnType<typeof planNextCompactionPass>>
+	state: TargetWindowFittingState
+	request?: ContextCompactionPassRequest
+	requestBuildMs: number
+}
+
 /** Own the complete fitting lifecycle shared by every compaction trigger. */
 export class ContextCompactionSession {
 	private active?: {
@@ -303,12 +319,12 @@ export class ContextCompactionSession {
 						state: snapshotFittingState(state),
 					})
 					const plannerStartedAtMs = performance.now()
-					const planResult = await planNextCompactionPass({
-						state,
-						passInputCeiling: this.ports.getPassInputCeiling(input),
-						estimateInputTokens: (passHistory) => this.ports.estimatePassInput(input, passHistory),
-					})
+					// The planner and the send side can measure the same request differently. Whatever
+					// causes the divergence, the range must keep shrinking until a Pass actually fits;
+					// reproposing the rejected range would leave the task permanently unable to compact.
+					const fitted = await this.planPassWithinSendBudget(input, state, signal)
 					const plannerMs = elapsedCompactionMs(plannerStartedAtMs)
+					const planResult = fitted.planResult
 					this.assertCurrent(input.operationId, signal)
 					if (planResult.kind === "summary_carry_overflow" && state.cumulativeSummary) {
 						if (consecutiveSummaryRefitAttempts >= MAX_SUMMARY_REFIT_ATTEMPTS) {
@@ -328,15 +344,16 @@ export class ContextCompactionSession {
 					if (planResult.kind !== "planned") {
 						throw new Error(formatCompactionPlanningFailure(planResult))
 					}
-					state = applyCompactionPassPlan(state, planResult.plan)
+					if (!fitted.request) {
+						throw new Error("Compaction Pass was planned without a request")
+					}
+					state = fitted.state
 					const plannedState = state
 					if (this.active?.operationId === input.operationId) this.active.state = snapshotFittingState(state)
 
 					const passIdentity = getCompactionPassIdentity(state)
-					let passGuidance = cloneDeep(input.passGuidance ?? [])
-					const requestBuildStartedAtMs = performance.now()
-					let request = await this.ports.buildPassRequest(input, state, passGuidance, planResult.passHistory)
-					const requestBuildMs = elapsedCompactionMs(requestBuildStartedAtMs)
+					const requestBuildMs = fitted.requestBuildMs
+					let request: ContextCompactionPassRequest = fitted.request
 					this.assertCurrent(input.operationId, signal)
 					let attemptIndex = 0
 					const initialAttempt: InternalCompactionAttemptIdentity = {
@@ -439,7 +456,6 @@ export class ContextCompactionSession {
 										feedback: cloneDeep(review.feedback),
 									},
 								})
-								passGuidance = cloneDeep(review.feedback)
 								request = nextRequest
 								attemptIndex = nextAttempt.attemptIndex
 								continue
@@ -520,6 +536,63 @@ export class ContextCompactionSession {
 
 	getActiveOperationId(): string | undefined {
 		return this.active?.operationId
+	}
+
+	/**
+	 * Plan a Pass the send side will actually accept.
+	 *
+	 * The planner selects a range using its own estimate; building the request applies the
+	 * send-side budget. When the two disagree the request is refused, and reproposing the same
+	 * range would repeat that refusal forever. The two sides measure in different units, so the
+	 * refused size cannot be subtracted from the planner's ceiling; the range itself is narrowed
+	 * instead. Dropping at least one logical turn per refusal shrinks monotonically towards the
+	 * single-turn case, which the planner reports as its own overflow outcome.
+	 */
+	private async planPassWithinSendBudget(
+		input: ContextCompactionSessionInput,
+		state: TargetWindowFittingState,
+		signal: AbortSignal,
+	): Promise<FittedCompactionPass> {
+		const passInputCeiling = this.ports.getPassInputCeiling(input)
+		let maxEndTurnIndex: number | undefined
+
+		for (let attempt = 0; ; attempt++) {
+			const planResult = await planNextCompactionPass({
+				state,
+				passInputCeiling,
+				...(maxEndTurnIndex === undefined ? {} : { maxEndTurnIndex }),
+				estimateInputTokens: (passHistory) => this.ports.estimatePassInput(input, passHistory),
+			})
+			this.assertCurrent(input.operationId, signal)
+			if (planResult.kind !== "planned") {
+				return { planResult, state, request: undefined, requestBuildMs: 0 }
+			}
+
+			const plannedState = applyCompactionPassPlan(state, planResult.plan)
+			const requestBuildStartedAtMs = performance.now()
+			try {
+				const request = await this.ports.buildPassRequest(
+					input,
+					plannedState,
+					cloneDeep(input.passGuidance ?? []),
+					planResult.passHistory,
+				)
+				return {
+					planResult,
+					state: plannedState,
+					request,
+					requestBuildMs: elapsedCompactionMs(requestBuildStartedAtMs),
+				}
+			} catch (error) {
+				const refusedEndTurnIndex = planResult.plan.passEndTurnIndex
+				const canNarrow =
+					isCompactionPassBudgetError(error) &&
+					refusedEndTurnIndex > planResult.plan.passStartTurnIndex &&
+					attempt < MAX_PASS_RANGE_NARROWING_ATTEMPTS
+				if (!canNarrow) throw error
+				maxEndTurnIndex = refusedEndTurnIndex - 1
+			}
+		}
 	}
 
 	private async runSummaryRefit(

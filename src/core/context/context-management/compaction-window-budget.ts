@@ -1,10 +1,15 @@
 import type { ClineStorageMessage } from "@/shared/messages"
+import { type ContextWindowCandidateEstimator, estimateContextWindowCandidateBreakdown } from "./context-window-projection"
 import { COMPACTION_CLOSURE_RESERVE_TOKENS } from "./context-window-utils"
 
 export type CompactionWindowBudgetDecision = "ready" | "needs_smaller_input"
 
 export interface CompactionWindowBudget {
 	estimatedInputTokens: number
+	/** Diagnostic split of estimatedInputTokens; never used in any budget decision. */
+	estimatedTextTokens: number
+	/** Diagnostic split of estimatedInputTokens; never used in any budget decision. */
+	estimatedImageTokens: number
 	rawRemainder: number
 	availableRemainder: number
 	providerOutputCap: number
@@ -39,6 +44,13 @@ export interface ResolveCompactionWindowBudgetInput {
 	tools?: readonly unknown[]
 	serverTools?: readonly unknown[]
 	closureReserveTokens?: number
+	/**
+	 * Provider/model context shared with the compaction planner and the context-window indicator.
+	 *
+	 * All three must measure the same request with the same estimator; a divergence here makes the
+	 * planner select a range that this budget then rejects, with no way for either side to converge.
+	 */
+	estimator?: ContextWindowCandidateEstimator
 	buildMessages: (guidance: string) => ClineStorageMessage[]
 }
 
@@ -47,7 +59,6 @@ export interface ResolvedCompactionWindowBudget {
 	messages: ClineStorageMessage[]
 }
 
-const TOKEN_ESTIMATE_BYTES = 4
 const MAX_RENDER_PASSES = 3
 
 /** Resolve a request-scoped compaction budget by rebuilding only the explicit summarize_task instruction. */
@@ -74,12 +85,16 @@ export function resolveCompactionWindowBudget(input: ResolveCompactionWindowBudg
 }
 
 function computeBudget(input: ResolveCompactionWindowBudgetInput, messages: ClineStorageMessage[]): CompactionWindowBudget {
-	const estimatedInputTokens = estimateTokens({
-		systemPrompt: input.systemPrompt,
-		messages,
-		tools: input.tools ?? [],
-		serverTools: input.serverTools ?? [],
-	})
+	const estimate = estimateContextWindowCandidateBreakdown(
+		{
+			systemPrompt: input.systemPrompt,
+			messages,
+			tools: input.tools ?? [],
+			serverTools: input.serverTools ?? [],
+		},
+		input.estimator ?? {},
+	)
+	const estimatedInputTokens = estimate.totalTokens
 	const rawRemainder = Math.floor(input.contextWindow) - estimatedInputTokens
 	const availableRemainder = Math.max(0, rawRemainder)
 	const closureReserveTokens = normalizeNonNegativeInteger(input.closureReserveTokens ?? COMPACTION_CLOSURE_RESERVE_TOKENS)
@@ -110,6 +125,8 @@ function computeBudget(input: ResolveCompactionWindowBudgetInput, messages: Clin
 
 	return {
 		estimatedInputTokens,
+		estimatedTextTokens: estimate.textTokens,
+		estimatedImageTokens: estimate.imageTokens,
 		rawRemainder,
 		availableRemainder,
 		providerOutputCap,
@@ -125,10 +142,6 @@ function computeBudget(input: ResolveCompactionWindowBudgetInput, messages: Clin
 
 function normalizeNonNegativeInteger(value: number): number {
 	return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
-}
-
-function estimateTokens(value: unknown): number {
-	return Math.max(1, Math.ceil(Buffer.byteLength(JSON.stringify(value), "utf8") / TOKEN_ESTIMATE_BYTES))
 }
 
 function renderBudgetGuidance(budget: CompactionWindowBudget): string {

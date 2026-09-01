@@ -1,5 +1,26 @@
 import { describe, expect, it } from "vitest"
-import { estimateContextWindowCandidate, resolveContextWindowProjection } from "../context-window-projection"
+import {
+	estimateContextWindowCandidate,
+	estimateContextWindowCandidateBreakdown,
+	resolveContextWindowProjection,
+} from "../context-window-projection"
+
+const ONE_PIXEL_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z8WQAAAAASUVORK5CYII="
+
+function candidateWithImage(data: string, text = "x".repeat(4_000)) {
+	return {
+		systemPrompt: "system",
+		messages: [
+			{
+				role: "user",
+				content: [
+					{ type: "text", text },
+					{ type: "image", source: { type: "base64", media_type: "image/png", data } },
+				],
+			},
+		],
+	}
+}
 
 describe("context window projection", () => {
 	it("keeps the latest reliable provider usage and accumulates only uncovered positive estimate growth", () => {
@@ -172,7 +193,6 @@ describe("context window projection", () => {
 			messages: [{ role: "user", content: [{ type: "text", text }] }],
 		}
 		const previousEstimate = estimateContextWindowCandidate(previousCandidate)
-		const onePixelPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z8WQAAAAASUVORK5CYII="
 		const candidate = {
 			...previousCandidate,
 			messages: [
@@ -182,13 +202,12 @@ describe("context window projection", () => {
 						{ type: "text", text },
 						{
 							type: "image",
-							source: { type: "base64", media_type: "image/png", data: `${onePixelPng}${"A".repeat(900_000)}` },
+							source: { type: "base64", media_type: "image/png", data: `${ONE_PIXEL_PNG}${"A".repeat(900_000)}` },
 						},
 					],
 				},
 			],
 		}
-		const conservativeEstimate = estimateContextWindowCandidate(candidate)
 		const candidateEstimate = estimateContextWindowCandidate(candidate, { providerId: "openai", modelId: "gpt-5.6-sol" })
 		const projection = resolveContextWindowProjection({
 			requestInfos: [
@@ -204,9 +223,45 @@ describe("context window projection", () => {
 		})
 
 		expect(previousEstimate).toBeGreaterThan(200_000)
-		expect(conservativeEstimate - previousEstimate).toBeGreaterThan(200_000)
 		expect(candidateEstimate - previousEstimate).toBeLessThan(10_000)
 		expect(projection.candidateDeltaTokens).toBeLessThan(10_000)
 		expect(projection.shouldCompact).toBe(false)
+	})
+
+	it.each([
+		["no estimator", {}],
+		["anthropic", { providerId: "anthropic", modelId: "claude-sonnet-4-5" }],
+		["gemini", { providerId: "gemini", modelId: "gemini-2.5-pro" }],
+		["bedrock", { providerId: "bedrock", modelId: "anthropic.claude-sonnet-4-5" }],
+		["unknown provider", { providerId: "some-new-provider", modelId: "unreleased-model" }],
+		["openai patch model", { providerId: "openai", modelId: "gpt-5.6-sol" }],
+	])("charges an image by dimensions rather than base64 size for %s", (_label, estimator) => {
+		const padded = `${ONE_PIXEL_PNG}${"A".repeat(400_000)}`
+		const breakdown = estimateContextWindowCandidateBreakdown(candidateWithImage(padded), estimator)
+
+		// 400k base64 characters would be ~100k tokens if charged as text.
+		expect(breakdown.totalTokens).toBeLessThan(10_000)
+		expect(breakdown.imageTokens).toBeGreaterThan(0)
+		expect(breakdown.totalTokens).toBe(breakdown.textTokens + breakdown.imageTokens)
+	})
+
+	it("falls back to a bounded image cost when dimensions cannot be decoded", () => {
+		const undecodable = "A".repeat(400_000)
+		const breakdown = estimateContextWindowCandidateBreakdown(candidateWithImage(undecodable))
+
+		expect(breakdown.imageTokens).toBe(1_600)
+		expect(breakdown.totalTokens).toBeLessThan(10_000)
+	})
+
+	it("reports no image tokens and a stable total for text-only candidates", () => {
+		const input = {
+			systemPrompt: "system",
+			messages: [{ role: "user", content: [{ type: "text", text: "hello".repeat(1_000) }] }],
+		}
+		const breakdown = estimateContextWindowCandidateBreakdown(input)
+
+		expect(breakdown.imageTokens).toBe(0)
+		expect(breakdown.totalTokens).toBe(breakdown.textTokens)
+		expect(breakdown.totalTokens).toBe(estimateContextWindowCandidate(input))
 	})
 })
