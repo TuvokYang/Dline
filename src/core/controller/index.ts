@@ -6,13 +6,13 @@ import { getProfileModelInfo } from "@core/api/model-info"
 import { createGlobalConfigurationSnapshot, type GlobalConfigurationSnapshot } from "@core/configuration/GlobalConfiguration"
 import { GlobalConfigurationManager, type GlobalConfigurationResult } from "@core/configuration/GlobalConfigurationManager"
 import { resolveTargetContextScope } from "@core/context/context-management/target-context-scope"
-import { IgnoreController } from "@core/ignore/IgnoreController"
 import { ContextTransitionEngine } from "@core/controller/context-transition/ContextTransitionEngine"
 import { ContextTransitionLease } from "@core/controller/context-transition/ContextTransitionLease"
 import { ModeTransitionPolicy } from "@core/controller/context-transition/policies/ModeTransitionPolicy"
 import { ProfileTransitionPolicy } from "@core/controller/context-transition/policies/ProfileTransitionPolicy"
 import { findEnabledProfileByName, findEnabledProfiles, readApiProfiles } from "@core/controller/file/getApiProfiles"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
+import { IgnoreController } from "@core/ignore/IgnoreController"
 import { TaskLockService } from "@core/locks/TaskLockService"
 import { resolveProfileReference } from "@core/profiles/profile-binding"
 import { getProfileCatalogRevision } from "@core/profiles/profile-catalog-state"
@@ -303,6 +303,8 @@ export class Controller {
 	private lockHeartbeatTimer?: NodeJS.Timeout
 	// Timer for polling lock status when task is in read-only mode
 	private lockPollTimer?: NodeJS.Timeout
+	// Invalidates poll rounds that are already suspended on an await
+	private lockPollGeneration = 0
 	// Whether the current task has an active lock
 	private taskLockAcquired = false
 	// Account usage data (refreshed every 60s, zero overhead on state push)
@@ -708,9 +710,7 @@ export class Controller {
 		this.taskLockAcquired = await this.lockService.acquireTaskLock(taskId)
 		if (this.taskLockAcquired) {
 			Logger.debug(`[Task ${taskId}] Task lock acquired`)
-			this.lockHeartbeatTimer = setInterval(() => {
-				this.lockService.touchTaskLock(taskId).catch(() => {})
-			}, 60000)
+			this.startLockHeartbeat(taskId)
 		} else {
 			Logger.debug(`[Task ${taskId}] Task locked by another instance - read-only mode`)
 			// Start polling for lock release in the background
@@ -2001,27 +2001,29 @@ export class Controller {
 	 */
 	private startLockPoll(taskId: string) {
 		this.stopLockPoll()
+		const generation = this.lockPollGeneration
+		const isCurrentRound = () => generation === this.lockPollGeneration && !this.disposed && !this.taskLockAcquired
 		this.lockPollTimer = setInterval(async () => {
+			if (!isCurrentRound()) return
 			try {
 				const status = await this.lockService.checkTaskLock(taskId)
-				if (!status.isLocked || status.isStale) {
-					// Lock is now available — acquire and activate the task
-					const acquired = await this.lockService.acquireTaskLock(taskId)
-					if (acquired) {
-						Logger.debug(`[Lock] Auto-acquired lock for task ${taskId} after polling`)
-						this.taskLockAcquired = true
-						this.stopLockPoll()
-						// Start heartbeat to keep lock fresh
-						this.lockHeartbeatTimer = setInterval(() => {
-							this.lockService.touchTaskLock(taskId).catch(() => {})
-						}, 60000)
-						// Publish the stopped interaction state after the task becomes writable.
-						if (this.task) {
-							await this.task.prepareFromHistory()
-						}
-						await this.postStateToWebview()
-					}
+				if (status.isLocked && !status.isStale) return
+				// A round that started before an unlock or takeover must not
+				// acquire on top of it: clearInterval cannot cancel a callback
+				// that is already suspended on an await.
+				if (!isCurrentRound()) return
+
+				const acquired = await this.lockService.acquireTaskLock(taskId)
+				if (!acquired) return
+				if (!isCurrentRound()) {
+					// Ownership changed while acquiring, so this round has no
+					// claim on the lock it just took.
+					await this.lockService.releaseTaskLock(taskId)
+					return
 				}
+
+				Logger.debug(`[Lock] Auto-acquired lock for task ${taskId} after polling`)
+				await this.activateTaskAfterUnlock(taskId)
 			} catch (error) {
 				Logger.warn(`[Lock] Poll error for task ${taskId}:`, error)
 			}
@@ -2029,9 +2031,10 @@ export class Controller {
 	}
 
 	/**
-	 * Stops the lock polling timer.
+	 * Stops the lock polling timer and invalidates any round already running.
 	 */
 	private stopLockPoll() {
+		this.lockPollGeneration++
 		if (this.lockPollTimer) {
 			clearInterval(this.lockPollTimer)
 			this.lockPollTimer = undefined
@@ -2039,20 +2042,50 @@ export class Controller {
 	}
 
 	/**
-	 * Activate the task after force-unlocking from another instance.
+	 * Take the task over after the unlock response has been sent.
+	 *
+	 * Acquiring the lock writes a new lock file, so it must not happen while
+	 * the unlock request is still being answered: the caller would then be
+	 * blocked by the very lock this instance just created. Scheduling the
+	 * takeover keeps releasing and re-acquiring in separate turns.
+	 *
+	 * @param taskId The task ID that was unlocked
+	 */
+	scheduleTakeoverAfterUnlock(taskId: string): void {
+		setTimeout(() => {
+			void this.takeOverTaskAfterUnlock(taskId).catch((error) => {
+				Logger.error(`[Lock] Failed to take over task ${taskId} after unlock:`, error)
+			})
+		}, 0)
+	}
+
+	/** Acquire the released lock and activate the task, or resume polling when it was taken. */
+	private async takeOverTaskAfterUnlock(taskId: string): Promise<void> {
+		if (this.disposed || this.taskLockAcquired) return
+
+		const acquired = await this.lockService.acquireTaskLock(taskId)
+		if (!acquired) {
+			// Another instance won the released lock. Stay read-only and let the
+			// existing poll pick the task up when it becomes available again.
+			Logger.warn(`[Lock] Task ${taskId} was re-locked before this instance could take over`)
+			await this.postStateToWebview()
+			return
+		}
+
+		await this.activateTaskAfterUnlock(taskId)
+	}
+
+	/**
+	 * Activate the task once this instance holds its lock.
 	 * Transitions the task from read-only mode to full interactive mode,
 	 * starts the lock heartbeat, and pushes updated state to the webview.
 	 *
-	 * @param taskId The task ID that was unlocked
+	 * @param taskId The task ID whose lock is now held by this instance
 	 */
 	async activateTaskAfterUnlock(taskId: string) {
 		this.taskLockAcquired = true
 		this.stopLockPoll()
-
-		// Start lock heartbeat to keep the new lock fresh
-		this.lockHeartbeatTimer = setInterval(() => {
-			this.lockService.touchTaskLock(taskId).catch(() => {})
-		}, 60000)
+		this.startLockHeartbeat(taskId)
 
 		// Publish the stopped interaction state after the task becomes writable.
 		if (this.task) {
@@ -2066,6 +2099,16 @@ export class Controller {
 		// Notify webview so the read-only banner is removed
 		await this.postStateToWebview()
 		Logger.debug(`[Lock] Task ${taskId} activated after force-unlock`)
+	}
+
+	/** Keep a single heartbeat alive for the lock this instance holds. */
+	private startLockHeartbeat(taskId: string): void {
+		if (this.lockHeartbeatTimer) {
+			clearInterval(this.lockHeartbeatTimer)
+		}
+		this.lockHeartbeatTimer = setInterval(() => {
+			this.lockService.touchTaskLock(taskId).catch(() => {})
+		}, 60000)
 	}
 
 	/**

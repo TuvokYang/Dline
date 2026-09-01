@@ -3,8 +3,12 @@ import type { Controller } from ".."
 
 /**
  * Force-release the lock on a task so the current instance can take over.
- * After releasing, the current instance acquires the lock and activates
- * the task from read-only mode into full interactive mode.
+ *
+ * Releasing is all this request does. Re-acquisition and the read-only to
+ * interactive transition are scheduled to run after the response is sent:
+ * performing them inline writes a new lock file while the caller still
+ * treats the unlock as in progress, and that new lock is what made the
+ * unlock itself look like it had failed.
  *
  * @param controller The controller instance
  * @param request StringRequest wrapping the task ID
@@ -16,17 +20,11 @@ export async function forceReleaseTaskLock(controller: Controller, request: Stri
 		throw new Error("Missing task ID")
 	}
 
-	// Force-release the existing lock
+	// Release only. The caller's unlock modal closes on this response.
 	await controller.lockService.forceReleaseTaskLock(taskId)
 
-	// Acquire the lock for this instance
-	const acquired = await controller.lockService.acquireTaskLock(taskId)
-	if (!acquired) {
-		throw new Error("Failed to acquire lock after force release")
-	}
-
-	// Activate the task from read-only to interactive mode
-	await controller.activateTaskAfterUnlock(taskId)
+	// Take the task over once the unlock itself has been answered.
+	controller.scheduleTakeoverAfterUnlock(taskId)
 
 	return Empty.create()
 }
