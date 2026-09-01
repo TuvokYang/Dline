@@ -31,6 +31,7 @@ describe("Task termination persistence", () => {
 		const flushApiConversationHistory = vi.fn(() => apiFlush.promise)
 		const flushUiMessages = vi.fn(() => uiFlush.promise)
 		const updateTaskHistory = vi.fn(async () => {})
+		const publishTaskHistoryClose = vi.fn()
 		const terminationRuntime = createTerminationRuntime(TaskPhase.CANCELLING)
 		const fakeTask = {
 			promptFreshnessInvalidationCoordinator: { dispose: vi.fn() },
@@ -49,6 +50,7 @@ describe("Task termination persistence", () => {
 				flushApiConversationHistory,
 				flushUiMessages,
 				updateTaskHistory,
+				publishTaskHistoryClose,
 				close: vi.fn(async () => {}),
 			},
 			postStateToWebview: vi.fn(async () => {}),
@@ -94,7 +96,74 @@ describe("Task termination persistence", () => {
 		apiFlush.resolve()
 		uiFlush.resolve()
 		await termination
-		expect(updateTaskHistory).toHaveBeenCalled()
+		expect(publishTaskHistoryClose).toHaveBeenCalledOnce()
+		expect(updateTaskHistory).not.toHaveBeenCalled()
+	})
+
+	it("does not wait for physical History metadata while closing", async () => {
+		const historyUpdate = deferred()
+		const updateTaskHistory = vi.fn(() => historyUpdate.promise)
+		const publishTaskHistoryClose = vi.fn()
+		const terminationRuntime = createTerminationRuntime(TaskPhase.CANCELLING)
+		const fakeTask = {
+			promptFreshnessInvalidationCoordinator: { dispose: vi.fn() },
+			disposePromptInputFileWatcher: vi.fn(async () => {}),
+			invalidatePreparedProviderInputs: vi.fn(),
+			cancelPendingAutoRetry: vi.fn(),
+			modeSwitchCompaction: { abort: vi.fn() },
+			shouldRunTaskCancelHook: vi.fn(async () => false),
+			...terminationRuntime,
+			taskState: { abort: false, abandoned: false, isStreaming: false, cancelOperations: vi.fn() },
+			getActiveHookExecution: vi.fn(async () => undefined),
+			commandExecutor: { cancelBackgroundCommand: vi.fn(async () => {}) },
+			stateManager: { getGlobalSettingsKey: vi.fn(() => false) },
+			flushTaskSnapshot: vi.fn(async () => {}),
+			messageStateHandler: {
+				flushApiConversationHistory: vi.fn(async () => {}),
+				flushUiMessages: vi.fn(async () => {}),
+				updateTaskHistory,
+				publishTaskHistoryClose,
+				close: vi.fn(async () => {}),
+			},
+			postStateToWebview: vi.fn(async () => {}),
+			getCurrentProviderInfo: () => ({
+				providerId: "openai",
+				mode: "act",
+				model: { id: "test-model", info: { capabilities: { contextWindow: 128_000 } } },
+			}),
+			FocusChainManager: undefined,
+			terminalManager: { disposeAll: vi.fn() },
+			urlContentFetcher: { closeBrowser: vi.fn() },
+			ignoreController: { dispose: vi.fn() },
+			taskFileTracker: { dispose: vi.fn() },
+			fileContextTracker: { dispose: vi.fn() },
+			mcpHub: { removeNotificationCallback: vi.fn() },
+			_mcpNotificationCb: undefined,
+			activityStore: {
+				listRunning: vi.fn(() => []),
+				cancel: vi.fn(async () => []),
+				dispose: vi.fn(),
+				waitForPersistence: vi.fn(async () => {}),
+			},
+			apiRateMetricsService: { dispose: vi.fn(async () => {}) },
+			apiRequestRoundLifecycle: { close: vi.fn(async () => {}) },
+			browserSession: { dispose: vi.fn(async () => {}) },
+			diffViewProvider: { revertChanges: vi.fn(async () => {}) },
+			presentationScheduler: { dispose: vi.fn(async () => {}) },
+			stopContextWindowEnvironmentRefresh: vi.fn(),
+		} as unknown as Task
+
+		const termination = Task.prototype.terminate.call(fakeTask)
+		const outcome = await Promise.race([
+			termination.then(() => "closed" as const),
+			new Promise<"blocked">((resolve) => setTimeout(() => resolve("blocked"), 25)),
+		])
+		historyUpdate.resolve()
+		await termination
+
+		expect(outcome).toBe("closed")
+		expect(publishTaskHistoryClose).toHaveBeenCalledOnce()
+		expect(updateTaskHistory).not.toHaveBeenCalled()
 	})
 
 	it("preserves a canonical completed snapshot while Start New Task disposes resources", async () => {
@@ -133,6 +202,7 @@ describe("Task termination persistence", () => {
 				flushApiConversationHistory: vi.fn(async () => {}),
 				flushUiMessages: vi.fn(async () => {}),
 				updateTaskHistory: vi.fn(async () => {}),
+				publishTaskHistoryClose: vi.fn(),
 				close: vi.fn(async () => {}),
 			},
 			postStateToWebview: vi.fn(async () => {}),
@@ -204,6 +274,7 @@ describe("Task termination persistence", () => {
 				flushApiConversationHistory,
 				flushUiMessages,
 				updateTaskHistory: vi.fn(async () => {}),
+				publishTaskHistoryClose: vi.fn(),
 				close: vi.fn(async () => {}),
 			},
 			postStateToWebview: vi.fn(async () => {}),

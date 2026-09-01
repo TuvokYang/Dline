@@ -1,7 +1,49 @@
 import { describe, expect, it, vi } from "vitest"
-import { prepareHistoryTaskForDisplay } from "../history-task-readiness"
+import { prepareHistoryTaskForDisplay, projectHistoryPreparingView } from "../history-task-readiness"
 
 describe("history task readiness", () => {
+	it("projects a visible but non-dispatchable Resume action while preparing", () => {
+		const view = projectHistoryPreparingView({ taskId: "task-1", phase: "initializing", revision: 3 })
+
+		expect(view.activeInteraction).toBeUndefined()
+		expect(view.input.enabled).toBe(false)
+		expect(view.footer.actions).toEqual([
+			expect.objectContaining({ type: "resume", label: "Resume", enabled: false, dispatchTarget: "interaction" }),
+		])
+	})
+
+	it("publishes a preparing surface before full historical display is ready", async () => {
+		const order: string[] = []
+		let releaseDisplay!: () => void
+		const displayBlocked = new Promise<void>((resolve) => {
+			releaseDisplay = resolve
+		})
+		const onPreparingToDisplay = vi.fn(async () => {
+			order.push("preparing")
+		})
+		const displayHistory = vi.fn(async () => {
+			order.push("display")
+			await displayBlocked
+		})
+		const prepareFromHistory = vi.fn(async () => undefined)
+
+		const readiness = prepareHistoryTaskForDisplay({
+			displayHistory,
+			prepareFromHistory,
+			hasTaskLock: true,
+			isCurrent: () => true,
+			onPreparingToDisplay,
+		} as Parameters<typeof prepareHistoryTaskForDisplay>[0] & {
+			onPreparingToDisplay: () => Promise<void>
+		})
+
+		await vi.waitFor(() => expect(displayHistory).toHaveBeenCalledOnce())
+		expect(order[0]).toBe("preparing")
+		expect(onPreparingToDisplay).toHaveBeenCalledOnce()
+		releaseDisplay()
+		await readiness
+	})
+
 	it("notifies readiness exactly once and stops when the callback replaces the current Task", async () => {
 		let isCurrent = true
 		const displayHistory = vi.fn(async () => undefined)

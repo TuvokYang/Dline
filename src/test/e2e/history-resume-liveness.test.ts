@@ -3,6 +3,8 @@ import * as path from "node:path"
 import { expect, type Frame } from "@playwright/test"
 import { E2ETestHelper, e2e } from "./utils/helpers"
 
+const HISTORY_SURFACE_BUDGET_MS = 500
+
 async function sendTask(sidebar: Frame, text: string): Promise<void> {
 	const input = sidebar.getByTestId("chat-input")
 	await input.fill(text)
@@ -97,6 +99,7 @@ e2e(
 
 		const historyTask = sidebar.getByText(taskText, { exact: true }).last()
 		await expect(historyTask).toBeVisible({ timeout: 30_000 })
+		const historyClickedAt = performance.now()
 		await historyTask.click()
 
 		await expect(sidebar.getByText(taskText, { exact: true }).first()).toBeVisible({ timeout: 5_000 })
@@ -104,6 +107,15 @@ e2e(
 		const footer = sidebar.getByRole("contentinfo")
 		const resumeButton = footer.getByText("Resume", { exact: true })
 		await expect(resumeButton).toBeVisible({ timeout: 5_000 })
+		const historySurfaceMs = Math.round(performance.now() - historyClickedAt)
+		console.log(`[history-resume-liveness] ${JSON.stringify({ historySurfaceMs })}`)
+		await e2e.info().attach("history-resume-liveness.json", {
+			body: Buffer.from(`${JSON.stringify({ historySurfaceMs }, null, 2)}\n`, "utf8"),
+			contentType: "application/json",
+		})
+		expect(historySurfaceMs, `History surface must be ready under ${HISTORY_SURFACE_BUDGET_MS}ms`).toBeLessThan(
+			HISTORY_SURFACE_BUDGET_MS,
+		)
 		await expect.poll(() => server.openAiRequestCount).toBe(2)
 		await expect(sidebar.getByText("E2E_HISTORY_LIVENESS_INTERRUPTED_MUST_NOT_RENDER", { exact: false })).toHaveCount(0)
 

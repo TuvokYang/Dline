@@ -15,8 +15,10 @@ export async function showTaskWithId(controller: Controller, request: StringRequ
 		const id = request.value
 
 		let didNavigate = false
-		const onHistoryTaskReadyToDisplay = async () => {
+		const navigateToHistoryTask = async () => {
+			if (didNavigate) return
 			didNavigate = true
+			await controller.postStateToWebview({ immediate: true })
 			await sendChatButtonClickedEvent(controller)
 		}
 
@@ -28,7 +30,8 @@ export async function showTaskWithId(controller: Controller, request: StringRequ
 		if (historyItem) {
 			// Always initialize the task with the history item
 			await controller.initTask(undefined, undefined, undefined, historyItem, undefined, {
-				onHistoryTaskReadyToDisplay,
+				onHistoryTaskPreparingToDisplay: navigateToHistoryTask,
+				onHistoryTaskReadyToDisplay: navigateToHistoryTask,
 			})
 			if (!didNavigate) {
 				await sendChatButtonClickedEvent(controller)
@@ -56,7 +59,8 @@ export async function showTaskWithId(controller: Controller, request: StringRequ
 
 		// Initialize the task with the fetched item
 		await controller.initTask(undefined, undefined, undefined, fetchedItem, undefined, {
-			onHistoryTaskReadyToDisplay,
+			onHistoryTaskPreparingToDisplay: navigateToHistoryTask,
+			onHistoryTaskReadyToDisplay: navigateToHistoryTask,
 		})
 		if (!didNavigate) {
 			await sendChatButtonClickedEvent(controller)

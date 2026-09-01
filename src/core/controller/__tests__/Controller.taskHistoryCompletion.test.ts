@@ -1,7 +1,8 @@
 import { Controller } from "@core/controller"
+import { clearWorkspaceHistoryManagersForTests } from "@core/controller/history/WorkspaceHistoryManager"
 import type { HistoryItem } from "@shared/HistoryItem"
 import Mutex from "p-mutex"
-import { describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 
 function item(overrides: Partial<HistoryItem> = {}): HistoryItem {
 	return {
@@ -32,12 +33,31 @@ function fakeController(history: HistoryItem[], completionResult?: HistoryItem) 
 	const controller = Object.create(Controller.prototype) as Controller
 	Object.assign(controller as unknown as Record<string, unknown>, {
 		stateManager,
+		workspaceManager: { getPrimaryRoot: () => ({ path: "test-workspace" }) },
 		taskHistoryProjectionMutex: new Mutex(),
 	})
 	return { controller, stateManager, getCache: () => cache }
 }
 
 describe("Controller task history completion projection", () => {
+	beforeEach(() => {
+		clearWorkspaceHistoryManagersForTests()
+	})
+	it("rejects History publication before a workspace path is initialized", async () => {
+		const controller = Object.create(Controller.prototype) as Controller
+		Object.assign(controller as unknown as Record<string, unknown>, {
+			stateManager: {
+				taskHistory: {},
+				getGlobalStateKey: vi.fn(() => []),
+				setGlobalState: vi.fn(),
+			},
+		})
+
+		await expect(controller.updateTaskHistory(item())).rejects.toThrow(
+			"WorkspaceHistoryManager requires an initialized workspace path",
+		)
+	})
+
 	it("preserves a newer completion projection during ordinary metadata updates", async () => {
 		const current = item({ isCompleted: true, completionStateRevision: 7, isFavorited: true })
 		const { controller, stateManager, getCache } = fakeController([current])
@@ -69,7 +89,7 @@ describe("Controller task history completion projection", () => {
 		expect(getCache()[0]).toMatchObject({ isCompleted: true, completionStateRevision: 7, tokensIn: 50 })
 	})
 
-	it("serializes metadata persistence with completion cache updates", async () => {
+	it("accepts completion while metadata persistence continues in the manager queue", async () => {
 		let releaseMetadata!: () => void
 		const metadataRelease = new Promise<void>((resolve) => {
 			releaseMetadata = resolve
@@ -86,12 +106,13 @@ describe("Controller task history completion projection", () => {
 
 		const metadataUpdate = controller.updateTaskHistory(item({ tokensIn: 50 }))
 		await vi.waitFor(() => expect(stateManager.taskHistory.upsertTaskHistory).toHaveBeenCalledOnce())
-		const completionUpdate = controller.persistTaskCompletionState("task-1", false, 8)
+		await expect(controller.persistTaskCompletionState("task-1", false, 8)).resolves.toBe(true)
 
 		expect(stateManager.taskHistory.setCompletionState).not.toHaveBeenCalled()
-		releaseMetadata()
-		await Promise.all([metadataUpdate, completionUpdate])
 		expect(getCache()).toEqual([updated])
+		releaseMetadata()
+		await metadataUpdate
+		await vi.waitFor(() => expect(stateManager.taskHistory.setCompletionState).toHaveBeenCalledOnce())
 	})
 
 	it("durably patches completion and synchronizes the controller cache", async () => {
@@ -102,11 +123,13 @@ describe("Controller task history completion projection", () => {
 		)
 
 		await expect(controller.persistTaskCompletionState("task-1", false, 8)).resolves.toBe(true)
-		expect(stateManager.taskHistory.setCompletionState).toHaveBeenCalledWith({
-			taskId: "task-1",
-			isCompleted: false,
-			revision: 8,
-		})
+		await vi.waitFor(() =>
+			expect(stateManager.taskHistory.setCompletionState).toHaveBeenCalledWith({
+				taskId: "task-1",
+				isCompleted: false,
+				revision: 8,
+			}),
+		)
 		expect(getCache()).toEqual([updated])
 	})
 

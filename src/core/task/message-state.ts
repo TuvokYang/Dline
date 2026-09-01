@@ -42,6 +42,7 @@ interface MessageStateHandlerParams {
 	ulid: string
 	taskIsFavorited?: boolean
 	updateTaskHistory: (historyItem: HistoryItem) => Promise<HistoryItem[]>
+	publishTaskHistoryClose?: () => void
 	taskState: TaskState
 	checkpointManagerErrorMessage?: string
 	/** UI messages store — optional for tests (memory-only mode). */
@@ -61,6 +62,7 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 	private taskIsFavorited: boolean
 	private checkpointTracker: CheckpointTracker | undefined
 	private _updateTaskHistory: (historyItem: HistoryItem) => Promise<HistoryItem[]>
+	private readonly _publishTaskHistoryClose: () => void
 	private taskId: string
 	private ulid: string
 	private taskState: TaskState
@@ -79,6 +81,7 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 		this.taskState = params.taskState
 		this.taskIsFavorited = params.taskIsFavorited ?? false
 		this._updateTaskHistory = params.updateTaskHistory
+		this._publishTaskHistoryClose = params.publishTaskHistoryClose ?? (() => {})
 		this.uiMessage = params.uiMessage
 		this.apiConversation = params.apiConversation
 	}
@@ -209,6 +212,10 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 
 	async updateTaskHistory(): Promise<void> {
 		await this.updateTaskHistoryOnly()
+	}
+
+	publishTaskHistoryClose(): void {
+		this._publishTaskHistoryClose()
 	}
 
 	// ── API conversation history ──
