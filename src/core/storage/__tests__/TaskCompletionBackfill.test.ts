@@ -1,6 +1,11 @@
 import type { HistoryItem } from "@shared/HistoryItem"
 import { describe, expect, it, vi } from "vitest"
-import { type CompletionRepair, type RecoveredCompletion, TaskCompletionBackfill } from "../TaskCompletionBackfill"
+import {
+	type CompletionRepair,
+	type RecoveredCompletion,
+	TASK_COMPLETION_BACKFILL_GENERATION,
+	TaskCompletionBackfill,
+} from "../TaskCompletionBackfill"
 
 type PersistBatchFn = (updates: readonly CompletionRepair[]) => Promise<number>
 
@@ -26,6 +31,16 @@ function backfill(options: {
 		}),
 	}
 }
+
+describe("TASK_COMPLETION_BACKFILL_GENERATION", () => {
+	it("advances past the generation that only repaired lost projections", () => {
+		// Histories already marked as repaired under generation 1 still carry
+		// projections retracted by the close-task defect, so the scan must run
+		// again for them.
+		expect(TASK_COMPLETION_BACKFILL_GENERATION).toBeGreaterThan(1)
+		expect(Number.isSafeInteger(TASK_COMPLETION_BACKFILL_GENERATION)).toBe(true)
+	})
+})
 
 describe("TaskCompletionBackfill", () => {
 	it("repairs a completed task whose projection was cleared", async () => {

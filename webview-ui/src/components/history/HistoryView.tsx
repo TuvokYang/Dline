@@ -64,15 +64,9 @@ const HistoryView = ({ onDone }: HistoryViewProps) => {
 					includeCompletionStatus: true,
 				}),
 			)
-			// The service already resolves the canonical projection, so a returned
-			// `isCompleted` is authoritative; mark it as revisioned for the shared
-			// completion rule used by every history list.
-			setTasks(
-				(response.tasks || []).map((task) => ({
-					...task,
-					completionStateRevision: task.isCompleted ? 1 : undefined,
-				})),
-			)
+			// The service carries the canonical projection, including its revision,
+			// so the shared completion rule can be applied to the response directly.
+			setTasks(response.tasks || [])
 		} catch (error) {
 			console.error("Error loading task history:", error)
 		}

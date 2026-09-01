@@ -239,6 +239,9 @@ message TaskItem {
   optional double cache_hit_rate = 12;
   optional string currency = 13;
   optional bool is_completed = 14;
+  // Runtime revision that produced the completion projection. Present only for
+  // a canonical projection; a bare is_completed without it is not authoritative.
+  optional int64 completion_state_revision = 15;
 }
 
 // Request for ask response operation

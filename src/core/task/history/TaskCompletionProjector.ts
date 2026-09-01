@@ -21,16 +21,28 @@ type CompletionRuntimeState = Pick<TaskRuntimeState, "phase" | "completion" | "r
 /**
  * Phases that carry no settled completion verdict.
  *
- * Reopening a finished Task walks through startup phases before its canonical
- * state is hydrated. Treating those transient states as "not completed" made
- * every reopen persist `isCompleted: false`, which is why history checkmarks
+ * Only phases that describe what the Task is actually doing can decide whether
+ * it is completed. Startup and shutdown phases describe the session, not the
+ * work, so they must leave the last real verdict untouched.
+ *
+ * Startup: reopening a finished Task walks through these phases before its
+ * canonical state is hydrated. Treating them as "not completed" made every
+ * reopen persist `isCompleted: false`, which is why history checkmarks
  * disappeared after a few refreshes.
+ *
+ * Shutdown: closing a Task dispatches a terminate transaction that moves any
+ * phase into CANCELLING, and an abort ends in ABORTED. Treating either as "not
+ * completed" retracted the verdict on every ordinary close, which is why the
+ * history checkmark never survived closing a finished Task. Cancelling a Task
+ * ends the session; it does not undo the completion that already happened.
  */
 const INDETERMINATE_PHASES: ReadonlySet<TaskPhase> = new Set([
 	TaskPhase.IDLE,
 	TaskPhase.INITIALIZING,
 	TaskPhase.WAITING_FOR_TASK,
 	TaskPhase.RESUMING,
+	TaskPhase.CANCELLING,
+	TaskPhase.ABORTED,
 ])
 
 /** Project canonical Task completion state into the durable task-history index. */

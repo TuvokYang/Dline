@@ -104,7 +104,11 @@ export async function getTaskHistory(controller: Controller, request: GetTaskHis
 			task: item.task,
 			ts: item.ts,
 			isFavorited: item.isFavorited || false,
+			// A bare `isCompleted` written before the projection existed is not
+			// authoritative, so both fields travel together and are only emitted
+			// for a canonical revisioned projection.
 			isCompleted: item.completionStateRevision !== undefined && item.isCompleted === true,
+			completionStateRevision: item.completionStateRevision,
 			size: item.size || 0,
 			totalCost: item.totalCost || 0,
 			currency: item.currency || "",

@@ -57,6 +57,7 @@ import { getDlineDocumentsPath, getDlineDocumentsPathSync } from "@/core/storage
 import {
 	readPersistedTaskCompletion,
 	TASK_COMPLETION_BACKFILL_DELAY_MS,
+	TASK_COMPLETION_BACKFILL_GENERATION,
 	TaskCompletionBackfill,
 } from "@/core/storage/TaskCompletionBackfill"
 import { HostProvider } from "@/hosts/host-provider"
@@ -438,22 +439,30 @@ export class Controller {
 		Logger.log("[Controller] ClineProvider instantiated")
 	}
 
+	/** Report whether this history already satisfies the current repair generation. */
+	private hasCurrentTaskCompletionBackfillGeneration(): boolean {
+		return this.stateManager.getGlobalStateKey("taskCompletionBackfillGeneration") >= TASK_COMPLETION_BACKFILL_GENERATION
+	}
+
 	/**
-	 * Repair completion projections lost by earlier versions, once, off the startup path.
+	 * Repair completion projections damaged by earlier versions, off the startup path.
 	 *
-	 * A defect used to clear the projection every time a finished Task was
-	 * reopened, and such a row cannot heal itself while nobody opens that Task.
-	 * The scan reads each Task's canonical snapshot, so it is deferred well past
-	 * activation and guarded by a durable marker to run at most once.
+	 * A damaged row cannot heal itself while nobody opens that Task, so the scan
+	 * reads each Task's canonical snapshot. That is expensive, so it stays fully
+	 * detached from startup: nothing awaits it, it is deferred well past
+	 * activation, it runs at most once per process, and it runs at most once per
+	 * repair generation.
 	 */
 	private scheduleTaskCompletionBackfill(): void {
-		if (this.stateManager.getGlobalStateKey("taskCompletionBackfillCompleted")) return
+		if (this.hasCurrentTaskCompletionBackfillGeneration()) return
 		// Process-level single-flight: every Controller shares the same history
 		// file, so a second scheduled scan would only multiply full-file reads
 		// and durable transactions without repairing anything new.
 		if (Controller.taskCompletionBackfillScheduled) return
 		Controller.taskCompletionBackfillScheduled = true
 
+		// Detached on purpose: the timer is unref'd and the run is not awaited by
+		// any startup path, so the scan can never interleave with activation IO.
 		const timer = setTimeout(() => {
 			void this.runTaskCompletionBackfill().catch((error) =>
 				Logger.debug(`[Controller] Task completion backfill skipped: ${error}`),
@@ -464,9 +473,9 @@ export class Controller {
 
 	private async runTaskCompletionBackfill(): Promise<void> {
 		if (this.disposed) return
-		// The marker may have been set durably by another window while the timer
-		// was pending; re-check before paying for the scan.
-		if (this.stateManager.getGlobalStateKey("taskCompletionBackfillCompleted")) return
+		// The marker may have been raised durably by another window while the
+		// timer was pending; re-check before paying for the scan.
+		if (this.hasCurrentTaskCompletionBackfillGeneration()) return
 
 		const backfill = new TaskCompletionBackfill({
 			listTasks: () => this.stateManager.taskHistory.getDeduplicated(),
@@ -481,7 +490,7 @@ export class Controller {
 		// Mark the migration done even when some rows failed: a failed row keeps
 		// its current projection and is repaired when its Task is next opened, so
 		// rescanning the whole history on every launch would buy nothing.
-		this.stateManager.setGlobalState("taskCompletionBackfillCompleted", true)
+		this.stateManager.setGlobalState("taskCompletionBackfillGeneration", TASK_COMPLETION_BACKFILL_GENERATION)
 		if (result.repaired > 0 || result.failed > 0) {
 			Logger.info(
 				`[Controller] Task completion backfill: scanned=${result.scanned}, repaired=${result.repaired}, failed=${result.failed}`,

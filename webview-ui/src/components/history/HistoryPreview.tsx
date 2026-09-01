@@ -163,13 +163,13 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 					}),
 				)
 				if (!cancelled) {
-					// The service resolves the canonical projection, so a returned
-					// `isCompleted` is already authoritative for this list.
+					// The service carries the canonical projection, including its
+					// revision, so the shared completion rule applies directly.
 					setLoadedTasks({
 						requestKey,
 						tasks: response.tasks.slice(0, HISTORY_PREVIEW_LIMIT).map((task) => ({
 							...task,
-							completionStateRevision: task.isCompleted ? 1 : undefined,
+							isCompleted: isTaskCompleted(task),
 						})),
 					})
 				}

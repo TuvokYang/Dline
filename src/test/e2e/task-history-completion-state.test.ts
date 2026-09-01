@@ -10,6 +10,8 @@ const FIRST_COMPLETION = "E2E_TASK_HISTORY_COMPLETION_FIRST"
 const CONTINUATION_READY = "E2E_TASK_HISTORY_COMPLETION_CONTINUED"
 const FINAL_COMPLETION = "E2E_TASK_HISTORY_COMPLETION_FINAL"
 const CONTINUATION_FEEDBACK = "E2E_TASK_HISTORY_CONTINUE_AFTER_COMPLETION"
+const CLOSE_TASK_TEXT = "E2E_TASK_HISTORY_COMPLETION_CLOSE"
+const CLOSE_COMPLETION = "E2E_TASK_HISTORY_COMPLETION_CLOSE_DONE"
 
 async function openSidebar(app: ElectronApplication, helper: E2ETestHelper): Promise<{ page: Page; sidebar: Frame }> {
 	const page = await app.firstWindow()
@@ -33,7 +35,9 @@ async function submitFeedback(sidebar: Frame, text: string): Promise<void> {
 	await input.fill(text)
 	await input.press("Enter")
 	await expect(input).toHaveValue("")
-	await expect(sidebar.locator("span.ph-no-capture:not(button span)").filter({ hasText: text })).toHaveCount(1)
+	// The submitted feedback is rendered as a direct user message row; assert on
+	// that contract rather than on a styling class that the chat rows no longer carry.
+	await expect(sidebar.getByTestId("direct-user-input").filter({ hasText: text })).toHaveCount(1, { timeout: 30_000 })
 }
 
 async function closeTask(sidebar: Frame): Promise<void> {
@@ -167,7 +171,11 @@ e2e(
 
 			await submitFeedback(opened.sidebar, "E2E_TASK_HISTORY_FINISH_NOW")
 			await expect(opened.sidebar.getByText(FINAL_COMPLETION, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
-			await expect(opened.sidebar.getByRole("contentinfo").getByText("Start New Task", { exact: true })).toBeVisible()
+			// The completion footer is published by a separate state update, so it can
+			// settle after the completion text itself becomes visible.
+			await expect(opened.sidebar.getByRole("contentinfo").getByText("Start New Task", { exact: true })).toBeVisible({
+				timeout: 30_000,
+			})
 			await expectPersistedCompletion(dlineDocsDir, taskId, true, continuedRevision + 1)
 			await startNewTask(opened.sidebar)
 			await expectHistoryCompletion(opened.sidebar, TASK_TEXT, true)
@@ -179,6 +187,56 @@ e2e(
 				"qna_respond",
 				"attempt_completion",
 			])
+			expect(consumptions.every((entry) => entry.contractError === undefined)).toBe(true)
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app?.close()
+			helper.clearCachedFrame()
+		}
+	},
+)
+
+e2e(
+	"Task history keeps the completed projection after the task is closed",
+	async ({ dlineDocsDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(300_000)
+		let app: ElectronApplication | undefined
+
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses({
+			type: "tool",
+			name: "attempt_completion",
+			arguments: { result: CLOSE_COMPLETION },
+		})
+
+		try {
+			app = await openVSCode(workspaceDir)
+			let opened = await openSidebar(app, helper)
+			await sendTask(opened.sidebar, CLOSE_TASK_TEXT)
+			await expect(opened.sidebar.getByText(CLOSE_COMPLETION, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+			await expect(opened.sidebar.getByRole("contentinfo").getByText("Start New Task", { exact: true })).toBeVisible()
+
+			const taskId = await onlyTaskId(dlineDocsDir)
+			const completedRevision = await expectPersistedCompletion(dlineDocsDir, taskId, true)
+
+			// Closing a finished Task only ends the session; it must not retract the
+			// completion verdict the Task already established.
+			await closeTask(opened.sidebar)
+			await expectPersistedCompletion(dlineDocsDir, taskId, true, completedRevision)
+			await expectHistoryCompletion(opened.sidebar, CLOSE_TASK_TEXT, true)
+
+			await app.close()
+			helper.clearCachedFrame()
+			app = undefined
+
+			app = await openVSCode(workspaceDir)
+			opened = await openSidebar(app, helper)
+			await expectHistoryCompletion(opened.sidebar, CLOSE_TASK_TEXT, true)
+			await expectPersistedCompletion(dlineDocsDir, taskId, true, completedRevision)
+
+			const consumptions = server.getMockConsumptions("openai-compatible-chat")
+			expect(consumptions).toHaveLength(1)
+			expect(consumptions.map((entry) => entry.toolName)).toEqual(["attempt_completion"])
 			expect(consumptions.every((entry) => entry.contractError === undefined)).toBe(true)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {

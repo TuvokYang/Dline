@@ -90,6 +90,22 @@ describe("TaskCompletionProjector", () => {
 		expect(persist).not.toHaveBeenCalled()
 	})
 
+	it("keeps a completed projection while the session shuts down", async () => {
+		const persist = vi.fn(async () => true)
+		const projector = new TaskCompletionProjector({
+			taskId: "task-1",
+			initial: { isCompleted: true, revision: 12 },
+			persist,
+		})
+
+		// Closing a finished Task moves it through CANCELLING, and an abort ends
+		// in ABORTED. Neither retracts the completion that already happened.
+		await expect(projector.sync(runtimeState(TaskPhase.CANCELLING, 13))).resolves.toBe(false)
+		await expect(projector.sync(runtimeState(TaskPhase.ABORTED, 14))).resolves.toBe(false)
+
+		expect(persist).not.toHaveBeenCalled()
+	})
+
 	it("lifts a restarted runtime revision above the durable watermark", async () => {
 		const persist = vi.fn(async () => true)
 		const projector = new TaskCompletionProjector({

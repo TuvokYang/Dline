@@ -87,6 +87,20 @@ const CHUNK_SIZE = 25
 export const TASK_COMPLETION_BACKFILL_DELAY_MS = 15_000
 
 /**
+ * Current repair generation of the completion projection.
+ *
+ * Raise this whenever a newly fixed defect could have written wrong
+ * projections, so histories repaired under an earlier generation are scanned
+ * once more. The stored marker records the generation a history already
+ * satisfies, which keeps the scan at most once per generation.
+ *
+ * 1: initial repair of histories that lost the projection on reopen.
+ * 2: repair of histories whose projection was retracted when a finished Task
+ *    was closed, because terminal phases were treated as "not completed".
+ */
+export const TASK_COMPLETION_BACKFILL_GENERATION = 2
+
+/**
  * Repair task-history completion projections that earlier versions lost.
  *
  * A defect used to persist `isCompleted: false` whenever a finished Task was

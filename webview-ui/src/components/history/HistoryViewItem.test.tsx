@@ -294,7 +294,9 @@ describe("HistoryPreview", () => {
 	})
 
 	it("keeps a completion returned by the filtered request", async () => {
-		const completed = historyItem("completed", 1, { isCompleted: true })
+		// The service emits the canonical projection, so the response carries the
+		// revision alongside the flag; a bare flag is not authoritative.
+		const completed = historyItem("completed", 1, { isCompleted: true, completionStateRevision: 4 })
 		extensionState.taskHistory = []
 		vi.mocked(TaskServiceClient.getTaskHistory).mockResolvedValue({ tasks: [completed], totalCount: 1 })
 
