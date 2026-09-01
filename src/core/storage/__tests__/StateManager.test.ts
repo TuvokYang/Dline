@@ -282,12 +282,14 @@ describe("StateManager — Per-Task Settings Isolation", () => {
 			settingsStorage.get("terminalOutputLineLimit").should.equal(900)
 		})
 
-		it("should dual-write settings to settings.json and globalState.json", async () => {
+		it("should route a Settings key to settings.json only", async () => {
 			sm.setGlobalState("mode" as any, "plan" as any)
 			await sm.flushPendingState()
 
-			// settings.json should have the value
 			sm.getGlobalSettingsKey("mode" as any)?.should.equal("plan")
+			// Projecting the same value into global state would persist a duplicate
+			// that later diverges from the canonical Settings document.
+			expect((sm as any).globalStateCache["mode"]).toBeUndefined()
 		})
 
 		it("should read settings from settingsCache first", async () => {
@@ -303,13 +305,22 @@ describe("StateManager — Per-Task Settings Isolation", () => {
 			await StateManager.resetForTest()
 		})
 
-		it("should fallback to globalStateCache when settingsCache is empty", () => {
-			// Clear settingsCache for this key to simulate pre-migration fallback
+		it("should fallback to the legacy snapshot when settingsCache is empty", () => {
+			// A pre-migration install still holds its value in the legacy global
+			// state file, which is captured into the fallback cache at startup.
 			delete (sm as any).settingsCache["yoloModeToggled"]
-			// Write only to globalStateCache
-			;(sm as any).globalStateCache["yoloModeToggled"] = true
+			;(sm as any).settingsFallbackActive = true
+			;(sm as any).settingsFallbackCache["yoloModeToggled"] = true
 
 			sm.getGlobalSettingsKey("yoloModeToggled" as any)?.should.equal(true)
+		})
+
+		it("should fall back to the declared default once the legacy snapshot is retired", () => {
+			delete (sm as any).settingsCache["terminalOutputLineLimit"]
+			;(sm as any).settingsFallbackActive = false
+			;(sm as any).settingsFallbackCache = {}
+
+			sm.getGlobalSettingsKey("terminalOutputLineLimit").should.equal(500)
 		})
 	})
 

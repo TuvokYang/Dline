@@ -29,6 +29,7 @@ import { AgentConfigLoader } from "../task/tools/subagent/AgentConfigLoader"
 import { openBufferedJsonlStore } from "./backend/jsonl/JsonlUnifyStore"
 import { readTaskSettingsFromStorage, writeTaskHistoryToState, writeTaskSettingsToStorage } from "./disk"
 import { STATE_MANAGER_NOT_INITIALIZED } from "./error-messages"
+import { cleanupLegacyGlobalState } from "./globalstatecleanup"
 import { filterAllowedRemoteConfigFields } from "./remote-config/utils"
 import {
 	getAccountApiKey,
@@ -214,11 +215,20 @@ export class StateManager {
 
 			// Populate non-Settings caches without triggering persistence during initialization.
 			candidate.populateCache(globalState, secrets, workspaceState)
-			candidate.captureSettingsFallbackCache()
+			candidate.captureSettingsFallbackCache(globalState)
 
 			// Load Settings from the canonical repository after global state so the
 			// committed Settings snapshot remains authoritative for overlapping keys.
 			await StateManager.loadAndMigrateSettings(candidate, storage, globalState)
+
+			// Drop legacy entries only after the Settings document owns their values,
+			// so a failed migration never causes data loss. A failure here is not
+			// fatal: the marker stays behind and the next launch retries.
+			try {
+				await cleanupLegacyGlobalState(storage.globalStateBackingStore)
+			} catch (error) {
+				Logger.warn("[StateManager] Legacy global state cleanup deferred:", error)
+			}
 
 			// Create TaskHistory inside the injected storage boundary.
 			const filePath = storage.taskHistoryPath
@@ -358,11 +368,19 @@ export class StateManager {
 		instance.disableSettingsFallback()
 	}
 
-	private captureSettingsFallbackCache(): void {
+	/**
+	 * Snapshot legacy Settings values before the canonical repository loads.
+	 *
+	 * Installations that predate the Settings document keep their values in the
+	 * legacy global state file. The snapshot is taken from that legacy source
+	 * directly, so the fallback stays available even though Settings are no
+	 * longer projected into the global state cache.
+	 */
+	private captureSettingsFallbackCache(legacyGlobalState: GlobalStateAndSettings): void {
 		const fallback = this.settingsFallbackCache as Record<string, unknown>
-		const global = this.globalStateCache as Record<string, unknown>
+		const legacy = legacyGlobalState as unknown as Record<string, unknown>
 		for (const key of SettingsKeys) {
-			const value = global[key as string]
+			const value = legacy[key as string]
 			if (value !== undefined) {
 				fallback[key as string] = value
 			}
@@ -377,6 +395,15 @@ export class StateManager {
 		await this.notifySyncExternalChange({ source: "settings", commit })
 	}
 
+	/**
+	 * Adopt a committed Settings snapshot into the in-memory Settings cache.
+	 *
+	 * Settings are never copied into the global state cache. The Settings
+	 * document is their only persistence target, so projecting them would make
+	 * globalState.json accumulate a second, always-stale copy of every setting.
+	 * Readers resolve a missing key through the legacy fallback and then the
+	 * declared default instead.
+	 */
 	private applySettingsSnapshot(snapshot: SettingsSnapshot): void {
 		const pendingValues = new Map<string, unknown>()
 		for (const key of this.pendingSettings) {
@@ -386,42 +413,38 @@ export class StateManager {
 		this.settingsCache = { ...(snapshot.values as Settings) }
 		this.appliedSettingsRevision = snapshot.revision
 		const settingsRecord = this.settingsCache as Record<string, unknown>
+
+		// Drop any Settings key that an older build projected into global state so
+		// the cleanup does not depend on the on-disk migration alone.
 		const globalRecord = this.globalStateCache as Record<string, unknown>
 		for (const key of SettingsKeys) {
-			const keyName = key as string
-			const value = settingsRecord[keyName]
-			if (value !== undefined) {
-				globalRecord[keyName] = value
-				continue
-			}
-
-			const fallbackValue = this.settingsFallbackActive
-				? (this.settingsFallbackCache as Record<string, unknown>)[keyName]
-				: undefined
-			if (fallbackValue !== undefined) {
-				globalRecord[keyName] = fallbackValue
-				continue
-			}
-
-			const defaultValue = getDefaultValue(key)
-			if (defaultValue !== undefined) {
-				globalRecord[keyName] = defaultValue
-			} else {
-				delete globalRecord[keyName]
-			}
+			delete globalRecord[key as string]
 		}
 
 		// Preserve optimistic local mutations until their own transaction commits.
 		for (const [key, value] of pendingValues) {
 			if (value === undefined) {
-				// The missing Settings key has already been projected to its declared
-				// default above; only remove the explicit value from the canonical cache.
 				delete settingsRecord[key]
 			} else {
 				settingsRecord[key] = value
-				globalRecord[key] = value
 			}
 		}
+	}
+
+	/**
+	 * Resolve a Settings key that the canonical document does not define.
+	 *
+	 * Pre-migration installations still hold their values in the legacy global
+	 * state snapshot; everything else falls back to the declared default.
+	 */
+	private resolveSettingsFallback<K extends SettingsKey>(key: K): Settings[K] {
+		if (this.settingsFallbackActive) {
+			const fallbackValue = (this.settingsFallbackCache as Record<string, unknown>)[key as string]
+			if (fallbackValue !== undefined) {
+				return fallbackValue as Settings[K]
+			}
+		}
+		return getDefaultValue(key) as Settings[K]
 	}
 
 	private disableSettingsFallback(): void {
@@ -547,7 +570,11 @@ export class StateManager {
 	}
 
 	/**
-	 * Set method for global state keys - updates cache immediately and schedules debounced persistence
+	 * Set one global state or Settings key and schedule its debounced write.
+	 *
+	 * A Settings key is routed to the Settings document only. Writing it to the
+	 * global state cache as well would persist a duplicate that later diverges
+	 * from the canonical value.
 	 */
 	setGlobalState<K extends keyof GlobalStateAndSettings>(key: K, value: GlobalStateAndSettings[K] | undefined): void {
 		if (!this.isInitialized) {
@@ -555,26 +582,24 @@ export class StateManager {
 		}
 		this.ensureMutationAllowed()
 
-		// Update cache immediately for instant access. The public setter permits
-		// undefined as an explicit delete value even for fields with a default.
-		;(this.globalStateCache as Record<string, unknown>)[key as string] = value
-
-		// Add to pending persistence set and schedule debounced write
-		this.pendingGlobalState.add(key)
-
-		// @deprecated Phase B dual-write for settings.
-		// When key is a SettingsKey, also write to settings.json.
-		// Remove dual-write in Phase C — settings go to settings.json only.
 		if (isSettingsKey(key as string)) {
 			;(this.settingsCache as Record<string, unknown>)[key as string] = value
 			this.pendingSettings.add(key as unknown as SettingsKey)
+			this.scheduleDebouncedPersistence()
+			return
 		}
+		// Update cache immediately for instant access. The public setter permits
+		// undefined as an explicit delete value even for fields with a default.
+		;(this.globalStateCache as Record<string, unknown>)[key as string] = value
+		this.pendingGlobalState.add(key)
 
 		this.scheduleDebouncedPersistence()
 	}
 
 	/**
-	 * Batch set method for global state keys - updates cache immediately and schedules debounced persistence
+	 * Set several global state or Settings keys in one debounced write.
+	 *
+	 * Each key is routed to exactly one store, matching setGlobalState().
 	 */
 	setGlobalStateBatch(updates: Partial<GlobalStateAndSettings>): void {
 		if (!this.isInitialized) {
@@ -582,18 +607,18 @@ export class StateManager {
 		}
 		this.ensureMutationAllowed()
 
-		// Update the legacy cache and route every Settings key through the same
-		// canonical repository path used by setGlobalState().
-		Object.assign(this.globalStateCache, updates)
 		const updateRecord = updates as Record<string, unknown>
 		const settingsRecord = this.settingsCache as Record<string, unknown>
+		const globalRecord = this.globalStateCache as Record<string, unknown>
 
 		for (const key of Object.keys(updates)) {
-			this.pendingGlobalState.add(key as GlobalStateAndSettingsKey)
 			if (isSettingsKey(key)) {
 				settingsRecord[key] = updateRecord[key]
 				this.pendingSettings.add(key as SettingsKey)
+				continue
 			}
+			globalRecord[key] = updateRecord[key]
+			this.pendingGlobalState.add(key as GlobalStateAndSettingsKey)
 		}
 
 		// Schedule debounced persistence
@@ -1129,7 +1154,7 @@ export class StateManager {
 		if (this.settingsCache[key] !== undefined) {
 			return this.settingsCache[key]
 		}
-		return this.globalStateCache[key]
+		return this.resolveSettingsFallback(key)
 	}
 
 	getGlobalSettingsKey<K extends keyof Settings>(key: K): Settings[K] {
@@ -1154,11 +1179,12 @@ export class StateManager {
 				return taskCache[key]
 			}
 		}
-		// Phase B: prefer settingsCache, fallback to globalStateCache
+		// The Settings document is authoritative; a key it does not define resolves
+		// through the legacy fallback and then its declared default.
 		if (this.settingsCache[key] !== undefined) {
 			return this.settingsCache[key]
 		}
-		return this.globalStateCache[key]
+		return this.resolveSettingsFallback(key)
 	}
 
 	/** Atomically mutate one global Setting against the latest cross-process committed snapshot. */
@@ -1526,6 +1552,9 @@ export class StateManager {
 			if (key === "taskHistory") {
 				// Mark dirty for periodic flush; do NOT write here
 				// taskHistory handled by TaskHistory singleton — no dirty flag needed
+			} else if (isSettingsKey(key as string)) {
+				// Settings belong to the Settings document. An older build could have
+				// queued one here, so drop it instead of writing a stale duplicate.
 			} else {
 				regularEntries[key] = this.globalStateCache[key]
 			}
@@ -1533,7 +1562,7 @@ export class StateManager {
 
 		// Batch write all regular keys in a single disk operation
 		if (Object.keys(regularEntries).length > 0) {
-			this.storage.globalStateBackingStore.setBatch(regularEntries)
+			await this.storage.globalStateBackingStore.setBatchAsync(regularEntries)
 		}
 	}
 
@@ -1570,7 +1599,7 @@ export class StateManager {
 			const value = this.secretsCache[key]
 			entries[key] = value || undefined // Convert empty strings to undefined (delete)
 		}
-		this.storage.secrets.setBatch(entries)
+		await this.storage.secrets.setBatchAsync(entries)
 	}
 
 	/**
@@ -1582,7 +1611,7 @@ export class StateManager {
 		for (const key of keys) {
 			entries[key] = this.workspaceStateCache[key]
 		}
-		this.storage.workspaceState.setBatch(entries)
+		await this.storage.workspaceState.setBatchAsync(entries)
 	}
 
 	/**
@@ -1615,7 +1644,7 @@ export class StateManager {
 		if (this.settingsCache[key] !== undefined) {
 			return this.settingsCache[key]
 		}
-		return this.globalStateCache[key]
+		return this.resolveSettingsFallback(key)
 	}
 
 	/**
