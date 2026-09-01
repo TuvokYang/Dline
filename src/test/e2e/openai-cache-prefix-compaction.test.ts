@@ -185,7 +185,7 @@ async function configureProfiles(dlineDir: string, maxOutputTokens = 60_000): Pr
 }
 
 async function createPromptResources(workspaceDir: string): Promise<void> {
-	const rulesDirectory = path.join(workspaceDir, ".dline", "rules")
+	const rulesDirectory = path.join(workspaceDir, ".agents", "rules")
 	const skillDirectory = path.join(workspaceDir, ".agents", "skills", SKILL_NAME)
 	const workflowDirectory = path.join(workspaceDir, ".agents", "workflows")
 	const mcpDirectory = path.join(workspaceDir, ".agents", "mcp")

@@ -1,4 +1,4 @@
-import { synchronizeRuleToggles } from "@core/context/instructions/user-instructions/rule-helpers"
+import { scanRuleToggles } from "@core/context/instructions/user-instructions/rule-helpers"
 import { getWorkflowsScanDirectories } from "@core/storage/disk"
 import { resolveCapabilityToggles } from "@core/storage/settings/capability-toggle-store"
 import { ClineRulesToggles } from "@shared/cline-rules"
@@ -22,20 +22,29 @@ export async function refreshWorkflowToggles(
 ): Promise<{
 	globalWorkflowToggles: ClineRulesToggles
 	localWorkflowToggles: ClineRulesToggles
+	discoveredLocalToggles: ClineRulesToggles
+	localScanComplete: boolean
 }> {
 	const startedAt = performance.now()
 	const scanDirs = getWorkflowsScanDirectories(workingDirectory)
 
 	const discoveredGlobal: ClineRulesToggles = {}
 	const discoveredLocal: ClineRulesToggles = {}
+	// One unreadable local root makes the whole local result untrustworthy: the
+	// caller cannot tell which workflows that root would have contributed.
+	let localScanComplete = true
 
-	// Synchronize each directory independently, then merge the discovered paths.
-	// Calling synchronizeRuleToggles with an empty map avoids one directory
-	// deleting entries discovered from a sibling directory.
+	// Scan each directory independently, then merge the discovered paths. Passing
+	// an empty map avoids one directory deleting entries discovered from a
+	// sibling directory.
 	for (const dir of scanDirs) {
-		const discovered = await synchronizeRuleToggles(dir.path, {})
-		if (dir.source === "global") Object.assign(discoveredGlobal, discovered)
-		else Object.assign(discoveredLocal, discovered)
+		const scan = await scanRuleToggles(dir.path, {})
+		if (dir.source === "global") {
+			Object.assign(discoveredGlobal, scan.toggles)
+		} else {
+			Object.assign(discoveredLocal, scan.toggles)
+			if (!scan.complete) localScanComplete = false
+		}
 	}
 
 	// Global entries resolve through the same scope chain as project entries, so a
@@ -43,11 +52,15 @@ export async function refreshWorkflowToggles(
 	const globalToggles = resolveCapabilityToggles(controller.stateManager, "workflows", discoveredGlobal)
 	const localToggles = resolveCapabilityToggles(controller.stateManager, "workflows", discoveredLocal)
 	Logger.debug(
-		`[CapabilityPerf] phase=workflows_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} directories=${scanDirs.length} global=${Object.keys(globalToggles).length} local=${Object.keys(localToggles).length}`,
+		`[CapabilityPerf] phase=workflows_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} directories=${scanDirs.length} global=${Object.keys(globalToggles).length} local=${Object.keys(localToggles).length} localComplete=${localScanComplete}`,
 	)
 
 	return {
 		globalWorkflowToggles: globalToggles,
 		localWorkflowToggles: localToggles,
+		// The raw scan says which workflows exist; the resolved map above already
+		// folds in the user's overrides and cannot answer that question.
+		discoveredLocalToggles: discoveredLocal,
+		localScanComplete,
 	}
 }

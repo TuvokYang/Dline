@@ -105,7 +105,10 @@ export const GlobalFileNames = {
 	hicapModels: "hicap_models.json",
 	mcpSettings: "mcp_settings.json",
 	dlineDir: ".dline",
-	dlineRulesDir: ".dline/rules",
+	// Workspace rules live under .agents/ alongside workflows, skills and
+	// subagents. Keeping rules in a separate root left them outside the
+	// discovery scan, so a rule placed next to a working workflow never loaded.
+	agentsRulesDir: ".agents/rules",
 	hooksDir: ".dline/hooks",
 	mcpDir: ".dline/mcp",
 	pluginDir: ".dline/plugin",
@@ -318,7 +321,7 @@ export async function ensureAgentSubagentsDirectoryExists(opts: { isGlobal: bool
 export async function ensureDlineRulesDirectoryExists(opts: { isGlobal: boolean; workspacePath?: string }): Promise<string> {
 	const dir = opts.isGlobal
 		? path.join(getDlineDocumentsPathSync(), "rules")
-		: path.join(opts.workspacePath ?? "", GlobalFileNames.dlineRulesDir)
+		: path.join(opts.workspacePath ?? "", GlobalFileNames.agentsRulesDir)
 	try {
 		await fs.mkdir(dir, { recursive: true })
 	} catch {
@@ -1003,8 +1006,18 @@ export async function deleteRemoteConfigFromCache(orgId: string): Promise<void> 
 }
 
 export async function getGlobalHooksDir(): Promise<string | undefined> {
+	const startedAt = performance.now()
 	const d = await ensureHooksDirectoryExists()
-	return (await isDirectory(d)) ? d : undefined
+	const directoryReadyAt = performance.now()
+	const exists = await isDirectory(d)
+	const completedAt = performance.now()
+	const totalMs = Math.round(completedAt - startedAt)
+	if (totalMs >= 100) {
+		Logger.debug(
+			`[HookDiscoveryPerf] phase=global_directory ensureMs=${Math.round(directoryReadyAt - startedAt)} statMs=${Math.round(completedAt - directoryReadyAt)} totalMs=${totalMs} exists=${exists}`,
+		)
+	}
+	return exists ? d : undefined
 }
 let runtimeHooksDir: string | undefined
 export function setRuntimeHooksDir(dir: string | undefined): void {
@@ -1012,20 +1025,32 @@ export function setRuntimeHooksDir(dir: string | undefined): void {
 }
 
 export async function getAllHooksDirs(): Promise<string[]> {
+	const startedAt = performance.now()
 	const dirs: string[] = []
 	if (runtimeHooksDir && (await isDirectory(runtimeHooksDir))) dirs.push(runtimeHooksDir)
+	const runtimeReadyAt = performance.now()
 	const g = await getGlobalHooksDir()
 	if (g) dirs.push(g)
+	const globalReadyAt = performance.now()
 	dirs.push(...(await getWorkspaceHooksDirs()))
+	const completedAt = performance.now()
+	const totalMs = Math.round(completedAt - startedAt)
+	if (totalMs >= 100) {
+		Logger.debug(
+			`[HookDiscoveryPerf] phase=directories runtimeMs=${Math.round(runtimeReadyAt - startedAt)} globalMs=${Math.round(globalReadyAt - runtimeReadyAt)} workspaceMs=${Math.round(completedAt - globalReadyAt)} totalMs=${totalMs} directories=${dirs.length}`,
+		)
+	}
 	return dirs
 }
 export async function getWorkspaceHooksDirs(): Promise<string[]> {
+	const startedAt = performance.now()
 	const { StateManager } = await import("./StateManager")
+	const importedAt = performance.now()
 	const roots =
 		StateManager.get()
 			.getGlobalStateKey("workspaceRoots")
 			?.map((r) => r.path) || []
-	return (
+	const directories = (
 		await Promise.all(
 			roots.map(async (r) => {
 				const c = path.join(r, GlobalFileNames.hooksDir)
@@ -1033,6 +1058,14 @@ export async function getWorkspaceHooksDirs(): Promise<string[]> {
 			}),
 		)
 	).filter((p): p is string => Boolean(p))
+	const completedAt = performance.now()
+	const totalMs = Math.round(completedAt - startedAt)
+	if (totalMs >= 100) {
+		Logger.debug(
+			`[HookDiscoveryPerf] phase=workspace_directories importMs=${Math.round(importedAt - startedAt)} statMs=${Math.round(completedAt - importedAt)} totalMs=${totalMs} roots=${roots.length} directories=${directories.length}`,
+		)
+	}
+	return directories
 }
 
 export async function writeConversationHistoryJson(taskId: string, h: ClineStorageMessage[], ts?: number): Promise<string> {

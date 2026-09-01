@@ -28,9 +28,9 @@ const prompts: Record<string, string> = {
 	clineRulesGlobalDirInstructions:
 		"# Global User Rules\n\nThe following is provided by global user rules where the user has specified instructions for all working directories:\n\n@CONTENT@",
 	clineRulesLocalDirInstructions:
-		"# Local User Rules (.dline/rules/)\n\nThe following is provided by local user rules in @WORKSPACE_NAME@ where the user has specified instructions:\n\n@CONTENT@",
+		"# Local User Rules (.agents/rules/)\n\nThe following is provided by local user rules in @WORKSPACE_NAME@ where the user has specified instructions:\n\n@CONTENT@",
 	clineRulesLocalFileInstructions:
-		"# Local User Rules (.dline/rules)\n\nThe following is provided by local user rules in @WORKSPACE_NAME@ where the user has specified instructions:\n\n@CONTENT@",
+		"# Local User Rules (.agents/rules)\n\nThe following is provided by local user rules in @WORKSPACE_NAME@ where the user has specified instructions:\n\n@CONTENT@",
 	windsurfRulesLocalFileInstructions:
 		"# .windsurfrules\n\nThe following is provided by a root-level .windsurfrules file where the user has specified instructions for this working directory (@CWD@)\n\n@CONTENT@",
 	cursorRulesLocalFileInstructions:

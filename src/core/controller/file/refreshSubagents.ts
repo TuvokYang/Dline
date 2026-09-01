@@ -15,6 +15,7 @@ import { HostProvider } from "@/hosts/host-provider"
 import { Logger } from "@/shared/services/Logger"
 import { fileExistsAtPath, isDirectory } from "@/utils/fs"
 import { Controller } from ".."
+import { rememberDiscoveredToggles } from "./capability-discovery-cache"
 
 /**
  * Scan a directory for subagent YAML config files.
@@ -126,6 +127,9 @@ export async function refreshSubagents(controller: Controller): Promise<Refreshe
 
 		const discoveredLocalToggles = Object.fromEntries(localSubagents.map((agent) => [agent.path, true]))
 		const localToggles = resolveCapabilityToggles(controller.stateManager, "subagents", discoveredLocalToggles)
+		// The state push needs to know which resources exist. Discovery no longer
+		// writes its result into the preference store, so remember it here instead.
+		rememberDiscoveredToggles(controller, "subagents", discoveredLocalToggles, localScan.complete)
 		for (const agent of localSubagents) {
 			agent.enabled = localToggles[agent.path] !== false
 		}

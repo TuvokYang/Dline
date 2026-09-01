@@ -51,7 +51,7 @@ describe("PromptInputFileWatcher", () => {
 
 		const visiblePaths = [
 			path.join(fixture.roots.globalRulesDirectory, "build", "nested-rule.md"),
-			path.join(fixture.cwd, ".dline", "rules", "local.md"),
+			path.join(fixture.cwd, ".agents", "rules", "local.md"),
 			path.join(fixture.cwd, ".cursor", "rules", "local.mdc"),
 			path.join(fixture.cwd, ".cursorrules"),
 			path.join(fixture.cwd, ".windsurfrules"),
@@ -141,7 +141,7 @@ describe("PromptInputFileWatcher", () => {
 		await fixture.inputWatcher.start()
 
 		fixture.watcher.emit("error", new Error("watch failed"))
-		fixture.watcher.emit("change", path.join(fixture.cwd, ".dline", "rules", "local.md"))
+		fixture.watcher.emit("change", path.join(fixture.cwd, ".agents", "rules", "local.md"))
 
 		expect(fixture.invalidate).toHaveBeenCalledOnce()
 	})

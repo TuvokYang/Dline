@@ -747,11 +747,7 @@ const ClineRulesToggleModal: React.FC = () => {
 						<div className={currentView === "environment" ? "flex min-h-0 flex-1" : "hidden"}>
 							<ShellEnvironmentModal isActive={currentView === "environment"} />
 						</div>
-						{currentView !== "environment" && (
-							<div className="w-full">
-								<CapabilityScopeNotice scope={storageScope} />
-							</div>
-						)}
+						{currentView !== "environment" && <CapabilityScopeNotice scope={storageScope} />}
 						{currentView !== "environment" &&
 							(currentView === "rules" ? (
 								<>

@@ -42,7 +42,7 @@ e2e(
 
 		const rulesV1 = "E2E_PROMPT_INPUT_RULES_V1"
 		const rulesV2 = "E2E_PROMPT_INPUT_RULES_V2"
-		const rulesDirectory = path.join(workspaceDir, ".dline", "rules")
+		const rulesDirectory = path.join(workspaceDir, ".agents", "rules")
 		const rulesPath = path.join(rulesDirectory, "e2e-prompt-input-freshness.md")
 		await mkdir(rulesDirectory, { recursive: true })
 		await writeFile(rulesPath, `# Prompt input freshness\n\n${rulesV1}\n`, "utf8")

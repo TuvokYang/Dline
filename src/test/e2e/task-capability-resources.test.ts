@@ -304,7 +304,7 @@ e2e(
 		await expect(input, `Webview errors: ${webviewErrors.join("\n")}`).toHaveValue("", { timeout: 5_000 })
 		await expect(sidebar.getByText("E2E_CAPABILITY_TASK_READY", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 		const taskId = await onlyTaskId(dlineDocsDir)
-		const initialToggles = await readTaskCapabilityToggles(dlineDocsDir, taskId)
+		const initialToggles = await waitForTaskCapabilityToggles(dlineDocsDir, taskId)
 		const mcpInternalNames = Object.keys(initialToggles.mcpServers).filter((name) => name.startsWith(`${MCP_NAME}@`))
 		expect(mcpInternalNames).toHaveLength(1)
 		const mcpInternalName = mcpInternalNames[0]

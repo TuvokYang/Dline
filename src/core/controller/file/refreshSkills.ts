@@ -16,6 +16,7 @@ import { HostProvider } from "@/hosts/host-provider"
 import { Logger } from "@/shared/services/Logger"
 import { fileExistsAtPath, isDirectory } from "@/utils/fs"
 import { Controller } from ".."
+import { rememberDiscoveredToggles } from "./capability-discovery-cache"
 import { coalesceCapabilityScan } from "./refresh-coalescing"
 
 /**
@@ -155,6 +156,7 @@ async function scanSkills(controller: Controller): Promise<RefreshedSkills> {
 	// rewritten, which keeps discovery free of persistence side effects.
 	const discoveredLocalToggles = Object.fromEntries(localSkills.map((skill) => [skill.path, true]))
 	const localToggles = resolveCapabilityToggles(controller.stateManager, "skills", discoveredLocalToggles)
+	rememberDiscoveredToggles(controller, "skills", discoveredLocalToggles, localScan.complete)
 	for (const skill of localSkills) {
 		skill.enabled = localToggles[skill.path] !== false
 	}

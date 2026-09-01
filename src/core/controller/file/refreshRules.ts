@@ -1,4 +1,4 @@
-import { refreshClineRulesToggles } from "@core/context/instructions/user-instructions/cline-rules"
+import { refreshClineRulesToggles } from "@core/context/instructions/user-instructions/agent-rules"
 import { refreshExternalRulesToggles } from "@core/context/instructions/user-instructions/external-rules"
 import { refreshWorkflowToggles } from "@core/context/instructions/user-instructions/workflows"
 import { EmptyRequest } from "@shared/proto/dline/common"
@@ -6,6 +6,7 @@ import { RefreshedDlineToggles } from "@shared/proto/dline/file"
 import { Logger } from "@/shared/services/Logger"
 import { getCwd, getDesktopDir } from "@/utils/path"
 import type { Controller } from "../index"
+import { rememberDiscoveredToggles } from "./capability-discovery-cache"
 import { coalesceCapabilityScan } from "./refresh-coalescing"
 import { refreshSkills } from "./refreshSkills"
 
@@ -30,20 +31,50 @@ async function scanRules(controller: Controller): Promise<RefreshedDlineToggles>
 		const cwd = await getCwd(getDesktopDir())
 		const cwdMs = Math.round(performance.now() - startedAt)
 		let stageStartedAt = performance.now()
-		const { globalToggles, localToggles } = await refreshClineRulesToggles(controller, cwd)
+		const rulesRefresh = await refreshClineRulesToggles(controller, cwd)
+		const { globalToggles, localToggles } = rulesRefresh
 		const dlineRulesMs = Math.round(performance.now() - stageStartedAt)
 		stageStartedAt = performance.now()
-		const { cursorLocalToggles, windsurfLocalToggles, agentsLocalToggles } = await refreshExternalRulesToggles(
-			controller,
-			cwd,
-		)
+		const externalRefresh = await refreshExternalRulesToggles(controller, cwd)
+		const { cursorLocalToggles, windsurfLocalToggles, agentsLocalToggles } = externalRefresh
 		const externalRulesMs = Math.round(performance.now() - stageStartedAt)
 		stageStartedAt = performance.now()
-		const { localWorkflowToggles, globalWorkflowToggles } = await refreshWorkflowToggles(controller, cwd)
+		const workflowsRefresh = await refreshWorkflowToggles(controller, cwd)
+		const { localWorkflowToggles, globalWorkflowToggles } = workflowsRefresh
 		const workflowsMs = Math.round(performance.now() - stageStartedAt)
 		stageStartedAt = performance.now()
 		const { globalSkills, localSkills } = await refreshSkills(controller)
 		const skillsMs = Math.round(performance.now() - stageStartedAt)
+
+		// The state push needs to know which resources exist. Discovery no longer
+		// writes its result into the preference store, so remember the raw scan
+		// here instead — the resolved maps above already fold in user overrides
+		// and cannot answer that question.
+		rememberDiscoveredToggles(controller, "rules", rulesRefresh.discoveredLocalToggles, rulesRefresh.localScanComplete)
+		rememberDiscoveredToggles(
+			controller,
+			"cursorRules",
+			externalRefresh.discovered.cursorRules.toggles,
+			externalRefresh.discovered.cursorRules.complete,
+		)
+		rememberDiscoveredToggles(
+			controller,
+			"windsurfRules",
+			externalRefresh.discovered.windsurfRules.toggles,
+			externalRefresh.discovered.windsurfRules.complete,
+		)
+		rememberDiscoveredToggles(
+			controller,
+			"agentsRules",
+			externalRefresh.discovered.agentsRules.toggles,
+			externalRefresh.discovered.agentsRules.complete,
+		)
+		rememberDiscoveredToggles(
+			controller,
+			"workflows",
+			workflowsRefresh.discoveredLocalToggles,
+			workflowsRefresh.localScanComplete,
+		)
 		Logger.debug(
 			`[CapabilityPerf] phase=rules_refresh_rpc taskId=${controller.task?.taskId ?? "none"} cwdMs=${cwdMs} dlineRulesMs=${dlineRulesMs} externalRulesMs=${externalRulesMs} workflowsMs=${workflowsMs} skillsMs=${skillsMs} totalMs=${Math.round(performance.now() - startedAt)} dlineRules=${Object.keys(globalToggles).length + Object.keys(localToggles).length} externalRules=${Object.keys(cursorLocalToggles).length + Object.keys(windsurfLocalToggles).length + Object.keys(agentsLocalToggles).length} workflows=${Object.keys(localWorkflowToggles).length + Object.keys(globalWorkflowToggles).length} skills=${globalSkills.length + localSkills.length}`,
 		)

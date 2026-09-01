@@ -12,26 +12,24 @@ interface CapabilityScopeNoticeProps {
 }
 
 const SCOPE_TEXT: Readonly<Record<CapabilityStorageScope, string>> = {
-	global: "Changes apply everywhere.",
-	workspace: "Changes apply to this workspace.",
-	task: "Changes apply to this task only; the workspace default is unchanged.",
+	global: "Saved globally",
+	workspace: "Saved for this workspace",
+	task: "Saved for this task only",
 }
 
-const SCOPE_LABEL: Readonly<Record<CapabilityStorageScope, string>> = {
-	global: "Global",
-	workspace: "Workspace",
-	task: "This task",
-}
-
-/** Tell the user which layer a toggle in this panel is stored in. */
+/**
+ * Tell the user which layer a toggle in this panel is stored in.
+ *
+ * The panel is a dense list, so this stays a single muted line rather than a
+ * banner: it answers a question the user only asks once, and should not compete
+ * with the toggles themselves.
+ */
 export const CapabilityScopeNotice = ({ scope }: CapabilityScopeNoticeProps) => (
 	<div
-		className="mb-3 flex items-center gap-2 border-l-[3px] border-vscode-textLink-foreground bg-vscode-textBlockQuote-background px-3 py-2"
+		className="mb-1.5 flex items-center gap-1 text-[11px] text-vscode-descriptionForeground"
 		data-scope={scope}
 		data-testid="capability-scope-notice">
-		<i className={`codicon ${scope === "task" ? "codicon-target" : "codicon-settings-gear"} text-sm`} />
-		<span className="text-xs">
-			<span className="font-bold">Saving to: {SCOPE_LABEL[scope]}</span> {SCOPE_TEXT[scope]}
-		</span>
+		<i className={`codicon ${scope === "task" ? "codicon-target" : "codicon-settings-gear"} text-[11px]`} />
+		<span>{SCOPE_TEXT[scope]}</span>
 	</div>
 )

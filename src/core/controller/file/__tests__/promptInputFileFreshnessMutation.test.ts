@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
 	refreshWorkflowToggles: vi.fn().mockResolvedValue(undefined),
 }))
 
-vi.mock("@core/context/instructions/user-instructions/cline-rules", () => ({
+vi.mock("@core/context/instructions/user-instructions/agent-rules", () => ({
 	refreshClineRulesToggles: mocks.refreshClineRulesToggles,
 }))
 vi.mock("@core/context/instructions/user-instructions/rule-helpers", () => ({

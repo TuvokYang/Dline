@@ -84,7 +84,7 @@ async function writeGeneratedSourceFiles(workspaceDir: string): Promise<void> {
 }
 
 async function writeCapabilityFiles(workspaceDir: string, options: LargeRealProjectFixtureOptions): Promise<void> {
-	const rulePath = path.join(workspaceDir, ".dline", "rules", "large-project-performance.md")
+	const rulePath = path.join(workspaceDir, ".agents", "rules", "large-project-performance.md")
 	const skillPath = path.join(workspaceDir, ".agents", "skills", LARGE_PROJECT_SKILL_NAME, "SKILL.md")
 	const subagentPath = path.join(workspaceDir, ".agents", "subagents", `${LARGE_PROJECT_SUBAGENT_NAME}.yml`)
 	await Promise.all([

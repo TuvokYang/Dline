@@ -1,4 +1,4 @@
-import { refreshClineRulesToggles } from "@core/context/instructions/user-instructions/cline-rules"
+import { refreshClineRulesToggles } from "@core/context/instructions/user-instructions/agent-rules"
 import { createRuleFile as createRuleFileImpl } from "@core/context/instructions/user-instructions/rule-helpers"
 import { getWorkspaceBasename } from "@core/workspace"
 import { RuleFile, RuleFileRequest } from "@shared/proto/dline/file"

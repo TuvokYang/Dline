@@ -1,5 +1,6 @@
 import { ensureRulesDirectoryExists, ensureWorkflowsDirectoryExists, GlobalFileNames } from "@core/storage/disk"
 import { capabilityResourceId } from "@core/storage/settings/capability-resource-id"
+import { type CapabilityScanResult, completeScan, incompleteScan } from "@core/storage/settings/capability-scan-result"
 import { type CapabilityKind, clearCapabilityOverrideEverywhere } from "@core/storage/settings/capability-toggle-store"
 import { removeGlobalCapability } from "@core/storage/settings/global-capability-settings"
 import { ClineRulesToggles } from "@shared/cline-rules"
@@ -14,12 +15,16 @@ import { evaluateRuleConditionals, RuleEvaluationContext } from "./rule-conditio
 
 /**
  * Recursively traverses directory and finds all files, including checking for optional whitelisted file extension
+ *
+ * Reports whether the directory could be read. An unreadable directory yields
+ * the same empty list as an empty one, so callers that act on absence need the
+ * flag to tell the two apart.
  */
 export async function readDirectoryRecursive(
 	directoryPath: string,
 	allowedFileExtension: string,
 	excludedPaths: string[][] = [],
-): Promise<string[]> {
+): Promise<CapabilityScanResult<string>> {
 	try {
 		const entries = await readDirectory(directoryPath, excludedPaths)
 		const results: string[] = []
@@ -32,15 +37,19 @@ export async function readDirectoryRecursive(
 			}
 			results.push(entry)
 		}
-		return results
+		return completeScan(results)
 	} catch (error) {
 		Logger.error(`Error reading directory ${directoryPath}: ${error}`)
-		return []
+		return incompleteScan([])
 	}
 }
 
 /**
- * Gets the up to date toggles
+ * Gets the up to date toggles.
+ *
+ * Prefer {@link scanRuleToggles} where the outcome drives destructive or
+ * display decisions: this wrapper drops the completeness flag, so a directory
+ * that could not be read is indistinguishable from one that is empty.
  */
 export async function synchronizeRuleToggles(
 	rulesDirectoryPath: string,
@@ -48,9 +57,32 @@ export async function synchronizeRuleToggles(
 	allowedFileExtension = "",
 	excludedPaths: string[][] = [],
 ): Promise<ClineRulesToggles> {
+	return (await scanRuleToggles(rulesDirectoryPath, currentToggles, allowedFileExtension, excludedPaths)).toggles
+}
+
+/** One rule-directory scan: the resulting toggles plus whether the scan is trustworthy. */
+export interface RuleToggleScan {
+	readonly toggles: ClineRulesToggles
+	/**
+	 * True when the outcome reflects the filesystem.
+	 *
+	 * A missing path is complete ("nothing here"); a directory that failed to
+	 * read is not, because its resources are unknown rather than absent.
+	 */
+	readonly complete: boolean
+}
+
+/** Scan one rule directory and report both the toggles and the scan's trustworthiness. */
+export async function scanRuleToggles(
+	rulesDirectoryPath: string,
+	currentToggles: ClineRulesToggles,
+	allowedFileExtension = "",
+	excludedPaths: string[][] = [],
+): Promise<RuleToggleScan> {
 	const startedAt = performance.now()
 	let discoveredFiles = 0
 	let pathKind = "missing"
+	let complete = true
 	// Create a copy of toggles to modify
 	const updatedToggles = { ...currentToggles }
 
@@ -63,7 +95,9 @@ export async function synchronizeRuleToggles(
 			if (isDir) {
 				pathKind = "directory"
 				// DIRECTORY CASE
-				const filePaths = await readDirectoryRecursive(rulesDirectoryPath, allowedFileExtension, excludedPaths)
+				const scan = await readDirectoryRecursive(rulesDirectoryPath, allowedFileExtension, excludedPaths)
+				const filePaths = scan.items
+				complete = scan.complete
 				discoveredFiles = filePaths.length
 				const existingRulePaths = new Set<string>()
 
@@ -110,12 +144,13 @@ export async function synchronizeRuleToggles(
 		}
 	} catch (error) {
 		Logger.error(`Failed to synchronize rule toggles for path: ${rulesDirectoryPath}`, error)
+		complete = false
 	}
 
 	Logger.debug(
-		`[CapabilityPerf] phase=rule_toggle_scan durationMs=${Math.round(performance.now() - startedAt)} kind=${pathKind} files=${discoveredFiles} toggles=${Object.keys(updatedToggles).length} extension=${allowedFileExtension || "any"}`,
+		`[CapabilityPerf] phase=rule_toggle_scan durationMs=${Math.round(performance.now() - startedAt)} kind=${pathKind} files=${discoveredFiles} toggles=${Object.keys(updatedToggles).length} extension=${allowedFileExtension || "any"} complete=${complete}`,
 	)
-	return updatedToggles
+	return { toggles: updatedToggles, complete }
 }
 
 /**
@@ -339,21 +374,14 @@ export const createRuleFile = async (isGlobal: boolean, filename: string, cwd: s
 				filePath = path.join(globalClineRulesFilePath, filename)
 			}
 		} else {
-			// Local rules use .dline/rules/
-			const localRulesFilePath = path.resolve(cwd, GlobalFileNames.dlineRulesDir)
-
-			// .dline/rules is a simple rules directory — no migration needed
-			await fs.mkdir(localRulesFilePath, { recursive: true })
-
-			if (type === "workflow") {
-				// Local workflows use .agents/workflows/
-				const localWorkflowsFilePath = path.resolve(cwd, GlobalFileNames.agentsWorkflowsDir)
-				await fs.mkdir(localWorkflowsFilePath, { recursive: true })
-				filePath = path.join(localWorkflowsFilePath, filename)
-			} else {
-				// rule file creation
-				filePath = path.join(localRulesFilePath, filename)
-			}
+			// Create only the directory the new file belongs to; workflows and
+			// rules live in sibling roots under .agents/.
+			const localDirectory =
+				type === "workflow"
+					? path.resolve(cwd, GlobalFileNames.agentsWorkflowsDir)
+					: path.resolve(cwd, GlobalFileNames.agentsRulesDir)
+			await fs.mkdir(localDirectory, { recursive: true })
+			filePath = path.join(localDirectory, filename)
 		}
 
 		const fileExists = await fileExistsAtPath(filePath)

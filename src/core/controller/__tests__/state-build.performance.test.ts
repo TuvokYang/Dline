@@ -85,6 +85,10 @@ function createFakeController(messages: ClineMessage[]): Record<string, unknown>
 			getWorkspaceStateKey: () => undefined,
 			getRemoteConfigSettings: () => ({}),
 		},
+		// buildState resolves capability toggles through this private helper; the
+		// header assertions below do not depend on discovery, so an empty result
+		// keeps the double focused on message sourcing.
+		readLocalCapabilityToggles: () => ({}),
 		modeSwitchCoordinator: { getSnapshot: () => ({}) },
 		getTaskLockStatus: () => undefined,
 		backgroundCommandRunning: undefined,

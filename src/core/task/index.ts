@@ -62,7 +62,7 @@ import {
 	getGlobalClineRules,
 	getLocalClineRules,
 	refreshClineRulesToggles,
-} from "@core/context/instructions/user-instructions/cline-rules"
+} from "@core/context/instructions/user-instructions/agent-rules"
 import {
 	getLocalAgentsRules,
 	getLocalCursorRules,
@@ -9704,7 +9704,7 @@ export class Task {
 		// Check clinerulesData if needed
 		const clinerulesCheckStartedAt = performance.now()
 		const clinerulesError = needsClinerulesFileCheck
-			? await ensureLocalClineDirExists(this.cwd, GlobalFileNames.dlineRulesDir)
+			? await ensureLocalClineDirExists(this.cwd, GlobalFileNames.agentsRulesDir)
 			: false
 		const clinerulesMs = performance.now() - clinerulesCheckStartedAt
 		const loadContextMs = performance.now() - loadContextStartedAt

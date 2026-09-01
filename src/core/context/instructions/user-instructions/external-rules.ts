@@ -2,7 +2,7 @@ import {
 	combineRuleToggles,
 	getRuleFilesTotalContent,
 	readDirectoryRecursive,
-	synchronizeRuleToggles,
+	scanRuleToggles,
 } from "@core/context/instructions/user-instructions/rule-helpers"
 import type { IgnoreController } from "@core/ignore/IgnoreController"
 import { formatResponse } from "@core/prompts/responses"
@@ -16,6 +16,23 @@ import path from "path"
 import { Controller } from "@/core/controller"
 import { Logger } from "@/shared/services/Logger"
 
+/** One editor-rule family's raw scan: what exists, and whether the scan is trustworthy. */
+export interface ExternalRuleDiscovery {
+	readonly toggles: ClineRulesToggles
+	readonly complete: boolean
+}
+
+export interface ExternalRulesRefresh {
+	windsurfLocalToggles: ClineRulesToggles
+	cursorLocalToggles: ClineRulesToggles
+	agentsLocalToggles: ClineRulesToggles
+	discovered: {
+		windsurfRules: ExternalRuleDiscovery
+		cursorRules: ExternalRuleDiscovery
+		agentsRules: ExternalRuleDiscovery
+	}
+}
+
 /**
  * Refreshes the toggles for windsurf, cursor, and agents rules.
  *
@@ -27,32 +44,28 @@ import { Logger } from "@/shared/services/Logger"
 export async function refreshExternalRulesToggles(
 	controller: Controller,
 	workingDirectory: string,
-): Promise<{
-	windsurfLocalToggles: ClineRulesToggles
-	cursorLocalToggles: ClineRulesToggles
-	agentsLocalToggles: ClineRulesToggles
-}> {
+): Promise<ExternalRulesRefresh> {
 	const startedAt = performance.now()
 	// local windsurf toggles
 	const localWindsurfRulesFilePath = path.resolve(workingDirectory, GlobalFileNames.windsurfRules)
-	const discoveredWindsurf = await synchronizeRuleToggles(localWindsurfRulesFilePath, {})
-	const updatedLocalWindsurfToggles = resolveCapabilityToggles(controller.stateManager, "windsurfRules", discoveredWindsurf)
+	const windsurfScan = await scanRuleToggles(localWindsurfRulesFilePath, {})
+	const updatedLocalWindsurfToggles = resolveCapabilityToggles(controller.stateManager, "windsurfRules", windsurfScan.toggles)
 
 	// cursor has two valid locations for rules files, so we need to check both and combine
-	// synchronizeRuleToggles drops whichever rules files are not in each given path, but combining the results avoids data loss
+	// each scan drops whichever rules files are not in its own path, but combining the results avoids data loss
 	let localCursorRulesFilePath = path.resolve(workingDirectory, GlobalFileNames.cursorRulesDir)
-	const discoveredCursorDir = await synchronizeRuleToggles(localCursorRulesFilePath, {}, ".mdc")
+	const cursorDirScan = await scanRuleToggles(localCursorRulesFilePath, {}, ".mdc")
 
 	localCursorRulesFilePath = path.resolve(workingDirectory, GlobalFileNames.cursorRulesFile)
-	const discoveredCursorFile = await synchronizeRuleToggles(localCursorRulesFilePath, {})
+	const cursorFileScan = await scanRuleToggles(localCursorRulesFilePath, {})
 
-	const discoveredCursor = combineRuleToggles(discoveredCursorDir, discoveredCursorFile)
+	const discoveredCursor = combineRuleToggles(cursorDirScan.toggles, cursorFileScan.toggles)
 	const updatedLocalCursorToggles = resolveCapabilityToggles(controller.stateManager, "cursorRules", discoveredCursor)
 
 	// local agents toggles
 	const localAgentsRulesFilePath = path.resolve(workingDirectory, GlobalFileNames.agentsRulesFile)
-	const discoveredAgents = await synchronizeRuleToggles(localAgentsRulesFilePath, {})
-	const updatedLocalAgentsToggles = resolveCapabilityToggles(controller.stateManager, "agentsRules", discoveredAgents)
+	const agentsScan = await scanRuleToggles(localAgentsRulesFilePath, {})
+	const updatedLocalAgentsToggles = resolveCapabilityToggles(controller.stateManager, "agentsRules", agentsScan.toggles)
 	Logger.debug(
 		`[CapabilityPerf] phase=external_rules_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} windsurf=${Object.keys(updatedLocalWindsurfToggles).length} cursor=${Object.keys(updatedLocalCursorToggles).length} agents=${Object.keys(updatedLocalAgentsToggles).length}`,
 	)
@@ -61,6 +74,14 @@ export async function refreshExternalRulesToggles(
 		windsurfLocalToggles: updatedLocalWindsurfToggles,
 		cursorLocalToggles: updatedLocalCursorToggles,
 		agentsLocalToggles: updatedLocalAgentsToggles,
+		// The raw scans say which files exist; the resolved maps above already
+		// fold in the user's overrides and cannot answer that question. Cursor
+		// reads from two roots, so one unreadable root taints its result.
+		discovered: {
+			windsurfRules: { toggles: windsurfScan.toggles, complete: windsurfScan.complete },
+			cursorRules: { toggles: discoveredCursor, complete: cursorDirScan.complete && cursorFileScan.complete },
+			agentsRules: { toggles: agentsScan.toggles, complete: agentsScan.complete },
+		},
 	}
 }
 
@@ -120,8 +141,8 @@ export const getLocalCursorRules = async (cwd: string, toggles: ClineRulesToggle
 	if (await fileExistsAtPath(cursorRulesDirPath)) {
 		if (await isDirectory(cursorRulesDirPath)) {
 			try {
-				const rulesFilePaths = await readDirectoryRecursive(cursorRulesDirPath, ".mdc")
-				const rulesFilesTotalContent = await getRuleFilesTotalContent(rulesFilePaths, cwd, toggles)
+				const rulesScan = await readDirectoryRecursive(cursorRulesDirPath, ".mdc")
+				const rulesFilesTotalContent = await getRuleFilesTotalContent([...rulesScan.items], cwd, toggles)
 				if (rulesFilesTotalContent) {
 					cursorRulesDirInstructions = formatResponse.cursorRulesLocalDirectoryInstructions(cwd, rulesFilesTotalContent)
 				}

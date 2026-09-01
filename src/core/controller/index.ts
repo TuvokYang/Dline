@@ -18,6 +18,7 @@ import { resolveProfileReference } from "@core/profiles/profile-binding"
 import { getProfileCatalogRevision } from "@core/profiles/profile-catalog-state"
 import { settingsAffectPromptFreshness } from "@core/prompts/system-prompt-cache/PromptFreshnessProjection"
 import * as SecretsManager from "@core/storage/secrets"
+import { capabilityResourceId } from "@core/storage/settings/capability-resource-id"
 import { type CapabilityKind, mergeScopedToggles, readScopedToggles } from "@core/storage/settings/capability-toggle-store"
 import { projectTaskView } from "@core/task/view/TaskViewProjector"
 import { detectWorkspaceRoots } from "@core/workspace/detection"
@@ -90,6 +91,7 @@ import { clearRemoteConfig } from "../storage/remote-config/utils"
 import { type PersistenceErrorEvent, StateManager } from "../storage/StateManager"
 import { UIMessage } from "../storage/UIMessage"
 import { Task } from "../task"
+import { readDiscoveredToggles } from "./file/capability-discovery-cache"
 import {
 	getWorkspaceHistoryManager,
 	type WorkspaceHistoryManager,
@@ -209,13 +211,23 @@ export class Controller {
 	}
 
 	/**
-	 * Read the stored overrides of one locally discovered capability kind.
+	 * Resolve the effective state of every locally discovered resource of one kind.
 	 *
-	 * The scope chain owns these preferences now. Merging every scope keeps a
-	 * task-level choice visible without letting an absent path read as disabled.
+	 * Two independent facts are combined here. Discovery says which resources
+	 * exist; the scope chain says what the user explicitly decided. An override
+	 * is sparse, so a path that is absent there inherits the discovery default
+	 * instead of reading as disabled — publishing the override map on its own
+	 * would leave the panel empty until the user toggled something.
 	 */
 	private readLocalCapabilityToggles(kind: CapabilityKind): Record<string, boolean> {
-		return mergeScopedToggles(readScopedToggles(this.stateManager, kind))
+		const overrides = mergeScopedToggles(readScopedToggles(this.stateManager, kind))
+		const discovered = readDiscoveredToggles(this as unknown as Controller, kind)
+		const resolved: Record<string, boolean> = {}
+		for (const [resourcePath, enabled] of Object.entries(discovered)) {
+			const id = capabilityResourceId(resourcePath)
+			resolved[resourcePath] = overrides[id] ?? overrides[resourcePath] ?? enabled
+		}
+		return resolved
 	}
 
 	private applyWorkspaceMcpServerToggles(servers: readonly McpServer[]): McpServer[] {

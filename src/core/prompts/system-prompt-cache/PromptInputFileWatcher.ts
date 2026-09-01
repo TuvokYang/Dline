@@ -69,7 +69,7 @@ export class PromptInputFileWatcher {
 		this.subagentDirectories = resolveUnique(deps.subagentDirectories)
 		this.protectedDirectories = resolveUnique([
 			this.globalRulesDirectory,
-			path.join(this.cwd, ".dline", "rules"),
+			path.join(this.cwd, ".agents", "rules"),
 			path.join(this.cwd, ".cursor", "rules"),
 			...this.workflowDirectories,
 			...this.skillDirectories,
@@ -189,7 +189,7 @@ export class PromptInputFileWatcher {
 		if (!isWithin(this.cwd, candidate)) return false
 		const normalized = path.relative(this.cwd, candidate).split(path.sep).join("/").toLowerCase()
 		if (normalized === ".cursorrules" || normalized === ".windsurfrules") return true
-		if (normalized.startsWith(".dline/rules/")) return true
+		if (normalized.startsWith(".agents/rules/")) return true
 		if (normalized.startsWith(".cursor/rules/") && normalized.endsWith(".mdc")) return true
 		return path.basename(candidate).toLowerCase() === "agents.md"
 	}

@@ -331,6 +331,16 @@ const SECRETS_KEYS = [
 // uses dynamic keys like pendingFileContextWarning_${taskId}.
 export const LocalStateKeys = [
 	"mcpServersToggles",
+	// Mirrors of the last trustworthy capability scan, kept so a restart shows
+	// the previously discovered resources instead of an empty panel. These are a
+	// display cache, never a preference: user intent lives in the scope chain.
+	"discoveredRulesToggles",
+	"discoveredWorkflowToggles",
+	"discoveredSkillsToggles",
+	"discoveredSubagentsToggles",
+	"discoveredCursorRulesToggles",
+	"discoveredWindsurfRulesToggles",
+	"discoveredAgentsRulesToggles",
 ] as const
 
 // ============================================================================

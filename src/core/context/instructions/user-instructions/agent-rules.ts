@@ -4,6 +4,7 @@ import {
 	getRuleFilesTotalContentWithMetadata,
 	RULE_SOURCE_PREFIX,
 	RuleLoadResultWithInstructions,
+	scanRuleToggles,
 	synchronizeRuleToggles,
 } from "@core/context/instructions/user-instructions/rule-helpers"
 import { formatResponse } from "@core/prompts/responses"
@@ -85,7 +86,7 @@ export const getLocalClineRules = async (
 	workspaceName: string,
 	opts?: { evaluationContext?: RuleEvaluationContext },
 ): Promise<RuleLoadResultWithInstructions> => {
-	const clineRulesFilePath = path.resolve(cwd, GlobalFileNames.dlineRulesDir)
+	const clineRulesFilePath = path.resolve(cwd, GlobalFileNames.agentsRulesDir)
 
 	let instructions: string | undefined
 	const activatedConditionalRules: ActivatedConditionalRule[] = []
@@ -93,7 +94,7 @@ export const getLocalClineRules = async (
 	if (await fileExistsAtPath(clineRulesFilePath)) {
 		if (await isDirectory(clineRulesFilePath)) {
 			try {
-				// .dline/rules/ only contains rule files — no subdirectories to exclude
+				// .agents/rules/ only contains rule files — no subdirectories to exclude
 				const rulesFilePaths = await readDirectory(clineRulesFilePath)
 
 				const rulesFilesTotal = await getRuleFilesTotalContentWithMetadata(rulesFilePaths, cwd, toggles, {
@@ -105,7 +106,7 @@ export const getLocalClineRules = async (
 					activatedConditionalRules.push(...rulesFilesTotal.activatedConditionalRules)
 				}
 			} catch {
-				Logger.error(`Failed to read .dline/rules directory at ${clineRulesFilePath}`)
+				Logger.error(`Failed to read .agents/rules directory at ${clineRulesFilePath}`)
 			}
 		} else {
 			try {
@@ -128,7 +129,7 @@ export const getLocalClineRules = async (
 								instructions = formatResponse.clineRulesLocalFileInstructions(workspaceName, parsed.body.trim())
 								if (parsed.hadFrontmatter && Object.keys(matchedConditions).length > 0) {
 									activatedConditionalRules.push({
-										name: `${RULE_SOURCE_PREFIX.workspace}:${GlobalFileNames.dlineRulesDir}`,
+										name: `${RULE_SOURCE_PREFIX.workspace}:${GlobalFileNames.agentsRulesDir}`,
 										matchedConditions,
 									})
 								}
@@ -137,7 +138,7 @@ export const getLocalClineRules = async (
 					}
 				}
 			} catch {
-				Logger.error(`Failed to read .dline/rules file at ${clineRulesFilePath}`)
+				Logger.error(`Failed to read .agents/rules file at ${clineRulesFilePath}`)
 			}
 		}
 	}
@@ -151,6 +152,8 @@ export async function refreshClineRulesToggles(
 ): Promise<{
 	globalToggles: ClineRulesToggles
 	localToggles: ClineRulesToggles
+	discoveredLocalToggles: ClineRulesToggles
+	localScanComplete: boolean
 }> {
 	// Discovery is read-only: scan the rule directories and resolve the effective
 	// state against the stored preferences in memory. Persisting a preference is
@@ -161,13 +164,17 @@ export async function refreshClineRulesToggles(
 	const updatedGlobalToggles = resolveCapabilityToggles(controller.stateManager, "rules", discoveredGlobalToggles)
 
 	// Local toggles
-	const localClineRulesFilePath = path.resolve(workingDirectory, GlobalFileNames.dlineRulesDir)
-	// .dline/rules/ only contains rule files — no subdirectories to exclude
-	const discoveredLocalToggles = await synchronizeRuleToggles(localClineRulesFilePath, {})
-	const updatedLocalToggles = resolveCapabilityToggles(controller.stateManager, "rules", discoveredLocalToggles)
+	const localClineRulesFilePath = path.resolve(workingDirectory, GlobalFileNames.agentsRulesDir)
+	// .agents/rules/ only contains rule files — no subdirectories to exclude
+	const localScan = await scanRuleToggles(localClineRulesFilePath, {})
+	const updatedLocalToggles = resolveCapabilityToggles(controller.stateManager, "rules", localScan.toggles)
 
 	return {
 		globalToggles: updatedGlobalToggles,
 		localToggles: updatedLocalToggles,
+		// The raw scan is what the state push needs: it says which rules exist,
+		// while the resolved map already folds in the user's overrides.
+		discoveredLocalToggles: localScan.toggles,
+		localScanComplete: localScan.complete,
 	}
 }
