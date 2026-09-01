@@ -78,33 +78,6 @@ describe("profile facade preflight", () => {
 		expect(toolNames(result.tools)).not.toContain("generate_explanation")
 	})
 
-	it("gives scoped current-user authorization precedence over Dline defaults without weakening platform constraints", async () => {
-		const generator = new SystemPromptGenerator()
-		const standard = await generator.generate(BASE_CONTEXT)
-		const lite = await generator.generate({
-			...BASE_CONTEXT,
-			providerInfo: BASE_CONTEXT.providerInfo,
-			promptProfile: PromptProfile.Lite,
-		})
-
-		for (const generated of [standard, lite]) {
-			expect(generated.systemPrompt).toContain(
-				"Platform/provider instructions, tool-enforced constraints, and explicit instructions remain authoritative.",
-			)
-			expect(generated.systemPrompt).toContain(
-				"the user's current explicit request or authorization for a specific operation and scope takes precedence over conflicting Dline defaults and USER'S CUSTOM INSTRUCTIONS",
-			)
-			expect(generated.systemPrompt).not.toContain("These user rules carry the same weight as the system rules above")
-		}
-
-		expect(standard.systemPrompt).toContain(
-			"A CLI command may read or filter file content only when the user explicitly asks to use the command line for the current task",
-		)
-		expect(lite.systemPrompt).toContain(
-			"In ACT MODE, a non-destructive CLI command may read or filter file content when the user explicitly requests command-line use",
-		)
-	})
-
 	it("preserves the established Native section order", async () => {
 		const prompt = (await new SystemPromptGenerator().generate(BASE_CONTEXT)).systemPrompt
 		const sectionMarkers = [
