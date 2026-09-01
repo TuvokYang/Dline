@@ -1,97 +1,52 @@
-import {
-	activeCapabilityScope,
-	resolveToggle,
-	resolveToggles,
-	withoutToggleOverride,
-	withToggleOverride,
-} from "@core/storage/settings/capability-toggle-scopes"
+import path from "node:path"
 import { describe, expect, it } from "vitest"
+import { capabilityResourceId } from "../capability-resource-id"
+import { activeCapabilityScope, resolveToggle, resolveToggles } from "../capability-toggle-scopes"
 
-describe("capability toggle scopes", () => {
-	describe("active scope selection", () => {
-		it("falls back to global when no workspace is open", () => {
-			expect(activeCapabilityScope({ hasWorkspace: false, hasTask: false })).toBe("global")
-		})
+const RAW_PATH = path.resolve("E:/ws/.agents/skills/review/SKILL.md")
+const STORED_ID = capabilityResourceId(RAW_PATH)
 
-		it("selects workspace once a workspace is open but no task was entered", () => {
-			expect(activeCapabilityScope({ hasWorkspace: true, hasTask: false })).toBe("workspace")
-		})
-
-		it("selects task once a task was entered", () => {
-			expect(activeCapabilityScope({ hasWorkspace: true, hasTask: true })).toBe("task")
-		})
+describe("resolveToggle", () => {
+	it("applies an override stored under the normalized resource id", () => {
+		// The write path stores capabilityResourceId(...), while discovery reports
+		// the raw scan path. Looking up the raw path alone would miss the override
+		// and silently keep the resource enabled.
+		expect(resolveToggle(RAW_PATH, true, { workspace: { [STORED_ID]: false } })).toBe(false)
 	})
 
-	describe("resolution", () => {
-		it("uses the discovered default when no scope has an opinion", () => {
-			expect(resolveToggles({ "/skills/a": true, "/skills/b": false })).toEqual({
-				"/skills/a": true,
-				"/skills/b": false,
-			})
-		})
-
-		it("lets workspace override global and task override workspace", () => {
-			const discovered = { "/skills/a": true }
-
-			expect(resolveToggles(discovered, { global: { "/skills/a": false } })).toEqual({ "/skills/a": false })
-			expect(
-				resolveToggles(discovered, {
-					global: { "/skills/a": false },
-					workspace: { "/skills/a": true },
-				}),
-			).toEqual({ "/skills/a": true })
-			expect(
-				resolveToggles(discovered, {
-					global: { "/skills/a": false },
-					workspace: { "/skills/a": true },
-					task: { "/skills/a": false },
-				}),
-			).toEqual({ "/skills/a": false })
-		})
-
-		it("inherits the level above when the nearer scope has no override", () => {
-			const discovered = { "/skills/a": true }
-
-			expect(resolveToggles(discovered, { global: { "/skills/a": false }, task: {} })).toEqual({
-				"/skills/a": false,
-			})
-		})
-
-		it("keeps an explicit false instead of treating it as missing", () => {
-			expect(resolveToggle("/skills/a", true, { global: { "/skills/a": false } })).toBe(false)
-		})
-
-		it("ignores overrides for capabilities that are no longer discovered", () => {
-			expect(resolveToggles({ "/skills/a": true }, { global: { "/skills/removed": false } })).toEqual({
-				"/skills/a": true,
-			})
-		})
-
-		it("never mutates the discovered scan result or the scope maps", () => {
-			const discovered = { "/skills/a": true }
-			const global = { "/skills/a": false }
-
-			resolveToggles(discovered, { global })
-
-			expect(discovered).toEqual({ "/skills/a": true })
-			expect(global).toEqual({ "/skills/a": false })
-		})
+	it("falls back to the discovered default when no scope has an opinion", () => {
+		expect(resolveToggle(RAW_PATH, true, { workspace: {} })).toBe(true)
+		expect(resolveToggle(RAW_PATH, false, {})).toBe(false)
 	})
 
-	describe("explicit overrides", () => {
-		it("records only the changed path so the rest keeps inheriting", () => {
-			expect(withToggleOverride({ "/skills/a": false }, "/skills/b", true)).toEqual({
-				"/skills/a": false,
-				"/skills/b": true,
-			})
-			expect(withToggleOverride(undefined, "/skills/b", false)).toEqual({ "/skills/b": false })
-		})
+	it("lets a task override win over workspace and global", () => {
+		const scopes = {
+			global: { [STORED_ID]: false },
+			workspace: { [STORED_ID]: false },
+			task: { [STORED_ID]: true },
+		}
+		expect(resolveToggle(RAW_PATH, false, scopes)).toBe(true)
+	})
 
-		it("drops an override so the capability inherits from the scope above again", () => {
-			const remaining = withoutToggleOverride({ "/skills/a": false, "/skills/b": true }, "/skills/a")
+	it("lets a workspace override win over global", () => {
+		const scopes = { global: { [STORED_ID]: true }, workspace: { [STORED_ID]: false } }
+		expect(resolveToggle(RAW_PATH, true, scopes)).toBe(false)
+	})
+})
 
-			expect(remaining).toEqual({ "/skills/b": true })
-			expect(resolveToggle("/skills/a", true, { workspace: remaining })).toBe(true)
-		})
+describe("resolveToggles", () => {
+	it("keeps the discovered keys so callers can map back onto scanned items", () => {
+		const resolved = resolveToggles({ [RAW_PATH]: true }, { workspace: { [STORED_ID]: false } })
+
+		expect(Object.keys(resolved)).toEqual([RAW_PATH])
+		expect(resolved[RAW_PATH]).toBe(false)
+	})
+})
+
+describe("activeCapabilityScope", () => {
+	it("selects the innermost scope the editor is currently in", () => {
+		expect(activeCapabilityScope({ hasWorkspace: false, hasTask: false })).toBe("global")
+		expect(activeCapabilityScope({ hasWorkspace: true, hasTask: false })).toBe("workspace")
+		expect(activeCapabilityScope({ hasWorkspace: true, hasTask: true })).toBe("task")
 	})
 })

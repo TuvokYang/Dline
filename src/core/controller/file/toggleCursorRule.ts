@@ -1,7 +1,10 @@
+import { capabilityResourceId } from "@core/storage/settings/capability-resource-id"
+import { setCapabilityEnabled } from "@core/storage/settings/capability-toggle-store"
 import type { ToggleCursorRuleRequest } from "@shared/proto/dline/file"
 import { ClineRulesToggles } from "@shared/proto/dline/file"
 import { Logger } from "@/shared/services/Logger"
 import type { Controller } from "../index"
+import { capabilityWriteContext } from "./capability-write-context"
 
 /**
  * Toggles a Cursor rule (enable or disable)
@@ -20,15 +23,18 @@ export async function toggleCursorRule(controller: Controller, request: ToggleCu
 		throw new Error("Missing or invalid parameters for toggleCursorRule")
 	}
 
-	// Update the toggles in workspace state
-	const toggles = controller.stateManager.getWorkspaceStateKey("localCursorRulesToggles")
-	toggles[rulePath] = enabled
-	controller.stateManager.setWorkspaceState("localCursorRulesToggles", toggles)
-
-	// Get the current state to return in the response
-	const cursorToggles = controller.stateManager.getWorkspaceStateKey("localCursorRulesToggles")
+	// Cursor rules always come from the workspace, but the preference is stored
+	// in the scope the editor is currently in, so only the changed path is
+	// recorded and every other rule keeps inheriting.
+	const cursorToggles = await setCapabilityEnabled(
+		controller.stateManager,
+		"cursorRules",
+		capabilityWriteContext(controller),
+		capabilityResourceId(rulePath),
+		enabled,
+	)
 
 	return ClineRulesToggles.create({
-		toggles: cursorToggles,
+		toggles: cursorToggles as Record<string, boolean>,
 	})
 }

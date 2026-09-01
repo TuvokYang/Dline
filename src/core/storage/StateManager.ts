@@ -41,7 +41,14 @@ import {
 	setFirebaseAccountId,
 	setWandbApiKey,
 } from "./secrets"
+import {
+	CAPABILITY_KEY_NORMALIZATION_GENERATION,
+	CAPABILITY_KEY_NORMALIZATION_GENERATION_KEY,
+	mergeMigratedOverrides,
+	planLegacyToggleMigration,
+} from "./settings/capability-toggle-migration"
 import type { CapabilityScope } from "./settings/capability-toggle-scopes"
+import { capabilityToggleSettingsKey } from "./settings/capability-toggle-store"
 import { SettingsRepository } from "./settings/SettingsRepository"
 import type { SettingsCommit, SettingsSnapshot } from "./settings/settings-types"
 import { TaskHistory } from "./TaskHistory"
@@ -325,6 +332,14 @@ export class StateManager {
 		const workspaceRepository = new SettingsRepository({ filePath: storage.workspaceSettingsFilePath })
 		instance.workspaceSettingsRepository = workspaceRepository
 		await workspaceRepository.initialize()
+
+		// Legacy per-workspace toggle maps predate the scope chain. A failure here
+		// must not block startup: the marker stays unset so the next launch retries.
+		try {
+			await instance.migrateLegacyCapabilityToggles()
+		} catch (error) {
+			Logger.warn(`[StateManager] Failed to migrate legacy capability toggles: ${error}`)
+		}
 
 		const existingValues = repository.readSnapshot().values as Record<string, unknown>
 		const existingSentinel = existingValues[SETTINGS_MIGRATION_VERSION_KEY]
@@ -1212,6 +1227,29 @@ export class StateManager {
 	 * effective value through `resolveToggles` so an absent path keeps inheriting
 	 * from the scope above.
 	 */
+	/**
+	 * True when a workspace settings document is bound to this session.
+	 *
+	 * Callers use this to pick the scope that owns a new preference; without a
+	 * workspace only the global scope can accept one.
+	 */
+	get hasWorkspaceScope(): boolean {
+		return this.workspaceSettingsRepository !== undefined
+	}
+
+	/**
+	 * True once stored capability keys use the normalized resource id form.
+	 *
+	 * Orphan pruning compares stored keys against normalized scan ids, so it must
+	 * stay disabled until this holds; otherwise every override would look
+	 * orphaned and be removed.
+	 */
+	get hasNormalizedCapabilityKeys(): boolean {
+		const applied = this.workspaceSettingsRepository?.readSnapshot().values as Record<string, unknown> | undefined
+		const generation = applied?.[CAPABILITY_KEY_NORMALIZATION_GENERATION_KEY]
+		return typeof generation === "number" && generation >= CAPABILITY_KEY_NORMALIZATION_GENERATION
+	}
+
 	getScopedCapabilityToggles<K extends SettingsKey>(scope: CapabilityScope, key: K): Settings[K] {
 		if (!this.isInitialized) {
 			throw new Error(STATE_MANAGER_NOT_INITIALIZED)
@@ -1323,6 +1361,40 @@ export class StateManager {
 			throw new Error(STATE_MANAGER_NOT_INITIALIZED)
 		}
 		return this.workspaceStateCache[key]
+	}
+
+	/**
+	 * Move legacy workspace toggle maps into the workspace preference scope.
+	 *
+	 * The legacy maps stored every discovered path and were rewritten by every
+	 * scan, which is how an incomplete scan after an update could erase a user's
+	 * disabled entries. Only explicit "disabled" decisions are carried over, and
+	 * only once per generation.
+	 */
+	async migrateLegacyCapabilityToggles(): Promise<boolean> {
+		const repository = this.workspaceSettingsRepository
+		if (!repository) return false
+
+		const applied = repository.readSnapshot().values as Record<string, unknown>
+		const appliedGeneration = applied[CAPABILITY_KEY_NORMALIZATION_GENERATION_KEY]
+		if (typeof appliedGeneration === "number" && appliedGeneration >= CAPABILITY_KEY_NORMALIZATION_GENERATION) {
+			return false
+		}
+
+		const migrations = planLegacyToggleMigration(this)
+
+		await repository.mutateResolved((values) => {
+			const patch: Record<string, unknown> = {
+				[CAPABILITY_KEY_NORMALIZATION_GENERATION_KEY]: CAPABILITY_KEY_NORMALIZATION_GENERATION,
+			}
+			for (const migration of migrations) {
+				const key = capabilityToggleSettingsKey(migration.kind, "workspace")
+				patch[key] = mergeMigratedOverrides(values[key] as Record<string, boolean> | undefined, migration.overrides)
+			}
+			return patch as Partial<Settings>
+		})
+
+		return migrations.length > 0
 	}
 
 	/**

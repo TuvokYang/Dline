@@ -1,3 +1,5 @@
+import { capabilityResourceId } from "@core/storage/settings/capability-resource-id"
+import { setCapabilityEnabled } from "@core/storage/settings/capability-toggle-store"
 import { setGlobalCapabilityEnabled } from "@core/storage/settings/global-capability-settings"
 import { getWorkspaceBasename } from "@core/workspace"
 import type { ToggleClineRuleRequest } from "@shared/proto/dline/file"
@@ -5,6 +7,7 @@ import { RuleScope, ToggleClineRules } from "@shared/proto/dline/file"
 import { telemetryService } from "@/services/telemetry"
 import { Logger } from "@/shared/services/Logger"
 import type { Controller } from "../index"
+import { capabilityWriteContext } from "./capability-write-context"
 
 /**
  * Toggles a Cline rule (enable or disable)
@@ -25,15 +28,24 @@ export async function toggleClineRule(controller: Controller, request: ToggleCli
 	}
 
 	// Handle the three different scopes
+	let localToggles = controller.stateManager.getWorkspaceStateKey("localClineRulesToggles")
 	switch (scope) {
 		case RuleScope.GLOBAL: {
 			await setGlobalCapabilityEnabled(controller.stateManager, "globalClineRulesToggles", rulePath, enabled)
 			break
 		}
 		case RuleScope.LOCAL: {
-			const toggles = controller.stateManager.getWorkspaceStateKey("localClineRulesToggles")
-			toggles[rulePath] = enabled
-			controller.stateManager.setWorkspaceState("localClineRulesToggles", toggles)
+			// The rule's origin is local, but the preference is stored in the scope
+			// the editor is currently in: task overrides workspace, workspace
+			// overrides global. Only the changed path is recorded, so every other
+			// rule keeps inheriting.
+			localToggles = (await setCapabilityEnabled(
+				controller.stateManager,
+				"rules",
+				capabilityWriteContext(controller),
+				capabilityResourceId(rulePath),
+				enabled,
+			)) as Record<string, boolean>
 			break
 		}
 		case RuleScope.REMOTE: {
@@ -56,7 +68,6 @@ export async function toggleClineRule(controller: Controller, request: ToggleCli
 
 	// Get the current state to return in the response
 	const globalToggles = controller.stateManager.getGlobalSettingsKey("globalClineRulesToggles")
-	const localToggles = controller.stateManager.getWorkspaceStateKey("localClineRulesToggles")
 	const remoteToggles = controller.stateManager.getGlobalStateKey("remoteRulesToggles")
 
 	return ToggleClineRules.create({

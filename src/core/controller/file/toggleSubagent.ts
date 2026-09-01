@@ -1,7 +1,10 @@
+import { capabilityResourceId } from "@core/storage/settings/capability-resource-id"
+import { setCapabilityEnabled } from "@core/storage/settings/capability-toggle-store"
 import { setGlobalCapabilityEnabled } from "@core/storage/settings/global-capability-settings"
 import { SubagentToggles, ToggleSubagentRequest } from "@shared/proto/dline/file"
 import { Logger } from "@/shared/services/Logger"
 import { Controller } from ".."
+import { capabilityWriteContext } from "./capability-write-context"
 
 /**
  * Toggles a subagent on or off.
@@ -23,9 +26,14 @@ export async function toggleSubagent(controller: Controller, request: ToggleSuba
 	if (isGlobal) {
 		globalToggles = await setGlobalCapabilityEnabled(controller.stateManager, "globalSubagentsToggles", subagentPath, enabled)
 	} else {
-		localToggles = controller.stateManager.getWorkspaceStateKey("localSubagentsToggles") || {}
-		localToggles[subagentPath] = enabled
-		controller.stateManager.setWorkspaceState("localSubagentsToggles", localToggles)
+		// Local origin, but the preference lands in the scope the editor is in.
+		localToggles = (await setCapabilityEnabled(
+			controller.stateManager,
+			"subagents",
+			capabilityWriteContext(controller),
+			capabilityResourceId(subagentPath),
+			enabled,
+		)) as Record<string, boolean>
 	}
 
 	return SubagentToggles.create({

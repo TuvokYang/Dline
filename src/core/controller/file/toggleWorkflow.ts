@@ -1,7 +1,10 @@
+import { capabilityResourceId } from "@core/storage/settings/capability-resource-id"
+import { setCapabilityEnabled } from "@core/storage/settings/capability-toggle-store"
 import { setGlobalCapabilityEnabled } from "@core/storage/settings/global-capability-settings"
 import { ClineRulesToggles, RuleScope, ToggleWorkflowRequest } from "@shared/proto/dline/file"
 import { Logger } from "@/shared/services/Logger"
 import { Controller } from ".."
+import { capabilityWriteContext } from "./capability-write-context"
 
 /**
  * Toggles a workflow on or off
@@ -30,9 +33,14 @@ export async function toggleWorkflow(controller: Controller, request: ToggleWork
 			break
 		}
 		case RuleScope.LOCAL: {
-			toggles = controller.stateManager.getWorkspaceStateKey("workflowToggles")
-			toggles[workflowPath] = enabled
-			controller.stateManager.setWorkspaceState("workflowToggles", toggles)
+			// Local origin, but the preference lands in the scope the editor is in.
+			toggles = (await setCapabilityEnabled(
+				controller.stateManager,
+				"workflows",
+				capabilityWriteContext(controller),
+				capabilityResourceId(workflowPath),
+				enabled,
+			)) as Record<string, boolean>
 			break
 		}
 		case RuleScope.REMOTE: {

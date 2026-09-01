@@ -1,4 +1,5 @@
 import type { ClineRulesToggles } from "@shared/cline-rules"
+import { capabilityResourceId } from "./capability-resource-id"
 
 /**
  * Preference scopes for capability toggles (skills / workflows / rules / subagents).
@@ -21,7 +22,7 @@ export interface ScopedToggles {
 }
 
 /** Ordered from the weakest to the strongest override. */
-const SCOPE_PRECEDENCE: readonly CapabilityScope[] = ["global", "workspace", "task"]
+export const CAPABILITY_SCOPES: readonly CapabilityScope[] = ["global", "workspace", "task"]
 
 /**
  * Select the scope that owns a new explicit preference.
@@ -38,9 +39,12 @@ export function activeCapabilityScope(context: { hasWorkspace: boolean; hasTask:
 /**
  * Resolve the effective enabled state for every discovered capability.
  *
- * `discovered` is the read-only scan result and carries the default state for
- * paths no scope has an opinion about. Resolution never mutates its inputs and
- * never persists anything, which keeps discovery off the storage write path.
+ * `discovered` is the read-only scan result keyed by the raw scan path, and it
+ * carries the default state for resources no scope has an opinion about. The
+ * result keeps those raw keys so callers can map straight back onto the scanned
+ * items, while lookups go through the normalized id the write path stores.
+ * Resolution never mutates its inputs and never persists anything, which keeps
+ * discovery off the storage write path.
  */
 export function resolveToggles(discovered: Readonly<ClineRulesToggles>, scopes: ScopedToggles = {}): ClineRulesToggles {
 	const resolved: ClineRulesToggles = {}
@@ -52,10 +56,20 @@ export function resolveToggles(discovered: Readonly<ClineRulesToggles>, scopes: 
 	return resolved
 }
 
-/** Resolve one capability through the scope chain, falling back to its discovered default. */
+/**
+ * Resolve one capability through the scope chain, falling back to its discovered default.
+ *
+ * The path is normalized before lookup because stored overrides are keyed by
+ * `capabilityResourceId`. Comparing a raw scan path against a normalized key
+ * would never match, so every override would be silently ignored and the
+ * resource would stay at its discovered default.
+ */
 export function resolveToggle(resourcePath: string, defaultEnabled: boolean, scopes: ScopedToggles = {}): boolean {
-	for (let index = SCOPE_PRECEDENCE.length - 1; index >= 0; index--) {
-		const override = scopes[SCOPE_PRECEDENCE[index]]?.[resourcePath]
+	const id = capabilityResourceId(resourcePath)
+	for (let index = CAPABILITY_SCOPES.length - 1; index >= 0; index--) {
+		const overrides = scopes[CAPABILITY_SCOPES[index]]
+		if (overrides === undefined) continue
+		const override = overrides[id] ?? overrides[resourcePath]
 		if (override !== undefined) return override
 	}
 	return defaultEnabled

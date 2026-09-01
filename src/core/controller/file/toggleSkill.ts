@@ -1,7 +1,10 @@
+import { capabilityResourceId } from "@core/storage/settings/capability-resource-id"
+import { setCapabilityEnabled } from "@core/storage/settings/capability-toggle-store"
 import { setGlobalCapabilityEnabled } from "@core/storage/settings/global-capability-settings"
 import { SkillsToggles, ToggleSkillRequest } from "@shared/proto/dline/file"
 import { Logger } from "@/shared/services/Logger"
 import { Controller } from ".."
+import { capabilityWriteContext } from "./capability-write-context"
 
 /**
  * Toggles a skill on or off
@@ -35,8 +38,16 @@ export async function toggleSkill(controller: Controller, request: ToggleSkillRe
 	} else if (isGlobal) {
 		globalToggles = await setGlobalCapabilityEnabled(controller.stateManager, "globalSkillsToggles", skillPath, enabled)
 	} else {
-		localToggles = { ...localToggles, [skillPath]: enabled }
-		controller.stateManager.setWorkspaceState("localSkillsToggles", localToggles)
+		// The skill's origin is local, but the preference lands in whichever scope
+		// the editor is currently in, so a task can disable it without changing
+		// the workspace default.
+		localToggles = (await setCapabilityEnabled(
+			controller.stateManager,
+			"skills",
+			capabilityWriteContext(controller),
+			capabilityResourceId(skillPath),
+			enabled,
+		)) as Record<string, boolean>
 	}
 
 	await controller.postStateToWebview()

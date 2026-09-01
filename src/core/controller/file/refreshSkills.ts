@@ -1,11 +1,12 @@
 import { parseRemoteSkillEntries } from "@core/context/instructions/user-instructions/skills"
+import { capabilityResourceId } from "@core/storage/settings/capability-resource-id"
 import {
 	type CapabilityScanResult,
 	completeScan,
 	incompleteScan,
 	mergeScans,
 } from "@core/storage/settings/capability-scan-result"
-import { resolveCapabilityToggles } from "@core/storage/settings/capability-toggle-store"
+import { pruneCapabilityOrphans, resolveCapabilityToggles } from "@core/storage/settings/capability-toggle-store"
 import { RefreshedSkills, SkillInfo } from "@shared/proto/dline/file"
 import fs from "fs/promises"
 import path from "path"
@@ -158,8 +159,14 @@ async function scanSkills(controller: Controller): Promise<RefreshedSkills> {
 		skill.enabled = localToggles[skill.path] !== false
 	}
 
+	// Drop overrides whose skill no longer exists. Both roots feed the same
+	// preference maps, so they are pruned together against one authoritative scan.
+	const scanComplete = globalScan.complete && localScan.complete
+	const discoveredIds = new Set([...globalScan.items, ...localScan.items].map((skill) => capabilityResourceId(skill.path)))
+	await pruneCapabilityOrphans(controller.stateManager, "skills", discoveredIds, scanComplete)
+
 	Logger.debug(
-		`[CapabilityPerf] phase=skills_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} directories=${scannedDirectories} global=${globalSkills.length} local=${localSkills.length} remote=${validatedRemoteSkills.length} complete=${globalScan.complete && localScan.complete}`,
+		`[CapabilityPerf] phase=skills_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} directories=${scannedDirectories} global=${globalSkills.length} local=${localSkills.length} remote=${validatedRemoteSkills.length} complete=${scanComplete}`,
 	)
 	return RefreshedSkills.create({
 		globalSkills,

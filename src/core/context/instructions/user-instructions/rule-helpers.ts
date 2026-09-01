@@ -1,4 +1,6 @@
 import { ensureRulesDirectoryExists, ensureWorkflowsDirectoryExists, GlobalFileNames } from "@core/storage/disk"
+import { capabilityResourceId } from "@core/storage/settings/capability-resource-id"
+import { type CapabilityKind, clearCapabilityOverrideEverywhere } from "@core/storage/settings/capability-toggle-store"
 import { removeGlobalCapability } from "@core/storage/settings/global-capability-settings"
 import { ClineRulesToggles } from "@shared/cline-rules"
 import { GlobalInstructionsFile } from "@shared/remote-config/schema"
@@ -368,6 +370,14 @@ export const createRuleFile = async (isGlobal: boolean, filename: string, cwd: s
 	}
 }
 
+/** Maps the caller's rule family to the capability kind that stores its toggles. */
+const LOCAL_RULE_CAPABILITY_KIND: Readonly<Record<string, CapabilityKind>> = {
+	workflow: "workflows",
+	cursor: "cursorRules",
+	windsurf: "windsurfRules",
+	agents: "agentsRules",
+}
+
 /**
  * Delete a rule file or workflow file
  */
@@ -401,27 +411,14 @@ export async function deleteRuleFile(
 				rulePath,
 			)
 		} else {
-			if (type === "workflow") {
-				const toggles = controller.stateManager.getWorkspaceStateKey("workflowToggles")
-				delete toggles[rulePath]
-				controller.stateManager.setWorkspaceState("workflowToggles", toggles)
-			} else if (type === "cursor") {
-				const toggles = controller.stateManager.getWorkspaceStateKey("localCursorRulesToggles")
-				delete toggles[rulePath]
-				controller.stateManager.setWorkspaceState("localCursorRulesToggles", toggles)
-			} else if (type === "windsurf") {
-				const toggles = controller.stateManager.getWorkspaceStateKey("localWindsurfRulesToggles")
-				delete toggles[rulePath]
-				controller.stateManager.setWorkspaceState("localWindsurfRulesToggles", toggles)
-			} else if (type === "agents") {
-				const toggles = controller.stateManager.getWorkspaceStateKey("localAgentsRulesToggles")
-				delete toggles[rulePath]
-				controller.stateManager.setWorkspaceState("localAgentsRulesToggles", toggles)
-			} else {
-				const toggles = controller.stateManager.getWorkspaceStateKey("localClineRulesToggles")
-				delete toggles[rulePath]
-				controller.stateManager.setWorkspaceState("localClineRulesToggles", toggles)
-			}
+			// The file is gone, so its override in every scope is now an orphan.
+			// Dropping all of them keeps a later file with the same path from
+			// inheriting a preference the user set for a different file.
+			await clearCapabilityOverrideEverywhere(
+				controller.stateManager,
+				LOCAL_RULE_CAPABILITY_KIND[type] ?? "rules",
+				capabilityResourceId(rulePath),
+			)
 		}
 
 		return {

@@ -1,7 +1,10 @@
+import { capabilityResourceId } from "@core/storage/settings/capability-resource-id"
+import { setCapabilityEnabled } from "@core/storage/settings/capability-toggle-store"
 import type { ToggleAgentsRuleRequest } from "@shared/proto/dline/file"
 import { ClineRulesToggles } from "@shared/proto/dline/file"
 import { Logger } from "@/shared/services/Logger"
 import type { Controller } from "../index"
+import { capabilityWriteContext } from "./capability-write-context"
 
 /**
  * Toggles an Agents rule (enable or disable)
@@ -20,15 +23,18 @@ export async function toggleAgentsRule(controller: Controller, request: ToggleAg
 		throw new Error("Missing or invalid parameters for toggleAgentsRule")
 	}
 
-	// Update the toggle in workspace state
-	const toggles = controller.stateManager.getWorkspaceStateKey("localAgentsRulesToggles")
-	toggles[rulePath] = enabled
-	controller.stateManager.setWorkspaceState("localAgentsRulesToggles", toggles)
-
-	// Get the current state to return in the response
-	const agentsToggles = controller.stateManager.getWorkspaceStateKey("localAgentsRulesToggles")
+	// Agents rules always come from the workspace, but the preference is stored
+	// in the scope the editor is currently in, so only the changed path is
+	// recorded and every other rule keeps inheriting.
+	const agentsToggles = await setCapabilityEnabled(
+		controller.stateManager,
+		"agentsRules",
+		capabilityWriteContext(controller),
+		capabilityResourceId(rulePath),
+		enabled,
+	)
 
 	return ClineRulesToggles.create({
-		toggles: agentsToggles,
+		toggles: agentsToggles as Record<string, boolean>,
 	})
 }

@@ -1,8 +1,11 @@
 import type { StateManager } from "@core/storage/StateManager"
 import type { ClineRulesToggles } from "@shared/cline-rules"
 import type { SettingsKey } from "@shared/storage/state-keys"
+import { Logger } from "@/shared/services/Logger"
+import { pruneOrphanOverrides } from "./capability-orphan-prune"
 import {
 	activeCapabilityScope,
+	CAPABILITY_SCOPES,
 	type CapabilityScope,
 	resolveToggles,
 	type ScopedToggles,
@@ -71,6 +74,11 @@ const SCOPE_KEYS: Record<CapabilityKind, Record<CapabilityScope, SettingsKey>> =
 	},
 }
 
+/** Settings key holding one capability kind's overrides in a given scope. */
+export function capabilityToggleSettingsKey(kind: CapabilityKind, scope: CapabilityScope): SettingsKey {
+	return SCOPE_KEYS[kind][scope]
+}
+
 /**
  * Read the stored overrides of one capability kind for every scope.
  *
@@ -133,4 +141,53 @@ export async function clearCapabilityOverride(
 	return (await stateManager.mutateScopedCapabilityToggles(scope, key, (current) =>
 		withoutToggleOverride(current as ClineRulesToggles, resourcePath),
 	)) as ClineRulesToggles
+}
+
+/**
+ * Drop one override from every scope.
+ *
+ * Used when the underlying resource is gone: leaving an override behind would
+ * silently apply to a future resource that happens to reuse the same path.
+ */
+export async function clearCapabilityOverrideEverywhere(
+	stateManager: StateManager,
+	kind: CapabilityKind,
+	resourcePath: string,
+): Promise<void> {
+	for (const scope of CAPABILITY_SCOPES) {
+		await clearCapabilityOverride(stateManager, kind, scope, resourcePath)
+	}
+}
+
+/**
+ * Drop overrides whose resource no longer exists, in every scope.
+ *
+ * Callers pass the discovery result as-is; `pruneOrphanOverrides` decides
+ * whether the scan is authoritative enough to act on. A non-authoritative scan
+ * is a no-op, so a temporarily unreadable directory can never erase a
+ * preference.
+ */
+export async function pruneCapabilityOrphans(
+	stateManager: StateManager,
+	kind: CapabilityKind,
+	discoveredIds: ReadonlySet<string>,
+	scanComplete: boolean,
+): Promise<number> {
+	const keysNormalized = stateManager.hasNormalizedCapabilityKeys
+	let removed = 0
+
+	for (const scope of CAPABILITY_SCOPES) {
+		const key = SCOPE_KEYS[kind][scope]
+		const overrides = stateManager.getScopedCapabilityToggles(scope, key) as ClineRulesToggles
+		const result = pruneOrphanOverrides({ overrides, discoveredIds, scanComplete, keysNormalized })
+		if (!result.pruned) continue
+
+		await stateManager.mutateScopedCapabilityToggles(scope, key, () => result.pruned as never)
+		removed += result.removedIds.length
+		Logger.debug(
+			`[CapabilityToggle] Pruned ${result.removedIds.length} orphan ${kind} overrides in ${scope}: ${result.removedIds.join(", ")}`,
+		)
+	}
+
+	return removed
 }

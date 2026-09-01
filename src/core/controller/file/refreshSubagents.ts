@@ -1,11 +1,12 @@
 import { getSubagentsScanDirectories } from "@core/storage/disk"
+import { capabilityResourceId } from "@core/storage/settings/capability-resource-id"
 import {
 	type CapabilityScanResult,
 	completeScan,
 	incompleteScan,
 	mergeScans,
 } from "@core/storage/settings/capability-scan-result"
-import { resolveCapabilityToggles } from "@core/storage/settings/capability-toggle-store"
+import { pruneCapabilityOrphans, resolveCapabilityToggles } from "@core/storage/settings/capability-toggle-store"
 import { parseAgentConfigFromYaml } from "@core/task/tools/subagent/AgentConfigLoader"
 import { RefreshedSubagents, SubagentInfo } from "@shared/proto/dline/file"
 import fs from "fs/promises"
@@ -129,8 +130,14 @@ export async function refreshSubagents(controller: Controller): Promise<Refreshe
 			agent.enabled = localToggles[agent.path] !== false
 		}
 
+		// Drop overrides whose subagent no longer exists. Shadowed global agents
+		// still exist on disk, so the raw scan items decide, not the visible set.
+		const scanComplete = globalScan.complete && localScan.complete
+		const discoveredIds = new Set([...globalScan.items, ...localScan.items].map((agent) => capabilityResourceId(agent.path)))
+		await pruneCapabilityOrphans(controller.stateManager, "subagents", discoveredIds, scanComplete)
+
 		Logger.debug(
-			`[CapabilityPerf] phase=subagents_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} directories=${scannedDirectories} global=${visibleGlobalSubagents.length} local=${localSubagents.length} shadowedGlobal=${globalSubagents.length - visibleGlobalSubagents.length} complete=${globalScan.complete && localScan.complete}`,
+			`[CapabilityPerf] phase=subagents_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} directories=${scannedDirectories} global=${visibleGlobalSubagents.length} local=${localSubagents.length} shadowedGlobal=${globalSubagents.length - visibleGlobalSubagents.length} complete=${scanComplete}`,
 		)
 		return RefreshedSubagents.create({
 			globalSubagents: visibleGlobalSubagents,

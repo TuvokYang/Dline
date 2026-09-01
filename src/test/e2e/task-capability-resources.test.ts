@@ -52,6 +52,31 @@ async function readTaskCapabilityToggles(dlineDocsDir: string, taskId: string): 
 	return toggles
 }
 
+/**
+ * Read the toggles once the task has actually flushed them.
+ *
+ * The task directory appears before settings.json is written, so a bare read
+ * right after the id shows up races the flush and fails with ENOENT.
+ */
+async function waitForTaskCapabilityToggles(dlineDocsDir: string, taskId: string): Promise<TaskCapabilityToggles> {
+	let toggles: TaskCapabilityToggles | undefined
+	await expect
+		.poll(
+			async () => {
+				try {
+					toggles = await readTaskCapabilityToggles(dlineDocsDir, taskId)
+					return true
+				} catch {
+					return false
+				}
+			},
+			{ timeout: 30_000 },
+		)
+		.toBe(true)
+	if (!toggles) throw new Error("Task capability toggles were not persisted")
+	return toggles
+}
+
 async function readPromptContext(dlineDocsDir: string, taskId: string): Promise<TaskPromptContext> {
 	return JSON.parse(await readFile(path.join(dlineDocsDir, "tasks", taskId, "context.json"), "utf8"))
 }
@@ -371,7 +396,7 @@ e2e(
 		expect(newTaskIds).toHaveLength(2)
 		const newTaskId = newTaskIds.find((candidate) => candidate !== taskId)
 		if (!newTaskId) throw new Error("Workspace-default capability task was not persisted")
-		expectCapabilityState(await readTaskCapabilityToggles(dlineDocsDir, newTaskId), files, mcpInternalName, false)
+		expectCapabilityState(await waitForTaskCapabilityToggles(dlineDocsDir, newTaskId), files, mcpInternalName, false)
 		expect(server.getMockConsumptions("openai-compatible-chat")[2].contractError).toBeUndefined()
 
 		await openCapabilityModal(sidebar)

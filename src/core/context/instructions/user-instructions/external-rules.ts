@@ -7,6 +7,7 @@ import {
 import type { IgnoreController } from "@core/ignore/IgnoreController"
 import { formatResponse } from "@core/prompts/responses"
 import { GlobalFileNames } from "@core/storage/disk"
+import { resolveCapabilityToggles } from "@core/storage/settings/capability-toggle-store"
 import { listFiles } from "@services/glob/list-files"
 import { ClineRulesToggles } from "@shared/cline-rules"
 import { fileExistsAtPath, isDirectory } from "@utils/fs"
@@ -16,7 +17,12 @@ import { Controller } from "@/core/controller"
 import { Logger } from "@/shared/services/Logger"
 
 /**
- * Refreshes the toggles for windsurf, cursor, and agents rules
+ * Refreshes the toggles for windsurf, cursor, and agents rules.
+ *
+ * Discovery is read-only: it reports what exists on disk and resolves the
+ * effective state against stored preferences in memory. Persisting a preference
+ * is reserved for explicit user toggles, so this stays off the storage write
+ * path and never contends for the cross-process settings lock.
  */
 export async function refreshExternalRulesToggles(
 	controller: Controller,
@@ -28,30 +34,25 @@ export async function refreshExternalRulesToggles(
 }> {
 	const startedAt = performance.now()
 	// local windsurf toggles
-	const localWindsurfRulesToggles = controller.stateManager.getWorkspaceStateKey("localWindsurfRulesToggles")
 	const localWindsurfRulesFilePath = path.resolve(workingDirectory, GlobalFileNames.windsurfRules)
-	const updatedLocalWindsurfToggles = await synchronizeRuleToggles(localWindsurfRulesFilePath, localWindsurfRulesToggles)
-	controller.stateManager.setWorkspaceState("localWindsurfRulesToggles", updatedLocalWindsurfToggles)
-
-	// local cursor toggles
-	const localCursorRulesToggles = controller.stateManager.getWorkspaceStateKey("localCursorRulesToggles")
+	const discoveredWindsurf = await synchronizeRuleToggles(localWindsurfRulesFilePath, {})
+	const updatedLocalWindsurfToggles = resolveCapabilityToggles(controller.stateManager, "windsurfRules", discoveredWindsurf)
 
 	// cursor has two valid locations for rules files, so we need to check both and combine
-	// synchronizeRuleToggles will drop whichever rules files are not in each given path, but combining the results will result in no data loss
+	// synchronizeRuleToggles drops whichever rules files are not in each given path, but combining the results avoids data loss
 	let localCursorRulesFilePath = path.resolve(workingDirectory, GlobalFileNames.cursorRulesDir)
-	const updatedLocalCursorToggles1 = await synchronizeRuleToggles(localCursorRulesFilePath, localCursorRulesToggles, ".mdc")
+	const discoveredCursorDir = await synchronizeRuleToggles(localCursorRulesFilePath, {}, ".mdc")
 
 	localCursorRulesFilePath = path.resolve(workingDirectory, GlobalFileNames.cursorRulesFile)
-	const updatedLocalCursorToggles2 = await synchronizeRuleToggles(localCursorRulesFilePath, localCursorRulesToggles)
+	const discoveredCursorFile = await synchronizeRuleToggles(localCursorRulesFilePath, {})
 
-	const updatedLocalCursorToggles = combineRuleToggles(updatedLocalCursorToggles1, updatedLocalCursorToggles2)
-	controller.stateManager.setWorkspaceState("localCursorRulesToggles", updatedLocalCursorToggles)
+	const discoveredCursor = combineRuleToggles(discoveredCursorDir, discoveredCursorFile)
+	const updatedLocalCursorToggles = resolveCapabilityToggles(controller.stateManager, "cursorRules", discoveredCursor)
 
 	// local agents toggles
-	const localAgentsRulesToggles = controller.stateManager.getWorkspaceStateKey("localAgentsRulesToggles")
 	const localAgentsRulesFilePath = path.resolve(workingDirectory, GlobalFileNames.agentsRulesFile)
-	const updatedLocalAgentsToggles = await synchronizeRuleToggles(localAgentsRulesFilePath, localAgentsRulesToggles)
-	controller.stateManager.setWorkspaceState("localAgentsRulesToggles", updatedLocalAgentsToggles)
+	const discoveredAgents = await synchronizeRuleToggles(localAgentsRulesFilePath, {})
+	const updatedLocalAgentsToggles = resolveCapabilityToggles(controller.stateManager, "agentsRules", discoveredAgents)
 	Logger.debug(
 		`[CapabilityPerf] phase=external_rules_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} windsurf=${Object.keys(updatedLocalWindsurfToggles).length} cursor=${Object.keys(updatedLocalCursorToggles).length} agents=${Object.keys(updatedLocalAgentsToggles).length}`,
 	)
