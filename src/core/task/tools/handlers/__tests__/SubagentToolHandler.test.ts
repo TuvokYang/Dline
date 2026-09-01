@@ -728,6 +728,55 @@ describe("SubagentToolHandler", () => {
 		})
 	})
 
+	// The runner reports its terminal status through onProgress as soon as the
+	// run resolves. Ignoring it left a finished subagent rendered as `running`
+	// until the job manager published the authoritative record.
+	it("publishes the terminal status reported through progress before the run resolves", async () => {
+		const { config } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
+		const statuses: unknown[] = []
+		config.activityStore = {
+			create: vi.fn(),
+			update: vi.fn((_activityId: string, patch: { status?: unknown }) => {
+				if (patch.status !== undefined) statuses.push(patch.status)
+			}),
+			appendEvent: vi.fn(),
+		} as unknown as TaskConfig["activityStore"]
+		const handler = new UseSubagentToolHandler()
+		vi.spyOn(SubagentRunner.prototype, "run").mockImplementation(async (_prompt, onProgress) => {
+			onProgress({ status: "running" })
+			onProgress({ status: "completed", result: "terminal status published" })
+			return {
+				status: "completed",
+				result: "terminal status published",
+				stats: {
+					toolCalls: 0,
+					inputTokens: 1,
+					outputTokens: 1,
+					cacheWriteTokens: 0,
+					cacheReadTokens: 0,
+					totalCost: 0,
+					currency: "USD",
+					contextTokens: 2,
+					contextWindow: 200000,
+					contextUsagePercentage: 0.001,
+				},
+			}
+		})
+
+		const result = await handler.execute(config, {
+			type: "tool_use",
+			name: ClineDefaultTool.USE_SUBAGENT,
+			params: { task: "review", context: "ctx" },
+			partial: false,
+			ts: Date.now(),
+		})
+
+		assert.match(String(result), /terminal status published/)
+		assert.equal(statuses.includes("running"), true, "the running status must still be published")
+		assert.equal(statuses.includes("completed"), true, "the terminal status must reach the activity store")
+		assert.equal(statuses.indexOf("completed") > statuses.indexOf("running"), true)
+	})
+
 	it("lists default and bounded configured names for an unknown stable subagent", async () => {
 		const { config } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
 		const handler = new UseSubagentToolHandler()

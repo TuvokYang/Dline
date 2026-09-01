@@ -153,8 +153,18 @@ function updateActivityFromEntry(config: TaskConfig, entry: SubagentStatusItem):
 	})
 }
 
+/**
+ * Apply a live progress update from a running subagent.
+ *
+ * The runner reports its terminal status as soon as the run resolves, while
+ * the job manager persists the authoritative record slightly later. Ignoring
+ * the terminal update kept a finished subagent rendered as `running` until the
+ * whole batch settled, so the status is mirrored here as an optimistic update.
+ * `finishedAt` stays owned by the job manager to keep a single source of truth
+ * for completion time.
+ */
 function applyProgress(config: TaskConfig, entry: SubagentStatusItem, update: SubagentProgressUpdate): void {
-	if (update.status === "running") entry.status = "running"
+	if (update.status) entry.status = update.status
 	if (update.latestToolCall) entry.latestToolCall = update.latestToolCall
 	if (update.stats) applyStats(entry, update.stats)
 	if (update.result) entry.result = update.result

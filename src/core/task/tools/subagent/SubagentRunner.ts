@@ -356,6 +356,8 @@ export class SubagentRunner {
 	private finishRequested: SubagentFinishReason | undefined
 	private completionOnly = false
 	private running = false
+	/** The run that has not unwound yet; a retry waits for it instead of racing it. */
+	private activeRun: Promise<SubagentRunResult> | undefined
 	private activeCommandExecutions = 0
 	private abortingCommands = false
 	private apiLogRequestIndex = 0
@@ -467,7 +469,31 @@ export class SubagentRunner {
 		}
 	}
 
+	/**
+	 * Run the subagent, serializing against a run that has not unwound yet.
+	 *
+	 * A retry can be requested while the previous run is still settling: an
+	 * aborted stream, a hosted tool lifecycle, and a running command all unwind
+	 * asynchronously. Both runs share this instance, so starting the second one
+	 * eagerly let it reset `abortRequested` and replace the abort controllers the
+	 * first one was still using. The two runs then cancelled each other's
+	 * requests and overwrote each other's results. Waiting for the previous run
+	 * keeps one live run per runner without silently refusing the retry.
+	 */
 	async run(prompt: string, onProgress: (update: SubagentProgressUpdate) => void): Promise<SubagentRunResult> {
+		while (this.activeRun) {
+			await this.activeRun.catch(() => undefined)
+		}
+		const execution = this.execute(prompt, onProgress)
+		this.activeRun = execution
+		try {
+			return await execution
+		} finally {
+			if (this.activeRun === execution) this.activeRun = undefined
+		}
+	}
+
+	private async execute(prompt: string, onProgress: (update: SubagentProgressUpdate) => void): Promise<SubagentRunResult> {
 		this.abortRequested = false
 		this.finishRequested = undefined
 		this.completionOnly = false

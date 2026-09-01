@@ -302,6 +302,86 @@ describe("SubagentRunner", () => {
 		assert.equal(progress.mock.calls.at(-1)?.[0].status, "cancelled")
 	})
 
+	// A retry reuses the same runner instance. Before the guard, the second run
+	// reset `abortRequested` and replaced the abort controllers while the first
+	// one was still unwinding, so the two runs cancelled each other's requests.
+	it("serializes a retry against a run that has not unwound yet", async () => {
+		const runOrder: string[] = []
+		let releaseFirstRun: (() => void) | undefined
+		const firstRunReachedProvider = new Promise<void>((resolve) => {
+			releaseFirstRun = resolve
+		})
+		let call = 0
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			call += 1
+			const label = `run-${call}`
+			runOrder.push(`${label}:start`)
+			if (call === 1) {
+				await firstRunReachedProvider
+			}
+			runOrder.push(`${label}:end`)
+			yield {
+				type: "tool_calls",
+				function_id: `${label}-complete`,
+				tool_call: { function: { name: ClineDefaultTool.ATTEMPT, arguments: JSON.stringify({ result: label }) } },
+			}
+		})
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+		const runner = new SubagentRunner(createTaskConfig(false))
+
+		const first = runner.run("First run", () => {})
+		await vi.waitFor(() => {
+			assert.equal(runOrder.includes("run-1:start"), true)
+		})
+		const second = runner.run("Retry run", () => {})
+		// The retry must not reach the provider while the first run is in flight.
+		assert.equal(createMessage.mock.calls.length, 1)
+
+		releaseFirstRun?.()
+		const [firstResult, secondResult] = await Promise.all([first, second])
+
+		assert.deepEqual(runOrder, ["run-1:start", "run-1:end", "run-2:start", "run-2:end"])
+		assert.equal(firstResult.status, "completed", firstResult.error)
+		assert.equal(firstResult.result, "run-1")
+		assert.equal(secondResult.status, "completed", secondResult.error)
+		assert.equal(secondResult.result, "run-2")
+		assert.equal(createMessage.mock.calls.length, 2)
+	})
+
+	// A failed run must not block the next one: the guard waits for the previous
+	// run to settle, not for it to succeed.
+	it("starts the next run after the previous one rejects", async () => {
+		// The first run must exhaust its own backoff sequence before it can fail,
+		// so every attempt of that run has to reject.
+		let firstRunFinished = false
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			if (!firstRunFinished) throw new Error("first run exploded")
+			yield {
+				type: "tool_calls",
+				function_id: "after-failure-complete",
+				tool_call: { function: { name: ClineDefaultTool.ATTEMPT, arguments: JSON.stringify({ result: "recovered" }) } },
+			}
+		})
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+		const runner = new SubagentRunner(createTaskConfig(false))
+
+		const failed = await runner.run("Failing run", () => {})
+		assert.equal(failed.status, "failed")
+		firstRunFinished = true
+
+		const recovered = await runner.run("Recovered run", () => {})
+		assert.equal(recovered.status, "completed", recovered.error)
+		assert.equal(recovered.result, "recovered")
+	})
+
 	it("allows an explicitly restored Activity runner to outlive an inert parent Task", async () => {
 		const createMessage = vi.fn().mockImplementation(async function* () {
 			yield {
