@@ -129,7 +129,7 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 async function showVersionUpdateAnnouncement(stateManager: StateManager) {
 	// Version checking for autoupdate notification
 	const currentVersion = ExtensionRegistryInfo.version
-	const previousVersion = stateManager.getGlobalStateKey("clineVersion")
+	const previousVersion = stateManager.getGlobalStateKey("version")
 	// Perform post-update actions if necessary
 	try {
 		if (!previousVersion || currentVersion !== previousVersion) {
@@ -150,7 +150,7 @@ async function showVersionUpdateAnnouncement(stateManager: StateManager) {
 				})
 			}
 			// Always update the main version tracker for the next launch.
-			await stateManager.setGlobalState("clineVersion", currentVersion)
+			await stateManager.setGlobalState("version", currentVersion)
 		}
 	} catch (error) {
 		const errorMessage = error instanceof Error ? error.message : String(error)

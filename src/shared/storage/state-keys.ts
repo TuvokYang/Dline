@@ -69,7 +69,8 @@ const REMOTE_CONFIG_EXTRA_FIELDS = {
 } satisfies FieldDefinitions
 
 const GLOBAL_STATE_FIELDS = {
-	clineVersion: { default: undefined as string | undefined },
+	/** Extension version observed on the previous launch, used to detect updates. */
+	version: { default: undefined as string | undefined },
 	"cline.generatedMachineId": { default: undefined as string | undefined }, // Note, distinctId reads/writes this directly from/to StorageContext before StateManager is initialized.
 	lastShownAnnouncementId: { default: undefined as string | undefined },
 	taskHistory: { default: [] as HistoryItem[], isAsync: true },

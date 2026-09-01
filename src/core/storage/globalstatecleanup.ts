@@ -16,6 +16,15 @@ export const GLOBAL_STATE_CLEANUP_GENERATION_KEY = "__globalStateCleanupGenerati
 export const GLOBAL_STATE_CLEANUP_GENERATION = 1
 
 /**
+ * Legacy keys whose value must be carried over to a renamed key before the
+ * sweep removes them.
+ *
+ * Dropping such a value outright is not a cosmetic loss: the version tracker
+ * would read as "first launch" and replay the update announcement.
+ */
+const RENAMED_KEYS: ReadonlyArray<readonly [legacy: string, current: string]> = [["clineVersion", "version"]]
+
+/**
  * Keys that are not declared in GLOBAL_STATE_FIELDS but must survive the sweep.
  *
  * Migration markers describe the store itself rather than application state, so
@@ -66,6 +75,16 @@ export async function cleanupLegacyGlobalState(store: ClineFileStorage): Promise
 	for (const key of removedKeys) {
 		entries[key] = undefined
 	}
+
+	// Carry renamed values forward. An existing current value wins, because it
+	// was written by a build that already knows the new key.
+	for (const [legacy, current] of RENAMED_KEYS) {
+		const legacyValue = store.get(legacy)
+		if (legacyValue !== undefined && store.get(current) === undefined) {
+			entries[current] = legacyValue
+		}
+	}
+
 	entries[GLOBAL_STATE_CLEANUP_GENERATION_KEY] = GLOBAL_STATE_CLEANUP_GENERATION
 
 	await store.setBatchAsync(entries)

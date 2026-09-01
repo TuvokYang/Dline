@@ -40,7 +40,7 @@ describe("cleanupLegacyGlobalState", () => {
 	it("removes projected Settings, dropped fields and migrated provider config", async () => {
 		const store = await openStore({
 			// Declared GlobalState — must survive.
-			clineVersion: "0.9.1",
+			version: "0.9.1",
 			mcpMarketplaceEnabled: true,
 			remoteRulesToggles: { "rule.md": false },
 			// Settings projected by an older build.
@@ -59,7 +59,7 @@ describe("cleanupLegacyGlobalState", () => {
 		const document = await readDocument()
 
 		expect(result.performed).toBe(true)
-		expect(document.clineVersion).toBe("0.9.1")
+		expect(document.version).toBe("0.9.1")
 		expect(document.mcpMarketplaceEnabled).toBe(true)
 		expect(document.remoteRulesToggles).toEqual({ "rule.md": false })
 		expect(document).not.toHaveProperty("globalSkillsToggles")
@@ -69,6 +69,27 @@ describe("cleanupLegacyGlobalState", () => {
 		expect(document).not.toHaveProperty("taskCompletionBackfillCompleted")
 		expect(document).not.toHaveProperty("openAiBaseUrl")
 		expect(document).not.toHaveProperty("planModeOpenAiModelId")
+	})
+
+	it("carries the legacy version tracker over to its renamed key", async () => {
+		const store = await openStore({ clineVersion: "0.9.0" })
+
+		await cleanupLegacyGlobalState(store)
+		const document = await readDocument()
+
+		// Losing this value would make the next launch look like a fresh install
+		// and replay the update announcement.
+		expect(document.version).toBe("0.9.0")
+		expect(document).not.toHaveProperty("clineVersion")
+	})
+
+	it("keeps a current version value when both keys are present", async () => {
+		const store = await openStore({ clineVersion: "0.9.0", version: "0.9.1" })
+
+		await cleanupLegacyGlobalState(store)
+		const document = await readDocument()
+
+		expect(document.version).toBe("0.9.1")
 	})
 
 	it("keeps the migration markers that describe the store itself", async () => {
