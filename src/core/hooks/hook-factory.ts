@@ -910,12 +910,30 @@ export class HookFactory {
 	 * (from .clinerules/hooks/ in each workspace root).
 	 */
 	private static async findHookScripts(hookName: HookName): Promise<string[]> {
-		const hookScripts = []
-		for (const hooksDir of await getAllHooksDirs()) {
-			hookScripts.push(HookFactory.findHookInHooksDir(hookName, hooksDir))
-		}
+		const startedAt = performance.now()
+		const hooksDirs = await getAllHooksDirs()
+		const directoriesReadyAt = performance.now()
+		const hookScripts = hooksDirs.map(async (hooksDir, directoryIndex) => {
+			const fileCheckStartedAt = performance.now()
+			const script = await HookFactory.findHookInHooksDir(hookName, hooksDir)
+			const durationMs = Math.round(performance.now() - fileCheckStartedAt)
+			if (durationMs >= 100) {
+				Logger.debug(
+					`[HookDiscoveryPerf] phase=file_check hook=${hookName} directoryIndex=${directoryIndex} durationMs=${durationMs}`,
+				)
+			}
+			return script
+		})
 		const isDefined = (scriptPath: string | undefined): scriptPath is string => Boolean(scriptPath)
-		return (await Promise.all(hookScripts)).filter(isDefined)
+		const scripts = (await Promise.all(hookScripts)).filter(isDefined)
+		const completedAt = performance.now()
+		const totalMs = Math.round(completedAt - startedAt)
+		if (totalMs >= 100) {
+			Logger.debug(
+				`[HookDiscoveryPerf] phase=has_hook_scan hook=${hookName} directories=${hooksDirs.length} directoriesMs=${Math.round(directoriesReadyAt - startedAt)} filesMs=${Math.round(completedAt - directoriesReadyAt)} totalMs=${totalMs} found=${scripts.length}`,
+			)
+		}
+		return scripts
 	}
 
 	/**

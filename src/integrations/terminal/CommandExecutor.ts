@@ -62,6 +62,7 @@ export class CommandExecutor {
 	private standaloneManager: StandaloneTerminalManager
 	private callbacks: CommandExecutorCallbacks
 	private terminalConfiguration: TerminalManagerConfiguration
+	private hasAppliedInitialConfiguration = false
 	private readonly shellEnvironmentLoader: ShellEnvironmentConfigLoader
 	private readonly workspaceRoots: readonly string[]
 
@@ -128,7 +129,9 @@ export class CommandExecutor {
 			closedCount += result.closedCount
 			busyTerminals.push(...result.busyTerminals)
 		}
-		if (this.terminalExecutionMode === "vscodeTerminal") void this.prewarmWorkspaceRoots()
+		const shouldPrewarm = this.hasAppliedInitialConfiguration
+		this.hasAppliedInitialConfiguration = true
+		if (shouldPrewarm && this.terminalExecutionMode === "vscodeTerminal") void this.prewarmWorkspaceRoots()
 		return { closedCount, busyTerminals }
 	}
 

@@ -225,11 +225,11 @@ describe("CommandExecutor explicit background execution", () => {
 		}
 	})
 
-	it("prewarms every workspace root after the initial terminal configuration", async () => {
+	it("defers prewarming until terminal configuration changes after construction", async () => {
 		const firstRoot = path.resolve("C:\\workspace-a")
 		const secondRoot = path.resolve("C:\\workspace-b")
 		const primaryManager = createTerminalManager()
-		new CommandExecutor(
+		const executor = new CommandExecutor(
 			{
 				cwd: firstRoot,
 				workspaceRoots: [firstRoot, secondRoot],
@@ -242,6 +242,10 @@ describe("CommandExecutor explicit background execution", () => {
 			createCallbacks(),
 		)
 
+		await new Promise((resolve) => setTimeout(resolve, 50))
+		assert.equal(vi.mocked(primaryManager.ensureWarm!).mock.calls.length, 0)
+
+		executor.configure(terminalConfiguration)
 		await vi.waitFor(() => assert.equal(vi.mocked(primaryManager.ensureWarm!).mock.calls.length, 2))
 		for (const [cwd, launchConfiguration] of vi.mocked(primaryManager.ensureWarm!).mock.calls) {
 			assert.equal(launchConfiguration?.workspaceRoot, cwd)
@@ -289,14 +293,14 @@ describe("CommandExecutor explicit background execution", () => {
 			},
 			createCallbacks(),
 		)
-		await vi.waitFor(() => assert.equal(vi.mocked(primaryManager.ensureWarm!).mock.calls.length, 1))
+		assert.equal(vi.mocked(primaryManager.ensureWarm!).mock.calls.length, 0)
 
 		executor.configure({ ...terminalConfiguration, defaultTerminalProfile: "powershell" })
-		await vi.waitFor(() => assert.equal(vi.mocked(primaryManager.ensureWarm!).mock.calls.length, 2))
-		assert.equal(vi.mocked(primaryManager.ensureWarm!).mock.calls[1]?.[1]?.profileId, "powershell")
+		await vi.waitFor(() => assert.equal(vi.mocked(primaryManager.ensureWarm!).mock.calls.length, 1))
+		assert.equal(vi.mocked(primaryManager.ensureWarm!).mock.calls[0]?.[1]?.profileId, "powershell")
 
 		executor.reinitializeTerminals()
-		await vi.waitFor(() => assert.equal(vi.mocked(primaryManager.ensureWarm!).mock.calls.length, 3))
+		await vi.waitFor(() => assert.equal(vi.mocked(primaryManager.ensureWarm!).mock.calls.length, 2))
 	})
 
 	it("reinitializes every owned terminal manager without forcing busy terminals closed", () => {
