@@ -116,6 +116,8 @@ export const toolPromptModules = [
 		yoloToolResult: createRuntimeContract("QUESTION"),
 		generateExplanationNoChanges: createRuntimeContract("FROM_REF", "TO_REF"),
 		planSwitchToActWithMessage: createRuntimeContract("TEXT"),
+		subagentRetryablePaused: createRuntimeContract("SUBAGENT", "REASON", "JOB_ID"),
+		subagentBatchRetryablePaused: createRuntimeContract("COUNT", "TOTAL"),
 	}),
 	defineLegacyModule("useMcpTool", "tools", useMcpTool, {
 		invalidMcpToolArgumentError: createRuntimeContract("SERVER_NAME", "TOOL_NAME"),

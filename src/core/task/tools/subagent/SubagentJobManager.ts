@@ -174,15 +174,16 @@ export class SubagentJobManager {
 	retainRetryableJob(input: RetainRetryableSubagentJobInput): SubagentJobRecord {
 		const existing = this.jobs.get(input.jobId)
 		if (existing) return { ...existing }
-		if (input.result.status !== "failed" || input.result.retryable !== true) {
-			throw new Error("Only retryable failed subagent results can be retained.")
+		const isRecoverableStatus = input.result.status === "failed" || input.result.status === "cancelled"
+		if (!isRecoverableStatus || input.result.retryable !== true) {
+			throw new Error("Only retryable failed or cancelled subagent results can be retained.")
 		}
 		const job: SubagentJobRecord = {
 			jobId: input.jobId,
 			subagentName: input.subagentName,
 			task: input.task,
 			prompt: input.prompt,
-			status: "failed",
+			status: input.result.status === "cancelled" ? "cancelled" : "failed",
 			startedAt: input.startedAt,
 			finishedAt: Date.now(),
 			timeoutSeconds: input.timeoutSeconds,
@@ -201,7 +202,9 @@ export class SubagentJobManager {
 	async retryJob(jobId: string): Promise<boolean> {
 		const job = this.jobs.get(jobId)
 		const runner = this.runners.get(jobId)
-		if (!job || !runner || job.status !== "failed" || !job.retryable) return false
+		// Both a provider failure and a user cancellation are recoverable entry points.
+		const isRecoverableStatus = job?.status === "failed" || job?.status === "cancelled"
+		if (!job || !runner || !isRecoverableStatus || !job.retryable) return false
 		job.status = "running"
 		job.startedAt = Date.now()
 		job.finishedAt = undefined
@@ -333,7 +336,9 @@ export class SubagentJobManager {
 		job.result = result.result
 		job.error = result.error
 		job.stats = result.stats
-		job.retryable = result.status === "failed" && result.retryable === true
+		// A cancelled run is recoverable too: the user stopped it deliberately and
+		// must be able to restart it from the Activity panel.
+		job.retryable = (result.status === "failed" || result.status === "cancelled") && result.retryable === true
 	}
 
 	/**

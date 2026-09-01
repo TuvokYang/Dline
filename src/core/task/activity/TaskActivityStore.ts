@@ -202,9 +202,12 @@ export class TaskActivityStore {
 
 	isRetryable(activityId: string): boolean {
 		const activity = this.activities.get(activityId)
+		// A user cancellation is recoverable just like a provider failure: the run
+		// stopped without producing a result, so restarting it is well defined.
+		const isRecoverableStatus = activity?.status === "failed" || activity?.status === "cancelled"
 		return (
 			activity?.kind === "subagent" &&
-			activity.status === "failed" &&
+			isRecoverableStatus &&
 			(this.hasLiveRetryControl(activityId) || activity.retryRecipe?.retryable === true)
 		)
 	}
@@ -262,9 +265,31 @@ export class TaskActivityStore {
 			>
 		> & { metrics?: Partial<TaskActivityMetrics>; runtime?: TaskActivityRuntimeConfig },
 	): void {
+		this.applyUpdate(activityId, patch, false)
+	}
+
+	/**
+	 * Apply one activity patch.
+	 *
+	 * A terminal `cancelled` or `interrupted` activity normally rejects status
+	 * changes so a late in-flight callback cannot resurrect it. An explicit user
+	 * retry is the one authorized transition out of that state, so it opts in
+	 * through `allowTerminalTransition` instead of weakening the guard for
+	 * everyone.
+	 *
+	 * @param activityId Activity to patch.
+	 * @param patch Fields to apply.
+	 * @param allowTerminalTransition Whether a terminal status may change.
+	 */
+	private applyUpdate(
+		activityId: string,
+		patch: Parameters<TaskActivityStore["update"]>[1],
+		allowTerminalTransition: boolean,
+	): void {
 		const activity = this.activities.get(activityId)
 		if (!activity) return
 		if (
+			!allowTerminalTransition &&
 			(activity.status === "cancelled" || activity.status === "interrupted") &&
 			patch.status &&
 			patch.status !== activity.status
@@ -300,7 +325,9 @@ export class TaskActivityStore {
 			this.cancellers.delete(activityId)
 			this.finishers.delete(activityId)
 			this.backgroundMovers.delete(activityId)
-			if (activity.status !== "failed") this.retriers.delete(activityId)
+			// A failed or cancelled run produced no result, so its retry control
+			// must survive the terminal transition and stay available to the user.
+			if (activity.status !== "failed" && activity.status !== "cancelled") this.retriers.delete(activityId)
 		}
 		const priority = previousStatus !== activity.status || this.isTerminal(activity.status)
 		this.markDirty(activityId, priority)
@@ -387,28 +414,37 @@ export class TaskActivityStore {
 		for (const activityId of activityIds) {
 			const activity = this.activities.get(activityId)
 			const retry = this.retriers.get(activityId)
-			if (!activity || !retry || activity.kind !== "subagent" || activity.status !== "failed") continue
+			// Restarting a cancelled run is as well defined as restarting a failed one.
+			const previousStatus = activity?.status
+			const isRecoverableStatus = previousStatus === "failed" || previousStatus === "cancelled"
+			if (!activity || !retry || activity.kind !== "subagent" || !isRecoverableStatus) continue
 			const previousError = activity.error
 			activity.currentAttempt += 1
 			activity.result = undefined
 			activity.error = undefined
 			activity.finishedAt = undefined
-			this.update(activityId, {
-				status: "running",
-				latestEvent: "Retry requested",
-			})
+			this.applyUpdate(activityId, { status: "running", latestEvent: "Retry requested" }, true)
 			try {
 				if (!(await retry())) {
-					this.update(activityId, { status: "failed", error: previousError, latestEvent: "Retry unavailable" })
+					// Restore the original terminal state so the row keeps its true history.
+					this.applyUpdate(
+						activityId,
+						{ status: previousStatus, error: previousError, latestEvent: "Retry unavailable" },
+						true,
+					)
 					continue
 				}
 				retried.push(activityId)
 			} catch (error) {
-				this.update(activityId, {
-					status: "failed",
-					error: error instanceof Error ? error.message : String(error),
-					latestEvent: "Retry failed to start",
-				})
+				this.applyUpdate(
+					activityId,
+					{
+						status: "failed",
+						error: error instanceof Error ? error.message : String(error),
+						latestEvent: "Retry failed to start",
+					},
+					true,
+				)
 			}
 		}
 		return retried

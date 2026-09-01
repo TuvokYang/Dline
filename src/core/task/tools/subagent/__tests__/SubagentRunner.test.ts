@@ -1284,6 +1284,114 @@ describe("SubagentRunner", () => {
 		)
 	})
 
+	// BUGFIX-022: the real gateway payload observed in the field. `sequence_number: 0`
+	// proves the failure happened before any semantic chunk, so the whole backoff
+	// sequence should run. The previous allow-list classifier rejected it outright.
+	it("retries an upstream stream_read_error reported as an SSE error event", async () => {
+		const providerError = {
+			error: { code: "stream_read_error", message: "stream_read_error", type: "upstream_error" },
+			sequence_number: 0,
+			type: "error",
+		}
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			yield* []
+			throw Object.assign(new Error("stream_read_error"), { code: "stream_read_error", error: providerError.error })
+		})
+		const setTimeoutSpy = vi.spyOn(global, "setTimeout").mockImplementation(((callback: (...args: unknown[]) => void) => {
+			queueMicrotask(callback)
+			return {} as NodeJS.Timeout
+		}) as typeof setTimeout)
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false)).run("Reproduce stream_read_error", () => {})
+
+		assert.equal(result.status, "failed")
+		assert.equal(result.retryable, true)
+		assert.equal(createMessage.mock.calls.length, 6)
+		assert.deepEqual(
+			setTimeoutSpy.mock.calls.map(([, timeout]) => timeout),
+			[5_000, 8_000, 11_000, 14_000, 17_000],
+		)
+	})
+
+	// The `response.failed` follow-up event carries only `upstream_error` plus a 502.
+	it("retries an upstream_error reported through response.failed with HTTP 502", async () => {
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			yield* []
+			throw Object.assign(new Error("Upstream request failed"), { code: "upstream_error", status: 502 })
+		})
+		vi.spyOn(global, "setTimeout").mockImplementation(((callback: (...args: unknown[]) => void) => {
+			queueMicrotask(callback)
+			return {} as NodeJS.Timeout
+		}) as typeof setTimeout)
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false)).run("Reproduce upstream_error", () => {})
+
+		assert.equal(result.status, "failed")
+		assert.equal(result.retryable, true)
+		assert.equal(createMessage.mock.calls.length, 6)
+	})
+
+	// A bare Error with no code and no status must still reach the backoff sequence.
+	it("retries an unclassified provider error that carries neither code nor status", async () => {
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			yield* []
+			throw new Error("Upstream request failed")
+		})
+		vi.spyOn(global, "setTimeout").mockImplementation(((callback: (...args: unknown[]) => void) => {
+			queueMicrotask(callback)
+			return {} as NodeJS.Timeout
+		}) as typeof setTimeout)
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false)).run("Reproduce bare provider error", () => {})
+
+		assert.equal(result.status, "failed")
+		assert.equal(result.retryable, true)
+		assert.equal(createMessage.mock.calls.length, 6)
+	})
+
+	it.each([
+		["insufficient credits", { code: "insufficient_credits", details: { current_balance: 0 } }],
+		["spend limit", { code: "SPEND_LIMIT_EXCEEDED" }],
+		["inference cap", { code: "INFERENCE_CAP_ERROR" }],
+		["auth", { status: 401 }],
+	])("does not retry a non-recoverable %s failure", async (_label, errorShape) => {
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			yield* []
+			throw Object.assign(new Error("Account level failure"), errorShape)
+		})
+		const setTimeoutSpy = vi.spyOn(global, "setTimeout").mockImplementation(((callback: (...args: unknown[]) => void) => {
+			queueMicrotask(callback)
+			return {} as NodeJS.Timeout
+		}) as typeof setTimeout)
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false)).run("Account failure", () => {})
+
+		assert.equal(result.status, "failed")
+		assert.equal(result.retryable, false)
+		assert.equal(createMessage.mock.calls.length, 1)
+		assert.equal(setTimeoutSpy.mock.calls.length, 0)
+	})
+
 	it("retries a retryable failure after a usage-only prefix", async () => {
 		const createMessage = vi.fn()
 		createMessage.mockImplementationOnce(async function* () {
@@ -1501,8 +1609,9 @@ describe("SubagentRunner", () => {
 		assert.equal(completeTurnEndAwaitingUser.mock.calls.length, 0)
 	})
 
+	// BUGFIX-022: retry classification is a deny-list. Only account-level failures
+	// that cannot recover by waiting short-circuit the backoff sequence.
 	it.each([
-		["configuration error", new Error("Invalid subagent configuration")],
 		["authentication error", Object.assign(new Error("Unauthorized"), { status: 401 })],
 	])("does not retry %s", async (_label, error) => {
 		const createMessage = vi.fn().mockImplementation(async function* () {
@@ -1518,6 +1627,7 @@ describe("SubagentRunner", () => {
 		const result = await new SubagentRunner(createTaskConfig(false)).run("Do not retry this", () => {})
 
 		assert.equal(result.status, "failed")
+		assert.equal(result.retryable, false)
 		assert.equal(createMessage.mock.calls.length, 1)
 	})
 

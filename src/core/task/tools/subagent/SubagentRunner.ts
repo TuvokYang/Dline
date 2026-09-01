@@ -2,6 +2,7 @@ import * as path from "node:path"
 import type { ApiHandler, buildApiHandler } from "@core/api"
 import { recordProviderAdapterInput, recordProviderAdapterOutput } from "@core/api/debug/api-conversation-log"
 import type { WebSearchRoutingPlan } from "@core/api/server-tools"
+import { isOutputLimitExceededError } from "@core/api/stream/OutputLimitExceededError"
 import { createIdentityFactory } from "@core/api/transform/block-identity"
 import type { ApiProviderStreamChunk } from "@core/api/transform/stream"
 import { createStreamNormalizer, normalizeApiStream } from "@core/api/transform/stream-identity-normalizer"
@@ -617,7 +618,7 @@ export class SubagentRunner {
 				await this.abort()
 				const error = "Subagent run cancelled."
 				onProgress({ status: "cancelled", error, stats: { ...stats } })
-				return { status: "cancelled", error, stats }
+				return { status: "cancelled", error, retryable: true, stats }
 			}
 
 			const finishProviderExecution = () => {
@@ -652,7 +653,7 @@ export class SubagentRunner {
 					await this.abort()
 					const error = "Subagent run cancelled."
 					onProgress({ status: "cancelled", error, stats: { ...stats } })
-					return { status: "cancelled", error, stats }
+					return { status: "cancelled", error, retryable: true, stats }
 				}
 				if (this.finishRequested && !this.completionOnly) {
 					this.completionOnly = true
@@ -828,7 +829,7 @@ export class SubagentRunner {
 							await this.abort()
 							const error = "Subagent run cancelled."
 							onProgress({ status: "cancelled", error, stats: { ...stats } })
-							return { status: "cancelled", error, stats }
+							return { status: "cancelled", error, retryable: true, stats }
 						}
 					}
 				} finally {
@@ -1093,7 +1094,7 @@ export class SubagentRunner {
 							if (error instanceof SubagentToolInterruptedError) {
 								const cancelError = "Subagent run cancelled."
 								onProgress({ status: "cancelled", error: cancelError, stats: { ...stats } })
-								return { status: "cancelled", error: cancelError, stats }
+								return { status: "cancelled", error: cancelError, retryable: true, stats }
 							}
 							toolError = error instanceof Error ? error.message : String(error)
 							toolResult = formatResponse.toolError(toolError)
@@ -1134,7 +1135,7 @@ export class SubagentRunner {
 						await this.abort()
 						const error = "Subagent run cancelled."
 						onProgress({ status: "cancelled", error, stats: { ...stats } })
-						return { status: "cancelled", error, stats }
+						return { status: "cancelled", error, retryable: true, stats }
 					}
 				}
 
@@ -1155,11 +1156,11 @@ export class SubagentRunner {
 			if (this.shouldAbort()) {
 				const cancelledError = "Subagent run cancelled."
 				onProgress({ status: "cancelled", error: cancelledError, stats: { ...stats } })
-				return { status: "cancelled", error: cancelledError, stats }
+				return { status: "cancelled", error: cancelledError, retryable: true, stats }
 			}
 
 			const errorText = (error as Error).message || "Subagent execution failed."
-			const retryable = this.shouldRetryInitialStreamError(
+			const retryable = this.shouldRetryStreamError(
 				error,
 				this.apiHandler.getProviderId?.() ?? DEFAULT_API_PROVIDER,
 				this.apiHandler.getModel().id,
@@ -1220,9 +1221,21 @@ export class SubagentRunner {
 		}
 	}
 
-	private shouldRetryInitialStreamError(error: unknown, providerId: string, modelId: string): boolean {
-		// Mirror main loop behavior: do not auto-retry auth, quota, or account-limit failures.
+	/**
+	 * Decide whether one failed Provider stream attempt may be retried.
+	 *
+	 * The main Task loop treats Provider failures as retryable by default and
+	 * only excludes account-level errors that cannot recover by waiting
+	 * (see `getStreamRetryDecision`). Subagents previously used an enumerated
+	 * allow-list instead, so any upstream code outside that list - for example
+	 * `stream_read_error` or `upstream_error` - silently skipped the whole
+	 * backoff sequence. This method now mirrors the main loop: deny-list only.
+	 */
+	private shouldRetryStreamError(error: unknown, providerId: string, modelId: string): boolean {
+		// A cancelled run is not a provider failure and must not be replayed here.
 		if (error instanceof Error && error.name === "AbortError") return false
+		// The provider refused to continue generating; replaying repeats the same limit.
+		if (isOutputLimitExceededError(error)) return false
 
 		const raw = error !== null && typeof error === "object" ? (error as Record<string, unknown>) : undefined
 		const messageRecord =
@@ -1243,6 +1256,8 @@ export class SubagentRunner {
 		const messageError = asRecord(messageRecord?.error)
 		const messageNestedError = asRecord(messageError?.error)
 		const parsedError = ClineError.transform(error, modelId, providerId)
+		// Providers nest the transport status differently; probe the known shapes
+		// so an auth classification can still be separated from a transient state.
 		const status =
 			raw?.status ??
 			raw?.statusCode ??
@@ -1255,57 +1270,19 @@ export class SubagentRunner {
 			messageError?.status ??
 			messageNestedError?.status ??
 			parsedError._error.status
-		const code =
-			raw?.code ??
-			rawError?.code ??
-			rawNestedError?.code ??
-			rawNestedError?.type ??
-			rawError?.type ??
-			raw?.type ??
-			asRecord(raw?.cause)?.code ??
-			messageRecord?.code ??
-			messageError?.code ??
-			messageNestedError?.code ??
-			messageNestedError?.type ??
-			messageError?.type ??
-			messageRecord?.type ??
-			asRecord(messageRecord?.cause)?.code ??
-			parsedError._error.code
 		const numericStatus = typeof status === "number" ? status : Number(status)
-		const isRetryableStatus =
-			Number.isFinite(numericStatus) &&
-			(numericStatus === 408 ||
-				numericStatus === 409 ||
-				numericStatus === 425 ||
-				numericStatus === 429 ||
-				numericStatus >= 500)
+		// 408/409/425 are transport-level request states that can accompany an auth
+		// classification without meaning the credentials themselves are rejected.
 		const isRetryableRequestStatus = numericStatus === 408 || numericStatus === 409 || numericStatus === 425
+
+		// Deny-list: only account-level failures that cannot recover by waiting.
 		const isNonRetryableError =
 			parsedError.isErrorType(ClineErrorType.Balance) ||
 			parsedError.isErrorType(ClineErrorType.SpendLimit) ||
 			parsedError.isErrorType(ClineErrorType.QuotaExceeded) ||
 			(parsedError.isErrorType(ClineErrorType.Auth) && !isRetryableRequestStatus)
-		if (isNonRetryableError) return false
 
-		const normalizedCode = typeof code === "string" ? code.toLowerCase() : undefined
-		const isNetworkError =
-			normalizedCode === "econnreset" ||
-			normalizedCode === "econnrefused" ||
-			normalizedCode === "etimedout" ||
-			normalizedCode === "enetunreach" ||
-			normalizedCode === "und_err_connect_timeout" ||
-			normalizedCode === "und_err_headers_timeout" ||
-			normalizedCode === "und_err_body_timeout" ||
-			normalizedCode === "und_err_socket" ||
-			normalizedCode === "server_error" ||
-			normalizedCode === "internal_error" ||
-			normalizedCode === "service_unavailable" ||
-			parsedError.isErrorType(ClineErrorType.RateLimit)
-		const isStreamInitializationFailure =
-			normalizedCode === "stream_initialization_failed" ||
-			(error instanceof Error && error.message.includes("stream_initialization_failed"))
-
-		return isRetryableStatus || isNetworkError || isStreamInitializationFailure
+		return !isNonRetryableError
 	}
 
 	private compactConversationForContextWindow(
@@ -1482,7 +1459,7 @@ export class SubagentRunner {
 				const shouldRetry =
 					!this.shouldAbort() &&
 					attempt < MAX_INITIAL_STREAM_ATTEMPTS &&
-					this.shouldRetryInitialStreamError(error, providerId, modelId)
+					this.shouldRetryStreamError(error, providerId, modelId)
 				if (!shouldRetry) {
 					throw error
 				}

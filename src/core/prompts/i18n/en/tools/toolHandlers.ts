@@ -103,6 +103,10 @@ Always adhere to this format for all tool uses to ensure proper parsing and exec
 
 	// SubagentToolHandler
 	subagentExecutionFailed: "Subagent execution failed",
+	subagentRetryablePaused:
+		"Subagent '@SUBAGENT@' stopped without producing a result (@REASON@). The activity and its accumulated context are preserved. Tell the user they can restart it with the Retry control on the subagent activity, then continue with the remaining work. Do not treat this as a completed result and do not silently re-run the same subagent. Job: @JOB_ID@",
+	subagentBatchRetryablePaused:
+		"@COUNT@ of @TOTAL@ subagents stopped without producing a result and are preserved for retry. Tell the user they can restart each one with the Retry control on its activity. Do not treat these as completed results.",
 
 	// WriteToFileToolHandler
 	writeToFileRetrying: "Retrying...",

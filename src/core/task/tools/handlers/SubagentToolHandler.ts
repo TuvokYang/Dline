@@ -209,6 +209,36 @@ function applyProgress(config: TaskConfig, entry: SubagentStatusItem, update: Su
 	updateActivityFromEntry(config, entry)
 }
 
+/**
+ * Describe why a preserved subagent stopped without a result.
+ *
+ * The raw provider error is deliberately excluded: it can carry account,
+ * endpoint, or credential diagnostics that must not reach model context.
+ * The full message stays on the Activity record for the user.
+ *
+ * @param result Terminal execution result.
+ * @returns Short, non-sensitive reason.
+ */
+function describePausedReason(result: SubagentExecResult): string {
+	if (result.status === "cancelled") return "Cancelled by the user"
+	if (result.status === "timeout") return "Timed out"
+	return "Retryable API failure"
+}
+
+/**
+ * Build the tool result for a preserved, retryable subagent run.
+ * @param subagentName Effective subagent name.
+ * @param result Terminal execution result.
+ * @param jobId Preserved activity/job identifier.
+ * @returns Tool result text that points the user at the Retry control.
+ */
+function buildRetryablePausedResult(subagentName: string, result: SubagentExecResult, jobId: string): string {
+	return getPrompt("toolHandlers", "subagentRetryablePaused")
+		.replace("@SUBAGENT@", subagentName)
+		.replace("@REASON@", describePausedReason(result))
+		.replace("@JOB_ID@", jobId)
+}
+
 function statsFromActivity(config: TaskConfig, activityId: string): SubagentRunStats {
 	const metrics = config.activityStore?.get(activityId)?.metrics
 	const contextTokens = metrics?.contextTokens ?? 0
@@ -845,7 +875,7 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 		await emitUsage(config, [entry])
 		return formatResponse.toolResult(
 			result.retryable
-				? `Subagent paused after a retryable API failure. The activity is preserved. The user can restart it with the Retry control; do not treat this failure as a completed result. Job: ${foregroundJob.jobId}`
+				? buildRetryablePausedResult(effectiveSubagentName, result, foregroundJob.jobId)
 				: formatSummary([entry]),
 		)
 	}
@@ -1175,14 +1205,20 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 			block.ts,
 		)
 		await emitUsage(config, entries)
-		const modelSummaryEntries = entries.map((entry, index) =>
-			results[index]?.retryable
-				? {
-						...entry,
-						error: "Retryable API failure. The activity is preserved. The user can restart it with the Retry control; do not treat this failure as a completed result.",
-					}
-				: entry,
-		)
-		return formatResponse.toolResult(formatSummary(modelSummaryEntries))
+		const modelSummaryEntries = entries.map((entry, index) => {
+			const result = results[index]
+			if (!result?.retryable) return entry
+			return {
+				...entry,
+				error: `${describePausedReason(result)}. The activity is preserved; the user can restart it with the Retry control. Do not treat this failure as a completed result.`,
+			}
+		})
+		const retryableCount = results.filter((result) => result?.retryable).length
+		const summary = formatSummary(modelSummaryEntries)
+		if (retryableCount === 0) return formatResponse.toolResult(summary)
+		const retryNotice = getPrompt("toolHandlers", "subagentBatchRetryablePaused")
+			.replace("@COUNT@", String(retryableCount))
+			.replace("@TOTAL@", String(entries.length))
+		return formatResponse.toolResult(`${summary}\n\n${retryNotice}`)
 	}
 }

@@ -5,6 +5,11 @@ import type { MockApiConsumption } from "./fixtures/server"
 import { E2E_PROFILE_NAMES } from "./utils/api-profile"
 import { E2ETestHelper, e2e } from "./utils/helpers"
 
+/** Mirrors SubagentRunner.MAX_INITIAL_STREAM_ATTEMPTS (one initial try plus five backoff retries). */
+const MAX_INITIAL_STREAM_ATTEMPTS = 6
+/** The OpenAI SDK retries a 5xx once internally, so one subagent attempt drains two queued responses. */
+const SDK_REQUESTS_PER_ATTEMPT = 2
+
 async function sendTask(sidebar: Frame, text: string): Promise<void> {
 	const input = sidebar.getByTestId("chat-input")
 	await expect(input).toBeEnabled()
@@ -430,7 +435,7 @@ e2e(
 				expectedToolResults: [
 					{
 						callId: "call_recoverable_retry_subagent",
-						contentIncludes: "Subagent paused after a retryable API failure",
+						contentIncludes: "stopped without producing a result",
 					},
 				],
 				expectedRequestIncludes: [
@@ -578,5 +583,218 @@ e2e(
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir, [
 			/E2E_SENSITIVE_PROVIDER_DIAGNOSTIC_MUST_NOT_REACH_PARENT/,
 		])
+	},
+)
+
+// BUGFIX-022: reproduce the exact upstream gateway payload observed in the field.
+// The `stream_read_error` code sits outside every previously enumerated retry
+// allow-list, so the subagent used to fail on the first attempt with no Retry
+// control at all. The whole backoff sequence must now run.
+e2e(
+	"Subagent recovery controls - upstream stream_read_error exhausts the backoff sequence and exposes Retry",
+	async ({ helper, server, sidebar, userDataDir, workspaceDir }, testInfo) => {
+		e2e.setTimeout(360_000)
+		const agentName = "e2e-stream-read-error"
+		const childTask = "E2E_STREAM_READ_ERROR_TASK"
+		const recoveredResult = "E2E_STREAM_READ_ERROR_CHILD_RECOVERED"
+		await writeResponsesSubagent(workspaceDir, agentName, "E2E upstream stream_read_error agent")
+
+		await helper.signin(sidebar)
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				id: "call_stream_read_error_subagent",
+				name: "use_subagent",
+				arguments: {
+					agent_name: agentName,
+					task: childTask,
+					context: "Survive the upstream stream_read_error and report the recovered finding.",
+					timeout: 180,
+				},
+			},
+			{
+				type: "tool",
+				id: "call_stream_read_error_ready",
+				name: "qna_respond",
+				arguments: { response: "E2E_STREAM_READ_ERROR_READY" },
+				expectedToolResults: [
+					{
+						callId: "call_stream_read_error_subagent",
+						contentIncludes: "stopped without producing a result",
+					},
+				],
+				expectedRequestIncludes: ["Retry control"],
+			},
+			{
+				type: "tool",
+				id: "call_stream_read_error_parent_complete",
+				name: "attempt_completion",
+				arguments: { result: "E2E_STREAM_READ_ERROR_PARENT_DONE" },
+				expectedRequestIncludes: ["E2E_STREAM_READ_ERROR_FEEDBACK", recoveredResult],
+			},
+		)
+		// The real gateway emits `{"error":{"code":"stream_read_error",...},"sequence_number":0,"type":"error"}`
+		// followed by `response.failed` with `upstream_error` and HTTP 502.
+		//
+		// The OpenAI SDK retries 5xx once on its own before the error surfaces to
+		// SubagentRunner, so a single subagent attempt drains two queued errors.
+		// Queue enough failures to starve all six subagent attempts, then assert the
+		// product-visible backoff instead of the SDK-dependent request count.
+		server.enqueueResponses(
+			"openai-compatible-responses",
+			...Array.from({ length: MAX_INITIAL_STREAM_ATTEMPTS * SDK_REQUESTS_PER_ATTEMPT }, (_, index) => ({
+				type: "error" as const,
+				status: 502,
+				code: "stream_read_error",
+				message: "stream_read_error",
+				requestId: `req_stream_read_error_${index + 1}`,
+			})),
+		)
+
+		await sendTask(sidebar, "Start a subagent that must survive an upstream stream_read_error.")
+
+		await expect(sidebar.getByText("E2E_STREAM_READ_ERROR_READY", { exact: true })).toBeVisible({ timeout: 240_000 })
+
+		const taskHeading = sidebar.getByRole("heading", { name: childTask, exact: true }).last()
+		const subagentCard = taskHeading.locator("xpath=ancestor::*[@data-testid='subagent-item'][1]")
+		await expect(taskHeading).toBeVisible()
+		await expect(subagentCard.getByRole("button", { name: "Retry", exact: true })).toBeVisible()
+		await subagentCard.getByRole("button", { name: "Show subagent output" }).click()
+		const retryOutput = subagentCard.getByTestId("subagent-output-scroll")
+		await expect(retryOutput.getByTestId("subagent-retry-attempt")).toHaveCount(5)
+		await expect(retryOutput).toContainText("total 55s")
+		await attachLocatorScreenshot(subagentCard, testInfo, "subagent-stream-read-error-card")
+
+		await sidebar.getByRole("tab", { name: /^Activities(?: \d+)?$/ }).click()
+		await sidebar.getByRole("button", { name: "All", exact: true }).first().click()
+		const activity = sidebar.getByTestId("activity-item").filter({ hasText: agentName })
+		await expect(activity).toHaveAttribute("data-activity-status", "failed")
+		const activityRetry = activity.getByRole("button", { name: "Retry", exact: true })
+		await expect(activityRetry).toBeVisible()
+
+		const failedRequestCount = server.getRequestCount("openai-compatible-responses")
+		server.clearPendingResponses("openai-compatible-responses")
+		server.enqueueResponses("openai-compatible-responses", {
+			type: "tool",
+			id: "call_stream_read_error_child_complete",
+			name: "attempt_completion",
+			arguments: { result: recoveredResult },
+		})
+
+		await activityRetry.click()
+		await expect(activity).toHaveAttribute("data-activity-status", "completed", { timeout: 120_000 })
+		await expect
+			.poll(() => server.getRequestCount("openai-compatible-responses"), { timeout: 120_000 })
+			.toBe(failedRequestCount + 1)
+
+		await sidebar.getByRole("tab", { name: "Work", exact: true }).click()
+		const input = sidebar.getByTestId("chat-input")
+		await input.fill("E2E_STREAM_READ_ERROR_FEEDBACK")
+		await input.press("Enter")
+		await expect(sidebar.getByText("E2E_STREAM_READ_ERROR_PARENT_DONE", { exact: false }).last()).toBeVisible({
+			timeout: 120_000,
+		})
+
+		const childConsumptions = server.getMockConsumptions("openai-compatible-responses")
+		expect(childConsumptions).toHaveLength(failedRequestCount + 1)
+		expect(
+			childConsumptions
+				.slice(0, failedRequestCount)
+				.every((entry) => entry.responseType === "error" && entry.status === 502),
+		).toBe(true)
+		expect(childConsumptions.at(-1)).toMatchObject({ responseType: "tool", toolName: "attempt_completion" })
+		expect(childConsumptions.every((entry) => entry.contractError === undefined)).toBe(true)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir, [/stream_read_error/])
+	},
+)
+
+// BUGFIX-022: a cancelled subagent produced no result, so the user must be able
+// to restart it. Retry used to be reachable only from a `failed` activity.
+e2e(
+	"Subagent recovery controls - a cancelled subagent stays retryable and recovers its result",
+	async ({ helper, server, sidebar, userDataDir, workspaceDir }, testInfo) => {
+		e2e.setTimeout(300_000)
+		const agentName = "e2e-cancel-retry"
+		const childTask = "E2E_SUBAGENT_CANCEL_RETRY_TASK"
+		const recoveredResult = "E2E_SUBAGENT_CANCEL_RETRY_RECOVERED"
+		await writeResponsesSubagent(workspaceDir, agentName, "E2E cancelled subagent retry agent")
+
+		await helper.signin(sidebar)
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				id: "call_cancel_retry_subagent",
+				name: "use_subagent",
+				arguments: {
+					agent_name: agentName,
+					task: childTask,
+					context: "Stay active until the user cancels, then recover on Retry.",
+					background: true,
+					timeout: 180,
+				},
+			},
+			{
+				type: "tool",
+				id: "call_cancel_retry_ready",
+				name: "qna_respond",
+				arguments: { response: "E2E_SUBAGENT_CANCEL_RETRY_READY" },
+			},
+			{
+				type: "tool",
+				id: "call_cancel_retry_parent_complete",
+				name: "attempt_completion",
+				arguments: { result: "E2E_SUBAGENT_CANCEL_RETRY_PARENT_DONE" },
+				expectedRequestIncludes: ["E2E_SUBAGENT_CANCEL_RETRY_FEEDBACK", recoveredResult],
+			},
+		)
+		server.enqueueResponses(
+			"openai-compatible-responses",
+			// Hold the child long enough to cancel it, but keep the delay well below
+			// the test budget: the mock only releases its socket when the delay
+			// elapses or the connection closes, and a multi-minute hold would stall
+			// the retry request behind the abandoned one.
+			{
+				type: "tool",
+				id: "call_cancel_retry_child_never_completes",
+				name: "attempt_completion",
+				arguments: { result: "E2E_SUBAGENT_CANCEL_RETRY_MUST_NOT_COMPLETE" },
+				delayMs: 25_000,
+			},
+			{
+				type: "tool",
+				id: "call_cancel_retry_child_complete",
+				name: "attempt_completion",
+				arguments: { result: recoveredResult },
+			},
+		)
+
+		await sendTask(sidebar, "Start a background subagent that must remain retryable after cancellation.")
+		await expect(sidebar.getByText("E2E_SUBAGENT_CANCEL_RETRY_READY", { exact: true })).toBeVisible({ timeout: 180_000 })
+
+		await sidebar.getByRole("tab", { name: /^Activities(?: \d+)?$/ }).click()
+		await sidebar.getByRole("button", { name: "All", exact: true }).first().click()
+		const activity = sidebar.getByTestId("activity-item").filter({ hasText: agentName })
+		await expect(activity).toHaveAttribute("data-activity-status", "running", { timeout: 60_000 })
+		await activity.getByRole("button", { name: "Cancel", exact: true }).click()
+		await expect(activity).toHaveAttribute("data-activity-status", "cancelled", { timeout: 60_000 })
+
+		// The regression: a cancelled subagent used to expose no recovery control.
+		const activityRetry = activity.getByRole("button", { name: "Retry", exact: true })
+		await expect(activityRetry).toBeVisible({ timeout: 30_000 })
+		await attachLocatorScreenshot(activity, testInfo, "subagent-cancelled-retryable-activity")
+
+		await activityRetry.click()
+		await expect(activity).toHaveAttribute("data-activity-status", "completed", { timeout: 120_000 })
+
+		await sidebar.getByRole("tab", { name: "Work", exact: true }).click()
+		const input = sidebar.getByTestId("chat-input")
+		await input.fill("E2E_SUBAGENT_CANCEL_RETRY_FEEDBACK")
+		await input.press("Enter")
+		await expect(sidebar.getByText("E2E_SUBAGENT_CANCEL_RETRY_PARENT_DONE", { exact: false }).last()).toBeVisible({
+			timeout: 120_000,
+		})
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )

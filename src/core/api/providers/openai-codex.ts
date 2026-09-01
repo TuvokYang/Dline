@@ -596,7 +596,13 @@ export class OpenAiCodexHandler implements ApiHandler {
 
 				if (parsed?.type === "response.failed") {
 					const responseError = parsed.response?.error
-					failure = new Error(responseError?.message || "Codex Responses websocket request failed")
+					// Preserve the upstream code: downstream retry classification needs it to
+					// tell a transient gateway failure apart from an account-level rejection.
+					const failedError: Error & { code?: string } = new Error(
+						responseError?.message || "Codex Responses websocket request failed",
+					)
+					failedError.code = responseError?.code
+					failure = failedError
 					completed = true
 					wake()
 					return

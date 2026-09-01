@@ -369,17 +369,21 @@ export function TaskActivityPanel({
 										Finish
 									</Button>
 								)}
-								{activity.kind === "subagent" && activity.retryable && activity.status === "failed" && (
-									<Button
-										className="h-5 self-center bg-button-background px-2 py-0 text-[11px] leading-none text-button-foreground hover:bg-button-hover"
-										disabled={isPending(retryKey)}
-										onClick={() =>
-											void runControl(retryKey, () => retryTaskActivities(taskId, [activity.activityId]))
-										}
-										size="xs">
-										Retry
-									</Button>
-								)}
+								{activity.kind === "subagent" &&
+									activity.retryable &&
+									(activity.status === "failed" || activity.status === "cancelled") && (
+										<Button
+											className="h-5 self-center bg-button-background px-2 py-0 text-[11px] leading-none text-button-foreground hover:bg-button-hover"
+											disabled={isPending(retryKey)}
+											onClick={() =>
+												void runControl(retryKey, () =>
+													retryTaskActivities(taskId, [activity.activityId]),
+												)
+											}
+											size="xs">
+											Retry
+										</Button>
+									)}
 								{activity.cancellable && isActive && activity.status !== "awaiting_approval" && (
 									<Button
 										className="h-5 self-center px-2 py-0 text-[11px] leading-none"

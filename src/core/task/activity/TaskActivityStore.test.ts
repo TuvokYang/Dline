@@ -174,6 +174,51 @@ describe("TaskActivityStore", () => {
 		expect(store.isRetryable("subagent-retry")).toBe(false)
 	})
 
+	// BUGFIX-022: a user cancellation stops the run without producing a result,
+	// so it must offer the same recovery path as a provider failure.
+	it("retries a cancelled subagent with the same activity identity", async () => {
+		const retry = vi.fn(async () => true)
+		const store = new TaskActivityStore("task-1")
+		store.create({
+			activityId: "subagent-cancelled",
+			kind: "subagent",
+			executionMode: "background",
+			title: "research",
+			retry,
+		})
+		store.update("subagent-cancelled", { status: "cancelled", error: "Subagent run cancelled." })
+
+		expect(store.isRetryable("subagent-cancelled")).toBe(true)
+		expect(await store.retry(["subagent-cancelled"])).toEqual(["subagent-cancelled"])
+		expect(retry).toHaveBeenCalledTimes(1)
+		expect(store.get("subagent-cancelled")).toMatchObject({
+			activityId: "subagent-cancelled",
+			status: "running",
+			latestEvent: "Retry requested",
+		})
+	})
+
+	// A refused retry must restore the original terminal state, not rewrite history.
+	it("restores the cancelled state when a retry is refused", async () => {
+		const retry = vi.fn(async () => false)
+		const store = new TaskActivityStore("task-1")
+		store.create({
+			activityId: "subagent-refused",
+			kind: "subagent",
+			executionMode: "background",
+			title: "research",
+			retry,
+		})
+		store.update("subagent-refused", { status: "cancelled", error: "Subagent run cancelled." })
+
+		expect(await store.retry(["subagent-refused"])).toEqual([])
+		expect(store.get("subagent-refused")).toMatchObject({
+			status: "cancelled",
+			error: "Subagent run cancelled.",
+			latestEvent: "Retry unavailable",
+		})
+	})
+
 	it("keeps events separated by execution attempt across retry", async () => {
 		const store = new TaskActivityStore("task-1")
 		store.create({
