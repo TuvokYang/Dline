@@ -15,14 +15,27 @@ describe("getAvailableSlashCommands", () => {
 	let mockController: Partial<Controller>
 	let mockStateManager: {
 		getWorkspaceStateKey: any /* sinon.SinonStub → vitest */
+		getScopedCapabilityToggles: any /* sinon.SinonStub → vitest */
 		getGlobalSettingsKey: any /* sinon.SinonStub → vitest */
 		getGlobalStateKey: any /* sinon.SinonStub → vitest */
 		getRemoteConfigSettings: any /* sinon.SinonStub → vitest */
 	}
 
+	/**
+	 * Serve a legacy workspace-state map through the scope chain reader.
+	 *
+	 * Locally discovered capabilities now resolve global → workspace → task, so
+	 * the fixtures below describe the workspace layer and leave the other two
+	 * empty, which is what "no explicit override" looks like.
+	 */
+	function scopedFromWorkspace(read: (settingsKey: string) => Record<string, boolean> | null | undefined) {
+		return (scope: string, settingsKey: string) => (scope === "workspace" ? (read(settingsKey) ?? {}) : {})
+	}
+
 	beforeEach(() => {
 		mockStateManager = {
 			getWorkspaceStateKey: vi.fn(),
+			getScopedCapabilityToggles: vi.fn(),
 			getGlobalSettingsKey: vi.fn(),
 			getGlobalStateKey: vi.fn(),
 			getRemoteConfigSettings: vi.fn(),
@@ -30,6 +43,7 @@ describe("getAvailableSlashCommands", () => {
 
 		// Default stubs return empty/null values
 		mockStateManager.getWorkspaceStateKey.mockReturnValue(null)
+		mockStateManager.getScopedCapabilityToggles.mockReturnValue({})
 		mockStateManager.getGlobalSettingsKey.mockReturnValue(null)
 		mockStateManager.getGlobalStateKey.mockReturnValue(null)
 		mockStateManager.getRemoteConfigSettings.mockReturnValue(null)
@@ -92,10 +106,12 @@ describe("getAvailableSlashCommands", () => {
 
 	describe("Local Workflow Toggles", () => {
 		it("should include enabled local workflows", async () => {
-			mockStateManager.getWorkspaceStateKey.mockReturnValue({
-				"/path/to/my-workflow.md": true,
-				"/path/to/another-workflow.md": true,
-			})
+			mockStateManager.getScopedCapabilityToggles.mockImplementation(
+				scopedFromWorkspace(() => ({
+					"/path/to/my-workflow.md": true,
+					"/path/to/another-workflow.md": true,
+				})),
+			)
 
 			const response = await getAvailableSlashCommands(mockController as Controller, EmptyRequest.create())
 
@@ -109,10 +125,12 @@ describe("getAvailableSlashCommands", () => {
 		})
 
 		it("should exclude disabled local workflows", async () => {
-			mockStateManager.getWorkspaceStateKey.mockReturnValue({
-				"/path/to/enabled-workflow.md": true,
-				"/path/to/disabled-workflow.md": false,
-			})
+			mockStateManager.getScopedCapabilityToggles.mockImplementation(
+				scopedFromWorkspace(() => ({
+					"/path/to/enabled-workflow.md": true,
+					"/path/to/disabled-workflow.md": false,
+				})),
+			)
 
 			const response = await getAvailableSlashCommands(mockController as Controller, EmptyRequest.create())
 
@@ -124,9 +142,11 @@ describe("getAvailableSlashCommands", () => {
 		})
 
 		it("should extract filename from full path", async () => {
-			mockStateManager.getWorkspaceStateKey.mockReturnValue({
-				"/Users/test/project/.clinerules/workflows/deep-analysis.md": true,
-			})
+			mockStateManager.getScopedCapabilityToggles.mockImplementation(
+				scopedFromWorkspace(() => ({
+					"/Users/test/project/.clinerules/workflows/deep-analysis.md": true,
+				})),
+			)
 
 			const response = await getAvailableSlashCommands(mockController as Controller, EmptyRequest.create())
 
@@ -135,9 +155,11 @@ describe("getAvailableSlashCommands", () => {
 		})
 
 		it("should handle Windows-style paths", async () => {
-			mockStateManager.getWorkspaceStateKey.mockReturnValue({
-				"C:\\Users\\test\\project\\.clinerules\\workflows\\windows-workflow.md": true,
-			})
+			mockStateManager.getScopedCapabilityToggles.mockImplementation(
+				scopedFromWorkspace(() => ({
+					"C:\\Users\\test\\project\\.clinerules\\workflows\\windows-workflow.md": true,
+				})),
+			)
 
 			const response = await getAvailableSlashCommands(mockController as Controller, EmptyRequest.create())
 
@@ -174,8 +196,10 @@ describe("getAvailableSlashCommands", () => {
 	describe("Workflow Deduplication", () => {
 		it("should prefer local workflows over global workflows with same name", async () => {
 			// Same filename in both local and global
-			mockStateManager.getWorkspaceStateKey.mockImplementation((key: string) =>
-				key === "workflowToggles" ? { "/local/path/shared-workflow.md": true } : null,
+			mockStateManager.getScopedCapabilityToggles.mockImplementation(
+				scopedFromWorkspace((settingsKey) =>
+					settingsKey === "workspaceWorkflowToggles" ? { "/local/path/shared-workflow.md": true } : null,
+				),
 			)
 			mockStateManager.getGlobalSettingsKey.mockImplementation((key: string) =>
 				key === "globalWorkflowToggles" ? { "/global/path/shared-workflow.md": true } : null,
@@ -190,8 +214,10 @@ describe("getAvailableSlashCommands", () => {
 		})
 
 		it("should include global workflow if local with same name is disabled", async () => {
-			mockStateManager.getWorkspaceStateKey.mockImplementation((key: string) =>
-				key === "workflowToggles" ? { "/local/path/shared-workflow.md": false } : null,
+			mockStateManager.getScopedCapabilityToggles.mockImplementation(
+				scopedFromWorkspace((settingsKey) =>
+					settingsKey === "workspaceWorkflowToggles" ? { "/local/path/shared-workflow.md": false } : null,
+				),
 			)
 			mockStateManager.getGlobalSettingsKey.mockImplementation((key: string) =>
 				key === "globalWorkflowToggles" ? { "/global/path/shared-workflow.md": true } : null,
@@ -284,8 +310,10 @@ describe("getAvailableSlashCommands", () => {
 		})
 
 		it("should hide remote workflow when local workflow has same name", async () => {
-			mockStateManager.getWorkspaceStateKey.mockImplementation((key: string) =>
-				key === "workflowToggles" ? { "/local/path/shared-workflow.md": true } : null,
+			mockStateManager.getScopedCapabilityToggles.mockImplementation(
+				scopedFromWorkspace((settingsKey) =>
+					settingsKey === "workspaceWorkflowToggles" ? { "/local/path/shared-workflow.md": true } : null,
+				),
 			)
 			mockStateManager.getRemoteConfigSettings.mockReturnValue({
 				remoteGlobalWorkflows: [{ name: "shared-workflow", alwaysEnabled: true }],
@@ -301,8 +329,10 @@ describe("getAvailableSlashCommands", () => {
 
 	describe("Skill Deduplication", () => {
 		it("should prefer local skills over global and remote skills with same name", async () => {
-			mockStateManager.getWorkspaceStateKey.mockImplementation((key: string) =>
-				key === "localSkillsToggles" ? { "/local/path/shared-skill.md": true } : null,
+			mockStateManager.getScopedCapabilityToggles.mockImplementation(
+				scopedFromWorkspace((settingsKey) =>
+					settingsKey === "workspaceSkillsToggles" ? { "/local/path/shared-skill.md": true } : null,
+				),
 			)
 			mockStateManager.getGlobalSettingsKey.mockImplementation((key: string) =>
 				key === "globalSkillsToggles" ? { "/global/path/shared-skill.md": true } : null,
@@ -322,7 +352,7 @@ describe("getAvailableSlashCommands", () => {
 
 	describe("Edge Cases", () => {
 		it("should handle null/undefined state values gracefully", async () => {
-			mockStateManager.getWorkspaceStateKey.mockReturnValue(null)
+			mockStateManager.getScopedCapabilityToggles.mockReturnValue(undefined)
 			mockStateManager.getGlobalSettingsKey.mockReturnValue(undefined)
 			mockStateManager.getGlobalStateKey.mockReturnValue(null)
 			mockStateManager.getRemoteConfigSettings.mockReturnValue(null)
@@ -334,7 +364,7 @@ describe("getAvailableSlashCommands", () => {
 		})
 
 		it("should handle empty workflow toggle objects", async () => {
-			mockStateManager.getWorkspaceStateKey.mockReturnValue({})
+			mockStateManager.getScopedCapabilityToggles.mockReturnValue({})
 			mockStateManager.getGlobalSettingsKey.mockReturnValue({})
 			mockStateManager.getGlobalStateKey.mockReturnValue({})
 			mockStateManager.getRemoteConfigSettings.mockReturnValue({

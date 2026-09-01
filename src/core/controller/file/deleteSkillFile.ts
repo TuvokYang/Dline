@@ -1,3 +1,9 @@
+import { capabilityResourceId } from "@core/storage/settings/capability-resource-id"
+import {
+	clearCapabilityOverrideEverywhere,
+	mergeScopedToggles,
+	readScopedToggles,
+} from "@core/storage/settings/capability-toggle-store"
 import { removeGlobalCapability } from "@core/storage/settings/global-capability-settings"
 import { DeleteSkillRequest, SkillsToggles } from "@shared/proto/dline/file"
 import fs from "fs/promises"
@@ -31,7 +37,7 @@ export async function deleteSkillFile(controller: Controller, request: DeleteSki
 		Logger.warn(`deleteSkillFile: Skill directory not found: ${skillDir}`)
 		// Return current toggles anyway
 		const globalToggles = controller.stateManager.getGlobalSettingsKey("globalSkillsToggles") || {}
-		const localToggles = controller.stateManager.getWorkspaceStateKey("localSkillsToggles") || {}
+		const localToggles = mergeScopedToggles(readScopedToggles(controller.stateManager, "skills"))
 		return SkillsToggles.create({
 			globalSkillsToggles: globalToggles,
 			localSkillsToggles: localToggles,
@@ -41,17 +47,15 @@ export async function deleteSkillFile(controller: Controller, request: DeleteSki
 	// Delete the skill directory
 	await fs.rm(skillDir, { recursive: true, force: true })
 
-	// Remove from toggles
+	// The file is gone, so its override in every scope is now an orphan.
 	let globalToggles = controller.stateManager.getGlobalSettingsKey("globalSkillsToggles") || {}
-	let localToggles = controller.stateManager.getWorkspaceStateKey("localSkillsToggles") || {}
 
 	if (isGlobal) {
 		globalToggles = await removeGlobalCapability(controller.stateManager, "globalSkillsToggles", skillPath)
 	} else {
-		const { [skillPath]: _, ...remaining } = localToggles
-		localToggles = remaining
-		controller.stateManager.setWorkspaceState("localSkillsToggles", localToggles)
+		await clearCapabilityOverrideEverywhere(controller.stateManager, "skills", capabilityResourceId(skillPath))
 	}
+	const localToggles = mergeScopedToggles(readScopedToggles(controller.stateManager, "skills"))
 
 	if (controller.task) {
 		await controller.task.flushPromptFreshnessInvalidation("capability_mutation")

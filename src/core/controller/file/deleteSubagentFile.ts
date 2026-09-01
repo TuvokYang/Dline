@@ -1,3 +1,9 @@
+import { capabilityResourceId } from "@core/storage/settings/capability-resource-id"
+import {
+	clearCapabilityOverrideEverywhere,
+	mergeScopedToggles,
+	readScopedToggles,
+} from "@core/storage/settings/capability-toggle-store"
 import { removeGlobalCapability } from "@core/storage/settings/global-capability-settings"
 import { DeleteSubagentRequest, SubagentToggles } from "@shared/proto/dline/file"
 import fs from "fs/promises"
@@ -35,9 +41,9 @@ export async function deleteSubagentFile(controller: Controller, request: Delete
 	if (isGlobal) {
 		globalToggles = await removeGlobalCapability(controller.stateManager, "globalSubagentsToggles", subagentPath)
 	} else {
-		localToggles = controller.stateManager.getWorkspaceStateKey("localSubagentsToggles") || {}
-		delete localToggles[subagentPath]
-		controller.stateManager.setWorkspaceState("localSubagentsToggles", localToggles)
+		// The file is gone, so its override in every scope is now an orphan.
+		await clearCapabilityOverrideEverywhere(controller.stateManager, "subagents", capabilityResourceId(subagentPath))
+		localToggles = mergeScopedToggles(readScopedToggles(controller.stateManager, "subagents"))
 	}
 	if (controller.task) {
 		await controller.task.flushPromptFreshnessInvalidation("capability_mutation")

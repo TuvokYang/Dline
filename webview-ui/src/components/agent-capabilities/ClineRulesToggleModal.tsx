@@ -24,6 +24,7 @@ import { useExtensionState } from "@/context/ExtensionStateContext"
 import { useTaskCapabilityToggles } from "@/hooks/useTaskCapabilityToggles"
 import { FileServiceClient } from "@/services/grpc-client"
 import { isMacOSOrLinux } from "@/utils/platformUtils"
+import { CapabilityScopeNotice, type CapabilityStorageScope } from "./CapabilityScopeNotice"
 import HookRow from "./HookRow"
 import { KeyedMutationQueue } from "./keyed-mutation-queue"
 import NewRuleRow from "./NewRuleRow"
@@ -67,6 +68,10 @@ const ClineRulesToggleModal: React.FC = () => {
 		setRemoteWorkflowToggles,
 	} = useExtensionState()
 	const capabilityScope = useTaskCapabilityToggles()
+	// Where a resource comes from and where its preference is stored are two
+	// separate axes: a global rule can be turned off for one task only. The
+	// section headings name the origin, so the notice names the storage layer.
+	const storageScope: CapabilityStorageScope = capabilityScope.isTaskScoped ? "task" : "workspace"
 	const globalClineRulesToggles = projectDiscoveredToggles(
 		globalClineRulesTogglesState,
 		capabilityScope.snapshot?.globalClineRulesToggles,
@@ -742,6 +747,11 @@ const ClineRulesToggleModal: React.FC = () => {
 						<div className={currentView === "environment" ? "flex min-h-0 flex-1" : "hidden"}>
 							<ShellEnvironmentModal isActive={currentView === "environment"} />
 						</div>
+						{currentView !== "environment" && (
+							<div className="w-full">
+								<CapabilityScopeNotice scope={storageScope} />
+							</div>
+						)}
 						{currentView !== "environment" &&
 							(currentView === "rules" ? (
 								<>

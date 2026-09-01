@@ -1,5 +1,4 @@
 import type { ClineRulesToggles } from "@shared/cline-rules"
-import type { LocalStateKey } from "@shared/storage/state-keys"
 import { Logger } from "@/shared/services/Logger"
 import { capabilityResourceId } from "./capability-resource-id"
 import type { CapabilityKind } from "./capability-toggle-store"
@@ -17,8 +16,16 @@ export const CAPABILITY_KEY_NORMALIZATION_GENERATION_KEY = "__capabilityKeyNorma
 /** Raise this when a new defect makes another normalization pass necessary. */
 export const CAPABILITY_KEY_NORMALIZATION_GENERATION = 1
 
-/** Legacy workspace-state maps and the capability kind that now owns them. */
-const LEGACY_LOCAL_TOGGLE_KEYS: ReadonlyArray<readonly [key: LocalStateKey, kind: CapabilityKind]> = [
+/**
+ * Legacy workspace-state maps and the capability kind that now owns them.
+ *
+ * These names are historical storage facts, not current keys: every entry
+ * except `mcpServersToggles` has already been removed from `LocalStateKeys`.
+ * They are spelled out as literals so retiring a key from the live enum can
+ * never silently drop the one-time migration that carries a user's stored
+ * `false` preferences into the scope chain.
+ */
+export const LEGACY_LOCAL_TOGGLE_KEYS: ReadonlyArray<readonly [key: string, kind: CapabilityKind]> = [
 	["localClineRulesToggles", "rules"],
 	["localCursorRulesToggles", "cursorRules"],
 	["localWindsurfRulesToggles", "windsurfRules"],
@@ -29,9 +36,19 @@ const LEGACY_LOCAL_TOGGLE_KEYS: ReadonlyArray<readonly [key: LocalStateKey, kind
 	["mcpServersToggles", "mcp"],
 ]
 
+/**
+ * Every workspace-state key a previous build may have written.
+ *
+ * The VSCode-to-file transfer needs this list, not the live `LocalStateKeys`
+ * enum: a retired key still exists in an installed user's VSCode storage, and
+ * dropping it from the transfer would strip their disabled toggles before this
+ * migration ever sees them.
+ */
+export const LEGACY_WORKSPACE_STATE_KEYS: readonly string[] = LEGACY_LOCAL_TOGGLE_KEYS.map(([key]) => key)
+
 /** Minimal view of the state manager this migration needs. */
 export interface LegacyToggleSource {
-	getWorkspaceStateKey(key: LocalStateKey): Record<string, boolean> | undefined
+	getLegacyWorkspaceToggleMap(key: string): Record<string, boolean> | undefined
 }
 
 /** One capability kind's normalized overrides, ready to merge into the workspace scope. */
@@ -56,7 +73,7 @@ export function planLegacyToggleMigration(source: LegacyToggleSource): LegacyTog
 	const migrations: LegacyToggleMigration[] = []
 
 	for (const [key, kind] of LEGACY_LOCAL_TOGGLE_KEYS) {
-		const legacy = source.getWorkspaceStateKey(key)
+		const legacy = source.getLegacyWorkspaceToggleMap(key)
 		if (!legacy) continue
 
 		const overrides: ClineRulesToggles = {}

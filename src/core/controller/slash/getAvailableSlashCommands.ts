@@ -1,4 +1,5 @@
 import { parseYamlFrontmatter } from "@core/context/instructions/user-instructions/frontmatter"
+import { type CapabilityKind, mergeScopedToggles, readScopedToggles } from "@core/storage/settings/capability-toggle-store"
 import { EmptyRequest } from "@shared/proto/dline/common"
 import { SlashCommandInfo, SlashCommandsResponse } from "@shared/proto/dline/slash"
 import { parseTaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
@@ -7,6 +8,16 @@ import { extractNameFromMdFile, getBuiltInSlashCommands } from "@/shared/slashCo
 import { Controller } from ".."
 
 const MAX_DESCRIPTION_LENGTH = 80
+
+/**
+ * Read the stored overrides of one locally discovered capability kind.
+ *
+ * The scope chain owns these preferences; merging the scopes keeps a task-level
+ * choice visible while an untouched resource keeps its discovered default.
+ */
+function localCapabilityToggles(controller: Controller, kind: CapabilityKind): Record<string, boolean> {
+	return mergeScopedToggles(readScopedToggles(controller.stateManager, kind))
+}
 
 /** Truncate a description string if it exceeds the max length */
 function truncateDescription(desc: string): string {
@@ -55,8 +66,7 @@ export async function getAvailableSlashCommands(controller: Controller, _request
 
 	// Get workflow toggles from state
 	const taskToggles = parseTaskCapabilityToggles(controller.task?.taskSm.taskCapabilityToggles)
-	const localWorkflowToggles =
-		taskToggles?.localWorkflowToggles ?? controller.stateManager.getWorkspaceStateKey("workflowToggles") ?? {}
+	const localWorkflowToggles = taskToggles?.localWorkflowToggles ?? localCapabilityToggles(controller, "workflows")
 	const globalWorkflowToggles =
 		taskToggles?.globalWorkflowToggles ?? controller.stateManager.getGlobalSettingsKey("globalWorkflowToggles") ?? {}
 	const remoteWorkflowToggles =
@@ -127,8 +137,7 @@ export async function getAvailableSlashCommands(controller: Controller, _request
 	}
 
 	// Add skills (section="skill", name="xxx")
-	const localSkillsToggles =
-		taskToggles?.localSkillsToggles ?? controller.stateManager.getWorkspaceStateKey("localSkillsToggles") ?? {}
+	const localSkillsToggles = taskToggles?.localSkillsToggles ?? localCapabilityToggles(controller, "skills")
 	const globalSkillsToggles =
 		taskToggles?.globalSkillsToggles ?? controller.stateManager.getGlobalSettingsKey("globalSkillsToggles") ?? {}
 	const remoteSkillsToggles =

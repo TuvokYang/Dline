@@ -435,7 +435,7 @@ describe("State Keys Type Safety", () => {
 			const globalKey: GlobalStateKey = "isNewUser"
 			const settingsKey: SettingsKey = "preferredLanguage"
 			const secretKey: SecretKey = "apiKey"
-			const localKey: LocalStateKey = "localClineRulesToggles"
+			const localKey: LocalStateKey = "mcpServersToggles"
 
 			expect(globalKey).to.be.a("string")
 			expect(settingsKey).to.be.a("string")
@@ -456,10 +456,9 @@ describe("State Keys Type Safety", () => {
 
 		it("should have LocalState keys map to ClineRulesToggles", () => {
 			const localState: Partial<LocalState> = {
-				localClineRulesToggles: {},
-				localCursorRulesToggles: { "some-rule": true },
+				mcpServersToggles: { "some-server": true },
 			}
-			expect(localState.localClineRulesToggles).to.deep.equal({})
+			expect(localState.mcpServersToggles).to.deep.equal({ "some-server": true })
 		})
 	})
 

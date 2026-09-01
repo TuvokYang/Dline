@@ -53,8 +53,7 @@ export async function toggleWorkflow(controller: Controller, request: ToggleWork
 			throw new Error(`Invalid scope: ${scope}`)
 	}
 
-	await controller.postStateToWebview()
-
-	// Return the updated toggles
+	// The response below already carries the updated toggles, so a full state
+	// publication would only add a webview-wide recompute to a switch.
 	return ClineRulesToggles.create({ toggles: toggles })
 }

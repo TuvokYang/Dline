@@ -75,7 +75,13 @@ describe("Prompt input file freshness mutations", () => {
 			controller: {
 				stateManager: {
 					getGlobalSettingsKey: vi.fn().mockReturnValue(globalSkillsToggles),
-					getWorkspaceStateKey: vi.fn().mockReturnValue(localSkillsToggles),
+					// Locally discovered skills read their overrides from the scope
+					// chain now, so the fake exposes the scoped reader instead of the
+					// retired workspace-state map.
+					getScopedCapabilityToggles: vi
+						.fn()
+						.mockImplementation((scope: string) => (scope === "workspace" ? localSkillsToggles : {})),
+					mutateScopedCapabilityToggles: vi.fn().mockResolvedValue(localSkillsToggles),
 					setWorkspaceState: vi.fn(),
 				},
 				task: { flushPromptFreshnessInvalidation },

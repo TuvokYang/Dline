@@ -1,4 +1,5 @@
 import { ensureAgentSkillsDirectoryExists } from "@core/storage/disk"
+import { mergeScopedToggles, readScopedToggles } from "@core/storage/settings/capability-toggle-store"
 import { CreateSkillRequest, SkillsToggles } from "@shared/proto/dline/file"
 import fs from "fs/promises"
 import path from "path"
@@ -80,7 +81,7 @@ export async function createSkillFile(controller: Controller, request: CreateSki
 		})
 		// Return current toggles
 		const globalToggles = controller.stateManager.getGlobalSettingsKey("globalSkillsToggles") || {}
-		const localToggles = controller.stateManager.getWorkspaceStateKey("localSkillsToggles") || {}
+		const localToggles = mergeScopedToggles(readScopedToggles(controller.stateManager, "skills"))
 		return SkillsToggles.create({
 			globalSkillsToggles: globalToggles,
 			localSkillsToggles: localToggles,
@@ -105,7 +106,7 @@ export async function createSkillFile(controller: Controller, request: CreateSki
 
 	// Return current toggles (new skill defaults to enabled)
 	const globalToggles = controller.stateManager.getGlobalSettingsKey("globalSkillsToggles") || {}
-	const localToggles = controller.stateManager.getWorkspaceStateKey("localSkillsToggles") || {}
+	const localToggles = mergeScopedToggles(readScopedToggles(controller.stateManager, "skills"))
 
 	return SkillsToggles.create({
 		globalSkillsToggles: globalToggles,

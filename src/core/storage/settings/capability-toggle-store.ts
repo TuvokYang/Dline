@@ -95,6 +95,17 @@ export function readScopedToggles(stateManager: StateManager, kind: CapabilityKi
 }
 
 /**
+ * Flatten the scope chain into one override map.
+ *
+ * Consumers that carry a single toggle map per capability kind use this. It
+ * preserves precedence but loses the layer a value came from, so it must not be
+ * used where the origin scope matters.
+ */
+export function mergeScopedToggles(scopes: ScopedToggles): Record<string, boolean> {
+	return { ...scopes.global, ...scopes.workspace, ...scopes.task }
+}
+
+/**
  * Resolve the effective enabled state of one capability kind against its
  * discovery result, applying global → workspace → task precedence.
  */

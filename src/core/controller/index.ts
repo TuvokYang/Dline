@@ -18,6 +18,7 @@ import { resolveProfileReference } from "@core/profiles/profile-binding"
 import { getProfileCatalogRevision } from "@core/profiles/profile-catalog-state"
 import { settingsAffectPromptFreshness } from "@core/prompts/system-prompt-cache/PromptFreshnessProjection"
 import * as SecretsManager from "@core/storage/secrets"
+import { type CapabilityKind, mergeScopedToggles, readScopedToggles } from "@core/storage/settings/capability-toggle-store"
 import { projectTaskView } from "@core/task/view/TaskViewProjector"
 import { detectWorkspaceRoots } from "@core/workspace/detection"
 import { setupWorkspaceManager } from "@core/workspace/setup"
@@ -89,6 +90,11 @@ import { clearRemoteConfig } from "../storage/remote-config/utils"
 import { type PersistenceErrorEvent, StateManager } from "../storage/StateManager"
 import { UIMessage } from "../storage/UIMessage"
 import { Task } from "../task"
+import {
+	getWorkspaceHistoryManager,
+	type WorkspaceHistoryManager,
+	type WorkspaceHistorySession,
+} from "./history/WorkspaceHistoryManager"
 import { sendMcpMarketplaceCatalogEvent } from "./mcp/subscribeToMcpMarketplaceCatalog"
 import { ModeSwitchCoordinator } from "./mode-switch/ModeSwitchCoordinator"
 import type { ModeSwitchOperation, ResolvedModeProfile } from "./mode-switch/types"
@@ -97,11 +103,12 @@ import { appendClineStealthModels } from "./models/refreshOpenRouterModels"
 import { ProfileSwitchCoordinator } from "./profile-switch/ProfileSwitchCoordinator"
 import type { ProfileSwitchOperation, ResolvedProfileTarget } from "./profile-switch/types"
 import { cleanupStateSubscriptions, sendAccountUsageUpdate, sendStateUpdate } from "./state/subscribeToState"
-import { prepareHistoryTaskForDisplay } from "./task/history-task-readiness"
+import { prepareHistoryTaskForDisplay, projectHistoryPreparingView } from "./task/history-task-readiness"
 import { startTaskLifecycle } from "./task/task-start-lifecycle"
 import { sendChatButtonClickedEvent } from "./ui/subscribeToChatButtonClicked"
 
 type InitTaskOptions = {
+	onHistoryTaskPreparingToDisplay?: () => Promise<void>
 	onHistoryTaskReadyToDisplay?: () => Promise<void>
 	/** Context fragments for spawned or new tasks. Each entry becomes an independent text block for cache-friendly design. */
 	context?: string[]
@@ -159,6 +166,8 @@ export class Controller {
 
 	// NEW: Add workspace manager (optional initially)
 	private workspaceManager?: WorkspaceRootManager
+	private workspaceHistoryManager?: WorkspaceHistoryManager
+	private workspaceHistorySession?: WorkspaceHistorySession
 	private backgroundCommandRunning = false
 	private backgroundCommandTaskId?: string
 
@@ -173,25 +182,40 @@ export class Controller {
 	private nextStateRevision = 0
 	private latestStateRevision = 0
 
-	/** Snapshot the currently effective resource toggles for a newly created task. */
+	/**
+	 * Snapshot the currently effective resource toggles for a newly created task.
+	 *
+	 * Locally discovered resources resolve through the scope chain, so a workspace
+	 * override is inherited while an untouched resource stays at its default.
+	 */
 	private getInheritedTaskCapabilityToggles(): TaskCapabilityToggles {
 		return createTaskCapabilityToggles({
 			globalClineRulesToggles: this.stateManager.getGlobalSettingsKey("globalClineRulesToggles") || {},
-			localClineRulesToggles: this.stateManager.getWorkspaceStateKey("localClineRulesToggles") || {},
-			localCursorRulesToggles: this.stateManager.getWorkspaceStateKey("localCursorRulesToggles") || {},
-			localWindsurfRulesToggles: this.stateManager.getWorkspaceStateKey("localWindsurfRulesToggles") || {},
-			localAgentsRulesToggles: this.stateManager.getWorkspaceStateKey("localAgentsRulesToggles") || {},
+			localClineRulesToggles: this.readLocalCapabilityToggles("rules"),
+			localCursorRulesToggles: this.readLocalCapabilityToggles("cursorRules"),
+			localWindsurfRulesToggles: this.readLocalCapabilityToggles("windsurfRules"),
+			localAgentsRulesToggles: this.readLocalCapabilityToggles("agentsRules"),
 			globalWorkflowToggles: this.stateManager.getGlobalSettingsKey("globalWorkflowToggles") || {},
-			localWorkflowToggles: this.stateManager.getWorkspaceStateKey("workflowToggles") || {},
+			localWorkflowToggles: this.readLocalCapabilityToggles("workflows"),
 			globalSkillsToggles: this.stateManager.getGlobalSettingsKey("globalSkillsToggles") || {},
-			localSkillsToggles: this.stateManager.getWorkspaceStateKey("localSkillsToggles") || {},
+			localSkillsToggles: this.readLocalCapabilityToggles("skills"),
 			remoteSkillsToggles: this.stateManager.getGlobalStateKey("remoteSkillsToggles") || {},
 			remoteRulesToggles: this.stateManager.getGlobalStateKey("remoteRulesToggles") || {},
 			remoteWorkflowToggles: this.stateManager.getGlobalStateKey("remoteWorkflowToggles") || {},
 			globalSubagentsToggles: this.stateManager.getGlobalSettingsKey("globalSubagentsToggles") || {},
-			localSubagentsToggles: this.stateManager.getWorkspaceStateKey("localSubagentsToggles") || {},
+			localSubagentsToggles: this.readLocalCapabilityToggles("subagents"),
 			mcpServers: Object.fromEntries(this.getMcpServersForOwner().map((server) => [server.name, server.disabled !== true])),
 		})
+	}
+
+	/**
+	 * Read the stored overrides of one locally discovered capability kind.
+	 *
+	 * The scope chain owns these preferences now. Merging every scope keeps a
+	 * task-level choice visible without letting an absent path read as disabled.
+	 */
+	private readLocalCapabilityToggles(kind: CapabilityKind): Record<string, boolean> {
+		return mergeScopedToggles(readScopedToggles(this.stateManager, kind))
 	}
 
 	private applyWorkspaceMcpServerToggles(servers: readonly McpServer[]): McpServer[] {
@@ -573,6 +597,9 @@ export class Controller {
 		}
 
 		await this.clearTask()
+		await this.workspaceHistoryManager
+			?.flush()
+			.catch((error) => Logger.error("[WorkspaceHistoryManager] Shutdown durability flush failed:", error))
 		this.mcpPromptCatalogDispose?.()
 		this.mcpPromptCatalogDispose = undefined
 		await this.workspaceMcpRegistration
@@ -692,7 +719,7 @@ export class Controller {
 			await this.postStateToWebview()
 		}
 
-		if (autoApprovalSettings) {
+		if (autoApprovalSettings && !historyItem) {
 			const updatedAutoApprovalSettings = {
 				...autoApprovalSettings,
 				version: (autoApprovalSettings.version ?? 1) + 1,
@@ -714,6 +741,9 @@ export class Controller {
 		logInitStage("ignore_controller")
 
 		const taskId = historyItem?.id || Date.now().toString()
+		const workspaceHistoryManager = this.resolveWorkspaceHistoryManager(cwd)
+		const workspaceHistorySession = workspaceHistoryManager.beginTask(taskId)
+		this.workspaceHistorySession = workspaceHistorySession
 
 		// Acquire task lock via lock service
 		this.taskLockAcquired = await this.lockService.acquireTaskLock(taskId)
@@ -764,9 +794,13 @@ export class Controller {
 		this.task = new Task({
 			controller: this,
 			mcpHub: this.mcpHub,
-			updateTaskHistory: (historyItem) => this.updateTaskHistory(historyItem),
+			updateTaskHistory: (historyItem) => workspaceHistoryManager.publishMetadata(historyItem, workspaceHistorySession),
 			persistTaskCompletionState: (projectionTaskId, isCompleted, revision) =>
-				this.persistTaskCompletionState(projectionTaskId, isCompleted, revision),
+				workspaceHistoryManager.publishCompletion(
+					{ taskId: projectionTaskId, isCompleted, revision },
+					workspaceHistorySession,
+				),
+			publishTaskHistoryClose: () => workspaceHistoryManager.closeTask(workspaceHistorySession),
 			postStateToWebview: (options) => this.postStateToWebview(options),
 			reinitExistingTaskFromId: (taskId) => this.reinitExistingTaskFromId(taskId),
 			cancelTask: () => this.cancelTask(),
@@ -800,11 +834,13 @@ export class Controller {
 
 		try {
 			if (historyItem) {
+				if (this.taskLockAcquired) taskInstance.beginHistoryPreparation()
 				const remainsCurrent = await prepareHistoryTaskForDisplay({
 					displayHistory: () => taskInstance.displayHistory(),
 					prepareFromHistory: (prepareOptions) => taskInstance.prepareFromHistory(prepareOptions),
 					hasTaskLock: this.taskLockAcquired,
 					isCurrent: () => this.task === taskInstance,
+					onPreparingToDisplay: options?.onHistoryTaskPreparingToDisplay,
 					onReadyToDisplay: options?.onHistoryTaskReadyToDisplay,
 				})
 				logInitStage("history_prepare", initializedTaskId, `current=${remainsCurrent}`)
@@ -1663,7 +1699,7 @@ export class Controller {
 		const globalWorkflowToggles = this.stateManager.getGlobalSettingsKey("globalWorkflowToggles")
 		const globalSkillsToggles = this.stateManager.getGlobalSettingsKey("globalSkillsToggles")
 		const taskCapabilityToggles = parseTaskCapabilityToggles(this.task?.taskSm.taskCapabilityToggles)
-		const localSkillsToggles = this.stateManager.getWorkspaceStateKey("localSkillsToggles")
+		const localSkillsToggles = this.readLocalCapabilityToggles("skills")
 		const remoteSkillsToggles = this.stateManager.getGlobalStateKey("remoteSkillsToggles")
 		const remoteRulesToggles = this.stateManager.getGlobalStateKey("remoteRulesToggles")
 		const remoteWorkflowToggles = this.stateManager.getGlobalStateKey("remoteWorkflowToggles")
@@ -1688,11 +1724,11 @@ export class Controller {
 		const showFeatureTips = this.stateManager.getGlobalSettingsKey("showFeatureTips")
 		const showActiveTasksInEnvDetails = this.stateManager.getGlobalSettingsKey("showActiveTasksInEnvDetails")
 
-		const localClineRulesToggles = this.stateManager.getWorkspaceStateKey("localClineRulesToggles")
-		const localWindsurfRulesToggles = this.stateManager.getWorkspaceStateKey("localWindsurfRulesToggles")
-		const localCursorRulesToggles = this.stateManager.getWorkspaceStateKey("localCursorRulesToggles")
-		const localAgentsRulesToggles = this.stateManager.getWorkspaceStateKey("localAgentsRulesToggles")
-		const workflowToggles = this.stateManager.getWorkspaceStateKey("workflowToggles")
+		const localClineRulesToggles = this.readLocalCapabilityToggles("rules")
+		const localWindsurfRulesToggles = this.readLocalCapabilityToggles("windsurfRules")
+		const localCursorRulesToggles = this.readLocalCapabilityToggles("cursorRules")
+		const localAgentsRulesToggles = this.readLocalCapabilityToggles("agentsRules")
+		const workflowToggles = this.readLocalCapabilityToggles("workflows")
 
 		const currentTaskItem = this.task?.taskId ? (taskHistory || []).find((item) => item.id === this.task?.taskId) : undefined
 		const rawMessages = [...(this.task?.messageStateHandler.clineMessages || [])]
@@ -1867,8 +1903,12 @@ export class Controller {
 			/** Complete interaction view projected only from canonical runtime state. */
 			taskViewState: this.task
 				? (() => {
+						const runtimeState = this.task.getRuntimeState()
+						if (this.task.isHistoryPreparationPending?.()) {
+							return projectHistoryPreparingView(runtimeState)
+						}
 						const commandHandoffActivityId = this.task.getReadyBackgroundHandoffActivityId()
-						return projectTaskView(this.task.getRuntimeState(), {
+						return projectTaskView(runtimeState, {
 							autoRetryActive: this.task.hasAutoRetrySequence(),
 							autoRetryPending: this.task.hasPendingAutoRetry(),
 							contextCompactionOperationId: this.task.getContextCompactionOperationId(),
@@ -2225,6 +2265,7 @@ export class Controller {
 			OrchestratorController.getInstance().unregisterController(taskId)
 		}
 		this.task = undefined // removes reference to it, so once promises end it will be garbage collected
+		this.workspaceHistorySession = undefined
 		this.restartAccountUsagePolling()
 		// Release file ownership in the global checkpoint registry
 		if (taskId) {
@@ -2256,45 +2297,31 @@ export class Controller {
 	For now we'll store the conversation history in memory, and if we need to store in state directly we'd need to do a manual conversion to ensure proper json stringification.
 	*/
 
-	async updateTaskHistory(item: HistoryItem): Promise<HistoryItem[]> {
-		return await this.taskHistoryProjectionMutex.withLock(async () => {
-			const history = [...(this.stateManager.getGlobalStateKey("taskHistory") ?? [])]
-			const existingItemIndex = history.findIndex((historyItem) => historyItem.id === item.id)
-			const existingItem = existingItemIndex >= 0 ? history[existingItemIndex] : undefined
-			const mergedItem = { ...item }
-			delete mergedItem.isCompleted
-			delete mergedItem.completionStateRevision
-			if (existingItem?.completionStateRevision !== undefined) {
-				mergedItem.isCompleted = existingItem.isCompleted
-				mergedItem.completionStateRevision = existingItem.completionStateRevision
-			}
-
-			// Persist ordinary metadata through the buffered task-history path.
-			// The durable store owns the completion projection, so its merged row is
-			// authoritative: the controller cache can be older than a completion that
-			// this or another window already wrote.
-			// Fall back to the locally merged row so a store that reports nothing can
-			// never blank an entry in the cache.
-			const persisted = (await this.stateManager.taskHistory.upsertTaskHistory(mergedItem)) ?? mergedItem
-			if (existingItemIndex !== -1) {
-				history[existingItemIndex] = persisted
-			} else {
-				history.push(persisted)
-			}
-			this.stateManager.setGlobalState("taskHistory", history)
-			return history
+	private resolveWorkspaceHistoryManager(workspacePath?: string): WorkspaceHistoryManager {
+		if (!workspacePath && this.workspaceHistoryManager) return this.workspaceHistoryManager
+		const resolvedWorkspacePath = workspacePath ?? this.workspaceManager?.getPrimaryRoot()?.path
+		if (!resolvedWorkspacePath) {
+			throw new Error("WorkspaceHistoryManager requires an initialized workspace path")
+		}
+		const manager = getWorkspaceHistoryManager(resolvedWorkspacePath, {
+			readCache: () => [...(this.stateManager.getGlobalStateKey("taskHistory") ?? [])],
+			writeCache: (history) => this.stateManager.setGlobalState("taskHistory", history),
+			writer: this.stateManager.taskHistory,
+			onError: (error) => Logger.error("[WorkspaceHistoryManager] Background persistence failed:", error),
 		})
+		if (workspacePath) this.workspaceHistoryManager = manager
+		return manager
 	}
 
-	/** Durably persist one canonical completion projection and synchronize the controller cache. */
-	async persistTaskCompletionState(taskId: string, isCompleted: boolean, revision: number): Promise<boolean> {
-		return await this.taskHistoryProjectionMutex.withLock(async () => {
-			const updated = await this.stateManager.taskHistory.setCompletionState({ taskId, isCompleted, revision })
-			if (!updated) return false
+	async updateTaskHistory(item: HistoryItem): Promise<HistoryItem[]> {
+		const session = this.workspaceHistorySession?.taskId === item.id ? this.workspaceHistorySession : undefined
+		return this.resolveWorkspaceHistoryManager().publishMetadata(item, session)
+	}
 
-			this.syncTaskHistoryCache([updated])
-			return true
-		})
+	/** Accept one canonical completion projection; physical History durability is manager-owned. */
+	async persistTaskCompletionState(taskId: string, isCompleted: boolean, revision: number): Promise<boolean> {
+		const session = this.workspaceHistorySession?.taskId === taskId ? this.workspaceHistorySession : undefined
+		return this.resolveWorkspaceHistoryManager().publishCompletion({ taskId, isCompleted, revision }, session)
 	}
 
 	/**

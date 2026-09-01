@@ -37,9 +37,13 @@ describe("Subagent freshness mutations", () => {
 			controller: {
 				stateManager: {
 					getGlobalSettingsKey: vi.fn().mockReturnValue({}),
-					getWorkspaceStateKey: vi
+					// Locally discovered subagents read their overrides from the scope
+					// chain now, so the fake exposes the scoped reader instead of the
+					// retired workspace-state map.
+					getScopedCapabilityToggles: vi
 						.fn()
-						.mockImplementation((key: string) => (key === "localSubagentsToggles" ? localToggles : {})),
+						.mockImplementation((scope: string) => (scope === "workspace" ? localToggles : {})),
+					mutateScopedCapabilityToggles: vi.fn().mockResolvedValue(localToggles),
 					setWorkspaceState: vi.fn(),
 				},
 				task: { flushPromptFreshnessInvalidation },

@@ -1,4 +1,5 @@
 import { ensureAgentSubagentsDirectoryExists } from "@core/storage/disk"
+import { mergeScopedToggles, readScopedToggles } from "@core/storage/settings/capability-toggle-store"
 import { CreateSubagentRequest, SubagentToggles } from "@shared/proto/dline/file"
 import fs from "fs/promises"
 import path from "path"
@@ -78,7 +79,7 @@ export async function createSubagentFile(controller: Controller, request: Create
 		Logger.warn(`Subagent "${sanitizedName}" already exists at ${filePath}`)
 		// Return current toggles
 		const globalToggles = controller.stateManager.getGlobalSettingsKey("globalSubagentsToggles") || {}
-		const localToggles = controller.stateManager.getWorkspaceStateKey("localSubagentsToggles") || {}
+		const localToggles = mergeScopedToggles(readScopedToggles(controller.stateManager, "subagents"))
 		return SubagentToggles.create({
 			globalSubagentsToggles: globalToggles,
 			localSubagentsToggles: localToggles,
@@ -99,7 +100,7 @@ export async function createSubagentFile(controller: Controller, request: Create
 
 	// Return current toggles (new subagent defaults to enabled)
 	const globalToggles = controller.stateManager.getGlobalSettingsKey("globalSubagentsToggles") || {}
-	const localToggles = controller.stateManager.getWorkspaceStateKey("localSubagentsToggles") || {}
+	const localToggles = mergeScopedToggles(readScopedToggles(controller.stateManager, "subagents"))
 
 	return SubagentToggles.create({
 		globalSubagentsToggles: globalToggles,

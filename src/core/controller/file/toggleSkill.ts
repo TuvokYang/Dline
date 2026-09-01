@@ -1,5 +1,5 @@
 import { capabilityResourceId } from "@core/storage/settings/capability-resource-id"
-import { setCapabilityEnabled } from "@core/storage/settings/capability-toggle-store"
+import { mergeScopedToggles, readScopedToggles, setCapabilityEnabled } from "@core/storage/settings/capability-toggle-store"
 import { setGlobalCapabilityEnabled } from "@core/storage/settings/global-capability-settings"
 import { SkillsToggles, ToggleSkillRequest } from "@shared/proto/dline/file"
 import { Logger } from "@/shared/services/Logger"
@@ -25,7 +25,7 @@ export async function toggleSkill(controller: Controller, request: ToggleSkillRe
 	}
 
 	let globalToggles = controller.stateManager.getGlobalSettingsKey("globalSkillsToggles") || {}
-	let localToggles = controller.stateManager.getWorkspaceStateKey("localSkillsToggles") || {}
+	let localToggles = mergeScopedToggles(readScopedToggles(controller.stateManager, "skills"))
 
 	let remoteToggles = controller.stateManager.getGlobalStateKey("remoteSkillsToggles") || {}
 
@@ -50,8 +50,8 @@ export async function toggleSkill(controller: Controller, request: ToggleSkillRe
 		)) as Record<string, boolean>
 	}
 
-	await controller.postStateToWebview()
-
+	// The response below already carries every toggle map the caller needs, so a
+	// full state publication would only add a webview-wide recompute to a switch.
 	return SkillsToggles.create({
 		globalSkillsToggles: globalToggles,
 		localSkillsToggles: localToggles,

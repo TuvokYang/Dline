@@ -330,13 +330,6 @@ const SECRETS_KEYS = [
 // WARNING, these are not ALL of the local state keys in practice. For example, FileContextTracker
 // uses dynamic keys like pendingFileContextWarning_${taskId}.
 export const LocalStateKeys = [
-	"localClineRulesToggles",
-	"localCursorRulesToggles",
-	"localWindsurfRulesToggles",
-	"localAgentsRulesToggles",
-	"localSkillsToggles",
-	"localSubagentsToggles",
-	"workflowToggles",
 	"mcpServersToggles",
 ] as const
 

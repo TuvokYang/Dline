@@ -18,6 +18,7 @@ import {
 	newTaskToolResponse,
 	reportBugToolResponse,
 } from "../prompts/commands"
+import { mergeScopedToggles, readScopedToggles } from "../storage/settings/capability-toggle-store"
 import { StateManager } from "../storage/StateManager"
 
 /**
@@ -273,8 +274,7 @@ export async function parseSlashCommands(
 							{},
 						localSkillsToggles:
 							capabilityContext?.capabilityToggles.localSkillsToggles ??
-							stateManager?.getWorkspaceStateKey("localSkillsToggles") ??
-							{},
+							(stateManager ? mergeScopedToggles(readScopedToggles(stateManager, "skills")) : {}),
 						remoteSkillsToggles:
 							capabilityContext?.capabilityToggles.remoteSkillsToggles ??
 							stateManager?.getGlobalStateKey("remoteSkillsToggles") ??

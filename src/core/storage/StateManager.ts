@@ -696,13 +696,7 @@ export class StateManager {
 
 	/**
 	 * Switch the active task context for per-task settings reads.
-<｜｜DSML｜｜parameter name="task_progress" string="true">- [x] 创建 TaskStateManager 类
-- [ ] 修改 TaskParams 接口添加 taskStateManager
-- [ ] 修改 Task 构造函数，存储 taskStateManager，替换 7 处 getGlobalSettingsKey("mode")
-- [ ] 修改 Controller.initTask 创建 TaskStateManager 并传入
-- [ ] 修改 Controller.togglePlanActMode 使用 task.taskSm.setMode()
-- [ ] 修改 Controller.getStateToPostToWebview 从 task.taskSm.mode 读取
-- [x] 在 StateManager 中添加 getTaskCacheRef 和 markTaskSettingDirty 方法
+	 *
 	 * Called by Controller.initTask() and OrchestratorController when switching between tasks.
 	 */
 	setActiveTask(taskId: string): void {
@@ -1258,9 +1252,16 @@ export class StateManager {
 			const values = this.workspaceSettingsRepository?.readSnapshot().values
 			return (values?.[key] ?? getDefaultValue(key)) as Settings[K]
 		}
-		// Global and task both resolve through the settings cache, which already
-		// prefers the active task document when one is bound.
-		return this.getGlobalSettingsKey(key)
+		// Each scope must read its own store. Routing both through
+		// `getGlobalSettingsKey` would collapse them, because that reader already
+		// prefers the bound task document: the task layer would leak into the
+		// global layer and, with no task bound, the task layer would report the
+		// global value. The scope chain then has nothing left to resolve.
+		if (scope === "task") {
+			const taskCache = this.activeTaskId ? this.taskStateCache.get(this.activeTaskId) : undefined
+			return (taskCache?.[key] ?? getDefaultValue(key)) as Settings[K]
+		}
+		return this.getCanonicalSettingsKey(key)
 	}
 
 	/**
@@ -1273,6 +1274,18 @@ export class StateManager {
 		key: K,
 		resolveValue: (currentValue: Settings[K]) => Settings[K],
 	): Promise<Settings[K]> {
+		// A task-scoped preference belongs to the task document. Writing it to the
+		// global Settings would make one task's choice the default everywhere.
+		if (scope === "task") {
+			const taskId = this.activeTaskId
+			if (!taskId) throw new Error("Cannot write a task-scoped capability toggle without an active task")
+
+			this.ensureMutationAllowed()
+			const currentValue = this.getScopedCapabilityToggles("task", key)
+			const nextValue = resolveValue(currentValue)
+			this.setTaskSettings(taskId, key, nextValue)
+			return nextValue
+		}
 		if (scope !== "workspace") {
 			return this.mutateGlobalSettingsKey(key, resolveValue)
 		}
@@ -1361,6 +1374,21 @@ export class StateManager {
 			throw new Error(STATE_MANAGER_NOT_INITIALIZED)
 		}
 		return this.workspaceStateCache[key]
+	}
+
+	/**
+	 * Read a workspace-state map that a previous build wrote.
+	 *
+	 * The one-time toggle migration must still see keys that `LocalStateKeys` no
+	 * longer declares, so it reads the raw cache instead of the current key
+	 * union. Only the migration should use this.
+	 */
+	getLegacyWorkspaceToggleMap(key: string): Record<string, boolean> | undefined {
+		if (!this.isInitialized) {
+			throw new Error(STATE_MANAGER_NOT_INITIALIZED)
+		}
+		const value = (this.workspaceStateCache as Record<string, unknown>)[key]
+		return typeof value === "object" && value !== null ? (value as Record<string, boolean>) : undefined
 	}
 
 	/**
