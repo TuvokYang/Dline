@@ -11,6 +11,7 @@ import {
 } from "@dnd-kit/core"
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
+import type { ImageGenerationProfile } from "@shared/proto/dline/profile"
 import type { Mode } from "@shared/storage/types"
 import { CheckIcon, GripVerticalIcon, ListFilterIcon, PlusIcon, Trash2Icon } from "lucide-react"
 import { useState } from "react"
@@ -19,6 +20,8 @@ import ApiProfileCard from "./ProviderProfileCard"
 
 interface ApiProfileListProps {
 	profiles: ApiProfile[]
+	imageProfiles: ImageGenerationProfile[]
+	imageGenerationEnabled: boolean
 	expandedId: string | null
 	editMode: boolean
 	currentMode: Mode
@@ -43,6 +46,8 @@ interface SortableProfileCardProps
 
 function SortableProfileCard({
 	profile,
+	imageProfiles,
+	imageGenerationEnabled,
 	expandedId,
 	editMode,
 	currentMode,
@@ -76,6 +81,8 @@ function SortableProfileCard({
 					</button>
 				}
 				editMode={editMode}
+				imageProfiles={imageProfiles}
+				imageGenerationEnabled={imageGenerationEnabled}
 				isExpanded={expandedId === profile.id}
 				onDelete={() => onDeleteProfile(profile.id)}
 				onToggleExpand={() => onToggleExpand(profile.id)}
@@ -94,6 +101,8 @@ function SortableProfileCard({
  */
 const ApiProfileList: React.FC<ApiProfileListProps> = ({
 	profiles,
+	imageProfiles,
+	imageGenerationEnabled,
 	expandedId,
 	editMode,
 	currentMode,
@@ -172,6 +181,8 @@ const ApiProfileList: React.FC<ApiProfileListProps> = ({
 						<SortableProfileCard
 							currentMode={currentMode}
 							editMode={editMode}
+							imageProfiles={imageProfiles}
+							imageGenerationEnabled={imageGenerationEnabled}
 							expandedId={expandedId}
 							key={profile.id}
 							onDeleteProfile={onDeleteProfile}

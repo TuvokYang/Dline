@@ -2,7 +2,7 @@ import { findEnabledProfileByName } from "@core/controller/file/getApiProfiles"
 import { ApiConfiguration, ModelInfo } from "@shared/api"
 import type { AccountUsageData, AccountUsageQuotaData } from "@shared/ExtensionMessage"
 import type { ServerTool } from "@shared/proto/dline/models/metadata"
-import type { ApiProfile } from "@shared/proto/dline/profile"
+import type { ApiProfile, ImageGenerationSource } from "@shared/proto/dline/profile"
 import type { WebSearchMode } from "@shared/proto/dline/provider/common"
 import { Mode } from "@shared/storage/types"
 import { ClineError } from "@/services/error"
@@ -122,6 +122,8 @@ export interface ApiHandler {
 	getProviderId?(): string
 	/** Return the web-search mode captured by this handler's profile. */
 	getWebSearchMode?(): WebSearchMode | undefined
+	/** Return the image source captured by this handler's profile when Image use is enabled. */
+	getImageGenerationSource?(): ImageGenerationSource | undefined
 }
 
 export interface ApiHandlerModel {

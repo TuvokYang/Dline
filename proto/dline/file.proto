@@ -119,6 +119,12 @@ service FileService {
   // Persists all ApiProfile configurations to api_profiles.json
   rpc updateApiProfiles(UpdateApiProfilesRequest) returns (Empty);
 
+  // Reads independent image endpoint profiles.
+  rpc getImageGenerationProfiles(EmptyRequest) returns (ImageGenerationProfilesResponse);
+
+  // Persists independent image endpoint profiles.
+  rpc updateImageGenerationProfiles(UpdateImageGenerationProfilesRequest) returns (Empty);
+
   // Lists Conda environments available to the extension host
   rpc listCondaEnvironments(EmptyRequest) returns (StringArray);
 

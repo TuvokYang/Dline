@@ -34,6 +34,7 @@ message ContextWindowTier {
 enum ServerTool {
   SERVER_TOOL_UNSPECIFIED = 0;
   WEB_SEARCH = 1;
+  IMAGE_GENERATION = 2;
 }
 
 /** Model capability flags and limits. */
@@ -80,4 +81,20 @@ message ModelPricing {
   repeated PricingTier tiers = 6;
   optional double thinking_output_price = 7;
   repeated ThinkingOutputPriceTier thinking_output_price_tiers = 8;
+}
+
+/** Capabilities for a dedicated image generation model. */
+message ImageGenerationCapabilities {
+  optional bool supports_generation = 1;
+  optional bool supports_editing = 2;
+  optional bool supports_mask = 3;
+  optional bool supports_reference_images = 4;
+  optional bool supports_transparent_background = 5;
+  optional uint32 max_images = 6;
+}
+
+/** Per-image pricing metadata for dedicated image generation models. */
+message ImagePricing {
+  optional double price_per_image = 1;
+  optional string currency = 2;
 }

@@ -4,7 +4,18 @@ import {
 	ClineSay as AppClineSay,
 	type CommandStatus,
 } from "@shared/ExtensionMessage"
-import { ClineAsk, ClineMessageType, ClineSay, ClineMessage as ProtoClineMessage } from "@shared/proto/dline/ui"
+import {
+	parseImageGenerationPresentation,
+	parseImageGenerationToolText,
+	type ImageGenerationPresentationV1,
+} from "@shared/image-generation"
+import {
+	ClineAsk,
+	ClineMessageType,
+	ClineSay,
+	ClineMessage as ProtoClineMessage,
+	type ImageGenerationPresentation as ProtoImageGenerationPresentation,
+} from "@shared/proto/dline/ui"
 
 // Helper function to convert ClineAsk string to enum
 function convertClineAskToProtoEnum(ask: AppClineAsk | undefined): ClineAsk | undefined {
@@ -186,6 +197,25 @@ function convertProtoEnumToClineSay(say: ClineSay): AppClineSay | undefined {
 	return mapping[say]
 }
 
+function convertImageGenerationToProto(
+	presentation: ImageGenerationPresentationV1 | undefined,
+): ProtoImageGenerationPresentation | undefined {
+	if (!presentation) return undefined
+	return {
+		schemaVersion: presentation.schemaVersion,
+		status: presentation.status,
+		requestId: presentation.requestId,
+		prompt: presentation.prompt,
+		profileId: presentation.profileId,
+		providerId: presentation.providerId,
+		modelId: presentation.modelId,
+		count: presentation.count,
+		artifacts: presentation.artifacts ?? [],
+		usage: presentation.usage,
+		error: presentation.error,
+	}
+}
+
 /**
  * Convert application ClineMessage to proto ClineMessage
  */
@@ -193,6 +223,7 @@ export function convertClineMessageToProto(message: AppClineMessage): ProtoCline
 	// For sending messages, we need to provide values for required proto fields
 	const askEnum = message.ask ? convertClineAskToProtoEnum(message.ask) : undefined
 	const sayEnum = message.say ? convertClineSayToProtoEnum(message.say) : undefined
+	const imageGeneration = message.imageGeneration ?? parseImageGenerationToolText(message.text)
 
 	// Determine appropriate enum values based on message type
 	let finalAskEnum: ClineAsk = ClineAsk.FOLLOWUP // Proto default
@@ -254,6 +285,7 @@ export function convertClineMessageToProto(message: AppClineMessage): ProtoCline
 			: undefined,
 		userInputKind: message.userInputKind ?? "",
 		queuedInputMode: message.queuedInputMode ?? "",
+		imageGeneration: convertImageGenerationToProto(imageGeneration),
 	}
 
 	return protoMessage
@@ -363,6 +395,10 @@ export function convertProtoToClineMessage(protoMessage: ProtoClineMessage): App
 	}
 	if (protoMessage.queuedInputMode !== "") {
 		message.queuedInputMode = protoMessage.queuedInputMode as AppClineMessage["queuedInputMode"]
+	}
+	if (protoMessage.imageGeneration) {
+		const imageGeneration = parseImageGenerationPresentation(protoMessage.imageGeneration)
+		if (imageGeneration) message.imageGeneration = imageGeneration
 	}
 
 	return message

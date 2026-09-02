@@ -3,10 +3,15 @@
  * Proto types from proto/dline/models are re-exported via @shared/api.
  * This file provides webview-safe augmentations (no proto direct references from webview).
  */
-import type { ModelInfo } from "../proto/dline/models"
-import type { ModelCapabilities, ModelPricing } from "../proto/dline/models/metadata"
+import type { ImageModelInfo, ModelInfo } from "../proto/dline/models"
+import type {
+	ImageGenerationCapabilities,
+	ImagePricing,
+	ModelCapabilities,
+	ModelPricing,
+} from "../proto/dline/models/metadata"
 
-export type { ModelCapabilities, ModelInfo, ModelPricing }
+export type { ImageGenerationCapabilities, ImageModelInfo, ImagePricing, ModelCapabilities, ModelInfo, ModelPricing }
 
 /**
  * App-layer ThinkingConfig — compatible with model file definitions.
@@ -47,4 +52,6 @@ export interface ProviderModelsConfig {
 	}
 	models: { [key: string]: ModelInfo }
 	defaultModelId?: string
+	imageModels?: { [key: string]: ImageModelInfo }
+	defaultImageModelId?: string
 }

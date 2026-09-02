@@ -16,6 +16,55 @@ export function getResponsesCacheWriteTokens(details: ResponsesInputTokenDetails
 	return details?.cache_write_tokens ?? details?.cache_miss_tokens ?? 0
 }
 
+function createImageGenerationChunk(
+	functionId: string,
+	phase: ApiServerToolPhase,
+	payload?: Pick<ApiRawStreamServerToolChunk, "input" | "result" | "error">,
+): ApiRawStreamServerToolChunk {
+	return {
+		type: "server_tool",
+		function_id: functionId,
+		provider_metadata: { item_id: functionId },
+		tool: ServerTool.IMAGE_GENERATION,
+		phase,
+		...payload,
+	}
+}
+
+function imageGenerationResult(item: any): unknown {
+	if (typeof item?.result !== "string" || item.result.length === 0) return undefined
+	return {
+		b64Json: item.result,
+		...(typeof item.revised_prompt === "string" ? { revisedPrompt: item.revised_prompt } : {}),
+	}
+}
+
+/** Normalize OpenAI Responses hosted image generation without exposing partial image bytes. */
+export function mapResponsesImageGenerationEvent(event: any): ApiRawStreamServerToolChunk | undefined {
+	if (event?.type === "response.output_item.added" || event?.type === "response.output_item.done") {
+		const item = event.item
+		if (item?.type !== "image_generation_call" || typeof item.id !== "string" || item.id.length === 0) return undefined
+		if (event.type === "response.output_item.added") {
+			return createImageGenerationChunk(item.id, "started")
+		}
+		return item.status === "failed"
+			? createImageGenerationChunk(item.id, "failed", { error: { code: "provider_error" } })
+			: createImageGenerationChunk(item.id, "completed", { result: imageGenerationResult(item) })
+	}
+
+	if (
+		event?.type !== "response.image_generation_call.in_progress" &&
+		event?.type !== "response.image_generation_call.generating" &&
+		event?.type !== "response.image_generation_call.completed" &&
+		event?.type !== "response.image_generation_call.partial_image"
+	) {
+		return undefined
+	}
+	const functionId = event.item_id
+	if (typeof functionId !== "string" || functionId.length === 0) return undefined
+	return createImageGenerationChunk(functionId, "in_progress")
+}
+
 function createWebSearchChunk(
 	functionId: string,
 	phase: ApiServerToolPhase,
@@ -93,6 +142,10 @@ export async function* handleResponsesApiStreamResponse(
 	try {
 		// Process the response stream
 		for await (const chunk of stream) {
+			const imageGenerationChunk = mapResponsesImageGenerationEvent(chunk)
+			if (imageGenerationChunk) {
+				yield imageGenerationChunk
+			}
 			const webSearchChunk = mapResponsesWebSearchEvent(chunk)
 			if (webSearchChunk) {
 				yield webSearchChunk

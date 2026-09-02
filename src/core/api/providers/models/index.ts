@@ -15,6 +15,7 @@ import { deepSeekModels } from "./deepseek"
 import { doubaoModels } from "./doubao"
 import { fireworksModels } from "./fireworks"
 import { geminiModels } from "./gemini"
+import { geminiDefaultImageModelId, geminiImageModels } from "./gemini-image"
 import { groqModels } from "./groq"
 import { huaweiCloudMaasModels } from "./huawei-cloud-maas"
 import { huggingFaceModels } from "./huggingface"
@@ -25,6 +26,7 @@ import { nebiusModels } from "./nebius"
 import { nousResearchModels } from "./nousresearch"
 import { openAiDefaultModelId, openAiModels } from "./openai"
 import { openAiCodexModels } from "./openai-codex"
+import { openAIDefaultImageModelId, openAIImageModels } from "./openai-image"
 import { mainlandQwenModels } from "./qwen-cn"
 import { qwenCodeModels } from "./qwen-code"
 import { internationalQwenModels } from "./qwen-intl"
@@ -78,6 +80,8 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 		billingMode: "token",
 		models: geminiModels,
 		defaultModelId: firstKey(geminiModels),
+		imageModels: geminiImageModels,
+		defaultImageModelId: geminiDefaultImageModelId,
 	},
 	"openai-codex": {
 		provider: "openai-codex",
@@ -283,6 +287,8 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 		billingMode: "token",
 		models: openAiModels,
 		defaultModelId: openAiDefaultModelId,
+		imageModels: openAIImageModels,
+		defaultImageModelId: openAIDefaultImageModelId,
 	},
 	ollama: {
 		provider: "ollama",

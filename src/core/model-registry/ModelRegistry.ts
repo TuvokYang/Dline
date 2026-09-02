@@ -7,7 +7,7 @@
 import { getDlineHomePath } from "@core/storage/disk"
 import { ServerTool, serverToolFromJSON } from "@shared/proto/dline/models/metadata"
 import { getProviderSeedConfig } from "@shared/providers/model-infos"
-import type { ModelInfo, ProviderModelsConfig } from "@shared/providers/types"
+import type { ImageModelInfo, ModelInfo, ProviderModelsConfig } from "@shared/providers/types"
 import { Logger } from "@shared/services/Logger"
 import chokidar, { type FSWatcher } from "chokidar"
 import fs from "fs/promises"
@@ -260,6 +260,11 @@ export class ModelRegistry {
 				...(configured?.models ?? {}),
 			},
 			defaultModelId: configured?.defaultModelId ?? seed?.defaultModelId,
+			imageModels: {
+				...(seed?.imageModels ?? {}),
+				...(configured?.imageModels ?? {}),
+			},
+			defaultImageModelId: configured?.defaultImageModelId ?? seed?.defaultImageModelId,
 		}
 	}
 
@@ -283,12 +288,16 @@ export class ModelRegistry {
 		providerName: string
 		models: ModelInfo[]
 		defaultModelId?: string
+		imageModels: ImageModelInfo[]
+		defaultImageModelId?: string
 	}> {
 		const result: Array<{
 			provider: string
 			providerName: string
 			models: ModelInfo[]
 			defaultModelId?: string
+			imageModels: ImageModelInfo[]
+			defaultImageModelId?: string
 		}> = []
 
 		for (const config of this.getAllProviders()) {
@@ -297,6 +306,8 @@ export class ModelRegistry {
 				providerName: config.providerName,
 				models: Object.values(config.models),
 				defaultModelId: config.defaultModelId,
+				imageModels: Object.values(config.imageModels ?? {}),
+				defaultImageModelId: config.defaultImageModelId,
 			})
 		}
 

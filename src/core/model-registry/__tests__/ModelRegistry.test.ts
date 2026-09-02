@@ -219,6 +219,33 @@ describe("ModelRegistry", () => {
 			expect(allModels[0].models).to.have.lengthOf(2)
 		})
 
+		it("returns image models and their default separately from chat models", async () => {
+			const config = {
+				provider: "image-provider",
+				providerName: "Image Provider",
+				billingMode: "token",
+				defaultModelId: "chat-model",
+				models: {
+					"chat-model": { id: "chat-model", name: "Chat Model" },
+				},
+				defaultImageModelId: "image-model",
+				imageModels: {
+					"image-model": { id: "image-model", name: "Image Model" },
+				},
+			}
+			await fsPromises.writeFile(path.join(tempDir, "image-provider.json"), JSON.stringify(config))
+			await registry.initialize()
+
+			const group = registry.getAllModels()[0] as unknown as {
+				defaultImageModelId?: string
+				imageModels?: Array<{ id: string }>
+				models: Array<{ id: string }>
+			}
+			expect(group.models.map((model) => model.id)).to.deep.equal(["chat-model"])
+			expect(group.defaultImageModelId).to.equal("image-model")
+			expect(group.imageModels?.map((model) => model.id)).to.deep.equal(["image-model"])
+		})
+
 		it("should have undefined defaultModelId when not set", async () => {
 			const config = {
 				provider: "simple",

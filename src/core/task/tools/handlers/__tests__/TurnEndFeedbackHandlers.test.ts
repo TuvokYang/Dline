@@ -97,6 +97,7 @@ function createConfig(text: string): TaskConfig {
 				getGlobalSettingsKey: vi.fn(() => "plan"),
 				getApiConfiguration: vi.fn(() => ({})),
 			}) as TaskConfig["services"]["stateManager"],
+			imageGenerationService: {} as TaskConfig["services"]["imageGenerationService"],
 		},
 		autoApprovalSettings: { enableNotifications: false } as TaskConfig["autoApprovalSettings"],
 		autoApprover: {} as TaskConfig["autoApprover"],

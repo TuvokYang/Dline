@@ -246,6 +246,52 @@ message ClineModelInfo {
   string model_id = 2;
 }
 
+message ImageGenerationArtifact {
+  string id = 1;
+  string mime_type = 2;
+  string format = 3;
+  int64 byte_length = 4;
+  uint32 width = 5;
+  uint32 height = 6;
+  optional string revised_prompt = 7;
+}
+
+message ImageGenerationUsage {
+  uint32 image_count = 1;
+  optional int64 total_output_bytes = 2;
+  optional double estimated_cost_usd = 3;
+  optional string currency = 4;
+}
+
+message ImageGenerationError {
+  optional string code = 1;
+  string message = 2;
+  optional bool retryable = 3;
+}
+
+message ImageGenerationPresentation {
+  uint32 schema_version = 1;
+  string status = 2;
+  string request_id = 3;
+  string prompt = 4;
+  optional string profile_id = 5;
+  optional string provider_id = 6;
+  optional string model_id = 7;
+  uint32 count = 8;
+  repeated ImageGenerationArtifact artifacts = 9;
+  optional ImageGenerationUsage usage = 10;
+  optional ImageGenerationError error = 11;
+}
+
+message ImageArtifactRequest {
+  string artifact_id = 1;
+}
+
+message ImageArtifactContent {
+  bytes data = 1;
+  string mime_type = 2;
+}
+
 // Main ClineMessage type
 message ClineMessage {
   int64 ts = 1;
@@ -285,6 +331,7 @@ message ClineMessage {
   CompactionConversationRange compaction_conversation_range = 33;
   string user_input_kind = 34;
   string queued_input_mode = 35;
+  optional ImageGenerationPresentation image_generation = 36;
 }
 
 message ShowWebviewEvent {
@@ -340,6 +387,9 @@ service UiService {
 
   // Opens a URL in the default browser
   rpc openUrl(StringRequest) returns (Empty);
+
+  // Returns verified bytes for an image artifact owned by the active task.
+  rpc getImageArtifact(ImageArtifactRequest) returns (ImageArtifactContent);
 
   // Opens the Cline walkthrough
   rpc openWalkthrough(EmptyRequest) returns (Empty);

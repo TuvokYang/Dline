@@ -14,7 +14,7 @@ export const openAiModels: Record<string, ModelInfo> = {
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
-			tools: [ServerTool.WEB_SEARCH],
+			tools: [ServerTool.WEB_SEARCH, ServerTool.IMAGE_GENERATION],
 			maxTokens: 128_000,
 			contextWindow: 272_000,
 			supportsImages: true,
@@ -40,7 +40,7 @@ export const openAiModels: Record<string, ModelInfo> = {
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
-			tools: [ServerTool.WEB_SEARCH],
+			tools: [ServerTool.WEB_SEARCH, ServerTool.IMAGE_GENERATION],
 			maxTokens: 128_000,
 			contextWindow: 272_000,
 			supportsImages: true,
@@ -66,7 +66,7 @@ export const openAiModels: Record<string, ModelInfo> = {
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
-			tools: [ServerTool.WEB_SEARCH],
+			tools: [ServerTool.WEB_SEARCH, ServerTool.IMAGE_GENERATION],
 			maxTokens: 128_000,
 			contextWindow: 272_000,
 			supportsImages: true,
@@ -92,7 +92,7 @@ export const openAiModels: Record<string, ModelInfo> = {
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
-			tools: [ServerTool.WEB_SEARCH],
+			tools: [ServerTool.WEB_SEARCH, ServerTool.IMAGE_GENERATION],
 			maxTokens: 128_000,
 			contextWindow: 1_050_000,
 			supportsImages: true,
@@ -108,7 +108,7 @@ export const openAiModels: Record<string, ModelInfo> = {
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
-			tools: [ServerTool.WEB_SEARCH],
+			tools: [ServerTool.WEB_SEARCH, ServerTool.IMAGE_GENERATION],
 			maxTokens: 128_000,
 			contextWindow: 1_050_000,
 			supportsImages: true,
@@ -124,7 +124,7 @@ export const openAiModels: Record<string, ModelInfo> = {
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
-			tools: [ServerTool.WEB_SEARCH],
+			tools: [ServerTool.WEB_SEARCH, ServerTool.IMAGE_GENERATION],
 			maxTokens: 128_000,
 			contextWindow: 1_050_000,
 			supportsImages: true,
@@ -140,7 +140,7 @@ export const openAiModels: Record<string, ModelInfo> = {
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
-			tools: [ServerTool.WEB_SEARCH],
+			tools: [ServerTool.WEB_SEARCH, ServerTool.IMAGE_GENERATION],
 			maxTokens: 128_000,
 			contextWindow: 1_050_000,
 			supportsImages: true,
@@ -156,7 +156,7 @@ export const openAiModels: Record<string, ModelInfo> = {
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
-			tools: [ServerTool.WEB_SEARCH],
+			tools: [ServerTool.WEB_SEARCH, ServerTool.IMAGE_GENERATION],
 			maxTokens: 128_000,
 			contextWindow: 272_000,
 			supportsImages: true,
@@ -172,7 +172,7 @@ export const openAiModels: Record<string, ModelInfo> = {
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
-			tools: [ServerTool.WEB_SEARCH],
+			tools: [ServerTool.WEB_SEARCH, ServerTool.IMAGE_GENERATION],
 			maxTokens: 128_000,
 			contextWindow: 272_000,
 			supportsImages: true,

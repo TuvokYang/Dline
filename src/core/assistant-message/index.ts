@@ -82,6 +82,16 @@ export const toolParamNames = [
 	"start_line",
 	"end_line",
 	"show_metadata",
+	"profile",
+	"count",
+	"width",
+	"height",
+	"aspect_ratio",
+	"quality",
+	"background",
+	"output_format",
+	"reference_artifact_ids",
+	"mask_artifact_id",
 ] as const
 
 export type ToolParamName = (typeof toolParamNames)[number]

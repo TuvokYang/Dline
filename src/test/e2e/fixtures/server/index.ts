@@ -5,6 +5,7 @@ import type { BalanceResponse, OrganizationBalanceResponse, UserResponse } from 
 import {
 	E2E_MOCK_API_RESPONSES,
 	E2E_MOCK_PROVIDER_ROUTES,
+	E2E_OPENAI_IMAGE_ROUTE,
 	E2E_REGISTERED_MOCK_ENDPOINTS,
 	type E2EMockApiProtocol,
 	type E2EMockProviderTarget,
@@ -174,6 +175,13 @@ export type OpenAiMockResponse =
 			followupTools?: readonly MockToolCall[]
 	  } & MockResponseOptions)
 	| ({
+			type: "hosted-image-generation"
+			id?: string
+			b64Json: string
+			revisedPrompt?: string
+			followupTools?: readonly MockToolCall[]
+	  } & MockResponseOptions)
+	| ({
 			type: "anthropic-orphan-web-search-result"
 			id?: string
 			results: readonly MockHostedWebSearchResult[]
@@ -225,6 +233,20 @@ export interface MockApiConsumption {
 	cacheDiagnostic?: MockCacheDiagnostic
 }
 
+export interface MockOpenAIImageResponse {
+	b64Json: string
+	revisedPrompt?: string
+}
+
+export interface MockOpenAIImageConsumption {
+	receivedAtMs: number
+	authorization?: string
+	requestHeaders: Readonly<Record<string, string | string[]>>
+	path: string
+	requestBody: unknown
+	response: MockOpenAIImageResponse
+}
+
 export interface MockModelListRequest {
 	receivedAtMs: number
 	target: MockApiTarget
@@ -271,7 +293,11 @@ function getResponseToolCalls(response: Exclude<OpenAiMockResponse, { type: "err
 		return [response]
 	}
 	if (response.type === "tools") return response.tools
-	if (response.type === "hosted-web-search" || response.type === "anthropic-orphan-web-search-result") {
+	if (
+		response.type === "hosted-web-search" ||
+		response.type === "hosted-image-generation" ||
+		response.type === "anthropic-orphan-web-search-result"
+	) {
 		return response.followupTools ?? []
 	}
 	return []
@@ -539,6 +565,8 @@ export class ClineApiServerMock {
 	private spendLimitExceeded = false
 	private mockResponses = createResponseQueues()
 	private mockConsumptions: MockApiConsumption[] = []
+	private mockOpenAIImageResponses: MockOpenAIImageResponse[] = []
+	private mockOpenAIImageConsumptions: MockOpenAIImageConsumption[] = []
 	private mockModelListRequests: MockModelListRequest[] = []
 	private mockSearxngSearchRequests: MockSearxngSearchRequest[] = []
 	private mockWebFetchPageRequests: MockWebFetchPageRequest[] = []
@@ -593,9 +621,19 @@ export class ClineApiServerMock {
 		this.mockResponses[target] = []
 	}
 
+	public enqueueOpenAIImageResponses(...responses: MockOpenAIImageResponse[]): void {
+		this.mockOpenAIImageResponses.push(...responses)
+	}
+
+	public getOpenAIImageConsumptions(): readonly MockOpenAIImageConsumption[] {
+		return this.mockOpenAIImageConsumptions
+	}
+
 	public resetOpenAiMock(): void {
 		this.mockResponses = createResponseQueues()
 		this.mockConsumptions = []
+		this.mockOpenAIImageResponses = []
+		this.mockOpenAIImageConsumptions = []
 		this.mockModelListRequests = []
 		this.mockSearxngSearchRequests = []
 		this.mockWebFetchPageRequests = []
@@ -952,9 +990,11 @@ export class ClineApiServerMock {
 			const handleRequest = async () => {
 				const mockProviderRoute = ClineApiServerMock.matchMockProviderRoute(path, method)
 				const mockModelListTarget = ClineApiServerMock.matchMockModelListRoute(path, method)
+				const mockOpenAIImageRoute =
+					method === "POST" && path === `${E2E_OPENAI_IMAGE_ROUTE.basePath}${E2E_OPENAI_IMAGE_ROUTE.endpoint}`
 				const routeMatch = ClineApiServerMock.matchRoute(path, method)
 
-				if (!mockProviderRoute && !mockModelListTarget && !routeMatch.matched) {
+				if (!mockProviderRoute && !mockModelListTarget && !mockOpenAIImageRoute && !routeMatch.matched) {
 					return sendJson({ error: "Not found" }, 404)
 				}
 
@@ -1015,6 +1055,30 @@ export class ClineApiServerMock {
 									: `https://example.test/dline-local-search/${index}`,
 							content: `E2E local snippet ${index} for ${searchQuery}`,
 						})),
+					})
+				}
+
+				if (mockOpenAIImageRoute) {
+					const body = await readBody()
+					const parsed = JSON.parse(body) as Record<string, unknown>
+					if (typeof parsed.model !== "string" || typeof parsed.prompt !== "string") {
+						return sendJson({ error: { message: "Invalid OpenAI image request shape" } }, 400)
+					}
+					const response = controller.mockOpenAIImageResponses.shift()
+					if (!response) {
+						return sendJson({ error: { message: "No scripted E2E image response remains", code: "e2e_image_queue_exhausted" } }, 500)
+					}
+					controller.mockOpenAIImageConsumptions.push({
+						receivedAtMs: Date.now(),
+						...(authHeader ? { authorization: authHeader } : {}),
+						requestHeaders: normalizeRequestHeaders(req),
+						path,
+						requestBody: parsed,
+						response,
+					})
+					return sendJson({
+						created: Math.floor(Date.now() / 1_000),
+						data: [{ b64_json: response.b64Json, ...(response.revisedPrompt ? { revised_prompt: response.revisedPrompt } : {}) }],
 					})
 				}
 
@@ -1358,8 +1422,20 @@ export class ClineApiServerMock {
 											: {}),
 									}))
 								: []
+						const hostedImageOutputItems =
+							scriptedResponse.type === "hosted-image-generation"
+								? [
+										{
+											id: scriptedResponse.id ?? `ig_${generationId}`,
+											type: "image_generation_call",
+											status: "completed",
+											result: scriptedResponse.b64Json,
+											...(scriptedResponse.revisedPrompt ? { revised_prompt: scriptedResponse.revisedPrompt } : {}),
+										},
+									]
+								: []
 						const ordinaryOutputItems = toolOutputItems.length > 0 ? toolOutputItems : [messageOutputItem]
-						const outputItems = [...hostedSearchOutputItems, ...ordinaryOutputItems]
+						const outputItems = [...hostedSearchOutputItems, ...hostedImageOutputItems, ...ordinaryOutputItems]
 						const response = {
 							id: generationId,
 							object: "response",
@@ -1499,9 +1575,32 @@ export class ClineApiServerMock {
 								"response.output_item.done",
 							)
 						}
+						for (const [index, hostedImageOutputItem] of hostedImageOutputItems.entries()) {
+							const outputIndex = outputOffset + hostedSearchOutputItems.length + index
+							writeSse(
+								{
+									type: "response.output_item.added",
+									output_index: outputIndex,
+									item: { ...hostedImageOutputItem, status: "in_progress", result: null },
+								},
+								"response.output_item.added",
+							)
+							for (const type of [
+								"response.image_generation_call.in_progress",
+								"response.image_generation_call.generating",
+								"response.image_generation_call.completed",
+							]) {
+								writeSse({ type, item_id: hostedImageOutputItem.id, output_index: outputIndex }, type)
+							}
+							writeSse(
+								{ type: "response.output_item.done", output_index: outputIndex, item: hostedImageOutputItem },
+								"response.output_item.done",
+							)
+						}
 						if (toolOutputItems.length > 0) {
 							for (const [index, outputItem] of toolOutputItems.entries()) {
-								const outputIndex = outputOffset + hostedSearchOutputItems.length + index
+								const outputIndex =
+									outputOffset + hostedSearchOutputItems.length + hostedImageOutputItems.length + index
 								writeSse(
 									{
 										type: "response.output_item.added",
@@ -1547,7 +1646,7 @@ export class ClineApiServerMock {
 							if (scriptedResponse.afterToolCompletionReasoning) {
 								if (!(await waitForOpenConnection(scriptedResponse.afterToolCompletionDelayMs))) return
 								const reasoningOutputIndex =
-									outputOffset + hostedSearchOutputItems.length + toolOutputItems.length
+									outputOffset + hostedSearchOutputItems.length + hostedImageOutputItems.length + toolOutputItems.length
 								const postToolReasoningItem = {
 									id: `reasoning_after_tool_${generationId}`,
 									type: "reasoning",
@@ -1603,7 +1702,7 @@ export class ClineApiServerMock {
 								if (!(await waitForOpenConnection(scriptedResponse.afterToolCompletionHoldMs))) return
 							}
 						} else {
-							const outputIndex = outputOffset + hostedSearchOutputItems.length
+							const outputIndex = outputOffset + hostedSearchOutputItems.length + hostedImageOutputItems.length
 							writeSse(
 								{
 									type: "response.output_item.added",

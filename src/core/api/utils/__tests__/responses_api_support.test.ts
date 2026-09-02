@@ -102,6 +102,53 @@ describe("responses_api_support hosted tools", () => {
 		expect(chunks.some((chunk) => chunk.type === "tool_calls")).to.equal(false)
 	})
 
+	it("emits hosted image lifecycle while ignoring partial image bytes", async () => {
+		const result = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
+		const chunks = await collectChunks([
+			{
+				type: "response.output_item.added",
+				item: { type: "image_generation_call", id: "ig_1", status: "in_progress" },
+			},
+			{ type: "response.image_generation_call.partial_image", item_id: "ig_1", partial_image_b64: "secret-preview" },
+			{
+				type: "response.output_item.done",
+				item: {
+					type: "image_generation_call",
+					id: "ig_1",
+					status: "completed",
+					result,
+					revised_prompt: "A blue owl",
+				},
+			},
+		])
+
+		expect(chunks).to.deep.equal([
+			{
+				type: "server_tool",
+				function_id: "ig_1",
+				provider_metadata: { item_id: "ig_1" },
+				tool: ServerTool.IMAGE_GENERATION,
+				phase: "started",
+			},
+			{
+				type: "server_tool",
+				function_id: "ig_1",
+				provider_metadata: { item_id: "ig_1" },
+				tool: ServerTool.IMAGE_GENERATION,
+				phase: "in_progress",
+			},
+			{
+				type: "server_tool",
+				function_id: "ig_1",
+				provider_metadata: { item_id: "ig_1" },
+				tool: ServerTool.IMAGE_GENERATION,
+				phase: "completed",
+				result: { b64Json: result, revisedPrompt: "A blue owl" },
+			},
+		])
+		expect(JSON.stringify(chunks)).not.to.contain("secret-preview")
+	})
+
 	it("classifies official Responses cache write tokens separately from uncached input", async () => {
 		const calculateCost = vi.fn(async () => 0)
 		const chunks = await collectChunks(

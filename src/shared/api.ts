@@ -62,6 +62,10 @@ export interface ApiConfiguration {
 	actModeProfileId?: string
 	/** Legacy/display Profile name for act mode. */
 	actModeProfile?: string
+	/** Stable Profile identity for image generation. */
+	imageProfileId?: string
+	/** Legacy/display Profile name for image generation. */
+	imageProfile?: string
 	/** Task-local reasoning override for plan mode. */
 	planModeReasoningOverride?: TaskReasoningOverride
 	/** Task-local reasoning override for act mode. */

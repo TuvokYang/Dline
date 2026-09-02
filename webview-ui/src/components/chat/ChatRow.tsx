@@ -10,6 +10,7 @@ import {
 	ClineSayTool,
 	COMPLETION_RESULT_CHANGES_FLAG,
 } from "@shared/ExtensionMessage"
+import { parseImageGenerationPresentation } from "@shared/image-generation"
 import type { LoadCapabilityPayload } from "@shared/load-capabilities"
 import { BooleanRequest, StringRequest } from "@shared/proto/dline/common"
 import { Mode } from "@shared/storage/types"
@@ -59,6 +60,7 @@ import { FeatureTip } from "./FeatureTip"
 import { FocusChainChangeRow } from "./FocusChainChangeRow"
 import GenerateReportRow from "./GenerateReportRow"
 import HookMessage from "./HookMessage"
+import ImageGenerationRow from "./ImageGenerationRow"
 import { KillCommandRow } from "./KillCommandRow"
 import LoadCapabilityRow from "./LoadCapabilityRow"
 import { MarkdownRow } from "./MarkdownRow"
@@ -93,6 +95,7 @@ interface ChatRowProps {
 	onHeightChange: (isTaller: boolean) => void
 	onFollowupOptionSelect?: (message: ClineMessage, option: string) => Promise<void>
 	sendMessageFromChatRow?: (text: string, images: string[], files: string[]) => void
+	onAddToInput?: (text: string) => void
 	onSetQuote: (text: string) => void
 	onCancelCommand?: () => void
 	mode?: Mode
@@ -220,6 +223,7 @@ export const ChatRowContent = memo(
 		isLast,
 		onFollowupOptionSelect,
 		sendMessageFromChatRow,
+		onAddToInput,
 		onSetQuote,
 		onCancelCommand,
 		mode,
@@ -877,6 +881,14 @@ export const ChatRowContent = memo(
 					return <WebFetchRow messageType={message.type} url={tool.path} webFetch={tool.webFetch} />
 				case "webSearch":
 					return <WebSearchRow messageType={message.type} query={tool.path} webSearch={tool.webSearch} />
+				case "generateImage": {
+					const imageGeneration = message.imageGeneration ?? parseImageGenerationPresentation(tool.imageGeneration)
+					return imageGeneration ? (
+						<ImageGenerationRow onAddToInput={onAddToInput} presentation={imageGeneration} />
+					) : (
+						<InvisibleSpacer />
+					)
+				}
 				case "useSkill":
 					return (
 						<div>

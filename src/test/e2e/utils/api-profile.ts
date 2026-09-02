@@ -3,12 +3,13 @@ import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import * as os from "node:os"
 import * as path from "node:path"
 import { allProviderModels } from "../../../core/api/providers/models"
-import { getE2EMockProviderBaseUrl } from "../fixtures/server/api"
+import { getE2EMockProviderBaseUrl, getE2EOpenAIImageBaseUrl } from "../fixtures/server/api"
 
 export const E2E_PROFILE_NAMES = {
 	mockOpenAi: "E2E OpenAI Custom Chat Mock",
 	mockOpenAiResponses: "E2E OpenAI Custom Responses Mock",
 	mockOpenAiOfficialResponses: "E2E OpenAI Official Responses Mock",
+	mockOpenAIImage: "E2E OpenAI Image Mock",
 	mockDeepSeek: "E2E DeepSeek Thinking Mock",
 	mockAnthropic: "E2E Anthropic Mock",
 	persistence: "E2E Profile Persistence",
@@ -79,6 +80,7 @@ const PROFILE_IDS = {
 	mockOpenAi: "dline-e2e-mock-openai",
 	mockOpenAiResponses: "dline-e2e-mock-openai-responses",
 	mockOpenAiOfficialResponses: "dline-e2e-mock-openai-official-responses",
+	mockOpenAIImage: "dline-e2e-mock-openai-image",
 	mockDeepSeek: "dline-e2e-mock-deepseek",
 	mockAnthropic: "dline-e2e-mock-anthropic",
 	persistence: "dline-e2e-profile-persistence",
@@ -337,6 +339,20 @@ function openAiProfile(
 	}
 }
 
+function openAIImageProfile(id: string, name: string, baseUrl: string): StoredApiProfile {
+	return {
+		id,
+		name,
+		provider: "openai",
+		baseUrl,
+		modelId: "dline-e2e-model",
+		imageModelId: "gpt-image-2",
+		usedFor: [],
+		enabled: true,
+		openai: { apiFormat: "OPENAI_CHAT" satisfies StoredApiFormat, customModelEnabled: true },
+	}
+}
+
 function deepSeekProfile(id: string, name: string, baseUrl: string): StoredApiProfile {
 	return {
 		id,
@@ -441,6 +457,9 @@ export async function prepareE2EState(options: PrepareE2EStateOptions): Promise<
 		"dline-e2e-model",
 		"OPENAI_CHAT",
 	)
+	mockProfile.imageSource = "IMAGE_GENERATION_SOURCE_INDEPENDENT"
+	mockProfile.imageProfileId = PROFILE_IDS.mockOpenAIImage
+	mockProfile.imageModelId = "gpt-image-2"
 	upsertProfile(profiles, mockProfile)
 	setApiKey(apiKeys, mockProfile, "dline-e2e-api-key")
 
@@ -464,6 +483,13 @@ export async function prepareE2EState(options: PrepareE2EStateOptions): Promise<
 	)
 	upsertProfile(profiles, mockOfficialResponsesProfile)
 	setApiKey(apiKeys, mockOfficialResponsesProfile, "dline-e2e-api-key")
+
+	const mockImageProfile = openAIImageProfile(
+		PROFILE_IDS.mockOpenAIImage,
+		E2E_PROFILE_NAMES.mockOpenAIImage,
+		getE2EOpenAIImageBaseUrl(options.mockBaseUrl),
+	)
+	apiKeys[`image:${mockImageProfile.id}`] = { apiKey: "dline-e2e-api-key", name: mockImageProfile.name }
 
 	const mockDeepSeekProfile = deepSeekProfile(
 		PROFILE_IDS.mockDeepSeek,
@@ -501,11 +527,25 @@ export async function prepareE2EState(options: PrepareE2EStateOptions): Promise<
 	const selectedProfileName = E2E_PROFILE_NAMES.mockOpenAi
 
 	await writeJson(profilesPath, profiles)
+	await writeJson(
+		path.join(settingsDir, "image_generation_profiles.json"),
+		[
+			{
+				id: mockImageProfile.id,
+				name: mockImageProfile.name,
+				provider: mockImageProfile.provider,
+				baseUrl: mockImageProfile.baseUrl,
+				enabled: true,
+				legacyNames: [],
+			},
+		],
+	)
 	await writeJson(apiKeysPath, apiKeys, 0o600)
 	await writeJson(path.join(settingsDir, "settings.json"), {
 		__settingsMigrationVersion: 1,
 		actModeProfile: selectedProfileName,
 		planModeProfile: selectedProfileName,
+		imageGenerationEnabled: false,
 		enableParallelToolCalling: true,
 	})
 	await writeJson(path.join(destinationDataDir, "globalState.json"), {

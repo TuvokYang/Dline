@@ -76,6 +76,7 @@ import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import * as NotificationHook from "@core/hooks/notification-hook"
 import { executePreCompactHookWithCleanup, HookCancellationError, HookExecution } from "@core/hooks/precompact-executor"
 import { IgnoreController } from "@core/ignore/IgnoreController"
+import { hasAvailableImageProfile } from "@core/image-generation/runtime"
 import { parseMentions } from "@core/mentions"
 import { CommandPermissionController } from "@core/permissions"
 import { summarizeTask } from "@core/prompts/contextManagement"
@@ -214,7 +215,7 @@ import {
 	ClineUserToolResultContentBlock,
 } from "@/shared/messages"
 import { ShowMessageType } from "@/shared/proto/dline/host"
-import { ApiFormat } from "@/shared/proto/dline/models/metadata"
+import { ApiFormat, ServerTool } from "@/shared/proto/dline/models/metadata"
 import { Logger } from "@/shared/services/Logger"
 import { Session } from "@/shared/services/Session"
 import {
@@ -6641,6 +6642,7 @@ export class Task {
 			subagentsEnabled: this.stateManager.getGlobalSettingsKey("subagentsEnabled"),
 			clineWebToolsEnabled: webToolsEnabled,
 			webSearchRoutingPlan,
+			imageGenerationAvailable: hasAvailableImageProfile(this.stateManager),
 			isMultiRootEnabled: multiRootEnabled,
 			workspaceRoots,
 			isSubagentRun: false,
@@ -6738,7 +6740,12 @@ export class Task {
 		}
 
 		const messages = ensureApiMessages(managedMessages, apiConversationHistory)
-		const serverTools = runtime.webSearchRoutingPlan.serverTools
+		const serverTools = Object.freeze([
+			...new Set([
+				...runtime.webSearchRoutingPlan.serverTools,
+				...requestScope.hostedImageGenerationPlan.serverTools,
+			]),
+		])
 
 		return { systemPrompt, messages, tools, serverTools, runtime, providerOutputCap: undefined }
 	}
@@ -6811,6 +6818,11 @@ export class Task {
 		} else {
 			this.toolExecutor.setWebSearchRoutingPlan(requestScope.webSearchRoutingPlan, requestScope.webToolsEnabled)
 		}
+		this.toolExecutor.setHostedImageGenerationContext({
+			enabled: serverTools.includes(ServerTool.IMAGE_GENERATION),
+			providerId: providerInfo.providerId,
+			modelId: providerInfo.model.id,
+		})
 		Logger.debug(
 			`[Task ${this.taskId}] attemptApiRequest: after systemPrompt +${Math.round(performance.now() - apiReqStart)}ms`,
 		)
@@ -8023,6 +8035,7 @@ export class Task {
 			this.stateManager.getGlobalSettingsKey("customPrompt"),
 			this.stateManager.getGlobalSettingsKey("clineWebToolsEnabled"),
 			this.explicitInstructionRegistry,
+			this.stateManager.getGlobalSettingsKey("imageGenerationEnabled"),
 		)
 		if (persistedRequest) {
 			const replayDeclaration = this.compactionRequestReplay.getDeclaration(apiIndex)

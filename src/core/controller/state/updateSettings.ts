@@ -93,6 +93,8 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 				...protoApiConfiguration,
 				planModeProfile: getStringConfigField(protoApiConfiguration, "planModeProfile"),
 				actModeProfile: getStringConfigField(protoApiConfiguration, "actModeProfile"),
+				imageProfileId: getStringConfigField(protoApiConfiguration, "imageProfileId"),
+				imageProfile: getStringConfigField(protoApiConfiguration, "imageProfile"),
 				planModeReasoningEffort: getConfigField(protoApiConfiguration, "planModeReasoningEffort") as
 					| OpenaiReasoningEffort
 					| undefined,
@@ -248,6 +250,10 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 				telemetryService.captureYoloModeToggle(controller.task.ulid, request.yoloModeToggled)
 			}
 			controller.stateManager.setGlobalState("yoloModeToggled", request.yoloModeToggled)
+		}
+
+		if (request.imageGenerationEnabled !== undefined) {
+			controller.stateManager.setGlobalState("imageGenerationEnabled", request.imageGenerationEnabled)
 		}
 
 		// Update Web Tools settings. Credentials must remain in Secret Storage.
@@ -469,7 +475,11 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 
 		// Profile-driven model selection
 		Logger.info("[updateSettings] received", {
-			fields: Object.keys(request),
+			fields,
+			planModeProfile: request.planModeProfile,
+			actModeProfile: request.actModeProfile,
+			imageProfileId: request.imageProfileId,
+			imageProfile: request.imageProfile,
 		})
 		const didChangeProfile = request.planModeProfile !== undefined || request.actModeProfile !== undefined
 		if (request.planModeProfile !== undefined) {
@@ -478,6 +488,12 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		if (request.actModeProfile !== undefined) {
 			Logger.info("[updateSettings] setting actModeProfile=", request.actModeProfile)
 			controller.stateManager.setGlobalState("actModeProfile", request.actModeProfile)
+		}
+		if (request.imageProfileId !== undefined) {
+			controller.stateManager.setGlobalState("imageProfileId", request.imageProfileId)
+		}
+		if (request.imageProfile !== undefined) {
+			controller.stateManager.setGlobalState("imageProfile", request.imageProfile)
 		}
 
 		// Synchronize profiles when unified mode is active (planActSeparateModelsSetting = false)

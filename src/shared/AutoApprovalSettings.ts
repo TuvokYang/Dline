@@ -21,6 +21,7 @@ export interface AutoApprovalSettings {
 		useBrowser: boolean // Use browser automation
 		useWeb?: boolean // Use local Web Search and Web Fetch
 		useMcp: boolean // Use MCP servers
+		generateImages?: boolean // Generate images through configured providers
 		focusChain: boolean // Auto-approve focus chain overrides
 	}
 	// Global settings
@@ -42,6 +43,7 @@ export const DEFAULT_AUTO_APPROVAL_SETTINGS: AutoApprovalSettings = {
 		useBrowser: false,
 		useWeb: false,
 		useMcp: true,
+		generateImages: false,
 		focusChain: false,
 	},
 	enableNotifications: false,

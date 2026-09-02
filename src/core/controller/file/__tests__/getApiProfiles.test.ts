@@ -5,7 +5,7 @@ import path from "node:path"
 import { ModelRegistry } from "@core/model-registry/ModelRegistry"
 import { getAllApiKeys, resetAllStores } from "@core/storage/secrets"
 import { EmptyRequest } from "@shared/proto/dline/common"
-import { ApiProfile } from "@shared/proto/dline/profile"
+import { ApiProfile, ImageGenerationSource } from "@shared/proto/dline/profile"
 import PROVIDERS from "@shared/providers/providers.json"
 import { Logger } from "@shared/services/Logger"
 import { expect } from "chai"
@@ -141,6 +141,23 @@ describe("getApiProfiles", () => {
 		]) as Array<Record<string, unknown>>
 
 		expect(stored[0].enabled).to.equal(false)
+	})
+
+	it("clears local image bindings when a Profile selects Hosted", () => {
+		const profile = normalizeApiProfile({
+			id: "hosted-openai",
+			name: "Hosted OpenAI",
+			provider: "openai",
+			modelId: "gpt-5.4-mini",
+			usedFor: ["act"],
+			imageSource: "IMAGE_GENERATION_SOURCE_HOSTED",
+			imageProfileId: "stale-independent-profile",
+			imageModelId: "gpt-image-2",
+		})
+
+		expect(profile.imageSource).to.equal(ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED)
+		expect(profile.imageProfileId).to.equal(undefined)
+		expect(profile.imageModelId).to.equal(undefined)
 	})
 
 	it("persists historical Profile names for name-only Task migration", () => {
@@ -815,6 +832,94 @@ describe("getApiProfiles", () => {
 		expect(response.profiles[0].modelId).to.equal("registry-default-model")
 		const storedProfiles = JSON.parse(await fs.readFile(storedProfilesPath, "utf8"))
 		expect(storedProfiles[0].modelId).to.equal("registry-default-model")
+	})
+
+	it("removes legacy Image uses and fills Current image defaults independently of Profile uses", async () => {
+		const providersDir = path.join(process.env.DLINE_HOME_DIR!, "providers")
+		const settingsDir = path.join(process.env.DLINE_DIR!, "data", "settings")
+		const storedProfilesPath = path.join(settingsDir, "api_profiles.json")
+		await fs.mkdir(providersDir, { recursive: true })
+		await fs.mkdir(settingsDir, { recursive: true })
+		await fs.writeFile(
+			path.join(providersDir, "openai.json"),
+			JSON.stringify({
+				provider: "openai",
+				providerName: "OpenAI",
+				billingMode: "token",
+				defaultModelId: "gpt-chat",
+				models: { "gpt-chat": { id: "gpt-chat" } },
+				defaultImageModelId: "gpt-image-2",
+				imageModels: { "gpt-image-2": { id: "gpt-image-2" } },
+			}),
+			"utf8",
+		)
+		await fs.writeFile(
+			storedProfilesPath,
+			JSON.stringify([
+				{
+					id: "explicit-image-profile",
+					name: "OpenAI explicit image",
+					provider: "openai",
+					modelId: "gpt-chat",
+					imageModelId: "custom-image-model",
+					usedFor: ["act", "image"],
+					enabled: true,
+				},
+				{
+					id: "default-image-profile",
+					name: "OpenAI default image",
+					provider: "openai",
+					modelId: "gpt-chat",
+					imageModelId: "",
+					usedFor: ["plan", "image"],
+					enabled: true,
+				},
+				{
+					id: "legacy-profile",
+					name: "OpenAI legacy",
+					provider: "openai",
+					modelId: "gpt-chat",
+					usedFor: ["act", "plan", "subagents"],
+					enabled: true,
+				},
+			]),
+			"utf8",
+		)
+		const setGlobalState = vi.fn()
+		const controller = {
+			stateManager: {
+				getApiConfiguration: () => ({}),
+				setGlobalState,
+				flushPendingState: vi.fn().mockResolvedValue(undefined),
+			},
+			postStateToWebview: vi.fn(),
+		} as any
+
+		const response = await getApiProfiles(controller, EmptyRequest.create({}))
+		const profiles = response.profiles as unknown as Array<{
+			id: string
+			modelId: string
+			imageModelId?: string
+			usedFor: string[]
+		}>
+
+		expect(profiles.find((profile) => profile.id === "explicit-image-profile")?.imageModelId).to.equal("custom-image-model")
+		expect(profiles.find((profile) => profile.id === "default-image-profile")?.imageModelId).to.equal("gpt-image-2")
+		expect(profiles.find((profile) => profile.id === "default-image-profile")?.modelId).to.equal("gpt-chat")
+		expect(profiles.find((profile) => profile.id === "explicit-image-profile")?.usedFor).to.deep.equal(["act"])
+		expect(profiles.find((profile) => profile.id === "default-image-profile")?.usedFor).to.deep.equal(["plan"])
+		expect(profiles.find((profile) => profile.id === "legacy-profile")?.imageModelId).to.equal("gpt-image-2")
+		expect(profiles.find((profile) => profile.id === "legacy-profile")?.usedFor).to.deep.equal(["act", "plan", "subagents"])
+		expect(setGlobalState.mock.calls.some(([key]) => key === "imageProfileId" || key === "imageProfile")).to.equal(false)
+
+		const stored = JSON.parse(await fs.readFile(storedProfilesPath, "utf8"))
+		expect(stored.find((profile: { id: string }) => profile.id === "explicit-image-profile").imageModelId).to.equal(
+			"custom-image-model",
+		)
+		expect(stored.find((profile: { id: string }) => profile.id === "default-image-profile").imageModelId).to.equal(
+			"gpt-image-2",
+		)
+		expect(stored.find((profile: { id: string }) => profile.id === "legacy-profile").imageModelId).to.equal("gpt-image-2")
 	})
 
 	it("rejects an unreadable profile file instead of returning an empty list", async () => {

@@ -365,7 +365,11 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		}
 	}, [scrolledPastUserMessageRowOffset, scrollToRowOffset])
 
-	const { expandedRows, setActiveQuote } = chatState
+	const { expandedRows, setActiveQuote, setInputValue } = chatState
+	const addToInput = useCallback(
+		(text: string) => setInputValue((current) => (current ? `${current}\n${text}\n` : `${text}\n`)),
+		[setInputValue],
+	)
 
 	const lastVisibleRow = useMemo(() => visibleGroupedMessages.at(-1), [visibleGroupedMessages])
 
@@ -421,6 +425,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 			expandedRows,
 			toggleRowExpansion,
 			handleRowHeightChange,
+			addToInput,
 			setActiveQuote,
 			onFollowupOptionSelect,
 			messageHandlers,
@@ -441,6 +446,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		expandedRows,
 		toggleRowExpansion,
 		handleRowHeightChange,
+		addToInput,
 		setActiveQuote,
 		onFollowupOptionSelect,
 		messageHandlers,

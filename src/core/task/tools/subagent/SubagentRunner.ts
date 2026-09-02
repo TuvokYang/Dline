@@ -608,6 +608,7 @@ export class SubagentRunner {
 				disableTools: Object.values(ClineDefaultTool).filter((tool) => !allowedTools.has(tool)),
 				clineWebToolsEnabled: webToolsEnabled,
 				webSearchRoutingPlan,
+				imageGenerationAvailable: this.baseConfig.services.imageGenerationService.hasAvailableProfile(),
 			}
 
 			const generated = await getSystemPrompt(context)

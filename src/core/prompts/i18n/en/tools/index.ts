@@ -10,6 +10,7 @@ import browserAction from "./browserAction"
 import executeCommand from "./executeCommand"
 import findReferences from "./findReferences"
 import generateExplanation from "./generateExplanation"
+import generateImage from "./generateImage"
 import generateReport from "./generateReport"
 import killCommand from "./killCommand"
 import listCodeDefinitionNames from "./listCodeDefinitionNames"
@@ -57,6 +58,7 @@ export const toolPromptModules = [
 		errorPrefix: createRuntimeContract("ERROR"),
 	}),
 	defineLegacyModule("generateExplanation", "tools", generateExplanation),
+	defineLegacyModule("generateImage", "tools", generateImage),
 	defineLegacyModule("generateReport", "tools", generateReport),
 	defineLegacyModule("listCodeDefinitionNames", "tools", listCodeDefinitionNames, {
 		pathInstruction: createRuntimeContract("CWD", "MULTI_ROOT_HINT"),

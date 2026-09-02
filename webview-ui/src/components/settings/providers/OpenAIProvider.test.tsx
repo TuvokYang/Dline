@@ -42,6 +42,11 @@ vi.mock("./useProviderModels", () => ({
 		models: { "gpt-multi": multiFormatModel, "gpt-custom": registryModel },
 		defaultModelId: "gpt-multi",
 		modelInfoSaneDefaults: multiFormatModel,
+		imageModels: {
+			"gpt-image-2": { id: "gpt-image-2", name: "GPT Image 2" },
+			"gpt-image-custom": { id: "gpt-image-custom", name: "Custom Image" },
+		},
+		defaultImageModelId: "gpt-image-2",
 		loading: false,
 	}),
 }))
@@ -213,6 +218,20 @@ describe("OpenAIProvider", () => {
 		expect(onUpdate).toHaveBeenCalledWith({
 			openai: expect.objectContaining({ apiFormat: ApiFormat.OPENAI_CHAT }),
 		})
+	})
+
+	it("leaves image source and model selection to the API Profile card", () => {
+		const profile = {
+			id: "openai-images",
+			provider: "openai",
+			modelId: "gpt-multi",
+			imageModelId: "gpt-image-2",
+			usedFor: ["act", "image"],
+			openai: OpenAiProviderConfig.create({ customModelEnabled: false }),
+		} as unknown as ApiProfile
+
+		render(<OpenAIProvider onUpdate={vi.fn()} profile={profile} showModelOptions={true} />)
+		expect(screen.queryByRole("combobox", { name: "Image model" })).not.toBeInTheDocument()
 	})
 
 	it("preserves a legacy compatible profile as custom configuration", () => {

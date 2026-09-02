@@ -48,6 +48,7 @@ message AutoApprovalActions {
   optional bool use_mcp = 8;
   optional bool focus_chain = 9;
   optional bool use_web = 10;
+  optional bool generate_images = 11;
 }
 
 // Auto approval settings for task execution
@@ -220,6 +221,9 @@ message Settings {
   optional string task_windsurf_rules_toggles = 233;
   optional string task_agents_rules_toggles = 234;
   optional string task_mcp_toggles = 235;
+  optional string image_profile = 236;
+  optional bool image_generation_enabled = 237;
+  optional string image_profile_id = 238;
 }
 
 // Account usage quota for rate-limited providers (e.g., Codex, Copilot)
@@ -472,6 +476,9 @@ message UpdateSettingsRequest {
   optional bool mcp_enabled = 55;
   optional int32 auto_condense_min_reserve_tokens = 56;
   optional int32 auto_condense_max_reserve_tokens = 57;
+  optional string image_profile = 58;
+  optional bool image_generation_enabled = 59;
+  optional string image_profile_id = 60;
 }
 
 message UpdateTerminalConnectionTimeoutRequest {

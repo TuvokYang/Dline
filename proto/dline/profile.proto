@@ -31,6 +31,20 @@ import "dline/provider/fireworks.proto";
 import "dline/provider/openai_codex.proto";
 import "dline/provider/dify.proto";
 
+enum ImageGenerationSource {
+  IMAGE_GENERATION_SOURCE_UNSPECIFIED = 0;
+  IMAGE_GENERATION_SOURCE_CURRENT = 1;
+  IMAGE_GENERATION_SOURCE_INDEPENDENT = 2;
+  IMAGE_GENERATION_SOURCE_HOSTED = 3;
+}
+
+/** Common safety and cost limits for image generation through one profile. */
+message ImageGenerationProfileSettings {
+  optional double task_budget_usd = 1;
+  optional int64 request_timeout_ms = 2;
+  optional uint32 max_concurrent_requests = 3;
+}
+
 /** A configured provider+model combination (ApiProfile). */
 message ApiProfile {
   string id = 1;
@@ -49,6 +63,10 @@ message ApiProfile {
   // Web search routing policy for this provider profile. Omitted legacy values
   // resolve to WEB_SEARCH_MODE_AUTO.
   optional dline.provider.WebSearchMode web_search_mode = 90;
+  optional string image_model_id = 92;
+  optional ImageGenerationProfileSettings image_generation = 93;
+  optional ImageGenerationSource image_source = 94;
+  optional string image_profile_id = 95;
 
   oneof provider_config {
     dline.provider.AnthropicProviderConfig anthropic = 10;
@@ -95,6 +113,26 @@ message ApiProfile {
     dline.provider.BaseProviderConfig wandb = 55;
     dline.provider.DifyProviderConfig dify = 56;
   }
+}
+
+/** Independent image endpoint credentials selected by an API Profile. */
+message ImageGenerationProfile {
+  string id = 1;
+  string name = 2;
+  string provider = 3;
+  string api_key = 4;
+  optional string base_url = 5;
+  bool enabled = 6;
+  repeated string legacy_names = 7;
+}
+
+message ImageGenerationProfilesResponse {
+  repeated ImageGenerationProfile profiles = 1;
+}
+
+message UpdateImageGenerationProfilesRequest {
+  repeated ImageGenerationProfile profiles = 1;
+  repeated string clear_api_key_profile_ids = 2;
 }
 
 /** Response for getApiProfiles RPC. */

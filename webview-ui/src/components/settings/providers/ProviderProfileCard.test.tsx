@@ -1,14 +1,51 @@
-import { ApiProfile } from "@shared/proto/dline/profile"
+import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
+import { ApiProfile, ImageGenerationSource, type ImageGenerationProfile } from "@shared/proto/dline/profile"
 import { AnthropicProviderConfig } from "@shared/proto/dline/provider/anthropic"
 import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
 import { fireEvent, render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import ProviderProfileCard from "./ProviderProfileCard"
 
-vi.mock("@/services/grpc-client", () => ({
-	ModelsServiceClient: {
-		getAvailableModels: vi.fn().mockResolvedValue({ providers: [] }),
+const providerCatalog = vi.hoisted(() => ({
+	anthropic: {
+		defaultModelId: "claude-chat",
+		defaultImageModelId: "",
+		models: { "claude-chat": { id: "claude-chat", name: "Claude Chat" } },
+		imageModels: {},
 	},
+	gemini: {
+		defaultModelId: "gemini-chat",
+		defaultImageModelId: "gemini-3.1-flash-image",
+		models: { "gemini-chat": { id: "gemini-chat", name: "Gemini Chat" } },
+		imageModels: {
+			"gemini-3.1-flash-image": {
+				id: "gemini-3.1-flash-image",
+				name: "Nano Banana 2",
+			},
+		},
+	},
+	openai: {
+		defaultModelId: "model-a",
+		defaultImageModelId: "gpt-image-2",
+		models: { "model-a": { id: "model-a", name: "Model A" } },
+		imageModels: { "gpt-image-2": { id: "gpt-image-2", name: "GPT Image 2" } },
+	},
+}))
+
+vi.mock("./useProviderModels", () => ({
+	getCachedProviderDefaultImageModelId: (providerId: keyof typeof providerCatalog) =>
+		providerCatalog[providerId]?.defaultImageModelId ?? "",
+	getCachedProviderDefaultModelId: (providerId: keyof typeof providerCatalog) =>
+		providerCatalog[providerId]?.defaultModelId ?? "",
+	useProviderModels: (providerId: keyof typeof providerCatalog) => ({
+		...(providerCatalog[providerId] ?? {
+			defaultModelId: "",
+			defaultImageModelId: "",
+			models: {},
+			imageModels: {},
+		}),
+		loading: false,
+	}),
 }))
 
 vi.mock("./ProviderProfileEditor", () => ({
@@ -17,6 +54,7 @@ vi.mock("./ProviderProfileEditor", () => ({
 
 const providerOptions = [
 	{ value: "openai", label: "OpenAI" },
+	{ value: "gemini", label: "Google Gemini" },
 	{ value: "anthropic", label: "Anthropic" },
 ]
 
@@ -227,5 +265,259 @@ describe("ProviderProfileCard", () => {
 		)
 
 		expect(screen.queryByRole("combobox", { name: "Web Search mode" })).not.toBeInTheDocument()
+	})
+
+	it("shows image configuration only when the global feature is enabled", () => {
+		const profile = buildProfile()
+		const { rerender } = render(
+			<ProviderProfileCard
+				currentMode="act"
+				editMode={false}
+				imageGenerationEnabled={false}
+				isExpanded={true}
+				onDelete={vi.fn()}
+				onToggleExpand={vi.fn()}
+				onUpdate={vi.fn()}
+				profile={profile}
+				providerOptions={providerOptions}
+			/>,
+		)
+		expect(screen.queryByRole("combobox", { name: "Image source" })).not.toBeInTheDocument()
+
+		rerender(
+			<ProviderProfileCard
+				currentMode="act"
+				editMode={false}
+				imageGenerationEnabled={true}
+				isExpanded={true}
+				onDelete={vi.fn()}
+				onToggleExpand={vi.fn()}
+				onUpdate={vi.fn()}
+				profile={profile}
+				providerOptions={providerOptions}
+			/>,
+		)
+		expect(screen.getByRole("combobox", { name: "Image source" })).toHaveValue(
+			String(ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT),
+		)
+		expect(screen.getByRole("combobox", { name: "Image model" })).toHaveValue("gpt-image-2")
+		expect(screen.queryByRole("checkbox", { name: "Image" })).not.toBeInTheDocument()
+	})
+
+	it("shows Independent source controls and uses the selected Image Profile provider catalog", () => {
+		const imageProfiles = [
+			{
+				id: "independent-gemini",
+				name: "Independent Gemini",
+				provider: "gemini",
+				baseUrl: "https://images.example.test",
+				enabled: true,
+				legacyNames: [],
+			},
+		] as ImageGenerationProfile[]
+		const profile = {
+			...buildProfile(),
+			provider: "anthropic",
+			modelId: "claude-chat",
+			usedFor: ["act"],
+			imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT,
+			imageProfileId: imageProfiles[0].id,
+			imageModelId: "gemini-3.1-flash-image",
+		} as ApiProfile
+
+		render(
+			<ProviderProfileCard
+				currentMode="act"
+				editMode={false}
+				imageProfiles={imageProfiles}
+				imageGenerationEnabled={true}
+				isExpanded={true}
+				onDelete={vi.fn()}
+				onToggleExpand={vi.fn()}
+				onUpdate={vi.fn()}
+				profile={profile}
+				providerOptions={providerOptions}
+			/>,
+		)
+
+		expect(screen.queryByRole("checkbox", { name: "Image" })).not.toBeInTheDocument()
+		expect(screen.getByRole("combobox", { name: "Image source" })).toHaveValue(
+			String(ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT),
+		)
+		expect(screen.getByRole("combobox", { name: "Image profile" })).toHaveValue("independent-gemini")
+		expect(screen.getByRole("combobox", { name: "Image model" })).toHaveValue("gemini-3.1-flash-image")
+	})
+
+	it("shows Current, Independent, and Hosted sources with API billing guidance", () => {
+		const profile = ApiProfile.create({
+			...buildProfile(),
+			usedFor: ["act"],
+			imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED,
+			modelInfo: {
+				id: "model-a",
+				apiFormats: [ApiFormat.OPENAI_RESPONSES],
+			},
+			openai: OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_RESPONSES }),
+		})
+		render(
+			<ProviderProfileCard
+				currentMode="act"
+				editMode={false}
+				imageGenerationEnabled={true}
+				isExpanded={true}
+				onDelete={vi.fn()}
+				onToggleExpand={vi.fn()}
+				onUpdate={vi.fn()}
+				profile={profile}
+				providerOptions={providerOptions}
+			/>,
+		)
+
+		const source = screen.getByRole("combobox", { name: "Image source" })
+		expect(source).toHaveValue(String(ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED))
+		expect(screen.getByRole("option", { name: "Current" })).toBeInTheDocument()
+		expect(screen.queryByRole("option", { name: "Independent" })).not.toBeInTheDocument()
+		expect(screen.getByRole("option", { name: "Hosted" })).toBeEnabled()
+		expect(screen.queryByRole("combobox", { name: "Image model" })).not.toBeInTheDocument()
+		expect(screen.getByText(/separate API Platform billing/)).toBeInTheDocument()
+		expect(screen.getByText(/ChatGPT\/GPT subscriptions are not used/)).toBeInTheDocument()
+	})
+
+	it("selects Hosted without interception and clears local image bindings", () => {
+		const onUpdate = vi.fn()
+		const profile = ApiProfile.create({
+			...buildProfile(),
+			usedFor: ["act"],
+			imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT,
+			imageModelId: "gpt-image-2",
+			modelInfo: {
+				id: "model-a",
+				apiFormats: [ApiFormat.OPENAI_RESPONSES],
+				capabilities: { tools: [ServerTool.IMAGE_GENERATION] },
+			},
+			openai: OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_RESPONSES }),
+		})
+		render(
+			<ProviderProfileCard
+				currentMode="act"
+				editMode={false}
+				imageGenerationEnabled={true}
+				isExpanded={true}
+				onDelete={vi.fn()}
+				onToggleExpand={vi.fn()}
+				onUpdate={onUpdate}
+				profile={profile}
+				providerOptions={providerOptions}
+			/>,
+		)
+
+		fireEvent.change(screen.getByRole("combobox", { name: "Image source" }), {
+			target: { value: String(ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED) },
+		})
+
+		expect(onUpdate).toHaveBeenCalledWith({
+			imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED,
+			imageProfileId: undefined,
+			imageModelId: undefined,
+		})
+	})
+
+	it("hides image configuration when the global feature is disabled without mutating saved fields", () => {
+		const onUpdate = vi.fn()
+		const profile = {
+			...buildProfile(),
+			imageModelId: "gpt-image-2",
+			imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT,
+		} as ApiProfile
+		render(
+			<ProviderProfileCard
+				currentMode="act"
+				editMode={false}
+				imageGenerationEnabled={false}
+				isExpanded={true}
+				onDelete={vi.fn()}
+				onToggleExpand={vi.fn()}
+				onUpdate={onUpdate}
+				profile={profile}
+				providerOptions={providerOptions}
+			/>,
+		)
+
+		expect(screen.queryByRole("combobox", { name: "Image source" })).not.toBeInTheDocument()
+		expect(onUpdate).not.toHaveBeenCalled()
+		expect(profile).toHaveProperty("imageModelId", "gpt-image-2")
+	})
+
+	it("re-resolves both chat and image defaults when the provider changes", () => {
+		const onUpdate = vi.fn()
+		const profile = {
+			...buildProfile(),
+			imageModelId: "gpt-image-2",
+			usedFor: ["act"],
+		} as ApiProfile
+		render(
+			<ProviderProfileCard
+				currentMode="act"
+				editMode={false}
+				imageGenerationEnabled={true}
+				isExpanded={true}
+				onDelete={vi.fn()}
+				onToggleExpand={vi.fn()}
+				onUpdate={onUpdate}
+				profile={profile}
+				providerOptions={providerOptions}
+			/>,
+		)
+
+		fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), { target: { value: "gemini" } })
+
+		expect(onUpdate).toHaveBeenCalledWith(
+			expect.objectContaining({
+				provider: "gemini",
+				modelId: "gemini-chat",
+				imageModelId: "gemini-3.1-flash-image",
+			}),
+		)
+	})
+
+	it("does not render unavailable image source options", () => {
+		const profile = { ...buildProfile(), provider: "anthropic", modelId: "claude-chat" }
+		render(
+			<ProviderProfileCard
+				currentMode="act"
+				editMode={false}
+				imageGenerationEnabled={true}
+				isExpanded={true}
+				onDelete={vi.fn()}
+				onToggleExpand={vi.fn()}
+				onUpdate={vi.fn()}
+				profile={profile}
+				providerOptions={providerOptions}
+			/>,
+		)
+
+		expect(screen.queryByRole("option", { name: "Current" })).not.toBeInTheDocument()
+		expect(screen.queryByRole("option", { name: "Independent" })).not.toBeInTheDocument()
+		expect(screen.queryByRole("option", { name: "Hosted" })).not.toBeInTheDocument()
+		expect(screen.queryByRole("checkbox", { name: "Image" })).not.toBeInTheDocument()
+	})
+
+	it("does not show Image as a usage badge for a legacy persisted use", () => {
+		const profile = { ...buildProfile(), usedFor: ["act", "image"] }
+		render(
+			<ProviderProfileCard
+				currentMode="act"
+				editMode={false}
+				isExpanded={false}
+				onDelete={vi.fn()}
+				onToggleExpand={vi.fn()}
+				onUpdate={vi.fn()}
+				profile={profile}
+				providerOptions={providerOptions}
+			/>,
+		)
+
+		expect(screen.getByText("ACT")).toBeInTheDocument()
+		expect(screen.queryByText("Image")).not.toBeInTheDocument()
 	})
 })

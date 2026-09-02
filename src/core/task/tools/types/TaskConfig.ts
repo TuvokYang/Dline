@@ -5,6 +5,7 @@ import type { CompactionPassIdentity } from "@core/context/context-management/ta
 import type { FileContextTracker } from "@core/context/context-tracking/FileContextTracker"
 import type { IgnoreController } from "@core/ignore/IgnoreController"
 import type { CommandPermissionController } from "@core/permissions"
+import type { ImageGenerationService } from "@core/image-generation/ImageGenerationService"
 import type { ExplicitInstructionAuthorization, ExplicitInstructionConsumePort } from "@core/task/explicit-instructions/types"
 import type { TaskFileTracker } from "@integrations/checkpoints/TaskFileTracker"
 import type { DiffViewProvider } from "@integrations/editor/DiffViewProvider"
@@ -144,6 +145,7 @@ export interface TaskServices {
 	commandPermissionController: CommandPermissionController
 	contextManager: ContextManager
 	stateManager: StateManager
+	imageGenerationService: ImageGenerationService
 }
 
 /**

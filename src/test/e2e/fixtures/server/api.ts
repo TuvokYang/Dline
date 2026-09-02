@@ -43,6 +43,11 @@ export const E2E_MOCK_PROVIDER_ROUTES = {
 	},
 } as const
 
+export const E2E_OPENAI_IMAGE_ROUTE = {
+	basePath: "/mock/openai/images/v1",
+	endpoint: "/images/generations",
+} as const
+
 export type E2EMockProviderTarget = keyof typeof E2E_MOCK_PROVIDER_ROUTES
 export type E2EMockApiProtocol = (typeof E2E_MOCK_PROVIDER_ROUTES)[E2EMockProviderTarget]["protocol"]
 
@@ -53,6 +58,10 @@ export function getE2EMockProviderBaseUrl(baseUrl: string, target: E2EMockProvid
 export function getE2EMockProviderUrl(baseUrl: string, target: E2EMockProviderTarget): string {
 	const route = E2E_MOCK_PROVIDER_ROUTES[target]
 	return `${getE2EMockProviderBaseUrl(baseUrl, target)}${route.endpoint}`
+}
+
+export function getE2EOpenAIImageBaseUrl(baseUrl: string): string {
+	return `${baseUrl}${E2E_OPENAI_IMAGE_ROUTE.basePath}`
 }
 
 export const E2E_REGISTERED_MOCK_ENDPOINTS = {

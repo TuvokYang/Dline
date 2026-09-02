@@ -1,3 +1,4 @@
+import { ServerTool } from "@shared/proto/dline/models/metadata"
 import type { ApiProviderStreamChunk } from "../transform/stream"
 
 /** Immutable complete provider response assembled from streaming deltas. */
@@ -10,6 +11,13 @@ export class ProviderResponseAssembler {
 	private readonly chunks: ApiProviderStreamChunk[] = []
 
 	append(chunk: ApiProviderStreamChunk): void {
+		if (chunk.type === "server_tool" && chunk.tool === ServerTool.IMAGE_GENERATION) {
+			this.chunks.push({
+				...chunk,
+				...(chunk.result === undefined ? {} : { result: { redacted: "hosted_image_bytes" } }),
+			})
+			return
+		}
 		const lastIndex = this.chunks.length - 1
 		const last = this.chunks[lastIndex]
 		if (chunk.type === "text" && last?.type === "text") {

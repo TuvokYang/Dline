@@ -95,6 +95,16 @@ message ModelInfo {
   optional bool user_defined = 9;
 }
 
+/** Metadata for a dedicated image generation model. */
+message ImageModelInfo {
+  string id = 1;
+  optional string name = 2;
+  optional string description = 3;
+  optional dline.models.ImageGenerationCapabilities capabilities = 4;
+  optional dline.models.ImagePricing pricing = 5;
+  optional bool user_defined = 6;
+}
+
 /** Complete provider definition: metadata + model list. */
 message ProviderModelsConfig {
   string provider = 1;
@@ -105,6 +115,8 @@ message ProviderModelsConfig {
   optional UsageLimits usage_limits = 6;
   map<string, ModelInfo> models = 7;
   optional string default_model_id = 8;
+  map<string, ImageModelInfo> image_models = 9;
+  optional string default_image_model_id = 10;
 }
 
 /** Usage limits for subscription-based providers. */
@@ -124,6 +136,8 @@ message ProviderModelGroup {
   string provider_name = 2;
   repeated ModelInfo models = 3;
   optional string default_model_id = 4;
+  repeated ImageModelInfo image_models = 5;
+  optional string default_image_model_id = 6;
 }
 
 /** Response for getAvailableModels RPC. */

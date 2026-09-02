@@ -1,5 +1,5 @@
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
-import { ApiProfile } from "@shared/proto/dline/profile"
+import { ApiProfile, ImageGenerationSource } from "@shared/proto/dline/profile"
 import { OpenAiPromptCacheMode, OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
 import { OpenAiCodexProviderConfig } from "@shared/proto/dline/provider/openai_codex"
 import {
@@ -969,6 +969,41 @@ describe("OpenAiHandler", () => {
 			])
 			expect(request?.include).to.deep.equal(["web_search_call.results", "web_search_call.action.sources"])
 			expect(handler.supportsServerTool(ServerTool.WEB_SEARCH)).to.equal(true)
+		})
+
+		it("projects hosted image generation and removes the local generate_image declaration", async () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					modelId: "gpt-compatible-responses",
+					usedFor: ["image"],
+					imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED,
+					openai: OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_RESPONSES }),
+				}),
+				mode: "act",
+			})
+			const responsesCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				responses: { create: responsesCreate },
+			})
+
+			for await (const _chunk of handler.createMessage(
+				"system prompt",
+				[{ role: "user", content: "Generate an owl" }],
+				[
+					{
+						type: "function",
+						function: { name: "generate_image", description: "Local image", parameters: { type: "object" } },
+					},
+				],
+				{ serverTools: [ServerTool.IMAGE_GENERATION] },
+			)) {
+			}
+
+			expect(responsesCreate.mock.calls[0]?.[0]?.tools).to.deep.equal([{ type: "image_generation" }])
+			expect(handler.supportsServerTool(ServerTool.IMAGE_GENERATION)).to.equal(true)
+			expect(handler.getImageGenerationSource()).to.equal(ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED)
 		})
 
 		it("keeps local web search as a function when no hosted tool was selected", async () => {

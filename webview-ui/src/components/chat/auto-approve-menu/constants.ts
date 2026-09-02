@@ -59,6 +59,12 @@ export const ACTION_METADATA: ActionMetadata[] = [
 		icon: "codicon-server",
 	},
 	{
+		id: "generateImages",
+		label: "Generate images",
+		shortName: "Images",
+		icon: "codicon-device-camera",
+	},
+	{
 		id: "focusChain",
 		label: "Focus chain overrides",
 		shortName: "Focus Chain",
