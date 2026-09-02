@@ -7,6 +7,40 @@ import * as McpOAuthStore from "./McpOAuthStore"
 import * as OcaTokenStore from "./OcaTokenStore"
 import * as OpenAiCodexAuthStore from "./OpenAiCodexAuthStore"
 import * as ProviderSecretStore from "./ProviderSecretStore"
+
+export type {
+	OAuthProfileCatalogEntry,
+	OpenAiCodexProfileAuthGarbageCollectionResult,
+	OpenAiCodexProfileAuthGarbageCollectorOptions,
+} from "./OpenAiCodexProfileAuthGarbageCollector"
+export { OpenAiCodexProfileAuthGarbageCollector } from "./OpenAiCodexProfileAuthGarbageCollector"
+export type {
+	OAuthProfileIdentity,
+	OpenAiCodexProfileAuthMigrationOptions,
+	OpenAiCodexProfileAuthMigrationResult,
+} from "./OpenAiCodexProfileAuthMigration"
+export { OpenAiCodexProfileAuthMigration } from "./OpenAiCodexProfileAuthMigration"
+export {
+	getLegacyOpenAiCodexAuthMigrationPath,
+	getLegacyOpenAiCodexAuthPath,
+	getOpenAiCodexProfileAuthDigest,
+	getOpenAiCodexProfileAuthFileName,
+	getOpenAiCodexProfileAuthPath,
+	isOpenAiCodexProfileAuthFileName,
+	LEGACY_OPENAI_CODEX_AUTH_FILE_NAME,
+	LEGACY_OPENAI_CODEX_AUTH_MIGRATION_FILE_NAME,
+} from "./OpenAiCodexProfileAuthPath"
+export type {
+	OpenAiCodexProfileAuthReadResult,
+	OpenAiCodexProfileAuthRepositoryOptions,
+	OpenAiCodexProfileAuthSaveIfMissingResult,
+	OpenAiOAuthCredentials,
+} from "./OpenAiCodexProfileAuthRepository"
+export {
+	OpenAiCodexProfileAuthRepository,
+	parseOpenAiOAuthCredentials,
+} from "./OpenAiCodexProfileAuthRepository"
+
 import * as WandbStore from "./WandbStore"
 
 export type { ApiKeyEntry } from "./ApiKeyStore"

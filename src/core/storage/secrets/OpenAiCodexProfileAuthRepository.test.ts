@@ -1,0 +1,126 @@
+import fs from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { FileLock } from "../backend/jsonl/FileLock"
+import { getOpenAiCodexProfileAuthFileName, getOpenAiCodexProfileAuthPath } from "./OpenAiCodexProfileAuthPath"
+import {
+	OpenAiCodexProfileAuthRepository,
+	type OpenAiOAuthCredentials,
+	parseOpenAiOAuthCredentials,
+} from "./OpenAiCodexProfileAuthRepository"
+
+const credentials: OpenAiOAuthCredentials = {
+	type: "gpt-team",
+	access_token: "access-a",
+	refresh_token: "refresh-a",
+	expires: 1_900_000_000_000,
+	email: "profile@example.test",
+	accountId: "account-a",
+}
+
+describe("OpenAiCodexProfileAuthRepository", () => {
+	let root: string
+	let secretsDir: string
+	let repository: OpenAiCodexProfileAuthRepository
+
+	beforeEach(async () => {
+		root = await fs.mkdtemp(path.join(os.tmpdir(), "dline-codex-profile-auth-"))
+		secretsDir = path.join(root, "data", "secrets")
+		repository = new OpenAiCodexProfileAuthRepository({ secretsDir })
+	})
+
+	afterEach(async () => {
+		await fs.rm(root, { recursive: true, force: true })
+	})
+
+	it("derives a deterministic traversal-safe file name from the exact profile ID", () => {
+		const fileName = getOpenAiCodexProfileAuthFileName("../../profile-a")
+		const filePath = getOpenAiCodexProfileAuthPath(secretsDir, "../../profile-a")
+
+		expect(fileName).toMatch(/^openai_codex_[a-f0-9]{32}\.json$/)
+		expect(fileName).toBe("openai_codex_1ba7dff874a224231bbcf39de2baacad.json")
+		expect(path.dirname(filePath)).toBe(path.resolve(secretsDir))
+	})
+
+	it("stores two profiles in two independent atomic credential files", async () => {
+		await repository.save("profile-a", credentials)
+		await repository.save("profile-b", { ...credentials, access_token: "access-b", refresh_token: "refresh-b" })
+
+		const pathA = repository.filePath("profile-a")
+		const pathB = repository.filePath("profile-b")
+		expect(pathA).not.toBe(pathB)
+		await expect(repository.read("profile-a")).resolves.toMatchObject({
+			status: "valid",
+			credential: { access_token: "access-a" },
+		})
+		await expect(repository.read("profile-b")).resolves.toMatchObject({
+			status: "valid",
+			credential: { access_token: "access-b" },
+		})
+		expect((await fs.readdir(secretsDir)).filter((name) => name.endsWith(".tmp"))).toEqual([])
+		await expect(fs.access(path.join(root, "data", "secrets.json"))).rejects.toMatchObject({ code: "ENOENT" })
+		await expect(fs.access(path.join(secretsDir, "api_keys.json"))).rejects.toMatchObject({ code: "ENOENT" })
+	})
+
+	it.skipIf(process.platform === "win32")("writes owner-only file permissions", async () => {
+		await repository.save("profile-a", credentials)
+		const stat = await fs.stat(repository.filePath("profile-a"))
+		expect(stat.mode & 0o777).toBe(0o600)
+	})
+
+	it("accepts a missing or non-Codex type while validating required token and expiry fields", () => {
+		expect(parseOpenAiOAuthCredentials({ ...credentials, type: undefined })).toMatchObject({ access_token: "access-a" })
+		expect(parseOpenAiOAuthCredentials({ ...credentials, type: "cloud-code" })).toMatchObject({ type: "cloud-code" })
+		expect(() => parseOpenAiOAuthCredentials({ ...credentials, access_token: "" })).toThrow(/access_token/)
+		expect(() => parseOpenAiOAuthCredentials({ ...credentials, refresh_token: 42 })).toThrow(/refresh_token/)
+		expect(() => parseOpenAiOAuthCredentials({ ...credentials, expires: 123 })).toThrow(/expires/)
+	})
+
+	it("keeps unknown fields only in the secret file and never exposes them from reads", async () => {
+		await fs.mkdir(secretsDir, { recursive: true })
+		await fs.writeFile(
+			repository.filePath("profile-a"),
+			JSON.stringify({ ...credentials, provider_private_claim: "private-value" }),
+			{ mode: 0o600 },
+		)
+
+		const read = await repository.read("profile-a")
+		expect(read).toEqual({ status: "valid", credential: credentials })
+		await repository.save("profile-a", { ...credentials, access_token: "rotated" })
+		expect(JSON.parse(await fs.readFile(repository.filePath("profile-a"), "utf8"))).toMatchObject({
+			access_token: "rotated",
+			provider_private_claim: "private-value",
+		})
+	})
+
+	it("reports malformed files without deleting or replacing them", async () => {
+		await fs.mkdir(secretsDir, { recursive: true })
+		const filePath = repository.filePath("profile-a")
+		await fs.writeFile(filePath, "{malformed", "utf8")
+
+		await expect(repository.read("profile-a")).resolves.toMatchObject({ status: "malformed" })
+		expect(await fs.readFile(filePath, "utf8")).toBe("{malformed")
+	})
+
+	it("uses the shared file lock for same-profile writes", async () => {
+		await fs.mkdir(secretsDir, { recursive: true })
+		const filePath = repository.filePath("profile-a")
+		const externalLock = new FileLock()
+		await externalLock.acquire(filePath)
+		try {
+			await expect(repository.save("profile-a", credentials)).rejects.toThrow(/Failed to acquire lock/)
+		} finally {
+			await externalLock.release(filePath)
+		}
+	})
+
+	it("deletes only the requested profile credential", async () => {
+		await repository.save("profile-a", credentials)
+		await repository.save("profile-b", { ...credentials, access_token: "access-b" })
+		await repository.delete("profile-a")
+
+		await expect(repository.read("profile-a")).resolves.toEqual({ status: "missing" })
+		await expect(repository.read("profile-b")).resolves.toMatchObject({ status: "valid" })
+	})
+})
