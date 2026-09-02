@@ -2,7 +2,7 @@ import { Anthropic } from "@anthropic-ai/sdk"
 import { LiteLLMModelInfo, liteLlmDefaultModelId, liteLlmModelInfoSaneDefaults, ModelInfo } from "@shared/api"
 import { isClaudeOpusAdaptiveThinkingModel, resolveClaudeOpusAdaptiveThinking } from "@shared/utils/reasoning-support"
 import OpenAI from "openai"
-import { StateManager } from "@/core/storage/StateManager"
+import { findCatalogModel } from "@/core/model-registry/provider-model-lookup"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { createOpenAIClient, fetch } from "@/shared/net"
@@ -20,6 +20,8 @@ import { ApiStream } from "../transform/stream"
 interface LiteLlmChatCompletionCreateParams extends OpenAI.Chat.ChatCompletionCreateParamsStreaming {
 	drop_params?: boolean
 }
+
+const LITELLM_PROVIDER_ID = "litellm"
 
 export interface LiteLlmModelInfoResponse {
 	data: Array<{
@@ -397,11 +399,11 @@ export class LiteLlmHandler implements ApiHandler {
 	getModel() {
 		const modelId = this.modelId || liteLlmDefaultModelId
 
-		// Try to get model info from StateManager cache first
-		const cachedModelInfo = StateManager.get().getModelInfo("liteLlm", modelId)
+		// The discovered catalog describes the actual deployment, so it wins.
+		const catalogModelInfo = findCatalogModel(LITELLM_PROVIDER_ID, modelId)
 
-		// Fall back to provided model info or defaults if not in cache
-		const modelInfo = cachedModelInfo || this.modelInfo || liteLlmModelInfoSaneDefaults
+		// Fall back to provided model info or defaults if the catalog has no entry.
+		const modelInfo = catalogModelInfo || this.modelInfo || liteLlmModelInfoSaneDefaults
 
 		return {
 			id: modelId,

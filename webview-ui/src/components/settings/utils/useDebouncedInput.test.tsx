@@ -45,6 +45,36 @@ describe("useDebouncedInput", () => {
 		expect(onChange).not.toHaveBeenCalled()
 	})
 
+	it("keeps accepting external values after an edit round-trips through the backend", async () => {
+		const onChange = vi.fn()
+		const { result, rerender } = renderHook(({ initialValue }) => useDebouncedInput(initialValue, onChange), {
+			initialProps: { initialValue: "2" },
+		})
+
+		act(() => result.current[1]("2.5"))
+		await act(async () => vi.advanceTimersByTimeAsync(100))
+		expect(onChange).toHaveBeenCalledWith("2.5")
+
+		// The backend echoes the saved value back, which must not be mistaken for
+		// an uncommitted draft; otherwise the field detaches from external state.
+		rerender({ initialValue: "2.5" })
+		rerender({ initialValue: "7" })
+
+		expect(result.current[0]).toBe("7")
+	})
+
+	it("keeps an uncommitted draft when an unrelated external value arrives", () => {
+		const onChange = vi.fn()
+		const { result, rerender } = renderHook(({ initialValue }) => useDebouncedInput(initialValue, onChange), {
+			initialProps: { initialValue: "initial" },
+		})
+
+		act(() => result.current[1]("draft"))
+		rerender({ initialValue: "external" })
+
+		expect(result.current[0]).toBe("draft")
+	})
+
 	it("flushes a pending edit before the debounce delay", async () => {
 		const onChange = vi.fn().mockResolvedValue(undefined)
 		const { result } = renderHook(() => useDebouncedInput("initial", onChange))

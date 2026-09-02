@@ -382,7 +382,7 @@ describe("DeepSeekHandler", () => {
 					description: "Read",
 					input_schema: { type: "object" },
 				},
-				{ type: "web_search_20250305", name: "web_search" },
+				{ type: "web_search_20260318", name: "web_search", allowed_callers: ["direct"] },
 			])
 			expect(handler.supportsServerTool(ServerTool.WEB_SEARCH)).to.equal(true)
 		})

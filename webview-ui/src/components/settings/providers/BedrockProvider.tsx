@@ -201,6 +201,7 @@ export const BedrockProvider = ({ showModelOptions, isPopup, profile, onUpdate }
 			) : (
 				<>
 					<DebouncedTextField
+						ariaLabel="AWS Access Key"
 						className="w-full"
 						initialValue={awsAccessKey}
 						key="accessKey"
@@ -210,6 +211,7 @@ export const BedrockProvider = ({ showModelOptions, isPopup, profile, onUpdate }
 						<span className="font-medium">AWS Access Key</span>
 					</DebouncedTextField>
 					<DebouncedTextField
+						ariaLabel="AWS Secret Key"
 						className="w-full"
 						initialValue={awsSecretKey}
 						onChange={(value) => persistConfig("awsSecretKey", value)}
@@ -218,6 +220,7 @@ export const BedrockProvider = ({ showModelOptions, isPopup, profile, onUpdate }
 						<span className="font-medium">AWS Secret Key</span>
 					</DebouncedTextField>
 					<DebouncedTextField
+						ariaLabel="AWS Session Token"
 						className="w-full"
 						initialValue={awsSessionToken}
 						onChange={(value) => persistConfig("awsSessionToken", value)}
@@ -500,7 +503,10 @@ export const BedrockProvider = ({ showModelOptions, isPopup, profile, onUpdate }
 							label="Adaptive Thinking"
 							onReasoningEffortChange={(v) =>
 								onUpdate({
-									bedrock: { ...pc, reasoning: { effort: v, thinkingBudget: pc.reasoning?.thinkingBudget ?? 0 } },
+									bedrock: {
+										...pc,
+										reasoning: { effort: v, thinkingBudget: pc.reasoning?.thinkingBudget ?? 0 },
+									},
 								})
 							}
 							reasoningEffort={reasoningEffort}
@@ -512,7 +518,9 @@ export const BedrockProvider = ({ showModelOptions, isPopup, profile, onUpdate }
 						<ThinkingBudgetSlider
 							maxBudget={modelInfo.capabilities?.thinking?.maxBudget}
 							onThinkingBudgetTokensChange={(v) =>
-								onUpdate({ bedrock: { ...pc, reasoning: { effort: pc.reasoning?.effort ?? "", thinkingBudget: v } } })
+								onUpdate({
+									bedrock: { ...pc, reasoning: { effort: pc.reasoning?.effort ?? "", thinkingBudget: v } },
+								})
 							}
 							thinkingBudgetTokens={thinkingBudgetTokens}
 						/>

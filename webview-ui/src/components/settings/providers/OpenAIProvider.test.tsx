@@ -51,16 +51,24 @@ vi.mock("../common/ModelConfiguration", () => ({
 		defaults,
 		fields,
 		onCapabilitiesUpdate,
+		onPricingUpdate,
 	}: {
 		defaults?: ModelInfo
 		fields: { capabilities?: string[] }
 		onCapabilitiesUpdate: (updates: Partial<ModelCapabilities>) => void
+		onPricingUpdate: (updates: Partial<ModelPricing>) => void
 	}) => (
 		<>
 			<span data-testid="default-native-tools">{String(defaults?.capabilities?.supportsTools)}</span>
 			<span data-testid="capability-fields">{fields.capabilities?.join(",")}</span>
 			<button onClick={() => onCapabilitiesUpdate({ supportsImages: true })} type="button">
 				Update Images
+			</button>
+			<button onClick={() => onPricingUpdate({ inputPrice: 1.25 })} type="button">
+				Set Input Price
+			</button>
+			<button onClick={() => onPricingUpdate({ outputPrice: 2.5 })} type="button">
+				Set Output Price
 			</button>
 			{fields.capabilities?.includes("supportsTools") && (
 				<button onClick={() => onCapabilitiesUpdate({ supportsTools: true })} type="button">
@@ -77,6 +85,7 @@ vi.mock("../common/ModelInfoView", () => ({
 			<span>context:{modelInfo.capabilities?.contextWindow}</span>
 			<span>max:{modelInfo.capabilities?.maxTokens}</span>
 			<span>input:{modelInfo.pricing?.inputPrice}</span>
+			<span>output:{modelInfo.pricing?.outputPrice}</span>
 		</div>
 	),
 }))
@@ -286,11 +295,13 @@ describe("OpenAIProvider", () => {
 			},
 		})
 
+		// The profile prop has not echoed the previous click back yet, so this
+		// update must build on it instead of reverting to the rendered config.
 		fireEvent.click(screen.getByRole("button", { name: "Enable Native Tools" }))
 		expect(onUpdate).toHaveBeenCalledWith({
 			openai: {
 				...profile.openai,
-				capabilities: { maxTokens: 64_000, supportsTools: true },
+				capabilities: { maxTokens: 64_000, supportsImages: true, supportsTools: true },
 			},
 		})
 	})
@@ -325,6 +336,47 @@ describe("OpenAIProvider", () => {
 		expect(screen.getByRole("button", { name: "Remove" }).parentElement).toHaveClass("justify-end", "xs:self-end")
 	})
 
+	it("shows the configured output price instead of the registry default", () => {
+		const profile = {
+			id: "profile-1",
+			provider: "openai",
+			modelId: "gpt-custom",
+			openai: OpenAiProviderConfig.create({
+				customModelEnabled: false,
+				pricing: { inputPrice: 1.25, outputPrice: 2.5 } as ModelPricing,
+			}),
+		} as unknown as ApiProfile
+
+		render(<OpenAIProvider onUpdate={vi.fn()} profile={profile} showModelOptions={true} />)
+
+		// The registry model prices output at 2, so a stale read shows that instead.
+		expect(screen.getByText("output:2.5")).toBeInTheDocument()
+	})
+
+	it("keeps an earlier pricing edit when the next edit runs before the profile echoes back", () => {
+		const onUpdate = vi.fn()
+		const profile = {
+			id: "profile-1",
+			provider: "openai",
+			modelId: "gpt-custom",
+			openai: OpenAiProviderConfig.create({ customModelEnabled: true }),
+		} as unknown as ApiProfile
+
+		render(<OpenAIProvider onUpdate={onUpdate} profile={profile} showModelOptions={true} />)
+
+		// Each debounced price field commits on its own timer, so a second field can
+		// save before the parent re-renders with the first field's value. Both edits
+		// must survive that window.
+		fireEvent.click(screen.getByRole("button", { name: "Set Input Price" }))
+		fireEvent.click(screen.getByRole("button", { name: "Set Output Price" }))
+
+		expect(onUpdate).toHaveBeenLastCalledWith({
+			openai: expect.objectContaining({
+				pricing: expect.objectContaining({ inputPrice: 1.25, outputPrice: 2.5 }),
+			}),
+		})
+	})
+
 	it("shows the default Responses stream idle timeout and persists a positive number of seconds", () => {
 		const onUpdate = vi.fn()
 		const profile = {
@@ -357,8 +409,13 @@ describe("OpenAIProvider", () => {
 
 		expect(screen.getByTestId("thinking-efforts")).toHaveTextContent("none,minimal,low,medium,high,xhigh,max,ultra")
 		expect(screen.getByTestId("service-tier-enabled")).toHaveTextContent("true")
+
+		// Each control replaces the whole provider config, and the profile prop
+		// only echoes a save back after the backend commits it. Editing several
+		// controls in a row must therefore accumulate: rebuilding from the prop
+		// each time would silently drop every edit but the last.
 		fireEvent.click(screen.getByRole("button", { name: "Set Priority Tier" }))
-		expect(onUpdate).toHaveBeenCalledWith({
+		expect(onUpdate).toHaveBeenLastCalledWith({
 			openai: {
 				...profile.openai,
 				serviceTier: "priority",
@@ -366,17 +423,20 @@ describe("OpenAIProvider", () => {
 		})
 
 		fireEvent.click(screen.getByRole("button", { name: "Disable Service Tier" }))
-		expect(onUpdate).toHaveBeenCalledWith({
+		expect(onUpdate).toHaveBeenLastCalledWith({
 			openai: {
 				...profile.openai,
+				serviceTier: "priority",
 				serviceTierEnabled: false,
 			},
 		})
 
 		fireEvent.click(screen.getByRole("checkbox", { name: "Use explicit prompt cache controls" }))
-		expect(onUpdate).toHaveBeenCalledWith({
+		expect(onUpdate).toHaveBeenLastCalledWith({
 			openai: {
 				...profile.openai,
+				serviceTier: "priority",
+				serviceTierEnabled: false,
 				promptCacheMode: OpenAiPromptCacheMode.OPENAI_PROMPT_CACHE_MODE_EXPLICIT,
 			},
 		})
@@ -384,9 +444,12 @@ describe("OpenAIProvider", () => {
 		fireEvent.change(screen.getByRole("combobox", { name: "API Format" }), {
 			target: { value: String(ApiFormat.OPENAI_RESPONSES) },
 		})
-		expect(onUpdate).toHaveBeenCalledWith({
+		expect(onUpdate).toHaveBeenLastCalledWith({
 			openai: {
 				...profile.openai,
+				serviceTier: "priority",
+				serviceTierEnabled: false,
+				promptCacheMode: OpenAiPromptCacheMode.OPENAI_PROMPT_CACHE_MODE_EXPLICIT,
 				apiEndpoint: undefined,
 				apiFormat: ApiFormat.OPENAI_RESPONSES,
 			},

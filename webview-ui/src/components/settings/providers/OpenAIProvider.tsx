@@ -7,7 +7,7 @@ import { buildEffectiveModelInfo, mergeCapabilities, mergePricing } from "@share
 import { DEFAULT_OPENAI_RESPONSES_STREAM_IDLE_TIMEOUT_SECONDS } from "@shared/providers/openai-stream"
 import { OPENAI_COMPATIBLE_REASONING_EFFORT_OPTIONS, OPENAI_REASONING_EFFORT_OPTIONS } from "@shared/storage/types"
 import { VSCodeButton, VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
-import { useCallback, useId, useMemo, useState } from "react"
+import { useCallback, useId, useMemo } from "react"
 import { ModelsServiceClient } from "@/services/grpc-client"
 import { ApiFormatSelector } from "../common/ApiFormatSelector"
 import { ApiKeyField } from "../common/ApiKeyField"
@@ -18,11 +18,13 @@ import { ModelConfiguration } from "../common/ModelConfiguration"
 import { ModelInfoView } from "../common/ModelInfoView"
 import { ModelSelector } from "../common/ModelSelector"
 import OpenAIServiceTierSelector from "../OpenAIServiceTierSelector"
-import ThinkingControl from "../ThinkingControl"
 import { ProfileActionRow, ProfileField, ProfileNotice, ProfileSection, ProfileSectionTitle } from "../profile-ui"
+import ThinkingControl from "../ThinkingControl"
 import { getModelCompatibilityNotice } from "./modelCompatibilityNotice"
 import type { ApiProfile } from "./ProviderProfile"
 import { ProviderWebSearchSettings } from "./ProviderWebSearchSettings"
+import { useModelProbe } from "./useModelProbe"
+import { usePendingProviderConfig } from "./usePendingProviderConfig"
 import { useProviderModels } from "./useProviderModels"
 
 interface OpenAIProviderProps {
@@ -39,12 +41,34 @@ function getOpenAiConfig(profile: ApiProfile): OpenAiProviderConfig {
 }
 
 /** Unified OpenAI API-key provider for official and custom OpenAI-compatible models. */
-export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }: OpenAIProviderProps) => {
-	const pc = getOpenAiConfig(profile)
+export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate: onUpdateProfile }: OpenAIProviderProps) => {
+	// Every field below rebuilds the whole config from `pc`. Debounced inputs
+	// commit on independent timers, so without this the second commit would
+	// rebuild from a prop that has not yet received the first one.
+	// A stable reference per profile lets the hook tell renders apart.
+	const propConfig = useMemo(() => getOpenAiConfig(profile), [profile])
+	const { config: pc, latest, publish } = usePendingProviderConfig(profile.id, propConfig)
+	const onUpdate = useCallback(
+		(updates: Partial<ApiProfile>) => {
+			if (updates.openai) {
+				publish(updates.openai)
+			}
+			onUpdateProfile(updates)
+		},
+		[onUpdateProfile, publish],
+	)
+	/**
+	 * Base config for an update that replaces the whole provider config.
+	 *
+	 * Callers spread this and override the field they own. Reading the newest
+	 * published config rather than this render's prop keeps a field committed
+	 * moments earlier, whose save has not been echoed back yet, from being
+	 * rebuilt away.
+	 */
+	const configToUpdate = useCallback(() => latest(), [latest])
 	const fieldId = useId()
 	const streamIdleTimeoutId = `${fieldId}-stream-idle-timeout`
 	const { models, defaultModelId, modelInfoSaneDefaults } = useProviderModels("openai")
-	const [discoveredModelIds, setDiscoveredModelIds] = useState<string[]>([])
 	// Profiles created by the former OpenAI Compatible provider have no
 	// customModelEnabled flag. Preserve their free-form model ID after the
 	// provider consolidation instead of forcing an unknown ID into the
@@ -81,24 +105,18 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 	const hostedWebSearchAvailable =
 		modelInfo.capabilities?.tools?.includes(ServerTool.WEB_SEARCH) === true &&
 		(selectedApiFormat === ApiFormat.OPENAI_RESPONSES || selectedApiFormat === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE)
-	const customModels = useMemo<Record<string, ModelInfo>>(() => {
-		const modelIds = new Set(discoveredModelIds)
-		if (modelId) modelIds.add(modelId)
-		return Object.fromEntries(
-			Array.from(modelIds).map((id) => [id, { ...openAiModelInfoSaneDefaults, id, name: id, userDefined: true }]),
+	const probeOpenAiModels = useCallback(async () => {
+		const response = await ModelsServiceClient.refreshOpenAiModels(
+			OpenAiModelsRequest.create({ baseUrl: profile.baseUrl, apiKey: profile.apiKey }),
 		)
-	}, [discoveredModelIds, modelId])
-	const refreshCustomModels = useCallback(async () => {
-		if (!profile.baseUrl || !profile.apiKey) return
-		try {
-			const response = await ModelsServiceClient.refreshOpenAiModels(
-				OpenAiModelsRequest.create({ baseUrl: profile.baseUrl, apiKey: profile.apiKey }),
-			)
-			setDiscoveredModelIds([...new Set(response.values.filter(Boolean))])
-		} catch (error) {
-			console.error("Failed to refresh OpenAI models", error)
-		}
+		return response.values
 	}, [profile.apiKey, profile.baseUrl])
+	const { models: customModels, refresh: refreshCustomModels } = useModelProbe({
+		probe: probeOpenAiModels,
+		enabled: Boolean(profile.baseUrl && profile.apiKey),
+		selectedModelId: modelId,
+		template: openAiModelInfoSaneDefaults,
+	})
 
 	const openAiHeaders = pc.openAiHeaders ?? {}
 	const headerEntries: [string, string][] = Object.entries(openAiHeaders)
@@ -106,35 +124,37 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 	const addHeader = useCallback(() => {
 		const current = { ...openAiHeaders }
 		current[`header${Object.keys(current).length + 1}`] = ""
-		onUpdate({ openai: { ...pc, openAiHeaders: current } })
-	}, [onUpdate, openAiHeaders, pc])
+		onUpdate({ openai: { ...configToUpdate(), openAiHeaders: current } })
+	}, [configToUpdate, onUpdate, openAiHeaders])
 
 	const removeHeader = useCallback(
 		(key: string) => {
 			const { [key]: _, ...rest } = openAiHeaders
-			onUpdate({ openai: { ...pc, openAiHeaders: rest } })
+			onUpdate({ openai: { ...configToUpdate(), openAiHeaders: rest } })
 		},
-		[onUpdate, openAiHeaders, pc],
+		[configToUpdate, onUpdate, openAiHeaders],
 	)
 
 	const updateHeader = useCallback(
 		(oldKey: string, newKey: string, value: string) => {
 			const { [oldKey]: _, ...rest } = openAiHeaders
 			if (newKey) rest[newKey] = value
-			onUpdate({ openai: { ...pc, openAiHeaders: rest } })
+			onUpdate({ openai: { ...configToUpdate(), openAiHeaders: rest } })
 		},
-		[onUpdate, openAiHeaders, pc],
+		[configToUpdate, onUpdate, openAiHeaders],
 	)
 
 	const handleCapabilitiesUpdate = (updates: Partial<ModelCapabilities>) => {
-		onUpdate({ openai: { ...pc, capabilities: mergeCapabilities(pc.capabilities, updates) } })
+		const base = configToUpdate()
+		onUpdate({ openai: { ...base, capabilities: mergeCapabilities(base.capabilities, updates) } })
 	}
 
 	const handlePricingUpdate = (updates: Partial<ModelPricing>) => {
+		const base = configToUpdate()
 		onUpdate({
 			openai: {
-				...pc,
-				pricing: mergePricing(pc.pricing, updates),
+				...base,
+				pricing: mergePricing(base.pricing, updates),
 				...(updates.tiers === undefined ? {} : { pricingTiersEnabled: true }),
 			},
 		})
@@ -143,7 +163,7 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 	const handleStreamIdleTimeoutChange = (value: string) => {
 		const seconds = Number.parseInt(value, 10)
 		if (!Number.isSafeInteger(seconds) || seconds <= 0) return
-		onUpdate({ openai: { ...pc, streamIdleTimeoutSeconds: seconds } })
+		onUpdate({ openai: { ...configToUpdate(), streamIdleTimeoutSeconds: seconds } })
 	}
 
 	const handleCustomModelToggle = (checked: boolean) => {
@@ -158,7 +178,7 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 		onUpdate({
 			modelId: nextModelId,
 			openai: {
-				...pc,
+				...configToUpdate(),
 				apiEndpoint: undefined,
 				apiFormat: resolveApiFormat(selectedApiFormat, { apiFormats: nextFormats }, ApiFormat.OPENAI_CHAT),
 				customModelEnabled: checked,
@@ -171,7 +191,7 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 		onUpdate({
 			modelId: nextModelId,
 			openai: {
-				...pc,
+				...configToUpdate(),
 				apiEndpoint: undefined,
 				apiFormat: resolveApiFormat(selectedApiFormat, nextModel, ApiFormat.OPENAI_CHAT),
 			},
@@ -209,7 +229,7 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 							label="Model ID"
 							models={customModels}
 							onChange={(value) => onUpdate({ modelId: value })}
-							onOpen={() => void refreshCustomModels()}
+							onOpen={refreshCustomModels}
 							placeholder="Enter Model ID..."
 							selectedModelId={modelId}
 						/>
@@ -227,7 +247,7 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 					<ApiFormatSelector
 						apiFormats={apiFormats}
 						fallbackApiFormat={ApiFormat.OPENAI_CHAT}
-						onChange={(apiFormat) => onUpdate({ openai: { ...pc, apiEndpoint: undefined, apiFormat } })}
+						onChange={(apiFormat) => onUpdate({ openai: { ...configToUpdate(), apiEndpoint: undefined, apiFormat } })}
 						selectedApiFormat={selectedApiFormat}
 					/>
 
@@ -236,7 +256,7 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 						onChange={(event: Event | React.FormEvent<HTMLElement>) =>
 							onUpdate({
 								openai: {
-									...pc,
+									...configToUpdate(),
 									promptCacheMode: (event.target as HTMLInputElement | null)?.checked
 										? OpenAiPromptCacheMode.OPENAI_PROMPT_CACHE_MODE_EXPLICIT
 										: OpenAiPromptCacheMode.OPENAI_PROMPT_CACHE_MODE_AUTOMATIC,
@@ -267,14 +287,16 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 							{ value: "effort", label: "Reasoning Effort" },
 							{ value: "budget", label: "Thinking Budget" },
 						]}
-						onReasoningConfigUpdate={(reasoning) => onUpdate({ openai: { ...pc, reasoning } })}
+						onReasoningConfigUpdate={(reasoning) => onUpdate({ openai: { ...configToUpdate(), reasoning } })}
 						reasoningConfig={pc.reasoning}
 						showModeSelector={true}
 					/>
 
 					<OpenAIServiceTierSelector
-						onServiceTierChange={(serviceTier) => onUpdate({ openai: { ...pc, serviceTier } })}
-						onServiceTierEnabledChange={(serviceTierEnabled) => onUpdate({ openai: { ...pc, serviceTierEnabled } })}
+						onServiceTierChange={(serviceTier) => onUpdate({ openai: { ...configToUpdate(), serviceTier } })}
+						onServiceTierEnabledChange={(serviceTierEnabled) =>
+							onUpdate({ openai: { ...configToUpdate(), serviceTierEnabled } })
+						}
 						serviceTier={pc.serviceTier}
 						serviceTierEnabled={pc.serviceTierEnabled}
 					/>
@@ -354,7 +376,7 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 			<BaseUrlField
 				initialValue={pc.azureApiVersion}
 				label="Set Azure API version"
-				onChange={(value) => onUpdate({ openai: { ...pc, azureApiVersion: value } })}
+				onChange={(value) => onUpdate({ openai: { ...configToUpdate(), azureApiVersion: value } })}
 				placeholder="Default: 2024-10-01-preview"
 			/>
 
@@ -362,7 +384,10 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 				checked={pc.azureIdentity ?? false}
 				onChange={(event: Event | React.FormEvent<HTMLElement>) =>
 					onUpdate({
-						openai: { ...pc, azureIdentity: (event.target as HTMLInputElement | null)?.checked === true },
+						openai: {
+							...configToUpdate(),
+							azureIdentity: (event.target as HTMLInputElement | null)?.checked === true,
+						},
 					})
 				}>
 				Use Azure Identity Authentication
@@ -372,7 +397,10 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 				checked={pc.streamIncludeUsage ?? true}
 				onChange={(event: Event | React.FormEvent<HTMLElement>) =>
 					onUpdate({
-						openai: { ...pc, streamIncludeUsage: (event.target as HTMLInputElement | null)?.checked === true },
+						openai: {
+							...configToUpdate(),
+							streamIncludeUsage: (event.target as HTMLInputElement | null)?.checked === true,
+						},
 					})
 				}>
 				Include usage stats in stream responses

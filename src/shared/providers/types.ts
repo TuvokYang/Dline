@@ -47,4 +47,9 @@ export interface ProviderModelsConfig {
 	}
 	models: { [key: string]: ModelInfo }
 	defaultModelId?: string
+	/**
+	 * Catalogs large enough that loading them would delay startup. The registry
+	 * loads these after the blocking pass instead of during it.
+	 */
+	deferred?: boolean
 }

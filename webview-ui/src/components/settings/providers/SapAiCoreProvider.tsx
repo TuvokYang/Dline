@@ -33,6 +33,7 @@ export const SapAiCoreProvider = ({ showModelOptions, isPopup, profile, onUpdate
 			</DebouncedTextField>
 
 			<DebouncedTextField
+				ariaLabel="Client ID"
 				initialValue={(pc.clientId as string) ?? ""}
 				onChange={(value) => persistConfig("clientId", value)}
 				placeholder="Enter Client ID"
@@ -41,6 +42,7 @@ export const SapAiCoreProvider = ({ showModelOptions, isPopup, profile, onUpdate
 			</DebouncedTextField>
 
 			<DebouncedTextField
+				ariaLabel="Client Secret"
 				initialValue={(pc.clientSecret as string) ?? ""}
 				onChange={(value) => persistConfig("clientSecret", value)}
 				placeholder="Enter Client Secret"
@@ -50,6 +52,7 @@ export const SapAiCoreProvider = ({ showModelOptions, isPopup, profile, onUpdate
 			</DebouncedTextField>
 
 			<DebouncedTextField
+				ariaLabel="Token URL"
 				initialValue={(pc.tokenUrl as string) ?? ""}
 				onChange={(value) => persistConfig("tokenUrl", value)}
 				placeholder="Enter Token URL"

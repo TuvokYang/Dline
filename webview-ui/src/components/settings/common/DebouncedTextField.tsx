@@ -1,5 +1,6 @@
 import { VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
 import { useDebouncedInput } from "../utils/useDebouncedInput"
+import { useTextFieldHost } from "../utils/useTextFieldHost"
 
 /**
  * Props for the DebouncedTextField component
@@ -34,10 +35,12 @@ export const DebouncedTextField = ({
 	...otherProps
 }: DebouncedTextFieldProps) => {
 	const [localValue, setLocalValue] = useDebouncedInput(initialValue, onChange)
+	const textFieldHostProps = useTextFieldHost(ariaLabel, localValue)
 
 	return (
 		<VSCodeTextField
 			{...otherProps}
+			{...textFieldHostProps}
 			aria-label={ariaLabel}
 			className={className}
 			onInput={(e: any) => {

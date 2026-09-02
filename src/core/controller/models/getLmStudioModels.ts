@@ -1,29 +1,21 @@
 import { StringArray, type StringRequest } from "@shared/proto/dline/common"
-import { fetch } from "@/shared/net"
-import { Logger } from "@/shared/services/Logger"
+import { discoverProviderModels } from "@/core/model-registry/remote/model-refresh"
 import type { Controller } from ".."
 
+const LMSTUDIO_PROVIDER_ID = "lmstudio"
+
 /**
- * Fetches available models from LM Studio
+ * Fetches available models from LM Studio and persists them to the provider catalog.
  * @param controller The controller instance
  * @param request The request containing the base URL (optional)
- * @returns Array of model names
+ * @returns Array of model ids
  */
 export async function getLmStudioModels(_controller: Controller, request: StringRequest): Promise<StringArray> {
-	try {
-		const baseUrl = request.value || "http://localhost:1234"
-		if (!URL.canParse(baseUrl)) {
-			return StringArray.create({ values: [] })
-		}
-		const endpoint = new URL("api/v0/models", baseUrl)
-
-		const response = await fetch(endpoint.href)
-		const data = await response.json()
-		const models = data?.data?.map((m: unknown) => JSON.stringify(m)) || []
-
-		return StringArray.create({ values: models })
-	} catch (error) {
-		Logger.error("Failed to fetch LM Studio models:", error)
+	const baseUrl = request.value || undefined
+	if (baseUrl && !URL.canParse(baseUrl)) {
 		return StringArray.create({ values: [] })
 	}
+
+	const models = await discoverProviderModels(LMSTUDIO_PROVIDER_ID, { baseUrl }, { persist: true })
+	return StringArray.create({ values: Object.keys(models).sort() })
 }
