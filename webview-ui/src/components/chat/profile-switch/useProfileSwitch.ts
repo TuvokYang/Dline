@@ -34,12 +34,16 @@ function toProtoMode(mode: Mode): PlanActMode {
 export function useProfileSwitch({ profileSwitch }: UseProfileSwitchOptions): UseProfileSwitchResult {
 	const requestSwitch = useCallback(async (targetProfile: string, targetModes: Mode[]): Promise<void> => {
 		if (targetModes.length === 0) return
+		// A dropped rejection made a refused switch indistinguishable from no request,
+		// so the reason has to reach the console even when the snapshot also carries it.
 		await StateServiceClient.requestProfileSwitch(
 			ProfileSwitchRequest.create({
 				targetProfile,
 				targetModes: targetModes.map(toProtoMode),
 			}),
-		).catch(() => undefined)
+		).catch((error: unknown) => {
+			console.error("Profile switch request failed", error)
+		})
 	}, [])
 
 	const confirmSwitch = useCallback(async (operationId: string): Promise<void> => {
@@ -55,11 +59,9 @@ export function useProfileSwitch({ profileSwitch }: UseProfileSwitchOptions): Us
 	const statusText = useMemo(() => {
 		switch (profileSwitch?.phase) {
 			case "preflighting":
-				return "Checking target Profile..."
+				return "Checking target context window..."
 			case "awaiting_confirmation":
 				return "Confirmation required"
-			case "compacting":
-				return `Compacting with ${profileSwitch.targetProfile ?? "target Profile"}...`
 			case "committing":
 				return `Activating ${profileSwitch.targetProfile ?? "target Profile"}...`
 			case "failed":

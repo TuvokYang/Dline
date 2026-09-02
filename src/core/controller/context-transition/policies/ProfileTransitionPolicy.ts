@@ -1,6 +1,5 @@
-import { decideContextTransition } from "@core/context/context-management/context-transition-preflight"
 import type {
-	ContextPressureReader,
+	OccupiedContextWindowReader,
 	ProfileBindingResolver,
 	ProfileCommitPort,
 	ProfileSwitchOperation,
@@ -9,7 +8,6 @@ import type {
 import type { ProfileSwitchSnapshot } from "@shared/profile-switch"
 import type { Mode } from "@shared/storage/types"
 import type {
-	ContextTransitionCompactionRequest,
 	ContextTransitionPhase,
 	ContextTransitionPolicy,
 	ContextTransitionPreparation,
@@ -18,12 +16,19 @@ import type {
 
 export interface ProfileTransitionPolicyDeps {
 	bindings: ProfileBindingResolver
-	pressure: ContextPressureReader
+	occupied: OccupiedContextWindowReader
 	commit: ProfileCommitPort
 	getTaskId: () => string | undefined
 }
 
-/** Express Profile-specific projection and confirmation-first binding adoption. */
+/**
+ * Rebind task-local Profile handlers with at most one advisory window notice.
+ *
+ * A Profile switch never compacts and never runs a target projection: it only
+ * compares the already-occupied context window against the target window so the
+ * user can acknowledge a tight fit. Every unresolved detail degrades to a direct
+ * switch, because nothing in this policy may block the rebind.
+ */
 export class ProfileTransitionPolicy
 	implements ContextTransitionPolicy<ProfileSwitchRequest, ProfileSwitchOperation, ProfileSwitchSnapshot>
 {
@@ -56,61 +61,16 @@ export class ProfileTransitionPolicy
 		}
 		if (!targetModes.includes(activeMode)) return { kind: "direct", operation }
 
-		const sourceProfile = operation.sourceBindings[activeMode]
 		const target = this.deps.bindings.resolveTarget(input.targetProfileId, input.targetProfile, activeMode)
-		if (!sourceProfile || !target || target.contextWindow <= 0) {
-			return { kind: "rejected", error: "Unable to resolve source binding, target handler, and target context window." }
-		}
+		if (!target || target.contextWindow <= 0) return { kind: "direct", operation }
 		operation.activeTarget = target
-		operation.currentTokens = await this.deps.pressure.read(target.executionApi, activeMode, input.chatContent)
-		if (this.deps.getTaskId() !== input.taskId) {
-			return { kind: "rejected", error: "Profile switch became stale during target projection." }
-		}
-		const decision = decideContextTransition({
-			projectedUsageTokens: operation.currentTokens,
-			targetContextWindow: target.triggerTokens,
-		})
-		return decision.kind === "confirm" ? { kind: "confirm", operation } : { kind: "direct", operation }
+		operation.currentTokens = this.deps.occupied.getOccupiedTokens()
+		const doesNotFit = operation.currentTokens >= target.contextWindow
+		return doesNotFit ? { kind: "confirm", operation } : { kind: "direct", operation }
 	}
 
 	validate(operation: ProfileSwitchOperation): boolean {
 		return this.deps.getTaskId() === operation.taskId && this.deps.commit.validate(operation)
-	}
-
-	createCompactionRequest(operation: ProfileSwitchOperation): ContextTransitionCompactionRequest {
-		const target = operation.activeTarget
-		if (!target) throw new Error("Profile transition target request scope is unavailable.")
-		const adoptedProfiles: Partial<Record<Mode, string>> = {}
-		for (const mode of operation.targetModes) adoptedProfiles[mode] = target.profile
-		return {
-			operationId: operation.operationId,
-			targetApi: target.executionApi,
-			targetMode: operation.activeMode,
-			chatContent: operation.chatContent,
-			transition: {
-				kind: "profile_switch",
-				operationId: operation.operationId,
-				phase: "compacting",
-				source: {
-					mode: operation.activeMode,
-					profile: target.profile,
-				},
-				sourceProfiles: adoptedProfiles,
-				target: {
-					mode: operation.activeMode,
-					profile: target.profile,
-					contextWindow: target.contextWindow,
-				},
-				targetModes: [...operation.targetModes],
-				chatContent: operation.chatContent
-					? {
-							message: operation.chatContent.message,
-							images: [...(operation.chatContent.images ?? [])],
-							files: [...(operation.chatContent.files ?? [])],
-						}
-					: undefined,
-			},
-		}
 	}
 
 	commit(operation: ProfileSwitchOperation): Promise<void> {
@@ -143,10 +103,6 @@ export class ProfileTransitionPolicy
 
 	cancelledError(): string {
 		return "Profile switch cancelled."
-	}
-
-	compactionError(result: "cancelled" | "failed"): string {
-		return result === "cancelled" ? "Profile switch compaction cancelled." : "Profile switch compaction failed."
 	}
 
 	staleConfirmationError(): string {

@@ -2216,13 +2216,15 @@ export class Task {
 		})
 	}
 
-	/** Project the active-mode candidate through a selected Profile without adopting its binding. */
-	async projectProfileSwitchTargetUsage(targetApi: ApiHandler, targetMode: Mode, chatContent?: ChatContent): Promise<number> {
-		return this.projectContextTransitionTargetUsage(targetApi, targetMode, {
-			chatContent,
-			didSwitchFromPlan: false,
-			missingInteractionError: "Profile switch interaction block is unavailable for target projection.",
-		})
+	/**
+	 * Report the context window the live indicator already attributes to this task.
+	 *
+	 * Selecting a Profile only rebinds which handler the task uses, so its advisory
+	 * window check reads the maintained occupancy instead of rebuilding a target
+	 * request. The former projection could throw and therefore blocked the switch.
+	 */
+	getOccupiedContextTokens(): number {
+		return this.contextWindowIndicator.getSnapshot().durableContextTokens
 	}
 
 	/** Assemble one non-destructive complete target candidate for an explicit context transition. */

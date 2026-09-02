@@ -1,9 +1,6 @@
 import type { ApiHandler } from "@core/api"
-import type { ContextPressureReader, TaskCompactionPort } from "@core/controller/context-transition/types"
 import type { ChatContent } from "@shared/ChatContent"
 import type { Mode } from "@shared/storage/types"
-
-export type { ContextPressureReader, TaskCompactionPort } from "@core/controller/context-transition/types"
 
 /** Frozen target Profile handler and effective window for the active task mode. */
 export interface ResolvedProfileTarget {
@@ -16,6 +13,18 @@ export interface ResolvedProfileTarget {
 	/** Strict fitting exit target resolved from the same target scope as the actual compaction. */
 	fittingExitTarget: number
 	executionApi: ApiHandler
+}
+
+/**
+ * Report the context window the live indicator already attributes to this task.
+ *
+ * Selecting a Profile only rebinds which handler the task uses, so the advisory
+ * window check must stay a pure comparison against an already-maintained number.
+ * Rebuilding a full target request here would turn an optional hint into a
+ * mandatory, throwing precondition that blocks the switch outright.
+ */
+export interface OccupiedContextWindowReader {
+	getOccupiedTokens(): number
 }
 
 /** Resolve task-local source bindings and a detached target handler. */
@@ -40,7 +49,7 @@ export interface ProfileSwitchRequest {
 	chatContent?: ChatContent
 }
 
-/** Immutable transaction data retained through confirmation and compaction. */
+/** Immutable transaction data retained through the advisory confirmation. */
 export interface ProfileSwitchOperation {
 	operationId: string
 	taskId: string
@@ -57,8 +66,7 @@ export interface ProfileSwitchOperation {
 /** Narrow dependencies required by the Profile transaction state machine. */
 export interface ProfileSwitchDependencies {
 	bindings: ProfileBindingResolver
-	pressure: ContextPressureReader
-	compaction: TaskCompactionPort
+	occupied: OccupiedContextWindowReader
 	commit: ProfileCommitPort
 	lease: import("@core/controller/context-transition/ContextTransitionLease").ContextTransitionLease
 	postState: () => Promise<void>

@@ -979,7 +979,7 @@ export class Controller {
 		return new ModeSwitchCoordinator({ engine: this.contextTransitionEngine, policy })
 	}
 
-	/** Build the Profile-specific policy without adopting its binding during preflight. */
+	/** Build the Profile policy that rebinds handlers behind at most one advisory notice. */
 	private createProfileSwitchCoordinator(): ProfileSwitchCoordinator {
 		const policy = new ProfileTransitionPolicy({
 			bindings: {
@@ -987,9 +987,8 @@ export class Controller {
 				getBinding: (mode) => this.resolveTaskProfileName(mode),
 				resolveTarget: (profileId, profileName, mode) => this.resolveProfileTarget(profileId, profileName, mode),
 			},
-			pressure: {
-				read: (targetApi, targetMode, chatContent) =>
-					this.task?.projectProfileSwitchTargetUsage(targetApi, targetMode, chatContent) ?? Promise.resolve(0),
+			occupied: {
+				getOccupiedTokens: () => this.task?.getOccupiedContextTokens() ?? 0,
 			},
 			commit: {
 				validate: (operation) => this.validateProfileSwitch(operation),

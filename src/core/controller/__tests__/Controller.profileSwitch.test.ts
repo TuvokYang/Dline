@@ -43,10 +43,10 @@ describe("Controller Profile switch integration", () => {
 		expect(postStateToWebview).toHaveBeenCalledWith({ immediate: true })
 		expect(request).not.toHaveBeenCalled()
 	})
-	it("uses the captured draft for target projection and target-Profile compaction", async () => {
+	it("confirms against the occupied context window and adopts the target without compacting", async () => {
 		const targetApi = { getModel: vi.fn() } as unknown as ApiHandler
 		const draft = { message: "keep this draft", images: ["image"], files: ["file"] }
-		const projectProfileSwitchTargetUsage = vi.fn(async () => 128_001)
+		const getOccupiedContextTokens = vi.fn(() => 128_001)
 		const compact = vi.fn(async () => "completed" as const)
 		const release = vi.fn()
 		const commitProfileBindings = vi.fn(async () => undefined)
@@ -54,7 +54,7 @@ describe("Controller Profile switch integration", () => {
 			task: {
 				taskId: "task-1",
 				getMode: () => "act" as const,
-				projectProfileSwitchTargetUsage,
+				getOccupiedContextTokens,
 				commitProfileBindings,
 			},
 			contextTransitionEngine: new ContextTransitionEngine({
@@ -94,27 +94,14 @@ describe("Controller Profile switch integration", () => {
 		})
 
 		expect(request).toEqual({ status: "confirmation_required", operationId: "profile-operation-1" })
-		expect(projectProfileSwitchTargetUsage).toHaveBeenCalledWith(targetApi, "act", draft)
+		expect(getOccupiedContextTokens).toHaveBeenCalledOnce()
 
 		await expect(coordinator.confirm("profile-operation-1")).resolves.toEqual({
 			status: "switched",
 			operationId: "profile-operation-1",
 		})
-		expect(compact).toHaveBeenCalledWith({
-			trigger: "profile_switch",
-			operationId: "profile-operation-1",
-			targetApi: targetApi,
-			targetMode: "act",
-			chatContent: draft,
-			transition: expect.objectContaining({
-				kind: "profile_switch",
-				chatContent: draft,
-				source: { mode: "act", profile: "target-profile" },
-				target: { mode: "act", profile: "target-profile", contextWindow: 128_000 },
-			}),
-		})
+		expect(compact).not.toHaveBeenCalled()
+		expect(release).not.toHaveBeenCalled()
 		expect(commitProfileBindings).toHaveBeenCalledWith({ profileId: "target-id", profileName: "target-profile" }, ["act"])
-		expect(commitProfileBindings.mock.invocationCallOrder[0]).toBeLessThan(compact.mock.invocationCallOrder[0])
-		expect(release).toHaveBeenCalledWith("profile-operation-1")
 	})
 })

@@ -71,22 +71,23 @@ export function ContextTransitionDialog({ state, onCancel, onConfirm, onRetry }:
 					<AlertDialogTitle>
 						<AlertTriangle className="h-5 w-5 text-(--vscode-errorForeground)" />
 						{isFailure
-							? isProfile && state.targetAdopted
-								? "Context compaction not completed"
-								: "Switch not completed"
-							: "Compact context before switching?"}
+							? "Switch not completed"
+							: isProfile
+								? "Switch to a smaller context window?"
+								: "Compact context before switching?"}
 					</AlertDialogTitle>
 					<AlertDialogDescription>
 						{isFailure ? (
 							isProfile && state.targetAdopted ? (
-								<>{targetLabel} remains active. Retry compaction or choose another Profile.</>
+								<>{targetLabel} remains active.</>
 							) : (
 								<>{sourceLabel} remains active. The target settings were not adopted.</>
 							)
 						) : isProfile ? (
 							<>
-								The target context window cannot safely hold the complete candidate. {targetLabel} will be
-								activated first, then context compaction will run with that Profile.
+								The context already in use does not fit inside the {targetLabel} context window. Switching only
+								rebinds the handler; nothing is compacted now, and ordinary compaction still runs later while the
+								task continues.
 							</>
 						) : (
 							<>
@@ -110,7 +111,7 @@ export function ContextTransitionDialog({ state, onCancel, onConfirm, onRetry }:
 					</span>
 					{state.currentTokens !== undefined && (
 						<>
-							<span className="text-[#a1a1aa]">Complete candidate</span>
+							<span className="text-[#a1a1aa]">{isProfile ? "Context in use" : "Complete candidate"}</span>
 							<span>{formatCount(state.currentTokens)} tokens</span>
 						</>
 					)}
@@ -143,7 +144,9 @@ export function ContextTransitionDialog({ state, onCancel, onConfirm, onRetry }:
 					) : (
 						<>
 							<AlertDialogCancel onClick={() => onCancel(operationId)}>Cancel</AlertDialogCancel>
-							<AlertDialogAction onClick={() => onConfirm(operationId)}>Compact & Switch</AlertDialogAction>
+							<AlertDialogAction onClick={() => onConfirm(operationId)}>
+								{isProfile ? "Switch" : "Compact & Switch"}
+							</AlertDialogAction>
 						</>
 					)}
 				</AlertDialogFooter>
