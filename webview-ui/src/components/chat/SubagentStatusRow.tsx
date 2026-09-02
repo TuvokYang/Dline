@@ -404,11 +404,6 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 							isPromptConstructionRow && message.partial === true && index === data.items.length - 1
 						const showToolsSection = !isStreamingPromptUnderConstruction && toolSteps.length > 0
 						const showOutputSection = !isStreamingPromptUnderConstruction && hasOutput
-						const expandedScrollableSectionCount =
-							Number(taskExpanded) +
-							Number(showToolsSection && toolsExpanded) +
-							Number(showOutputSection && outputExpanded)
-						const shareAvailableHeight = expandedScrollableSectionCount > 1
 						const isBackground = entry.background === true
 						const ExecutionModeIcon = isBackground ? SendToBackIcon : BringToFrontIcon
 						const executionModeLabel = isBackground ? "Background" : "Foreground"
@@ -433,9 +428,7 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 						const retryKey = `retry:${entry.jobId ?? ""}`
 						return (
 							<div
-								className={`flex max-h-[30vh] flex-col overflow-hidden rounded-xs border border-editor-group-border ${
-									!isItemCollapsed && shareAvailableHeight ? "h-[30vh]" : ""
-								}`}
+								className="flex max-h-[30vh] flex-col overflow-hidden rounded-xs border border-editor-group-border"
 								data-testid="subagent-item"
 								key={itemKey}
 								style={{ backgroundColor: "var(--vscode-editor-background)" }}>
@@ -522,14 +515,13 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 								</div>
 								{!isItemCollapsed && (
 									<div
-										className="flex min-h-0 flex-1 flex-col overflow-hidden px-2 pb-1.5"
+										className="flex min-h-0 flex-[0_1_auto] flex-col overflow-hidden px-2 pb-1.5"
 										data-testid="subagent-item-body">
 										<SubagentWorkSection
 											ariaLabel={`${taskExpanded ? "Collapse" : "Expand"} subagent task`}
 											expanded={taskExpanded}
 											onToggle={() => toggleSection(itemKey, "task")}
 											scrollTestId="subagent-task-scroll"
-											shareAvailableHeight={shareAvailableHeight}
 											title="Task">
 											<div className="min-w-0 max-w-full space-y-1.5">
 												{hasStructuredPrompt ? (
@@ -556,7 +548,6 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 												expanded={toolsExpanded}
 												onToggle={() => toggleSection(itemKey, "tools")}
 												scrollTestId="subagent-tools-scroll"
-												shareAvailableHeight={shareAvailableHeight}
 												title={`Tools (${toolSteps.length})`}>
 												<SubagentToolTimeline
 													compact
@@ -573,7 +564,6 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 												expanded={outputExpanded}
 												onToggle={() => toggleSection(itemKey, "output")}
 												scrollTestId="subagent-output-scroll"
-												shareAvailableHeight={shareAvailableHeight}
 												title="Output">
 												<SubagentRetryTimeline attempts={retryAttempts} />
 												{entry.result && entry.status === "completed" && (

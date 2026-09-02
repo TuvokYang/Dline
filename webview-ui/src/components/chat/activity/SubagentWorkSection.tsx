@@ -11,7 +11,6 @@ interface SubagentWorkSectionProps {
 	children: ReactNode
 	contentClassName?: string
 	scrollable?: boolean
-	shareAvailableHeight: boolean
 }
 
 export function SubagentWorkSection({
@@ -23,7 +22,6 @@ export function SubagentWorkSection({
 	children,
 	contentClassName,
 	scrollable = true,
-	shareAvailableHeight,
 }: SubagentWorkSectionProps) {
 	return (
 		<section
@@ -31,7 +29,7 @@ export function SubagentWorkSection({
 				"min-w-0 border-t border-editor-group-border/50",
 				expanded && "flex min-h-[24px] flex-col overflow-hidden",
 				expanded && !scrollable && "shrink-0",
-				expanded && scrollable && (shareAvailableHeight ? "flex-1 basis-0" : "flex-[1_1_auto]"),
+				expanded && scrollable && "flex-[0_1_auto]",
 				!expanded && "shrink-0",
 			)}>
 			<button

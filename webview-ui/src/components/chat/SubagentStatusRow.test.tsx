@@ -844,7 +844,7 @@ describe("SubagentStatusRow", () => {
 		expect(metrics).not.toHaveTextContent("CN")
 	})
 
-	it("independently scrolls long Task, Tools, and Output within the bounded Work card", () => {
+	it("keeps Task, Tools, and Output content-sized within the bounded Work card", () => {
 		taskActivities.push({
 			activityId: "job-section-layout",
 			taskId: "task-1",
@@ -916,17 +916,19 @@ describe("SubagentStatusRow", () => {
 		render(<SubagentStatusRow isLast={true} message={msg} />)
 		const item = screen.getByTestId("subagent-item")
 		const body = within(item).getByTestId("subagent-item-body")
-		expect(body).toHaveClass("flex", "min-h-0", "flex-1", "flex-col", "overflow-hidden")
+		expect(body).toHaveClass("flex", "min-h-0", "flex-[0_1_auto]", "flex-col", "overflow-hidden")
 		expect(body).not.toHaveClass("overflow-y-auto")
 
 		const taskScroll = within(item).getByTestId("subagent-task-scroll")
 		const toolsScroll = within(item).getByTestId("subagent-tools-scroll")
 		const taskSection = taskScroll.parentElement
 		const toolsSection = toolsScroll.parentElement
-		expect(item).toHaveClass("max-h-[30vh]", "h-[30vh]")
-		expect(taskSection).toHaveClass("flex", "min-h-[24px]", "flex-1", "basis-0", "overflow-hidden")
-		expect(taskSection).not.toHaveClass("shrink-0")
-		expect(toolsSection).toHaveClass("flex", "min-h-[24px]", "flex-1", "basis-0", "overflow-hidden")
+		expect(item).toHaveClass("max-h-[30vh]")
+		expect(item).not.toHaveClass("h-[30vh]")
+		expect(taskSection).toHaveClass("flex", "min-h-[24px]", "flex-[0_1_auto]", "overflow-hidden")
+		expect(taskSection).not.toHaveClass("basis-0", "shrink-0")
+		expect(toolsSection).toHaveClass("flex", "min-h-[24px]", "flex-[0_1_auto]", "overflow-hidden")
+		expect(toolsSection).not.toHaveClass("basis-0", "shrink-0")
 		expect(taskScroll).toHaveClass("overflow-x-hidden", "min-h-0", "flex-1", "overflow-y-auto")
 		expect(toolsScroll).toHaveClass("min-h-0", "overflow-y-auto")
 		expect(within(item).queryByTestId("subagent-output-scroll")).not.toBeInTheDocument()
@@ -936,7 +938,7 @@ describe("SubagentStatusRow", () => {
 		const singleToolsScroll = within(item).getByTestId("subagent-tools-scroll")
 		expect(singleToolsScroll).toBeInTheDocument()
 		expect(item).not.toHaveClass("h-[30vh]")
-		expect(singleToolsScroll.parentElement).toHaveClass("flex-[1_1_auto]")
+		expect(singleToolsScroll.parentElement).toHaveClass("flex-[0_1_auto]")
 		expect(singleToolsScroll.parentElement).not.toHaveClass("basis-0")
 
 		fireEvent.click(within(item).getByRole("button", { name: "Collapse subagent tools" }))
@@ -947,10 +949,11 @@ describe("SubagentStatusRow", () => {
 		fireEvent.click(within(item).getByRole("button", { name: "Show subagent output" }))
 		const outputScroll = within(item).getByTestId("subagent-output-scroll")
 		const restoredTaskSection = within(item).getByTestId("subagent-task-scroll").parentElement
-		expect(item).toHaveClass("h-[30vh]")
-		expect(restoredTaskSection).toHaveClass("flex-1", "basis-0")
-		expect(restoredTaskSection).not.toHaveClass("shrink-0")
-		expect(outputScroll.parentElement).toHaveClass("flex-1", "basis-0")
+		expect(item).not.toHaveClass("h-[30vh]")
+		expect(restoredTaskSection).toHaveClass("flex-[0_1_auto]")
+		expect(restoredTaskSection).not.toHaveClass("basis-0", "shrink-0")
+		expect(outputScroll.parentElement).toHaveClass("flex-[0_1_auto]")
+		expect(outputScroll.parentElement).not.toHaveClass("basis-0", "shrink-0")
 		expect(outputScroll).toHaveClass("min-h-0", "overflow-y-auto")
 		expect(outputScroll).toHaveTextContent("Automatic retries")
 		expect(outputScroll).toHaveTextContent("Retry 1/5")
@@ -964,14 +967,17 @@ describe("SubagentStatusRow", () => {
 
 		fireEvent.click(within(item).getByRole("button", { name: "Expand subagent tools" }))
 		const sharedToolsScroll = within(item).getByTestId("subagent-tools-scroll")
-		expect(item).toHaveClass("h-[30vh]")
-		expect(restoredTaskSection).toHaveClass("flex-1", "basis-0")
-		expect(sharedToolsScroll.parentElement).toHaveClass("flex-1", "basis-0")
-		expect(outputScroll.parentElement).toHaveClass("flex-1", "basis-0")
+		expect(item).not.toHaveClass("h-[30vh]")
+		expect(restoredTaskSection).toHaveClass("flex-[0_1_auto]")
+		expect(sharedToolsScroll.parentElement).toHaveClass("flex-[0_1_auto]")
+		expect(outputScroll.parentElement).toHaveClass("flex-[0_1_auto]")
+		expect(restoredTaskSection).not.toHaveClass("basis-0")
+		expect(sharedToolsScroll.parentElement).not.toHaveClass("basis-0")
+		expect(outputScroll.parentElement).not.toHaveClass("basis-0")
 
 		fireEvent.click(within(item).getByRole("button", { name: "Hide subagent output" }))
 		expect(within(item).queryByTestId("subagent-output-scroll")).not.toBeInTheDocument()
-		expect(item).toHaveClass("h-[30vh]")
+		expect(item).not.toHaveClass("h-[30vh]")
 		expect(within(item).getByTestId("subagent-task-scroll")).toBeInTheDocument()
 	})
 
@@ -1123,7 +1129,7 @@ describe("SubagentStatusRow", () => {
 		expect(within(runner).getByTestId("subagent-item-body")).toHaveClass(
 			"flex",
 			"min-h-0",
-			"flex-1",
+			"flex-[0_1_auto]",
 			"flex-col",
 			"overflow-hidden",
 		)
