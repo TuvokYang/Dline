@@ -3,7 +3,7 @@ import type { BetaRawMessageStreamEvent } from "@anthropic-ai/sdk/resources/beta
 import {
 	Tool as AnthropicTool,
 	type ToolUnion as AnthropicToolUnion,
-	type WebSearchTool20260209,
+	type WebSearchTool20250305,
 } from "@anthropic-ai/sdk/resources/messages/messages"
 import type { ChatCompletionTool as OpenAITool } from "openai/resources/chat/completions"
 import { ServerTool } from "@/shared/proto/dline/models/metadata"
@@ -12,10 +12,17 @@ import { ApiStream } from "../transform/stream"
 
 type AnthropicMessagesStreamEvent = Anthropic.RawMessageStreamEvent | BetaRawMessageStreamEvent
 
+/**
+ * Basic hosted web search.
+ *
+ * The `_20260209` and later versions add dynamic filtering, which requires the
+ * `code_execution` server tool to be declared in the same request. Until that
+ * dependency is modelled, the basic version is the only one that can run standalone.
+ */
 const ANTHROPIC_WEB_SEARCH_TOOL = {
-	type: "web_search_20260209",
+	type: "web_search_20250305",
 	name: "web_search",
-} satisfies WebSearchTool20260209
+} satisfies WebSearchTool20250305
 
 function getServerToolUsage(usage: { server_tool_use?: { web_search_requests?: number } | null }) {
 	const webSearchRequests = usage.server_tool_use?.web_search_requests

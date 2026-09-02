@@ -175,7 +175,11 @@ export class AnthropicHandler implements ApiHandler {
 		const requestTools = mergeAnthropicServerTools(tools, options?.serverTools)
 		// Tools are available only when local functions or resolved hosted tools are enabled.
 		const nativeToolsOn = requestTools !== undefined && requestTools.length > 0
-		const reasoningOn = requestedThinkingEnabled && (model.info.capabilities?.supportsReasoning ?? false) && budget_tokens !== 0
+		// `tool_choice: any` only admits client tools, so forcing it would make a merged
+		// hosted server tool unreachable for the whole request.
+		const hostedServerToolsOn = (options?.serverTools?.length ?? 0) > 0
+		const reasoningOn =
+			requestedThinkingEnabled && (model.info.capabilities?.supportsReasoning ?? false) && budget_tokens !== 0
 
 		// Effective model metadata is authoritative for built-in adaptive-thinking support.
 		const modelThinking = model.info.capabilities?.thinking ?? anthropicModels[modelId]?.capabilities?.thinking
@@ -249,7 +253,13 @@ export class AnthropicHandler implements ApiHandler {
 				// - auto: allows Claude to decide whether to call any provided tools or not. This is the default value when tools are provided.
 				// - any: tells Claude that it must use one of the provided tools, but doesn't force a particular tool.
 				// Manual extended thinking cannot force tools, but adaptive thinking supports tool_choice.
-				tool_choice: localNativeToolsOn && (!thinkingEnabled || isAdaptiveThinkingModel) ? { type: "any" } : undefined,
+				tool_choice: !localNativeToolsOn
+					? undefined
+					: hostedServerToolsOn
+						? { type: "auto" }
+						: !thinkingEnabled || isAdaptiveThinkingModel
+							? { type: "any" }
+							: undefined,
 			}
 			if (outputConfig) {
 				requestBody.output_config = outputConfig
@@ -259,9 +269,7 @@ export class AnthropicHandler implements ApiHandler {
 				? await createFastModeMessage(requestBody)
 				: await client.messages.create(
 						requestBody,
-						enable1mContextWindow
-							? { headers: { "anthropic-beta": "context-1m-2025-08-07" } }
-							: undefined,
+						enable1mContextWindow ? { headers: { "anthropic-beta": "context-1m-2025-08-07" } } : undefined,
 					)
 		} else {
 			const requestBody: AnthropicMessageCreateParamsStreaming & Record<string, unknown> = {
@@ -283,9 +291,7 @@ export class AnthropicHandler implements ApiHandler {
 				? await createFastModeMessage(requestBody)
 				: await client.messages.create(
 						requestBody,
-						enable1mContextWindow
-							? { headers: { "anthropic-beta": "context-1m-2025-08-07" } }
-							: undefined,
+						enable1mContextWindow ? { headers: { "anthropic-beta": "context-1m-2025-08-07" } } : undefined,
 					)
 		}
 
