@@ -1,5 +1,6 @@
 import type { ToolUse } from "@core/assistant-message"
 import { getPrompt, renderPrompt } from "@core/prompts/i18n"
+import { resolveWorkspacePath } from "@core/workspace"
 import { getReadablePath } from "@utils/path"
 import { HostProvider } from "@/hosts/host-provider"
 import { ClineDefaultTool } from "@/shared/tools"
@@ -7,6 +8,7 @@ import type { ToolResponse } from "../../index"
 import type { IFullyManagedTool } from "../ToolExecutorCoordinator"
 import type { TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
+import { describeLanguageFailure } from "./language-tool-failure"
 
 /** Structured reference entry for JSON payload. */
 interface RefEntry {
@@ -45,16 +47,17 @@ export class FindReferencesHandler implements IFullyManagedTool {
 
 	async execute(config: TaskConfig, block: ToolUse): Promise<ToolResponse> {
 		const p = block.params as Record<string, unknown> | undefined
-		const filePath = String(p?.file_path || "")
+		const rawPath = String(p?.file_path || "")
 		const line = Number(p?.line || 0)
 		const character = Number(p?.character || 0)
+		const displayPath = getReadablePath(config.cwd, rawPath)
 		const errMsg = (msg: string) => {
 			config.callbacks
 				.say(
 					"tool",
 					JSON.stringify({
 						tool: "findReferences",
-						path: getReadablePath(config.cwd, filePath),
+						path: displayPath,
 						content: msg,
 						operationIsLocatedInWorkspace: true,
 					}),
@@ -66,14 +69,16 @@ export class FindReferencesHandler implements IFullyManagedTool {
 				.catch(() => {})
 			return msg
 		}
-		if (!filePath || !line || !character) return errMsg("Error: missing required parameters.")
+		if (!rawPath || !line || !character) return errMsg("Error: missing required parameters.")
+
+		// The LSP requires an absolute path; the model may pass a workspace-relative one.
+		const pathResult = resolveWorkspacePath(config, rawPath, "FindReferencesHandler.execute")
+		const filePath = typeof pathResult === "string" ? pathResult : pathResult.absolutePath
 
 		try {
 			const r = await HostProvider.language.findReferences({ filePath, line, character })
-			if (!r.hasLspSupport) return errMsg(getPrompt("findReferences", "noLspSupport"))
-			if (r.errorMessage) {
-				return errMsg(renderPrompt("findReferences", "errorPrefix", { ERROR: r.errorMessage }))
-			}
+			const failure = describeLanguageFailure("findReferences", r, displayPath)
+			if (failure) return errMsg(failure)
 			if (!r.references?.length) return errMsg(getPrompt("findReferences", "noReferences"))
 
 			// Build structured references array
@@ -104,7 +109,7 @@ export class FindReferencesHandler implements IFullyManagedTool {
 					"tool",
 					JSON.stringify({
 						tool: "findReferences",
-						path: getReadablePath(config.cwd, filePath),
+						path: displayPath,
 						symbolName,
 						files: uniqueFiles,
 						count: r.references.length,

@@ -14,6 +14,10 @@ const prompts: Record<string, string> = {
 	dryRunInstruction: "When true, returns a preview of all changes without actually modifying any files. Defaults to false.",
 	// Handler messages
 	noLspSupport: "Error: LSP not available. Use replace_text instead.",
+	invalidPath: "Error: file not found at '@PATH@'. Pass a path that exists in the workspace.",
+	outsideWorkspace:
+		"Error: '@PATH@' is outside the workspace, so the language server cannot rename symbols in it. Use replace_text instead.",
+	noLanguageSupport: "Error: no language server handles this file type. Use replace_text instead.",
 	missingParams: "Error: missing required parameters.",
 	noEdits: "Error: rename failed. No edits returned by LSP.",
 	failedApply: "rename: VSCode failed to apply the rename edit.",
