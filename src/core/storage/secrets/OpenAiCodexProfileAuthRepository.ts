@@ -25,6 +25,8 @@ export type OpenAiCodexProfileAuthReadResult =
 	| { status: "valid"; credential: OpenAiOAuthCredentials }
 
 export type OpenAiCodexProfileAuthSaveIfMissingResult = "saved" | "existing" | "malformed"
+export type OpenAiCodexProfileAuthReplaceResult = "saved" | "changed" | "missing" | "malformed"
+export type OpenAiCodexProfileAuthDeleteIfMatchesResult = "deleted" | "changed" | "missing" | "malformed"
 
 export interface OpenAiCodexProfileAuthRepositoryOptions {
 	secretsDir?: string
@@ -57,6 +59,17 @@ export function parseOpenAiOAuthCredentials(value: unknown): OpenAiOAuthCredenti
 		...(typeof value.email === "string" ? { email: value.email } : {}),
 		...(typeof value.accountId === "string" ? { accountId: value.accountId } : {}),
 	}
+}
+
+function credentialsEqual(left: OpenAiOAuthCredentials, right: OpenAiOAuthCredentials): boolean {
+	return (
+		left.type === right.type &&
+		left.access_token === right.access_token &&
+		left.refresh_token === right.refresh_token &&
+		left.expires === right.expires &&
+		left.email === right.email &&
+		left.accountId === right.accountId
+	)
 }
 
 function serializeCredential(credential: OpenAiOAuthCredentials): Record<string, unknown> {
@@ -144,6 +157,41 @@ export class OpenAiCodexProfileAuthRepository {
 			await fs.unlink(filePath).catch((error: NodeJS.ErrnoException) => {
 				if (error.code !== "ENOENT") throw error
 			})
+		})
+	}
+
+	async replaceIfMatches(
+		profileId: string,
+		expectedCredential: OpenAiOAuthCredentials,
+		nextCredential: OpenAiOAuthCredentials,
+	): Promise<OpenAiCodexProfileAuthReplaceResult> {
+		const expected = parseOpenAiOAuthCredentials(expectedCredential)
+		const next = parseOpenAiOAuthCredentials(nextCredential)
+		const filePath = this.filePath(profileId)
+		await fs.mkdir(this.secretsDir, { recursive: true })
+		return this.lock.withLock(filePath, async () => {
+			const current = await this.readPath(filePath)
+			if (current.status !== "valid") return current.status
+			if (!credentialsEqual(current.credential, expected)) return "changed"
+			const existing = await this.readRawObject(filePath)
+			await atomicWriteCredential(filePath, { ...preserveUnknownFields(existing), ...serializeCredential(next) })
+			return "saved"
+		})
+	}
+
+	async deleteIfMatches(
+		profileId: string,
+		expectedCredential: OpenAiOAuthCredentials,
+	): Promise<OpenAiCodexProfileAuthDeleteIfMatchesResult> {
+		const expected = parseOpenAiOAuthCredentials(expectedCredential)
+		const filePath = this.filePath(profileId)
+		await fs.mkdir(this.secretsDir, { recursive: true })
+		return this.lock.withLock(filePath, async () => {
+			const current = await this.readPath(filePath)
+			if (current.status !== "valid") return current.status
+			if (!credentialsEqual(current.credential, expected)) return "changed"
+			await fs.unlink(filePath)
+			return "deleted"
 		})
 	}
 

@@ -149,16 +149,16 @@ function validateProfile(profile: ApiProfile): ApiProfileValidity {
 }
 
 export interface ApiProfileCredentialProbes {
-	isOpenAiCodexAuthenticated?: () => Promise<boolean>
+	isOpenAiCodexAuthenticated?: (profile: ApiProfile) => Promise<boolean>
 	getOcaAuthToken?: () => Promise<string | null>
 	getClineAuthToken?: () => Promise<string | null>
 	hasQwenCodeCredentials?: (profile: ApiProfile) => Promise<boolean>
 }
 
-async function defaultOpenAiCodexProbe(): Promise<boolean> {
+async function defaultOpenAiCodexProbe(profile: ApiProfile): Promise<boolean> {
 	try {
 		const { openAiCodexOAuthManager } = await import("@integrations/openai-codex/oauth")
-		return await openAiCodexOAuthManager.isAuthenticated()
+		return await openAiCodexOAuthManager.isAuthenticated(profile.id)
 	} catch {
 		return false
 	}
@@ -211,7 +211,7 @@ export async function validateApiProfileCredentials(
 
 	switch (profile.provider) {
 		case "openai-codex": {
-			const authenticated = await (probes.isOpenAiCodexAuthenticated ?? defaultOpenAiCodexProbe)()
+			const authenticated = await (probes.isOpenAiCodexAuthenticated ?? defaultOpenAiCodexProbe)(profile)
 			return authenticated
 				? validProfile(profile)
 				: invalidProfile(

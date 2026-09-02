@@ -1,9 +1,10 @@
 import { Empty, EmptyRequest } from "@shared/proto/dline/common"
 import { ShowMessageType } from "@shared/proto/dline/host/window"
+import { readApiProfilesFresh } from "@/core/controller/file/getApiProfiles"
 import { HostProvider } from "@/hosts/host-provider"
 import { openAiCodexOAuthManager } from "@/integrations/openai-codex/oauth"
+import { OAuthFlowError } from "@/services/oauth"
 import { Logger } from "@/shared/services/Logger"
-import { openExternal } from "@/utils/env"
 import { Controller } from ".."
 
 /**
@@ -11,17 +12,17 @@ import { Controller } from ".."
  * Opens the authorization URL in the user's browser
  */
 export async function openAiCodexSignIn(controller: Controller, _: EmptyRequest): Promise<Empty> {
+	const mode = controller.stateManager.getGlobalSettingsKey("mode")
+	const configuration = controller.stateManager.getApiConfiguration()
+	const profileId = mode === "plan" ? configuration.planModeProfileId : configuration.actModeProfileId
+	const profile = profileId ? (await readApiProfilesFresh()).find((candidate) => candidate.id === profileId) : undefined
+	if (!profile || profile.provider !== "openai-codex") {
+		throw new Error("Select an OpenAI Codex profile before signing in.")
+	}
+
 	try {
-		// Start the authorization flow and get the auth URL
-		const authUrl = openAiCodexOAuthManager.startAuthorizationFlow()
-
-		// Open the auth URL in the browser
-		await openExternal(authUrl)
-
-		// Wait for the OAuth callback in the background
-		// The callback will save credentials when complete
-		openAiCodexOAuthManager
-			.waitForCallback()
+		const started = await openAiCodexOAuthManager.startAuthorizationFlow(profile.id)
+		void started.result
 			.then(async () => {
 				HostProvider.window.showMessage({
 					type: ShowMessageType.INFORMATION,
@@ -29,21 +30,19 @@ export async function openAiCodexSignIn(controller: Controller, _: EmptyRequest)
 				})
 				await controller.postStateToWebview()
 			})
-			.catch((error) => {
-				Logger.error("[openAiCodexSignIn] OAuth callback failed:", error)
-				openAiCodexOAuthManager.cancelAuthorizationFlow()
-				// Don't show notification for timeouts (user likely just abandoned)
-				const errorMessage = error instanceof Error ? error.message : String(error)
-				if (!errorMessage.includes("timed out")) {
+			.catch((error: unknown) => {
+				const code = error instanceof OAuthFlowError ? error.code : "UNKNOWN"
+				Logger.error(`[openAiCodexSignIn] OAuth flow failed (${code}).`)
+				if (code !== "FLOW_TIMED_OUT" && code !== "FLOW_CANCELLED") {
 					HostProvider.window.showMessage({
 						type: ShowMessageType.ERROR,
-						message: `OpenAI Codex sign in failed: ${errorMessage}`,
+						message: "OpenAI Codex sign in failed. Please try again.",
 					})
 				}
 			})
 	} catch (error) {
-		Logger.error("[openAiCodexSignIn] Failed to start OAuth flow:", error)
-		openAiCodexOAuthManager.cancelAuthorizationFlow()
+		const code = error instanceof OAuthFlowError ? error.code : "UNKNOWN"
+		Logger.error(`[openAiCodexSignIn] Failed to start OAuth flow (${code}).`)
 		throw error
 	}
 

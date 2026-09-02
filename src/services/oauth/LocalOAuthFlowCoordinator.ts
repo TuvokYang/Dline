@@ -13,9 +13,16 @@ import {
 	type StartOAuthFlowInput,
 } from "./types"
 
-interface CoordinatorOptions {
+export interface OAuthCredentialPersistenceInput<TCredential> {
+	flowId: string
+	profileId: string
+	credential: TCredential
+}
+
+export interface CoordinatorOptions<TCredential> {
 	lease: OAuthFlowLease
 	openExternal: (authorizationUrl: string) => Promise<void>
+	onCredential?: (input: OAuthCredentialPersistenceInput<TCredential>) => Promise<void>
 	timeoutMs?: number
 }
 
@@ -40,14 +47,14 @@ export class LocalOAuthFlowCoordinator<TCredential> {
 
 	constructor(
 		private readonly strategy: OAuthAuthorizationStrategy<TCredential>,
-		private readonly options: CoordinatorOptions,
+		private readonly options: CoordinatorOptions<TCredential>,
 	) {
 		this.timeoutMs = options.timeoutMs ?? 5 * 60_000
 	}
 
 	async startFlow(input: StartOAuthFlowInput): Promise<OAuthFlowStarted<TCredential>> {
 		if (this.pending) throw new OAuthFlowError("FLOW_ALREADY_IN_PROGRESS", "An OAuth authorization flow is already active.")
-		const flowId = randomUUID()
+		const flowId = input.flowId ?? randomUUID()
 		const lease = await this.options.lease.acquire({
 			flowId,
 			profileId: input.profileId,
@@ -149,6 +156,13 @@ export class LocalOAuthFlowCoordinator<TCredential> {
 				redirectUri: pending.redirectUri,
 			})
 			.then(async (credential) => {
+				if (this.options.onCredential) {
+					try {
+						await this.options.onCredential({ flowId: pending.flowId, profileId: pending.profileId, credential })
+					} catch {
+						throw new OAuthFlowError("CREDENTIAL_PERSIST_FAILED", "The OAuth credential could not be saved.", true)
+					}
+				}
 				await this.settleSuccess(pending, credential, waitForServer)
 				return credential
 			})

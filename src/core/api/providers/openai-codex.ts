@@ -155,13 +155,13 @@ export class OpenAiCodexHandler implements ApiHandler {
 		const timeout = setTimeout(() => controller.abort(), CODEX_USAGE_TIMEOUT_MS)
 
 		try {
-			let accessToken = await openAiCodexOAuthManager.getAccessToken()
+			let accessToken = await openAiCodexOAuthManager.getAccessToken(this.ctx.profile.id)
 			if (!accessToken) {
 				return undefined
 			}
 
 			for (let attempt = 0; attempt < 2; attempt++) {
-				const accountId = await openAiCodexOAuthManager.getAccountId()
+				const accountId = await openAiCodexOAuthManager.getAccountId(this.ctx.profile.id)
 				const response = await fetch(CODEX_USAGE_URL, {
 					headers: {
 						Authorization: `Bearer ${accessToken}`,
@@ -174,7 +174,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 				})
 
 				if (response.status === 401 && attempt === 0) {
-					const refreshed = await openAiCodexOAuthManager.forceRefreshAccessToken()
+					const refreshed = await openAiCodexOAuthManager.forceRefreshAccessToken(this.ctx.profile.id)
 					if (!refreshed) {
 						return undefined
 					}
@@ -267,7 +267,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 		this.responsesRegistry = createResponsesRegistry("openai-codex")
 
 		// Get access token from OAuth manager
-		let accessToken = await openAiCodexOAuthManager.getAccessToken()
+		let accessToken = await openAiCodexOAuthManager.getAccessToken(this.ctx.profile.id)
 		if (!accessToken) {
 			throw new Error("Not authenticated with OpenAI Codex. Please sign in using the OpenAI Codex OAuth flow in settings.")
 		}
@@ -290,7 +290,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 
 				if (attempt === 0 && isAuthFailure) {
 					// Force refresh the token for retry
-					const refreshed = await openAiCodexOAuthManager.forceRefreshAccessToken()
+					const refreshed = await openAiCodexOAuthManager.forceRefreshAccessToken(this.ctx.profile.id)
 					if (!refreshed) {
 						throw new Error(
 							"Not authenticated with OpenAI Codex. Please sign in using the OpenAI Codex OAuth flow in settings.",
@@ -383,7 +383,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 
 		try {
 			// Get ChatGPT account ID for organization subscriptions
-			const accountId = await openAiCodexOAuthManager.getAccountId()
+			const accountId = await openAiCodexOAuthManager.getAccountId(this.ctx.profile.id)
 
 			// Build Codex-specific headers
 			const codexHeaders: Record<string, string> = {
@@ -695,7 +695,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 		const url = `${CODEX_API_BASE_URL}/responses`
 
 		// Get ChatGPT account ID for organization subscriptions
-		const accountId = await openAiCodexOAuthManager.getAccountId()
+		const accountId = await openAiCodexOAuthManager.getAccountId(this.ctx.profile.id)
 
 		// Build headers with required Codex-specific fields
 		const headers: Record<string, string> = {

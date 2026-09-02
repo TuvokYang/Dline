@@ -10,6 +10,7 @@ export type OAuthFlowErrorCode =
 	| "STATE_MISMATCH"
 	| "AUTHORIZATION_DENIED"
 	| "TOKEN_EXCHANGE_FAILED"
+	| "CREDENTIAL_PERSIST_FAILED"
 	| "BROWSER_OPEN_FAILED"
 	| "FLOW_CANCELLED"
 	| "FLOW_TIMED_OUT"
@@ -44,6 +45,7 @@ export interface OAuthAuthorizationStrategy<TCredential> {
 	readonly callbackPath: string
 	buildAuthorizationUrl(input: OAuthAuthorizationInput): URL
 	exchangeAuthorizationCode(input: OAuthCodeExchangeInput): Promise<TCredential>
+	refreshCredential?(credential: TCredential): Promise<TCredential>
 }
 
 export interface OAuthFlowLeaseOwner {
@@ -68,6 +70,7 @@ export interface OAuthFlowStarted<TCredential> {
 
 export interface StartOAuthFlowInput {
 	profileId: string
+	flowId?: string
 }
 
 export interface CompleteOAuthCallbackInput {

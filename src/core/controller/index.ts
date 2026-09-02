@@ -1770,9 +1770,17 @@ export class Controller {
 		const version = ExtensionRegistryInfo.version
 		const clineConfig = ClineEnv.config()
 		const environment = clineConfig?.environment
-		// Check OpenAI Codex authentication status
+		// Deprecated global UI field: resolve only the currently selected Profile until TASK-004 removes it as a fact source.
 		const { openAiCodexOAuthManager } = await import("@/integrations/openai-codex/oauth")
-		const openAiCodexIsAuthenticated = await openAiCodexOAuthManager.isAuthenticated()
+		const selectedProfileId = mode === "plan" ? apiConfiguration.planModeProfileId : apiConfiguration.actModeProfileId
+		let openAiCodexIsAuthenticated = false
+		if (selectedProfileId) {
+			try {
+				openAiCodexIsAuthenticated = await openAiCodexOAuthManager.isAuthenticated(selectedProfileId)
+			} catch {
+				openAiCodexIsAuthenticated = false
+			}
+		}
 
 		// Compute apiMetrics from all messages (not window slice).
 		// These are passed through subscribeToState so the frontend
