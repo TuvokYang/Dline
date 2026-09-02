@@ -9,6 +9,7 @@ import { BrowserSettings } from "./BrowserSettings"
 import type { ChatInputSendShortcut } from "./ChatInputSendShortcut"
 import { ClineFeatureSetting } from "./ClineFeatureSetting"
 import { ClineRulesToggles } from "./cline-rules"
+import type { CodeExecutionPresentationV1 } from "./code-execution-tools"
 import type { ContextWindowIndicatorSnapshot } from "./context-window-indicator"
 import { FocusChainSettings } from "./FocusChainSettings"
 import { HistoryItem } from "./HistoryItem"
@@ -486,6 +487,7 @@ export interface ClineSayTool {
 		| "searchFiles"
 		| "webFetch"
 		| "webSearch"
+		| "codeExecution"
 		| "summarizeTask"
 		| "useSkill"
 		| "loadCapability"
@@ -535,6 +537,8 @@ export interface ClineSayTool {
 	compactionBranchId?: string
 	webSearch?: WebSearchPresentationV1
 	webFetch?: WebFetchPresentationV1
+	/** Provider-hosted sandbox run: the code sent, what it printed, and how it ended. */
+	codeExecution?: CodeExecutionPresentationV1
 	regex?: string
 	filePattern?: string
 	operationIsLocatedInWorkspace?: boolean

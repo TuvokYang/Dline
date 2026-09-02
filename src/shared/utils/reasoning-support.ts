@@ -11,6 +11,23 @@ export interface ClaudeOpusAdaptiveThinkingSettings {
 	effort?: ClaudeAdaptiveThinkingEffort
 }
 
+/**
+ * How Anthropic returns thinking content when the request opts in.
+ *
+ * `summarized` returns thinking normally; `omitted` redacts the content but still
+ * returns a signature for multi-turn continuity. A profile may also leave this
+ * unset, which omits the field and lets the API default apply.
+ */
+export const ANTHROPIC_THINKING_DISPLAY_OPTIONS = ["summarized", "omitted"] as const
+
+export type ClaudeThinkingDisplay = (typeof ANTHROPIC_THINKING_DISPLAY_OPTIONS)[number]
+
+/** Narrow a persisted display preference to a value the Messages API accepts. */
+export function resolveClaudeThinkingDisplay(display?: string): ClaudeThinkingDisplay | undefined {
+	const normalized = display?.trim().toLowerCase()
+	return ANTHROPIC_THINKING_DISPLAY_OPTIONS.find((option) => option === normalized)
+}
+
 export const DEEPSEEK_REASONING_EFFORT_OPTIONS = ["low", "high", "max"] as const
 
 export type DeepSeekReasoningEffort = (typeof DEEPSEEK_REASONING_EFFORT_OPTIONS)[number]
@@ -27,11 +44,26 @@ export interface DeepSeekAdaptiveThinkingSettings {
 
 export function isClaudeAdaptiveThinkingEnabledByDefault(modelId?: string): boolean {
 	const id = modelId?.toLowerCase()
-	return id?.includes("claude-fable-5") === true || id?.includes("claude-opus-5") === true || id?.includes("claude-sonnet-5") === true
+	return (
+		id?.includes("claude-fable-5") === true ||
+		id?.includes("claude-opus-5") === true ||
+		id?.includes("claude-sonnet-5") === true
+	)
 }
 
 export function canDisableClaudeAdaptiveThinking(modelId?: string): boolean {
 	return modelId?.toLowerCase().includes("claude-fable-5") !== true
+}
+
+/**
+ * Report whether a Claude model still accepts a forced tool choice.
+ *
+ * Fable 5.1 rejects forced tool use with an error instead of degrading to an
+ * automatic choice, so any caller that would otherwise send `tool_choice: any`
+ * (including OpenAI-compatible layers mapping `required`) must ask here first.
+ */
+export function supportsClaudeForcedToolUse(modelId?: string): boolean {
+	return modelId?.toLowerCase().includes("claude-fable-5-1") !== true
 }
 
 export function isClaudeOpusAdaptiveThinkingModel(modelId?: string): boolean {

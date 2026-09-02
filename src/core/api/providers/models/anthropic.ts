@@ -71,9 +71,33 @@ export const anthropicModels: Record<string, ModelInfo> = {
 			cacheReadsPrice: 0.5,
 		},
 	},
+	"claude-fable-5-1": {
+		id: "claude-fable-5-1",
+		name: "claude-fable-5-1",
+		description:
+			"Current Claude Fable model. Adaptive thinking is always on, forced tool use is rejected, and thinking blocks are invalidated when earlier turns are edited.",
+		capabilities: {
+			supportsTools: true,
+			tools: [ServerTool.WEB_SEARCH],
+			maxTokens: 128_000,
+			contextWindow: 1_000_000,
+			supportsImages: true,
+			supportsPromptCache: true,
+			supportsReasoning: true,
+			thinking: adaptiveThinking(ANTHROPIC_REQUIRED_ADAPTIVE_REASONING_EFFORT_OPTIONS),
+		},
+		pricing: {
+			inputPrice: 10.0,
+			outputPrice: 50.0,
+			cacheWritesPrice: 12.5,
+			// Fable 5.1 keeps Fable 5 pricing except for a cheaper cache read.
+			cacheReadsPrice: 0.25,
+		},
+	},
 	"claude-fable-5": {
 		id: "claude-fable-5",
 		name: "claude-fable-5",
+		description: "Legacy Claude Fable model. Use claude-fable-5-1 for current Fable capabilities.",
 		capabilities: {
 			supportsTools: true,
 			tools: [ServerTool.WEB_SEARCH],

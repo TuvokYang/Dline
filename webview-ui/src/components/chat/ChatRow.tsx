@@ -49,6 +49,7 @@ import CodeAccordian, { cleanPathPrefix } from "../common/CodeAccordian"
 import ActModeRespondRow from "./ActModeRespondRow"
 import { ApiErrorBox } from "./ApiErrorBox"
 import { cancelTaskActivities } from "./activity/useTaskActivities"
+import CodeExecutionRow from "./CodeExecutionRow"
 import { CommandOutputContent, CommandOutputRow } from "./CommandOutputRow"
 import { CompletionOutputRow } from "./CompletionOutputRow"
 import { resolveApiErrorMessage } from "./chat-view/utils/messageUtils"
@@ -877,6 +878,10 @@ export const ChatRowContent = memo(
 					return <WebFetchRow messageType={message.type} url={tool.path} webFetch={tool.webFetch} />
 				case "webSearch":
 					return <WebSearchRow messageType={message.type} query={tool.path} webSearch={tool.webSearch} />
+				case "codeExecution":
+					return (
+						<CodeExecutionRow codeExecution={tool.codeExecution} description={tool.path} messageType={message.type} />
+					)
 				case "useSkill":
 					return (
 						<div>

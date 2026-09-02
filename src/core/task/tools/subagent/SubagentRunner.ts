@@ -35,7 +35,7 @@ import {
 } from "@/core/context/context-management/context-window-utils"
 import { HostRegistryInfo } from "@/registry"
 import { ClineError, ClineErrorType } from "@/services/error"
-import { ApiFormat } from "@/shared/proto/dline/models/metadata"
+import { ApiFormat, ServerTool } from "@/shared/proto/dline/models/metadata"
 import { calculateApiCostAnthropic } from "@/utils/cost"
 import { isNativeToolCallingConfig, isNextGenModelFamily } from "@/utils/model-utils"
 import { TaskState } from "../../TaskState"
@@ -760,16 +760,19 @@ export class SubagentRunner {
 						countedHostedServerToolIds.add(update.dlineTid)
 						stats.toolCalls += 1
 					}
+					// Report the tool that actually ran: a hardcoded name would attribute
+					// sandbox work to web search in progress output.
+					const toolName = update.tool === ServerTool.CODE_EXECUTION ? "code_execution" : "web_search"
 					onProgress({
 						stats: { ...stats },
-						latestToolCall: "web_search",
+						latestToolCall: toolName,
 						event:
 							update.status === "completed" || update.status === "failed"
 								? {
 										kind: "tool_result",
 										phase: "final",
 										toolCallId: update.dlineTid,
-										toolName: "web_search",
+										toolName,
 										toolStatus: update.status,
 										error: update.error,
 									}
@@ -777,7 +780,7 @@ export class SubagentRunner {
 										kind: "tool_call",
 										phase: "delta",
 										toolCallId: update.dlineTid,
-										toolName: "web_search",
+										toolName,
 										toolStatus: "started",
 									},
 					})

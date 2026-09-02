@@ -17,8 +17,15 @@ import { UrlContentFetcher } from "@services/browser/UrlContentFetcher"
 import { McpHub } from "@services/mcp/McpHub"
 import { DlineRuntimeFileManager } from "@services/runtime-files/DlineRuntimeFileManager"
 import { DEFAULT_API_PROVIDER } from "@shared/api"
+import {
+	describeCodeExecutionOperation,
+	normalizeCodeExecutionErrorCode,
+	normalizeCodeExecutionOutput,
+	normalizeHostedCodeExecutionOperation,
+} from "@shared/code-execution-tools"
 import { ClineAsk, ClineSay, ClineSayTool, type CommandStatus } from "@shared/ExtensionMessage"
 import { ClineContent, type ClineToolResponseContent, type ClineUserToolResultContentBlock } from "@shared/messages/content"
+import { ServerTool } from "@shared/proto/dline/models/metadata"
 import { WebSearchMode } from "@shared/proto/dline/provider/common"
 import { Logger } from "@shared/services/Logger"
 import type { Mode } from "@shared/storage/types"
@@ -53,7 +60,7 @@ import { TaskState } from "./TaskState"
 import { canonicalizeAttemptCompletionParams } from "./tools/attempt-completion-params"
 import { AutoApprove } from "./tools/autoApprove"
 import { isInternalNativeToolName, normalizeNativeToolName } from "./tools/NativeToolAdmission"
-import { ServerToolLifecycle } from "./tools/ServerToolLifecycle"
+import { type HostedServerToolUpdate, ServerToolLifecycle } from "./tools/ServerToolLifecycle"
 import { SubagentJobManager } from "./tools/subagent/SubagentJobManager"
 import { normalizeToolExecutionResult, type ToolPostCommitDirective } from "./tools/ToolExecutionResult"
 import { type IPartialBlockHandler, ToolExecutorCoordinator } from "./tools/ToolExecutorCoordinator"
@@ -158,6 +165,70 @@ export function isBlockAutoApproved(block: ToolUse, options: BlockApproveOptions
 	return (isLocal && autoApproveLocal) || (!isLocal && autoApproveLocal && autoApproveExternal)
 }
 
+/** Present one hosted Web Search call. */
+function buildWebSearchMessage(update: HostedServerToolUpdate, providerId: string, providerLabel: string): ClineSayTool {
+	const items = normalizeWebSearchItems(update.result)
+	return {
+		tool: "webSearch",
+		path: update.query,
+		content:
+			update.status === "failed" ? `Web search failed: ${update.error ?? update.query}` : `Searching for: ${update.query}`,
+		operationIsLocatedInWorkspace: false,
+		webSearch: {
+			schemaVersion: 1,
+			status: update.status === "failed" ? "failed" : update.status === "completed" ? "completed" : "running",
+			source: {
+				id: `${providerId}-hosted`,
+				label: `${providerLabel} Web Search`,
+				execution: "hosted",
+				provider: providerId,
+			},
+			query: update.query,
+			operation: update.operation,
+			...(items.length > 0 ? { items } : {}),
+			...(update.error === undefined ? {} : { error: update.error }),
+		},
+	}
+}
+
+/**
+ * Present one provider-hosted sandbox run.
+ *
+ * The sandbox executes remotely, so the submitted code and the captured streams
+ * are the only evidence available when a run misbehaves; both are carried here
+ * rather than reduced to a status line.
+ */
+function buildCodeExecutionMessage(update: HostedServerToolUpdate, providerId: string, providerLabel: string): ClineSayTool {
+	const operation = normalizeHostedCodeExecutionOperation(update.input)
+	const output = normalizeCodeExecutionOutput(update.result)
+	const errorCode = normalizeCodeExecutionErrorCode(update.errorDetail)
+	const description = describeCodeExecutionOperation(operation)
+
+	return {
+		tool: "codeExecution",
+		path: description ?? update.query,
+		content:
+			update.status === "failed"
+				? `Code execution failed: ${errorCode ?? update.error ?? "unknown error"}`
+				: (description ?? "Running code"),
+		operationIsLocatedInWorkspace: false,
+		codeExecution: {
+			schemaVersion: 1,
+			status: update.status === "failed" ? "failed" : update.status === "completed" ? "completed" : "running",
+			source: {
+				id: `${providerId}-hosted`,
+				label: `${providerLabel} Code Execution`,
+				execution: "hosted",
+				provider: providerId,
+			},
+			operation,
+			...(output === undefined ? {} : { output }),
+			...(errorCode === undefined ? {} : { errorCode }),
+			...(update.error === undefined ? {} : { error: update.error }),
+		},
+	}
+}
+
 export class ToolExecutor {
 	private autoApprover: AutoApprove
 	private coordinator: ToolExecutorCoordinator
@@ -245,30 +316,12 @@ export class ToolExecutor {
 		this.hostedServerToolLifecycle = new ServerToolLifecycle(plan, allowHosted, async (update) => {
 			const providerId = this.api.getProviderId?.() ?? "provider"
 			const providerLabel = providerId === "openai" ? "OpenAI" : providerId === "deepseek" ? "DeepSeek" : providerId
-			const items = normalizeWebSearchItems(update.result)
-			const message: ClineSayTool = {
-				tool: "webSearch",
-				path: update.query,
-				content:
-					update.status === "failed"
-						? `Web search failed: ${update.error ?? update.query}`
-						: `Searching for: ${update.query}`,
-				operationIsLocatedInWorkspace: false,
-				webSearch: {
-					schemaVersion: 1,
-					status: update.status === "failed" ? "failed" : update.status === "completed" ? "completed" : "running",
-					source: {
-						id: `${providerId}-hosted`,
-						label: `${providerLabel} Web Search`,
-						execution: "hosted",
-						provider: providerId,
-					},
-					query: update.query,
-					operation: update.operation,
-					...(items.length > 0 ? { items } : {}),
-					...(update.error === undefined ? {} : { error: update.error }),
-				},
-			}
+			// Each hosted tool reports a differently shaped payload, so the message is
+			// built from the tool that actually ran rather than a single fixed shape.
+			const message =
+				update.tool === ServerTool.CODE_EXECUTION
+					? buildCodeExecutionMessage(update, providerId, providerLabel)
+					: buildWebSearchMessage(update, providerId, providerLabel)
 			const messageTs = await this.say(
 				"tool",
 				JSON.stringify(message),

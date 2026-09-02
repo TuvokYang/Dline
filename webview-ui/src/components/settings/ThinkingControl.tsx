@@ -63,6 +63,14 @@ const RangeInput = styled.input<{ $value: number; $min: number; $max: number }>`
 
 type ThinkingMode = "effort" | "budget"
 
+/** Sentinel for "leave the provider field unset", which cannot be an empty Select value. */
+const DISPLAY_UNSET = "none"
+
+interface ThinkingDisplayOption {
+	value: string
+	label: string
+}
+
 interface ThinkingControlProps {
 	// === Data ===
 	reasoningConfig?: ReasoningConfig
@@ -83,6 +91,11 @@ interface ThinkingControlProps {
 	showModeSelector?: boolean
 	modeSelectorLabel?: string
 	modeSelectorOptions?: Array<{ value: ThinkingMode; label: string }>
+
+	// === Reasoning display, for providers that expose the choice ===
+	displayOptions?: readonly ThinkingDisplayOption[]
+	displayLabel?: string
+	displayDescription?: string
 }
 
 /**
@@ -107,6 +120,9 @@ const ThinkingControl = ({
 		{ value: "effort" as ThinkingMode, label: "Effort" },
 		{ value: "budget" as ThinkingMode, label: "Budget" },
 	],
+	displayOptions,
+	displayLabel = "Reasoning Display",
+	displayDescription,
 }: ThinkingControlProps) => {
 	// Derive state from reasoningConfig
 	const enableThinking = useMemo(() => {
@@ -122,7 +138,13 @@ const ThinkingControl = ({
 		const hasEffort = !!(reasoningConfig?.effort && reasoningConfig.effort !== "none" && reasoningConfig.effort !== "")
 		const hasBudget = !!(reasoningConfig?.thinkingBudget && reasoningConfig.thinkingBudget > 0)
 		return hasEffort || hasBudget || defaultEnabled
-	}, [defaultEnabled, disableSupported, reasoningConfig?.enableThinking, reasoningConfig?.effort, reasoningConfig?.thinkingBudget])
+	}, [
+		defaultEnabled,
+		disableSupported,
+		reasoningConfig?.enableThinking,
+		reasoningConfig?.effort,
+		reasoningConfig?.thinkingBudget,
+	])
 
 	const activeType = useMemo<ThinkingMode>(() => {
 		if (reasoningConfig?.thinkingBudget != null && reasoningConfig.thinkingBudget > 0) {
@@ -133,6 +155,9 @@ const ThinkingControl = ({
 
 	const effort = reasoningConfig?.effort
 	const budget = reasoningConfig?.thinkingBudget ?? 0
+	// Every update below rebuilds the whole config, so the current display has to be
+	// carried through explicitly or changing the effort would silently clear it.
+	const display = reasoningConfig?.display
 
 	// Local state for budget slider
 	const [localBudget, setLocalBudget] = useState(budget || 0)
@@ -149,6 +174,7 @@ const ThinkingControl = ({
 					enableThinking: true,
 					effort: defaultMode === "effort" ? (defaultEffort ?? "medium") : undefined,
 					thinkingBudget: defaultMode === "budget" ? 1024 : undefined,
+					display,
 				})
 			} else {
 				// Disable
@@ -156,10 +182,11 @@ const ThinkingControl = ({
 					enableThinking: false,
 					effort: undefined,
 					thinkingBudget: undefined,
+					display,
 				})
 			}
 		},
-		[defaultEffort, disableSupported, mode, onReasoningConfigUpdate],
+		[defaultEffort, disableSupported, display, mode, onReasoningConfigUpdate],
 	)
 
 	const handleEffortChange = useCallback(
@@ -168,9 +195,10 @@ const ThinkingControl = ({
 				enableThinking: value !== "none",
 				effort: value,
 				thinkingBudget: undefined,
+				display,
 			})
 		},
-		[onReasoningConfigUpdate],
+		[display, onReasoningConfigUpdate],
 	)
 
 	const handleBudgetSliderChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
@@ -184,8 +212,9 @@ const ThinkingControl = ({
 			enableThinking: true,
 			effort: undefined,
 			thinkingBudget: localBudget,
+			display,
 		})
-	}, [localBudget, onReasoningConfigUpdate])
+	}, [display, localBudget, onReasoningConfigUpdate])
 
 	const handleModeChange = useCallback(
 		(value: string) => {
@@ -194,6 +223,17 @@ const ThinkingControl = ({
 				enableThinking: true,
 				effort: newMode === "effort" ? reasoningConfig?.effort || "medium" : undefined,
 				thinkingBudget: newMode === "budget" ? reasoningConfig?.thinkingBudget || 1024 : undefined,
+				display,
+			})
+		},
+		[display, reasoningConfig, onReasoningConfigUpdate],
+	)
+
+	const handleDisplayChange = useCallback(
+		(value: string) => {
+			onReasoningConfigUpdate({
+				...reasoningConfig,
+				display: value === DISPLAY_UNSET ? undefined : value,
 			})
 		},
 		[reasoningConfig, onReasoningConfigUpdate],
@@ -204,6 +244,7 @@ const ThinkingControl = ({
 	const shouldShowEffort = showThinkingOptions && (mode === "effort-only" || (mode === "both" && activeType === "effort"))
 	const shouldShowBudget = showThinkingOptions && (mode === "budget-only" || (mode === "both" && activeType === "budget"))
 	const shouldShowModeSelector = showThinkingOptions && mode === "both" && showModeSelector
+	const shouldShowDisplaySelector = showThinkingOptions && (displayOptions?.length ?? 0) > 0
 
 	// Sync local budget with config when external budget changes
 	useEffect(() => {
@@ -277,6 +318,36 @@ const ThinkingControl = ({
 										color: "var(--vscode-descriptionForeground)",
 									}}>
 									{effortDescription}
+								</p>
+							)}
+						</div>
+					)}
+
+					{/* Reasoning Display Selector */}
+					{shouldShowDisplaySelector && displayOptions && (
+						<div style={{ marginTop: 10, marginBottom: 5 }}>
+							<Label className="text-xs font-medium">{displayLabel}</Label>
+							<Select onValueChange={handleDisplayChange} value={display ?? DISPLAY_UNSET}>
+								<SelectTrigger className="w-full mt-1">
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									{displayOptions.map((option) => (
+										<SelectItem key={option.value} value={option.value}>
+											{option.label}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+							{displayDescription && (
+								<p
+									style={{
+										fontSize: "12px",
+										marginTop: 3,
+										marginBottom: 0,
+										color: "var(--vscode-descriptionForeground)",
+									}}>
+									{displayDescription}
 								</p>
 							)}
 						</div>

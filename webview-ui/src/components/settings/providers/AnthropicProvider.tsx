@@ -26,6 +26,7 @@ import { ModelInfoView } from "../common/ModelInfoView"
 import { ModelSelector } from "../common/ModelSelector"
 import { RemotelyConfiguredInputWrapper } from "../common/RemotelyConfiguredInputWrapper"
 import ThinkingControl from "../ThinkingControl"
+import { ANTHROPIC_THINKING_DISPLAY_DESCRIPTION, ANTHROPIC_THINKING_DISPLAY_SELECTOR_OPTIONS } from "./anthropicThinkingDisplay"
 import { useProviderModels } from "./useProviderModels"
 
 const StyledCheckbox = styled(VSCodeCheckbox)`
@@ -239,9 +240,12 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 					{/* ThinkingControl - for predefined models only (custom model has it in CustomModelConfig) */}
 					{!useCustomModel && isAdaptiveThinkingModel && (
 						<ThinkingControl
-							defaultEnabled={adaptiveThinkingDefaultEnabled}
 							defaultEffort={adaptiveThinkingDefaultEnabled ? "high" : undefined}
+							defaultEnabled={adaptiveThinkingDefaultEnabled}
 							disableSupported={adaptiveThinkingDisableSupported}
+							displayDescription={ANTHROPIC_THINKING_DISPLAY_DESCRIPTION}
+							displayLabel="Thinking Display"
+							displayOptions={ANTHROPIC_THINKING_DISPLAY_SELECTOR_OPTIONS}
 							effortDescription={
 								adaptiveThinkingDisableSupported
 									? "Use None to disable adaptive thinking. Higher effort increases response detail and token usage."
@@ -304,6 +308,9 @@ const CustomModelConfig = ({
 			{/* ThinkingControl - placed before ModelConfiguration */}
 			{modelInfo?.capabilities?.supportsReasoning && (
 				<ThinkingControl
+					displayDescription={ANTHROPIC_THINKING_DISPLAY_DESCRIPTION}
+					displayLabel="Thinking Display"
+					displayOptions={ANTHROPIC_THINKING_DISPLAY_SELECTOR_OPTIONS}
 					effortDescription="Use None to disable adaptive thinking. Higher effort increases response detail and token usage."
 					effortLabel="Adaptive Thinking"
 					effortOptions={

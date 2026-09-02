@@ -8,6 +8,9 @@ message ReasoningConfig {
   optional bool enable_thinking = 1;
   optional string effort = 2;
   optional int32 thinking_budget = 3;
+  // How reasoning content is returned by providers that expose the choice.
+  // Unset means the field is omitted from the request and the provider default applies.
+  optional string display = 4;
 }
 
 // Per-profile policy for choosing between Dline's local web search executor
