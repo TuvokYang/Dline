@@ -179,6 +179,16 @@ export class Controller {
 	private readonly taskHistoryProjectionMutex = new Mutex()
 
 	private readonly contextTransitionEngine: ContextTransitionEngine
+	/**
+	 * Own the Profile transaction separately from the Mode transaction.
+	 *
+	 * Both engines hold a single-slot `ContextTransitionLease`. Sharing one engine
+	 * meant a Mode compaction, or a Profile notice left unanswered by a reloaded
+	 * webview, pinned that slot and made every later Profile switch report
+	 * `in_progress` forever. A Profile switch never compacts, so it needs no
+	 * mutual exclusion with Mode and must never be blocked by one.
+	 */
+	private readonly profileTransitionEngine: ContextTransitionEngine
 	private readonly modeSwitchCoordinator: ModeSwitchCoordinator
 	private readonly profileSwitchCoordinator: ProfileSwitchCoordinator
 	private nextStateRevision = 0
@@ -442,6 +452,7 @@ export class Controller {
 		this.ocaAuthService = OcaAuthService.initialize(this)
 		this.accountService = ClineAccountService.getInstance()
 		this.contextTransitionEngine = this.createContextTransitionEngine()
+		this.profileTransitionEngine = this.createContextTransitionEngine()
 		this.modeSwitchCoordinator = this.createModeSwitchCoordinator()
 		this.profileSwitchCoordinator = this.createProfileSwitchCoordinator()
 
@@ -935,7 +946,7 @@ export class Controller {
 		await this.postStateToWebview()
 	}
 
-	/** Create the sole Profile/Mode transition state owner for this Controller. */
+	/** Create one independently leased transition state owner for this Controller. */
 	private createContextTransitionEngine(): ContextTransitionEngine {
 		return new ContextTransitionEngine({
 			lease: new ContextTransitionLease(),
@@ -1003,7 +1014,7 @@ export class Controller {
 			},
 			getTaskId: () => this.task?.taskId,
 		})
-		return new ProfileSwitchCoordinator({ engine: this.contextTransitionEngine, policy })
+		return new ProfileSwitchCoordinator({ engine: this.profileTransitionEngine, policy })
 	}
 
 	/** Resolve the stable task-local Profile identity for one mode. */
@@ -2247,7 +2258,10 @@ export class Controller {
 			await this.clearPanelStateIfNeeded()
 			logCloseStage("panel_state_clear")
 		}
-		await this.contextTransitionEngine.reset("Task cleared during context transition.")
+		await Promise.all([
+			this.contextTransitionEngine.reset("Task cleared during context transition."),
+			this.profileTransitionEngine.reset("Task cleared during context transition."),
+		])
 		logCloseStage("context_transition_reset")
 		if (this.task) {
 			// Sync task mode to global state so slider works after task closed

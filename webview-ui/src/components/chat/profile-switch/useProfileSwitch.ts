@@ -1,5 +1,5 @@
 import type { ProfileSwitchSnapshot } from "@shared/profile-switch"
-import { PlanActMode, ProfileSwitchOperationRequest, ProfileSwitchRequest } from "@shared/proto/dline/state"
+import { PlanActMode, ProfileSwitchOperationRequest, ProfileSwitchRequest, ProfileSwitchStatus } from "@shared/proto/dline/state"
 import type { Mode } from "@shared/storage/types"
 import { useCallback, useMemo } from "react"
 import { StateServiceClient } from "../../../services/grpc-client"
@@ -36,14 +36,23 @@ export function useProfileSwitch({ profileSwitch }: UseProfileSwitchOptions): Us
 		if (targetModes.length === 0) return
 		// A dropped rejection made a refused switch indistinguishable from no request,
 		// so the reason has to reach the console even when the snapshot also carries it.
-		await StateServiceClient.requestProfileSwitch(
-			ProfileSwitchRequest.create({
-				targetProfile,
-				targetModes: targetModes.map(toProtoMode),
-			}),
-		).catch((error: unknown) => {
+		try {
+			const response = await StateServiceClient.requestProfileSwitch(
+				ProfileSwitchRequest.create({
+					targetProfile,
+					targetModes: targetModes.map(toProtoMode),
+				}),
+			)
+			// `rejected` and `in_progress` publish no snapshot, so discarding the status
+			// left a refused switch looking exactly like a click that never happened.
+			if (response.status === ProfileSwitchStatus.PROFILE_SWITCH_STATUS_REJECTED) {
+				console.error("Profile switch rejected", response.error ?? "no reason reported")
+			} else if (response.status === ProfileSwitchStatus.PROFILE_SWITCH_STATUS_IN_PROGRESS) {
+				console.error("Profile switch deferred: another transition owns the task", response.operationId)
+			}
+		} catch (error: unknown) {
 			console.error("Profile switch request failed", error)
-		})
+		}
 	}, [])
 
 	const confirmSwitch = useCallback(async (operationId: string): Promise<void> => {
