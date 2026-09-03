@@ -58,6 +58,19 @@ class CheckpointTracker {
 	private gitOperations: GitOperations
 	/** Optional reference to the per-task file tracker for incremental checkpoint staging */
 	private taskFileTracker?: TaskFileTracker
+	/**
+	 * Consecutive staging failures since the last usable checkpoint.
+	 *
+	 * Staging failures happen below the chat layer, so without this counter a
+	 * task can lose every restore point while the UI still reports checkpoints
+	 * as healthy.
+	 */
+	private consecutiveStagingFailures = 0
+
+	/** Number of consecutive staging failures since the last usable checkpoint. */
+	public getConsecutiveStagingFailures(): number {
+		return this.consecutiveStagingFailures
+	}
 
 	/**
 	 * Inject the TaskFileTracker for this task so that commit() can stage only
@@ -347,13 +360,20 @@ class CheckpointTracker {
 				fileList: files,
 				taskId: this.taskId,
 			})
+			// Paths Git cannot stage must leave the pending set even when the whole
+			// attempt failed. Retaining them replays the same rejected batch on every
+			// later checkpoint and disables checkpoints for the rest of the task.
+			this.dropUnstageablePaths(addFilesResult.rejectedPaths)
 			if (!addFilesResult.success) {
+				this.consecutiveStagingFailures += 1
 				Logger.error(
-					`[CheckpointTracker] Failed to stage ${files.length} tracked file(s) for task ${this.taskId}. ` +
+					`[CheckpointTracker] Failed to stage ${files.length} tracked file(s) for task ${this.taskId} ` +
+						`(consecutive failures: ${this.consecutiveStagingFailures}). ` +
 						`Skipping commit to avoid an empty checkpoint.`,
 				)
 				return undefined
 			}
+			this.consecutiveStagingFailures = 0
 		} else if (requiresWorkspaceScan) {
 			const hasWorkspaceChanges = await this.gitOperations.hasWorkspaceChanges(git, this.taskId)
 			if (!hasWorkspaceChanges) {
@@ -369,9 +389,14 @@ class CheckpointTracker {
 				taskId: this.taskId,
 			})
 			if (!addFilesResult.success) {
-				Logger.error(`[CheckpointTracker] Failed workspace-scan staging for task ${this.taskId}`)
+				this.consecutiveStagingFailures += 1
+				Logger.error(
+					`[CheckpointTracker] Failed workspace-scan staging for task ${this.taskId} ` +
+						`(consecutive failures: ${this.consecutiveStagingFailures})`,
+				)
 				return undefined
 			}
+			this.consecutiveStagingFailures = 0
 		} else {
 			return this.getCurrentRestorePoint(git)
 		}
@@ -406,6 +431,27 @@ class CheckpointTracker {
 		}
 
 		return commitHash
+	}
+
+	/**
+	 * Remove worktree-relative paths the shadow repository refused to stage.
+	 *
+	 * Rejections are permanent for the current worktree state — a nested
+	 * repository path or a deleted file will not become stageable by retrying —
+	 * so they are dropped rather than carried into the next checkpoint.
+	 */
+	private dropUnstageablePaths(relativePaths: string[]): void {
+		if (relativePaths.length === 0 || !this.taskFileTracker) {
+			return
+		}
+		const absolutePaths = relativePaths.map((relativePath) => path.resolve(this.cwd, relativePath))
+		const dropped = this.taskFileTracker.dropModifiedFiles(absolutePaths)
+		if (dropped > 0) {
+			Logger.warn(
+				`[CheckpointTracker] Dropped ${dropped} unstageable path(s) from task ${this.taskId} tracking ` +
+					`to prevent repeated checkpoint failures`,
+			)
+		}
 	}
 
 	/** Return the current validated shadow revision without creating an empty commit. */

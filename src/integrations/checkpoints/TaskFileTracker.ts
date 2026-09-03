@@ -22,10 +22,15 @@ export class TaskFileTracker {
 	private taskId: string
 	private registry: WorkspaceFileRegistry
 
-	/** Local cache of files modified by this task (lowercased absolute paths) */
-	private modifiedFiles = new Set<string>()
+	/**
+	 * Files modified by this task, keyed by a case-insensitive lookup key.
+	 *
+	 * The value keeps the original spelling: it is handed to Git as a pathspec,
+	 * and a lower-cased name does not resolve on a case-sensitive filesystem.
+	 */
+	private modifiedFiles = new Map<string, string>()
 	/** Lifetime cache of files modified by this task. Used for Active Tasks env details. */
-	private allModifiedFiles = new Set<string>()
+	private allModifiedFiles = new Map<string, string>()
 	/** Whether command execution may have modified files outside explicit tracking. */
 	private workspaceScanRequired = false
 
@@ -47,18 +52,47 @@ export class TaskFileTracker {
 	 * @param filePath - Absolute or relative path to the modified file
 	 */
 	trackModification(filePath: string): void {
-		const normalizedPath = path.resolve(filePath).toLowerCase()
+		const absolutePath = path.resolve(filePath)
+		const lookupKey = this.toLookupKey(absolutePath)
 
-		this.allModifiedFiles.add(normalizedPath)
+		this.allModifiedFiles.set(lookupKey, absolutePath)
 
 		// Avoid duplicate registrations for the same file
-		if (this.modifiedFiles.has(normalizedPath)) {
+		if (this.modifiedFiles.has(lookupKey)) {
 			return
 		}
 
-		this.modifiedFiles.add(normalizedPath)
+		this.modifiedFiles.set(lookupKey, absolutePath)
 		this.registry.registerModification(this.taskId, filePath)
-		Logger.debug(`[TaskFileTracker] Task ${this.taskId} tracked modification of '${normalizedPath}'`)
+		Logger.debug(`[TaskFileTracker] Task ${this.taskId} tracked modification of '${absolutePath}'`)
+	}
+
+	/**
+	 * Stop tracking paths the checkpoint layer proved it cannot stage.
+	 *
+	 * Without this, a path Git rejects stays in the pending set and is replayed
+	 * on every later checkpoint, so one bad path disables checkpoints for the
+	 * remainder of the task.
+	 *
+	 * @param filePaths - Absolute paths to drop from the pending set
+	 * @returns Number of paths actually removed
+	 */
+	dropModifiedFiles(filePaths: string[]): number {
+		let dropped = 0
+		for (const filePath of filePaths) {
+			if (this.modifiedFiles.delete(this.toLookupKey(path.resolve(filePath)))) {
+				dropped += 1
+			}
+		}
+		if (dropped > 0) {
+			Logger.debug(`[TaskFileTracker] Dropped ${dropped} unstageable file(s) for task ${this.taskId}`)
+		}
+		return dropped
+	}
+
+	/** Case-insensitive de-duplication key; the stored value keeps real spelling. */
+	private toLookupKey(absolutePath: string): string {
+		return absolutePath.toLowerCase()
 	}
 
 	/**
@@ -67,7 +101,7 @@ export class TaskFileTracker {
 	 * @returns Array of absolute file paths
 	 */
 	getModifiedFiles(): string[] {
-		return Array.from(this.modifiedFiles)
+		return Array.from(this.modifiedFiles.values())
 	}
 
 	/**
@@ -75,7 +109,7 @@ export class TaskFileTracker {
 	 * @returns Array of normalized absolute file paths.
 	 */
 	getAllModifiedFiles(): string[] {
-		return Array.from(this.allModifiedFiles)
+		return Array.from(this.allModifiedFiles.values())
 	}
 
 	/**

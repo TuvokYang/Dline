@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { GitOperations } from "../CheckpointGitOperations"
 import CheckpointTracker from "../CheckpointTracker"
 import { getShadowGitPath, hashWorkingDir } from "../CheckpointUtils"
+import { NestedRepositoryBoundaryDetector } from "../NestedRepositoryBoundaryDetector"
 import { TaskFileTracker } from "../TaskFileTracker"
 
 function createGitHarness(): { git: SimpleGit; add: ReturnType<typeof vi.fn> } {
@@ -17,16 +18,15 @@ function createGitHarness(): { git: SimpleGit; add: ReturnType<typeof vi.fn> } {
 }
 
 function configureNestedRepositoryBoundary(operations: GitOperations, relativePath: string): void {
+	const workspacePath = (operations as unknown as { cwd: string }).cwd
 	Object.assign(operations, {
-		repositoryBoundaries: [
-			{
-				relativePath,
-				kind: "nested_repo",
-				initialized: true,
-				head: "committed",
-			},
-		],
+		boundaryDetector: new NestedRepositoryBoundaryDetector(workspacePath, [relativePath]),
 	})
+}
+
+/** Create a real nested repository marker so lazy detection can observe it. */
+async function createNestedRepositoryMarker(nestedRepositoryPath: string): Promise<void> {
+	await fs.mkdir(path.join(nestedRepositoryPath, ".git"), { recursive: true })
 }
 
 describe("CheckpointTracker baseline checkpoints", () => {
@@ -87,7 +87,8 @@ describe("GitOperations repository boundaries", () => {
 				taskId: "task-1",
 			})
 
-			expect(result).toEqual({ success: true })
+			expect(result).toMatchObject({ success: true, stagedCount: 1 })
+			expect(result.rejectedPaths).toEqual(["packages/nested/src/owned.ts"])
 			expect(harness.add).toHaveBeenCalledOnce()
 			expect(harness.add).toHaveBeenCalledWith(["-A", "-f", "--", ":(literal)src/root.ts"])
 		} finally {
@@ -95,7 +96,39 @@ describe("GitOperations repository boundaries", () => {
 		}
 	})
 
-	it("does not stage or mutate metadata when every tracked file belongs to a repository boundary", async () => {
+	it("excludes files owned by a repository created after the tracker started", async () => {
+		const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), "dline-checkpoint-late-boundary-"))
+		const workspacePath = path.join(sandbox, "workspace")
+		const rootFile = path.join(workspacePath, "src", "root.ts")
+		const lateRepositoryPath = path.join(workspacePath, ".worktree", "feature")
+		const lateFile = path.join(lateRepositoryPath, "src", "owned.ts")
+		await fs.mkdir(path.dirname(rootFile), { recursive: true })
+		await fs.mkdir(path.dirname(lateFile), { recursive: true })
+		await fs.writeFile(rootFile, "root")
+		await fs.writeFile(lateFile, "late")
+		try {
+			// No seeded boundary: the repository appears only on disk, exactly as it
+			// would when the agent runs `git worktree add` mid-task.
+			const operations = new GitOperations(workspacePath)
+			await createNestedRepositoryMarker(lateRepositoryPath)
+			const harness = createGitHarness()
+
+			const result = await operations.addCheckpointFiles({
+				git: harness.git,
+				mode: "tracked",
+				fileList: [rootFile, lateFile],
+				taskId: "task-late-boundary",
+			})
+
+			expect(result).toMatchObject({ success: true, stagedCount: 1 })
+			expect(result.rejectedPaths).toEqual([".worktree/feature/src/owned.ts"])
+			expect(harness.add).toHaveBeenCalledWith(["-A", "-f", "--", ":(literal)src/root.ts"])
+		} finally {
+			await fs.rm(sandbox, { recursive: true, force: true })
+		}
+	})
+
+	it("reports nested files as rejected instead of failing when every tracked file is nested", async () => {
 		const workspacePath = path.resolve("checkpoint-test-workspace")
 		const operations = new GitOperations(workspacePath)
 		configureNestedRepositoryBoundary(operations, "packages/nested")
@@ -109,8 +142,45 @@ describe("GitOperations repository boundaries", () => {
 			taskId: "task-1",
 		})
 
-		expect(result).toEqual({ success: false })
+		expect(result).toEqual({
+			success: true,
+			stagedCount: 0,
+			rejectedPaths: ["packages/nested/src/owned.ts"],
+		})
 		expect(harness.add).not.toHaveBeenCalled()
+	})
+
+	it("isolates a rejected pathspec so the remaining files still reach the index", async () => {
+		const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), "dline-checkpoint-isolation-"))
+		const workspacePath = path.join(sandbox, "workspace")
+		const goodFile = path.join(workspacePath, "src", "good.ts")
+		const poisonedFile = path.join(workspacePath, "src", "poisoned.ts")
+		await fs.mkdir(path.dirname(goodFile), { recursive: true })
+		await fs.writeFile(goodFile, "good")
+		await fs.writeFile(poisonedFile, "poisoned")
+		try {
+			const operations = new GitOperations(workspacePath)
+			const add = vi.fn(async (args: string[]) => {
+				if (args.includes(":(literal)src/poisoned.ts")) {
+					throw new Error("fatal: Pathspec 'src/poisoned.ts' is in submodule 'src'")
+				}
+				return undefined
+			})
+			const git = { add } as unknown as SimpleGit
+
+			const result = await operations.addCheckpointFiles({
+				git,
+				mode: "tracked",
+				fileList: [goodFile, poisonedFile],
+				taskId: "task-isolation",
+			})
+
+			expect(result).toMatchObject({ success: true, stagedCount: 1 })
+			expect(result.rejectedPaths).toEqual(["src/poisoned.ts"])
+			expect(add).toHaveBeenCalledWith(["-A", "-f", "--", ":(literal)src/good.ts"])
+		} finally {
+			await fs.rm(sandbox, { recursive: true, force: true })
+		}
 	})
 
 	it("rejects a worktree path whose parent symlink resolves outside the worktree", async () => {
@@ -133,7 +203,7 @@ describe("GitOperations repository boundaries", () => {
 				taskId: "task-symlink",
 			})
 
-			expect(result).toEqual({ success: false })
+			expect(result).toEqual({ success: false, stagedCount: 0, rejectedPaths: [] })
 			expect(harness.add).not.toHaveBeenCalled()
 		} finally {
 			await fs.rm(sandbox, { recursive: true, force: true })
@@ -157,7 +227,7 @@ describe("GitOperations repository boundaries", () => {
 				taskId: "task-dot-segment",
 			})
 
-			expect(result).toEqual({ success: true })
+			expect(result).toMatchObject({ success: true, stagedCount: 1, rejectedPaths: [] })
 			expect(harness.add).toHaveBeenCalledOnce()
 			expect(harness.add).toHaveBeenCalledWith(["-A", "-f", "--", ":(literal)..cache/tracked.ts"])
 		} finally {
@@ -183,7 +253,7 @@ describe("GitOperations repository boundaries", () => {
 				taskId: `task-realpath-${code.toLowerCase()}`,
 			})
 
-			expect(result).toEqual({ success: false })
+			expect(result).toEqual({ success: false, stagedCount: 0, rejectedPaths: [] })
 			expect(harness.add).not.toHaveBeenCalled()
 		} finally {
 			await fs.rm(sandbox, { recursive: true, force: true })
@@ -200,7 +270,39 @@ describe("GitOperations repository boundaries", () => {
 			taskId: "task-1",
 		})
 
-		expect(result).toEqual({ success: true })
+		expect(result).toEqual({ success: true, stagedCount: 0, rejectedPaths: [] })
 		expect(harness.add).toHaveBeenCalledWith([".", "--ignore-errors"])
+	})
+
+	it("splits large tracked batches so one command cannot exceed the process limit", async () => {
+		const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), "dline-checkpoint-batching-"))
+		const workspacePath = path.join(sandbox, "workspace")
+		const sourceDir = path.join(workspacePath, "src")
+		await fs.mkdir(sourceDir, { recursive: true })
+		const files: string[] = []
+		for (let index = 0; index < 250; index += 1) {
+			const filePath = path.join(sourceDir, `file-${index}.ts`)
+			await fs.writeFile(filePath, "content")
+			files.push(filePath)
+		}
+		try {
+			const operations = new GitOperations(workspacePath)
+			const harness = createGitHarness()
+
+			const result = await operations.addCheckpointFiles({
+				git: harness.git,
+				mode: "tracked",
+				fileList: files,
+				taskId: "task-batching",
+			})
+
+			expect(result).toMatchObject({ success: true, stagedCount: 250, rejectedPaths: [] })
+			expect(harness.add).toHaveBeenCalledTimes(3)
+			for (const call of harness.add.mock.calls) {
+				expect((call[0] as string[]).length - 3).toBeLessThanOrEqual(100)
+			}
+		} finally {
+			await fs.rm(sandbox, { recursive: true, force: true })
+		}
 	})
 })

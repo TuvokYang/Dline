@@ -315,7 +315,9 @@ describe("CheckpointTracker with tracked files in an unborn user repository", ()
 				// "baseline" or "workspace-scan" depending on whether the exclusion
 				// ruleset changed, so match on that role rather than one mode name.
 				const isRefreshStaging = options.mode === "baseline" || options.mode === "workspace-scan"
-				return options.taskId === failedTaskId && isRefreshStaging ? { success: false } : result
+				return options.taskId === failedTaskId && isRefreshStaging
+					? { success: false, stagedCount: 0, rejectedPaths: [] }
+					: result
 			})
 
 			await expect(CheckpointTracker.create(failedTaskId, true, sandbox.workspacePath)).rejects.toThrow(
