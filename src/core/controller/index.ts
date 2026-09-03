@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
 import type { Anthropic } from "@anthropic-ai/sdk"
 import { accountUsageCoordinator } from "@core/account-usage/AccountUsageCoordinator"
-import { AccountUsage, buildApiHandler } from "@core/api"
+import { type AccountUsage, type ApiHandler, buildApiHandler } from "@core/api"
 import { getProfileModelInfo } from "@core/api/model-info"
 import { createGlobalConfigurationSnapshot, type GlobalConfigurationSnapshot } from "@core/configuration/GlobalConfiguration"
 import { GlobalConfigurationManager, type GlobalConfigurationResult } from "@core/configuration/GlobalConfigurationManager"
@@ -10,7 +10,7 @@ import { ContextTransitionEngine } from "@core/controller/context-transition/Con
 import { ContextTransitionLease } from "@core/controller/context-transition/ContextTransitionLease"
 import { ModeTransitionPolicy } from "@core/controller/context-transition/policies/ModeTransitionPolicy"
 import { ProfileTransitionPolicy } from "@core/controller/context-transition/policies/ProfileTransitionPolicy"
-import { findEnabledProfileByName, findEnabledProfiles, readApiProfiles } from "@core/controller/file/getApiProfiles"
+import { findEnabledProfiles, readApiProfiles } from "@core/controller/file/getApiProfiles"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import { IgnoreController } from "@core/ignore/IgnoreController"
 import { TaskLockService } from "@core/locks/TaskLockService"
@@ -25,6 +25,7 @@ import { detectWorkspaceRoots } from "@core/workspace/detection"
 import { setupWorkspaceManager } from "@core/workspace/setup"
 import type { WorkspaceRootManager } from "@core/workspace/WorkspaceRootManager"
 import { cleanupLegacyCheckpoints } from "@integrations/checkpoints/CheckpointMigration"
+import { type OpenAiCodexRuntimeMutationEvent, openAiCodexOAuthManager } from "@integrations/openai-codex/oauth"
 import { ClineAccountService } from "@services/account/ClineAccountService"
 import { McpHub } from "@services/mcp/McpHub"
 import type { ModelInfo } from "@shared/api"
@@ -315,6 +316,7 @@ export class Controller {
 	private remoteConfigTimer?: NodeJS.Timeout
 	// Timer for periodic account usage polling
 	private accountUsageTimer?: NodeJS.Timeout
+	private accountUsageHandler?: ApiHandler
 	private accountUsagePollGeneration = 0
 	private accountUsagePolling = false
 	private accountUsagePollingEnabled = true
@@ -352,6 +354,7 @@ export class Controller {
 	// state-change notifications so closed windows don't keep receiving them.
 	private stateManagerCallbacksDispose?: () => void
 	private mcpPromptCatalogDispose?: () => void
+	private openAiCodexRuntimeMutationDispose?: () => void
 
 	/** Public getter for account usage data, used by subscribeToState/getLatestState. */
 	getAccountUsage(): AccountUsage | undefined {
@@ -411,6 +414,11 @@ export class Controller {
 			id: "terminal",
 			configure: (snapshot) => this.configureTerminal(snapshot),
 		})
+		this.openAiCodexRuntimeMutationDispose = openAiCodexOAuthManager.subscribeToRuntimeMutations((event) =>
+			this.handleOpenAiCodexRuntimeMutation(event).catch(() =>
+				Logger.error("[CodexRuntime] Failed to invalidate the target Profile runtime."),
+			),
+		)
 		this.stateManagerCallbacksDispose = StateManager.get().registerCallbacks({
 			onPersistenceError: async ({ error }: PersistenceErrorEvent) => {
 				// Just log - don't call reInitialize() (that sets isInitialized=false which
@@ -591,6 +599,8 @@ export class Controller {
 		const taskId = this.task?.taskId ?? "none"
 		this.detachUi()
 		this.disposed = true
+		this.openAiCodexRuntimeMutationDispose?.()
+		this.openAiCodexRuntimeMutationDispose = undefined
 		// Clear the remote config timer
 		if (this.remoteConfigTimer) {
 			clearInterval(this.remoteConfigTimer)
@@ -1949,6 +1959,21 @@ export class Controller {
 		return result
 	}
 
+	private async handleOpenAiCodexRuntimeMutation(event: OpenAiCodexRuntimeMutationEvent): Promise<void> {
+		if (this.disposed) return
+		const taskId = this.task?.taskId
+		const apiConfig = this.stateManager.getApiConfigurationForTask(taskId)
+		const mode = this.stateManager.getSettingsKeyForTask("mode", taskId) || "act"
+		const selectedProfileReference =
+			(mode === "plan" ? apiConfig.planModeProfileId : apiConfig.actModeProfileId) ??
+			(mode === "plan" ? apiConfig.planModeProfile : apiConfig.actModeProfile)
+		const selectedProfile = resolveProfileReference(readApiProfiles(), selectedProfileReference)
+		if (selectedProfile.status === "invalid" || selectedProfile.profile.id !== event.profileId) return
+		accountUsageCoordinator.deleteByPrefix(`${event.profileId}:`)
+		this.restartAccountUsagePolling()
+		await this.task?.rebuildApiHandler({ abortPrevious: true })
+	}
+
 	/** Poll account usage every 60 seconds and push to webview */
 	private startAccountUsagePolling() {
 		if (this.disposed || !this.accountUsagePollingEnabled || this.accountUsagePolling) {
@@ -1984,12 +2009,17 @@ export class Controller {
 			const apiConfig = this.stateManager.getApiConfigurationForTask(taskId)
 			const mode = this.stateManager.getSettingsKeyForTask("mode", taskId) || "act"
 			const profileName = mode === "plan" ? apiConfig.planModeProfile : apiConfig.actModeProfile
-			const profile = findEnabledProfileByName(profileName)
-			if (!profile) {
-				throw new Error(`Profile "${profileName}" not found`)
+			const profileId = mode === "plan" ? apiConfig.planModeProfileId : apiConfig.actModeProfileId
+			const profileReference = profileId ?? profileName
+			const profileResolution = resolveProfileReference(readApiProfiles(), profileReference)
+			if (profileResolution.status === "invalid") {
+				throw new Error("Selected Profile is unavailable")
 			}
+			const profile = profileResolution.profile
 			const profileSignature = createHash("sha256").update(JSON.stringify(profile)).digest("hex")
-			const profileKey = `${profile.id}:${profileSignature}`
+			const credentialRevision =
+				profile.provider === "openai-codex" ? openAiCodexOAuthManager.getRuntimeRevision(profile.id) : 0
+			const profileKey = `${profile.id}:${profileSignature}:${credentialRevision}`
 			if (this.accountUsageProfileKey !== profileKey) {
 				this._accountUsage = undefined
 				this.accountUsageProfileKey = profileKey
@@ -2001,7 +2031,16 @@ export class Controller {
 				return
 			}
 			const getAccountUsage = handler.getAccountUsage.bind(handler)
-			const usage = await accountUsageCoordinator.get(profileKey, getAccountUsage)
+			this.accountUsageHandler = handler
+			let usage: AccountUsage | undefined
+			try {
+				usage = await accountUsageCoordinator.get(profileKey, getAccountUsage)
+			} finally {
+				if (this.accountUsageHandler === handler) {
+					handler.abort?.()
+					this.accountUsageHandler = undefined
+				}
+			}
 			if (generation !== this.accountUsagePollGeneration || this.accountUsageProfileKey !== profileKey) {
 				return
 			}
@@ -2023,6 +2062,8 @@ export class Controller {
 
 	private stopAccountUsagePolling() {
 		this.accountUsagePolling = false
+		this.accountUsageHandler?.abort?.()
+		this.accountUsageHandler = undefined
 		this.accountUsagePollGeneration++
 		if (this.accountUsageTimer) {
 			clearTimeout(this.accountUsageTimer)

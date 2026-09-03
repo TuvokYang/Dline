@@ -10,7 +10,7 @@ import {
 import type { OAuthAuthorizationStrategy, OAuthCodeExchangeInput, OAuthFlowLease } from "@/services/oauth"
 import { OpenAiCodexOAuthManager } from "./oauth"
 import type { OpenAiCodexRefreshStrategy } from "./session"
-import { OpenAiCodexOAuthStrategy } from "./strategy"
+import { OpenAiCodexOAuthStrategy, OpenAiCodexOAuthTokenError } from "./strategy"
 
 const NOW = 1_900_000_000_000
 
@@ -173,6 +173,55 @@ describe("OpenAI Codex OAuth flow integration", () => {
 		await expect(started.result).rejects.toMatchObject({ code: "FLOW_CANCELLED" })
 		await expect(completion).rejects.toMatchObject({ code: "CREDENTIAL_PERSIST_FAILED" })
 		await expect(repository.read("profile-a")).resolves.toEqual({ status: "missing" })
+		await manager.dispose()
+	})
+
+	it("publishes committed runtime mutations with Profile-local revisions and deduplicates reauthentication", async () => {
+		const strategy: OAuthAuthorizationStrategy<OpenAiOAuthCredentials> & OpenAiCodexRefreshStrategy = {
+			strategyId: "openai-codex-test",
+			callbackPort: 0,
+			callbackPath: "/auth/callback",
+			buildAuthorizationUrl: ({ redirectUri, state }) => {
+				const url = new URL("https://auth.example.test/authorize")
+				url.searchParams.set("redirect_uri", redirectUri)
+				url.searchParams.set("state", state)
+				return url
+			},
+			exchangeAuthorizationCode: async () => credential("exchange"),
+			refreshCredential: async () => {
+				throw new OpenAiCodexOAuthTokenError("INVALID_GRANT", "sensitive provider payload", 400)
+			},
+		}
+		const manager = new OpenAiCodexOAuthManager({
+			repository,
+			strategy,
+			lease,
+			profileCatalogLoader: async () => [
+				{ id: "profile-a", provider: "openai-codex" },
+				{ id: "profile-b", provider: "openai-codex" },
+			],
+			openExternal: async () => undefined,
+		})
+		const events: Array<{ profileId: string; reason: string; revision: number }> = []
+		const unsubscribe = manager.subscribeToRuntimeMutations((event) => {
+			events.push(event)
+		})
+
+		await manager.saveCredentials("profile-a", credential("a"))
+		await manager.saveCredentials("profile-b", credential("b"))
+		await expect(manager.forceRefreshCredentialContext("profile-a")).resolves.toBeNull()
+		await expect(manager.forceRefreshCredentialContext("profile-a")).resolves.toBeNull()
+		await manager.clearCredentials("profile-b")
+
+		expect(events).toEqual([
+			{ profileId: "profile-a", reason: "credential-saved", revision: 1 },
+			{ profileId: "profile-b", reason: "credential-saved", revision: 1 },
+			{ profileId: "profile-a", reason: "reauthentication-required", revision: 2 },
+			{ profileId: "profile-b", reason: "credential-cleared", revision: 2 },
+		])
+		expect(manager.getRuntimeRevision("profile-a")).toBe(2)
+		expect(manager.getRuntimeRevision("profile-b")).toBe(2)
+		unsubscribe()
 		await manager.dispose()
 	})
 

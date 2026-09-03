@@ -8,8 +8,17 @@ import { resolveProfileReference } from "@core/profiles/profile-binding"
 import type { ApiConfiguration } from "@shared/api"
 import type { ApiProfile } from "@shared/proto/dline/profile"
 import type { Mode } from "@shared/storage/types"
+import type { OpenAiCodexProfileAuthStatus } from "@/integrations/openai-codex/oauth"
 
-export type ApiProfileInvalidReason = "missing" | "ambiguous" | "disabled" | "credential_unavailable" | "configuration_invalid"
+export type ApiProfileInvalidReason =
+	| "missing"
+	| "ambiguous"
+	| "disabled"
+	| "credential_unavailable"
+	| "credential_malformed"
+	| "credential_legacy_shared"
+	| "reauthentication_required"
+	| "configuration_invalid"
 
 export interface ApiProfileValidity {
 	status: "valid" | "invalid"
@@ -149,18 +158,18 @@ function validateProfile(profile: ApiProfile): ApiProfileValidity {
 }
 
 export interface ApiProfileCredentialProbes {
-	isOpenAiCodexAuthenticated?: (profile: ApiProfile) => Promise<boolean>
+	getOpenAiCodexAuthStatus?: (profile: ApiProfile) => Promise<OpenAiCodexProfileAuthStatus>
 	getOcaAuthToken?: () => Promise<string | null>
 	getClineAuthToken?: () => Promise<string | null>
 	hasQwenCodeCredentials?: (profile: ApiProfile) => Promise<boolean>
 }
 
-async function defaultOpenAiCodexProbe(profile: ApiProfile): Promise<boolean> {
+async function defaultOpenAiCodexProbe(profile: ApiProfile): Promise<OpenAiCodexProfileAuthStatus> {
 	try {
 		const { openAiCodexOAuthManager } = await import("@integrations/openai-codex/oauth")
-		return await openAiCodexOAuthManager.isAuthenticated(profile.id)
+		return await openAiCodexOAuthManager.getAuthStatus(profile.id)
 	} catch {
-		return false
+		return "missing"
 	}
 }
 
@@ -211,14 +220,37 @@ export async function validateApiProfileCredentials(
 
 	switch (profile.provider) {
 		case "openai-codex": {
-			const authenticated = await (probes.isOpenAiCodexAuthenticated ?? defaultOpenAiCodexProbe)(profile)
-			return authenticated
-				? validProfile(profile)
-				: invalidProfile(
+			const status = await (probes.getOpenAiCodexAuthStatus ?? defaultOpenAiCodexProbe)(profile)
+			switch (status) {
+				case "authenticated":
+				case "refreshable-expired":
+					return validProfile(profile)
+				case "malformed":
+					return invalidProfile(
+						profile,
+						"credential_malformed",
+						`Profile not valid: the stored credential for "${profile.name}" is invalid. Sign in again.`,
+					)
+				case "legacy-shared":
+					return invalidProfile(
+						profile,
+						"credential_legacy_shared",
+						`Profile not valid: "${profile.name}" requires its own OpenAI Codex sign-in.`,
+					)
+				case "reauthentication-required":
+					return invalidProfile(
+						profile,
+						"reauthentication_required",
+						`Profile not valid: "${profile.name}" must sign in to OpenAI Codex again.`,
+					)
+				case "missing":
+				default:
+					return invalidProfile(
 						profile,
 						"credential_unavailable",
-						`Profile not valid: credentials for "${profile.name}" are unavailable.`,
+						`Profile not valid: credentials for "${profile.name}" are unavailable. Sign in to OpenAI Codex.`,
 					)
+			}
 		}
 		case "oca": {
 			const token = await (probes.getOcaAuthToken ?? defaultOcaProbe)()

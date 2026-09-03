@@ -33,6 +33,16 @@ export type OpenAiCodexCredentials = OpenAiOAuthCredentials
 
 type OpenAiCodexManagerStrategy = OAuthAuthorizationStrategy<OpenAiOAuthCredentials> & OpenAiCodexRefreshStrategy
 
+export type OpenAiCodexRuntimeMutationReason = "credential-saved" | "credential-cleared" | "reauthentication-required"
+
+export interface OpenAiCodexRuntimeMutationEvent {
+	profileId: string
+	reason: OpenAiCodexRuntimeMutationReason
+	revision: number
+}
+
+export type OpenAiCodexRuntimeMutationListener = (event: OpenAiCodexRuntimeMutationEvent) => void | Promise<void>
+
 export interface OpenAiCodexOAuthManagerOptions {
 	repository?: OpenAiCodexProfileAuthRepository
 	strategy?: OpenAiCodexManagerStrategy
@@ -57,6 +67,9 @@ export class OpenAiCodexOAuthManager {
 	private migrationResult: OpenAiCodexProfileAuthMigrationResult | undefined
 	private readonly generations = new Map<string, number>()
 	private readonly mutationTails = new Map<string, Promise<void>>()
+	private readonly runtimeRevisions = new Map<string, number>()
+	private readonly runtimeMutationListeners = new Set<OpenAiCodexRuntimeMutationListener>()
+	private readonly publishedReauthenticationRequired = new Set<string>()
 	private activeFlow: { flowId: string; profileId: string; generation: number } | undefined
 
 	constructor(options: OpenAiCodexOAuthManagerOptions = {}) {
@@ -81,13 +94,17 @@ export class OpenAiCodexOAuthManager {
 	async getCredentialContext(profileId: string): Promise<OpenAiCodexCredentialContext | null> {
 		await this.ensureLegacyMigration()
 		if (this.isLegacyShared(profileId)) return null
-		return this.sessions.getCredentialContext(profileId)
+		const context = await this.sessions.getCredentialContext(profileId)
+		await this.publishReauthenticationRequiredIfNeeded(profileId, context)
+		return context
 	}
 
 	async forceRefreshCredentialContext(profileId: string): Promise<OpenAiCodexCredentialContext | null> {
 		await this.ensureLegacyMigration()
 		if (this.isLegacyShared(profileId)) return null
-		return this.sessions.forceRefreshCredentialContext(profileId)
+		const context = await this.sessions.forceRefreshCredentialContext(profileId)
+		await this.publishReauthenticationRequiredIfNeeded(profileId, context)
+		return context
 	}
 
 	async getAuthStatus(profileId: string): Promise<OpenAiCodexProfileAuthStatus> {
@@ -116,6 +133,15 @@ export class OpenAiCodexOAuthManager {
 		return flow?.profileId === profileId ? { profileId: flow.profileId, flowId: flow.flowId } : undefined
 	}
 
+	subscribeToRuntimeMutations(listener: OpenAiCodexRuntimeMutationListener): () => void {
+		this.runtimeMutationListeners.add(listener)
+		return () => this.runtimeMutationListeners.delete(listener)
+	}
+
+	getRuntimeRevision(profileId: string): number {
+		return this.runtimeRevisions.get(profileId) ?? 0
+	}
+
 	/** @deprecated TASK-005 migrates Provider consumers to the atomic credential context API. */
 	async getAccessToken(profileId: string): Promise<string | null> {
 		return (await this.getCredentialContext(profileId))?.accessToken ?? null
@@ -133,8 +159,12 @@ export class OpenAiCodexOAuthManager {
 
 	async saveCredentials(profileId: string, credentials: OpenAiCodexCredentials): Promise<void> {
 		this.advanceGeneration(profileId)
-		await this.withProfileMutation(profileId, () => this.sessions.saveCredential(profileId, credentials))
+		await this.withProfileMutation(profileId, async () => {
+			await this.sessions.saveCredential(profileId, credentials)
+		})
+		this.publishedReauthenticationRequired.delete(profileId)
 		await this.ensureLegacyMigration(true)
+		await this.publishRuntimeMutation(profileId, "credential-saved")
 	}
 
 	async clearCredentials(profileId: string): Promise<void> {
@@ -142,7 +172,11 @@ export class OpenAiCodexOAuthManager {
 		this.advanceGeneration(profileId)
 		const activeFlow = this.activeFlow?.profileId === profileId ? this.activeFlow : undefined
 		if (activeFlow) await this.cancelCoordinatorFlow(activeFlow.profileId, activeFlow.flowId)
-		await this.withProfileMutation(profileId, () => this.sessions.clearCredential(profileId))
+		await this.withProfileMutation(profileId, async () => {
+			await this.sessions.clearCredential(profileId)
+		})
+		this.publishedReauthenticationRequired.delete(profileId)
+		await this.publishRuntimeMutation(profileId, "credential-cleared")
 	}
 
 	async startAuthorizationFlow(profileId: string): Promise<OAuthFlowStarted<OpenAiCodexCredentials>> {
@@ -188,11 +222,12 @@ export class OpenAiCodexOAuthManager {
 	async dispose(): Promise<void> {
 		if (this.activeFlow) this.advanceGeneration(this.activeFlow.profileId)
 		this.activeFlow = undefined
+		this.runtimeMutationListeners.clear()
 		await this.coordinator.dispose()
 	}
 
-	private persistFlowCredential(flowId: string, profileId: string, credential: OpenAiCodexCredentials): Promise<void> {
-		return this.withProfileMutation(profileId, async () => {
+	private async persistFlowCredential(flowId: string, profileId: string, credential: OpenAiCodexCredentials): Promise<void> {
+		await this.withProfileMutation(profileId, async () => {
 			const activeFlow = this.activeFlow
 			if (
 				!activeFlow ||
@@ -203,8 +238,10 @@ export class OpenAiCodexOAuthManager {
 				throw new Error("The OAuth authorization flow is no longer current.")
 			}
 			await this.sessions.saveCredential(profileId, credential)
+			this.publishedReauthenticationRequired.delete(profileId)
 			await this.ensureLegacyMigration(true)
 		})
+		await this.publishRuntimeMutation(profileId, "credential-saved")
 	}
 
 	private async ensureLegacyMigration(force = false): Promise<OpenAiCodexProfileAuthMigrationResult> {
@@ -222,6 +259,26 @@ export class OpenAiCodexOAuthManager {
 			if (this.migrationPromise === operation) this.migrationPromise = undefined
 			throw error
 		}
+	}
+
+	private async publishReauthenticationRequiredIfNeeded(
+		profileId: string,
+		context: OpenAiCodexCredentialContext | null,
+	): Promise<void> {
+		if (context) {
+			this.publishedReauthenticationRequired.delete(profileId)
+			return
+		}
+		if ((await this.sessions.getAuthStatus(profileId)) !== "reauthentication-required") return
+		if (this.publishedReauthenticationRequired.has(profileId)) return
+		this.publishedReauthenticationRequired.add(profileId)
+		await this.publishRuntimeMutation(profileId, "reauthentication-required")
+	}
+
+	private async publishRuntimeMutation(profileId: string, reason: OpenAiCodexRuntimeMutationReason): Promise<void> {
+		const revision = this.getRuntimeRevision(profileId) + 1
+		this.runtimeRevisions.set(profileId, revision)
+		await Promise.allSettled([...this.runtimeMutationListeners].map((listener) => listener({ profileId, reason, revision })))
 	}
 
 	private isLegacyShared(profileId: string): boolean {

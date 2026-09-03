@@ -7,7 +7,7 @@ import type { ChatCompletionTool } from "openai/resources/chat/completions"
 import * as os from "os"
 import { MessageEvent as UndiciMessageEvent, WebSocket as UndiciWebSocket } from "undici"
 import { v7 as uuidv7 } from "uuid"
-import { openAiCodexOAuthManager } from "@/integrations/openai-codex/oauth"
+import { type OpenAiCodexCredentialContext, openAiCodexOAuthManager } from "@/integrations/openai-codex/oauth"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { featureFlagsService } from "@/services/feature-flags"
 import { ClineStorageMessage } from "@/shared/messages/content"
@@ -34,6 +34,19 @@ const CODEX_API_BASE_URL = "https://chatgpt.com/backend-api/codex"
 const CODEX_RESPONSES_WEBSOCKET_URL = "wss://chatgpt.com/backend-api/codex/responses"
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 const CODEX_USAGE_TIMEOUT_MS = 10_000
+const SAFE_CODEX_ERROR_CODES = new Set([
+	"authentication_error",
+	"invalid_request_error",
+	"invalid_token",
+	"previous_response_not_found",
+	"provider_failure",
+	"rate_limit_exceeded",
+	"unauthorized",
+	"websocket_closed",
+	"websocket_concurrency_limit",
+	"websocket_error",
+	"websocket_parse_error",
+])
 
 interface CodexUsageWindow {
 	used_percent?: number
@@ -64,16 +77,22 @@ interface CodexUsageResponse {
 export class OpenAiCodexHandler implements ApiHandler {
 	private client?: OpenAI
 	private responsesWs: UndiciWebSocket | undefined
+	private responsesWsCredentialContext: OpenAiCodexCredentialContext | undefined
 	private websocketRequestInFlight = false
 	// Session ID for the Codex API (persists for the lifetime of the handler)
 	private readonly sessionId: string
 	// Abort controller for cancelling ongoing requests
 	private abortController?: AbortController
 	private accountUsageController?: AbortController
+	private readonly profileId: string
+	private runtimeMutationDispose?: () => void
+	private activeRuntimeOperations = 0
 	// Track request-local Responses item and function identities.
 	private responsesRegistry: ResponsesIdentityRegistry = createResponsesRegistry("openai-codex")
 
 	constructor(private ctx: ApiHandlerContext) {
+		if (!ctx.profile.id?.trim()) throw new Error("OpenAI Codex requires a non-empty Profile ID.")
+		this.profileId = ctx.profile.id
 		this.sessionId = uuidv7()
 	}
 
@@ -95,6 +114,72 @@ export class OpenAiCodexHandler implements ApiHandler {
 	}
 	private get serviceTier() {
 		return this.config?.serviceTierEnabled === false ? undefined : normalizeOpenAiServiceTier(this.config?.serviceTier)
+	}
+
+	private beginRuntimeOperation(): () => void {
+		this.activeRuntimeOperations++
+		this.ensureRuntimeMutationSubscription()
+		let released = false
+		return () => {
+			if (released) return
+			released = true
+			this.activeRuntimeOperations--
+			this.releaseRuntimeMutationSubscriptionIfIdle()
+		}
+	}
+
+	private ensureRuntimeMutationSubscription(): void {
+		this.runtimeMutationDispose ??= openAiCodexOAuthManager.subscribeToRuntimeMutations((event) => {
+			if (event.profileId === this.profileId) this.abort()
+		})
+	}
+
+	private releaseRuntimeMutationSubscriptionIfIdle(): void {
+		const websocketOpen =
+			this.responsesWs?.readyState === UndiciWebSocket.OPEN || this.responsesWs?.readyState === UndiciWebSocket.CONNECTING
+		if (this.activeRuntimeOperations > 0 || websocketOpen) return
+		this.runtimeMutationDispose?.()
+		this.runtimeMutationDispose = undefined
+	}
+
+	private isSameCredentialContext(
+		left: OpenAiCodexCredentialContext | undefined,
+		right: OpenAiCodexCredentialContext,
+	): boolean {
+		return left?.accessToken === right.accessToken && left.accountId === right.accountId
+	}
+
+	private safeErrorStatus(error: unknown): number | undefined {
+		if (typeof error !== "object" || error === null || !("status" in error)) return undefined
+		const status = (error as { status?: unknown }).status
+		return typeof status === "number" && Number.isInteger(status) ? status : undefined
+	}
+
+	private safeErrorCode(error: unknown): string | undefined {
+		if (typeof error !== "object" || error === null || !("code" in error)) return undefined
+		const code = (error as { code?: unknown }).code
+		return typeof code === "string" && SAFE_CODEX_ERROR_CODES.has(code) ? code : undefined
+	}
+
+	private toSafeProviderError(error: unknown): Error & { status?: number; code?: string } {
+		const status = this.safeErrorStatus(error)
+		const code = this.safeErrorCode(error)
+		const suffix = status !== undefined ? ` with status ${status}` : code ? ` (${code})` : ""
+		return Object.assign(new Error(`OpenAI Codex request failed${suffix}.`), {
+			...(status !== undefined ? { status } : {}),
+			...(code ? { code } : {}),
+		})
+	}
+
+	private isAuthenticationFailure(error: unknown): boolean {
+		if (typeof error === "object" && error !== null) {
+			const status = "status" in error ? (error as { status?: unknown }).status : undefined
+			if (status === 401) return true
+			const code = "code" in error ? (error as { code?: unknown }).code : undefined
+			if (typeof code === "string" && /^(?:401|unauthorized|invalid_token|authentication_error)$/i.test(code)) return true
+		}
+		const message = error instanceof Error ? error.message : String(error)
+		return /unauthorized|invalid token|not authenticated|authentication|401/i.test(message)
 	}
 
 	supportsServerTool(tool: ServerTool): boolean {
@@ -149,36 +234,36 @@ export class OpenAiCodexHandler implements ApiHandler {
 
 	/** Fetch current ChatGPT Codex quota windows for this OAuth account. */
 	async getAccountUsage(): Promise<AccountUsage | undefined> {
+		const releaseRuntime = this.beginRuntimeOperation()
 		this.accountUsageController?.abort()
 		const controller = new AbortController()
 		this.accountUsageController = controller
 		const timeout = setTimeout(() => controller.abort(), CODEX_USAGE_TIMEOUT_MS)
 
 		try {
-			let accessToken = await openAiCodexOAuthManager.getAccessToken(this.ctx.profile.id)
-			if (!accessToken) {
+			let credential = await openAiCodexOAuthManager.getCredentialContext(this.profileId)
+			if (!credential) {
 				return undefined
 			}
 
 			for (let attempt = 0; attempt < 2; attempt++) {
-				const accountId = await openAiCodexOAuthManager.getAccountId(this.ctx.profile.id)
 				const response = await fetch(CODEX_USAGE_URL, {
 					headers: {
-						Authorization: `Bearer ${accessToken}`,
+						Authorization: `Bearer ${credential.accessToken}`,
 						originator: "dline",
 						"User-Agent": `dline/${process.env.npm_package_version || "1.0.0"}`,
-						...(accountId ? { "ChatGPT-Account-Id": accountId } : {}),
+						...(credential.accountId ? { "ChatGPT-Account-Id": credential.accountId } : {}),
 						...buildExternalBasicHeaders(),
 					},
 					signal: controller.signal,
 				})
 
 				if (response.status === 401 && attempt === 0) {
-					const refreshed = await openAiCodexOAuthManager.forceRefreshAccessToken(this.ctx.profile.id)
+					const refreshed = await openAiCodexOAuthManager.forceRefreshCredentialContext(this.profileId)
 					if (!refreshed) {
 						return undefined
 					}
-					accessToken = refreshed
+					credential = refreshed
 					continue
 				}
 				if (!response.ok) {
@@ -209,6 +294,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 			if (this.accountUsageController === controller) {
 				this.accountUsageController = undefined
 			}
+			releaseRuntime()
 		}
 	}
 
@@ -261,46 +347,54 @@ export class OpenAiCodexHandler implements ApiHandler {
 		tools?: ChatCompletionTool[],
 		options?: ApiRequestOptions,
 	): ApiStream {
-		const model = this.getModel()
+		const releaseRuntime = this.beginRuntimeOperation()
+		try {
+			const model = this.getModel()
 
-		// Reset request-local Responses identity state.
-		this.responsesRegistry = createResponsesRegistry("openai-codex")
+			// Reset request-local Responses identity state.
+			this.responsesRegistry = createResponsesRegistry("openai-codex")
 
-		// Get access token from OAuth manager
-		let accessToken = await openAiCodexOAuthManager.getAccessToken(this.ctx.profile.id)
-		if (!accessToken) {
-			throw new Error("Not authenticated with OpenAI Codex. Please sign in using the OpenAI Codex OAuth flow in settings.")
-		}
-		const useWebsocketMode = this.useWebsocketMode(model.info.apiFormats?.[0])
-		const { input, previousResponseId } = convertToOpenAIResponsesInput(messages, { usePreviousResponseId: useWebsocketMode })
-		const usePreviousResponseId = useWebsocketMode && !!previousResponseId
-
-		// Build request body
-		const requestBody = this.buildRequestBody(model, input, systemPrompt, tools, previousResponseId, options)
-		const fallbackRequestBody = this.buildRequestBody(model, input, systemPrompt, tools, undefined, options)
-
-		// Make the request with retry on auth failure
-		for (let attempt = 0; attempt < 2; attempt++) {
-			try {
-				yield* this.executeRequest(requestBody, fallbackRequestBody, model, accessToken, usePreviousResponseId)
-				return
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error)
-				const isAuthFailure = /unauthorized|invalid token|not authenticated|authentication|401/i.test(message)
-
-				if (attempt === 0 && isAuthFailure) {
-					// Force refresh the token for retry
-					const refreshed = await openAiCodexOAuthManager.forceRefreshAccessToken(this.ctx.profile.id)
-					if (!refreshed) {
-						throw new Error(
-							"Not authenticated with OpenAI Codex. Please sign in using the OpenAI Codex OAuth flow in settings.",
-						)
-					}
-					accessToken = refreshed
-					continue
-				}
-				throw error
+			// Resolve token and account identity from one Profile-owned snapshot.
+			let credential = await openAiCodexOAuthManager.getCredentialContext(this.profileId)
+			if (!credential) {
+				throw new Error(
+					"Not authenticated with OpenAI Codex. Please sign in using the OpenAI Codex OAuth flow in settings.",
+				)
 			}
+			const useWebsocketMode = this.useWebsocketMode(model.info.apiFormats?.[0])
+			const { input, previousResponseId } = convertToOpenAIResponsesInput(messages, {
+				usePreviousResponseId: useWebsocketMode,
+			})
+			const usePreviousResponseId = useWebsocketMode && !!previousResponseId
+
+			// Build request body
+			const requestBody = this.buildRequestBody(model, input, systemPrompt, tools, previousResponseId, options)
+			const fallbackRequestBody = this.buildRequestBody(model, input, systemPrompt, tools, undefined, options)
+
+			// Make the request with retry on auth failure
+			for (let attempt = 0; attempt < 2; attempt++) {
+				try {
+					yield* this.executeRequest(requestBody, fallbackRequestBody, model, credential, usePreviousResponseId)
+					return
+				} catch (error) {
+					if (this.isAuthenticationFailure(error)) {
+						if (attempt === 0) {
+							const refreshed = await openAiCodexOAuthManager.forceRefreshCredentialContext(this.profileId)
+							if (refreshed) {
+								credential = refreshed
+								continue
+							}
+						}
+						throw Object.assign(new Error("Not authenticated with OpenAI Codex. Sign in to this Profile again."), {
+							status: 401,
+						})
+					}
+					if (isOutputLimitExceededError(error)) throw error
+					throw this.toSafeProviderError(error)
+				}
+			}
+		} finally {
+			releaseRuntime()
 		}
 	}
 
@@ -375,34 +469,34 @@ export class OpenAiCodexHandler implements ApiHandler {
 		requestBody: any,
 		fallbackRequestBody: any,
 		model: { id: string; info: ModelInfo },
-		accessToken: string,
+		credential: OpenAiCodexCredentialContext,
 		useWebsocketMode: boolean,
 	): ApiStream {
 		// Create AbortController for cancellation
 		this.abortController = new AbortController()
 
 		try {
-			// Get ChatGPT account ID for organization subscriptions
-			const accountId = await openAiCodexOAuthManager.getAccountId(this.ctx.profile.id)
-
-			// Build Codex-specific headers
+			// Build Codex-specific headers from the same snapshot as Authorization.
 			const codexHeaders: Record<string, string> = {
 				originator: "dline",
 				session_id: this.sessionId,
 				"User-Agent": `dline/${process.env.npm_package_version || "1.0.0"} (${os.platform()} ${os.release()}; ${os.arch()}) node/${process.version.slice(1)}`,
-				...(accountId ? { "ChatGPT-Account-Id": accountId } : {}),
+				...(credential.accountId ? { "ChatGPT-Account-Id": credential.accountId } : {}),
 				...buildExternalBasicHeaders(),
 			}
 
 			if (useWebsocketMode) {
 				try {
-					yield* this.createResponseStreamWebsocket(requestBody, fallbackRequestBody, accessToken, codexHeaders, model)
+					yield* this.createResponseStreamWebsocket(requestBody, fallbackRequestBody, credential, codexHeaders, model)
 					return
 				} catch (error) {
-					if (isOutputLimitExceededError(error)) {
+					if (isOutputLimitExceededError(error) || this.isAuthenticationFailure(error)) {
 						throw error
 					}
-					Logger.error("OpenAI Codex websocket mode failed, falling back to HTTP Responses API:", error)
+					const diagnostic = this.toSafeProviderError(error)
+					Logger.error(
+						`OpenAI Codex websocket mode failed; falling back to HTTP Responses API (status=${diagnostic.status ?? "unknown"}, code=${diagnostic.code ?? "unknown"}).`,
+					)
 					this.closeResponsesWebsocket()
 				}
 			}
@@ -412,7 +506,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 				const client =
 					this.client ??
 					new OpenAI({
-						apiKey: accessToken,
+						apiKey: credential.accessToken,
 						baseURL: CODEX_API_BASE_URL,
 						defaultHeaders: codexHeaders,
 						fetch: providerFetch,
@@ -437,11 +531,11 @@ export class OpenAiCodexHandler implements ApiHandler {
 					}
 				}
 			} catch (error) {
-				if (isOutputLimitExceededError(error)) {
+				if (isOutputLimitExceededError(error) || this.isAuthenticationFailure(error)) {
 					throw error
 				}
 				// Fallback to manual SSE via fetch
-				yield* this.makeCodexRequest(requestBody, model, accessToken)
+				yield* this.makeCodexRequest(requestBody, model, credential)
 			}
 		} finally {
 			this.abortController = undefined
@@ -451,12 +545,12 @@ export class OpenAiCodexHandler implements ApiHandler {
 	private async *createResponseStreamWebsocket(
 		primaryParams: OpenAI.Responses.ResponseCreateParamsStreaming,
 		fallbackParams: OpenAI.Responses.ResponseCreateParamsStreaming,
-		accessToken: string,
+		credential: OpenAiCodexCredentialContext,
 		codexHeaders: Record<string, string>,
 		model: { id: string; info: ModelInfo },
 	): ApiStream {
 		try {
-			for await (const event of this.createResponseEventsViaWebsocket(primaryParams, accessToken, codexHeaders)) {
+			for await (const event of this.createResponseEventsViaWebsocket(primaryParams, credential, codexHeaders)) {
 				if (this.abortController?.signal.aborted) {
 					return
 				}
@@ -468,7 +562,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 					"Retrying Codex websocket response with full context after previous_response_not_found or socket reset",
 				)
 				this.closeResponsesWebsocket()
-				for await (const event of this.createResponseEventsViaWebsocket(fallbackParams, accessToken, codexHeaders)) {
+				for await (const event of this.createResponseEventsViaWebsocket(fallbackParams, credential, codexHeaders)) {
 					if (this.abortController?.signal.aborted) {
 						return
 					}
@@ -495,8 +589,15 @@ export class OpenAiCodexHandler implements ApiHandler {
 		return false
 	}
 
-	private async ensureResponsesWebsocket(accessToken: string, codexHeaders: Record<string, string>): Promise<UndiciWebSocket> {
-		if (this.responsesWs && this.responsesWs.readyState === UndiciWebSocket.OPEN) {
+	private async ensureResponsesWebsocket(
+		credential: OpenAiCodexCredentialContext,
+		codexHeaders: Record<string, string>,
+	): Promise<UndiciWebSocket> {
+		if (
+			this.responsesWs &&
+			this.responsesWs.readyState === UndiciWebSocket.OPEN &&
+			this.isSameCredentialContext(this.responsesWsCredentialContext, credential)
+		) {
 			return this.responsesWs
 		}
 
@@ -504,7 +605,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 
 		const ws = new UndiciWebSocket(CODEX_RESPONSES_WEBSOCKET_URL, {
 			headers: {
-				Authorization: `Bearer ${accessToken}`,
+				Authorization: `Bearer ${credential.accessToken}`,
 				"OpenAI-Beta": "responses_websockets=2026-02-06",
 				...codexHeaders,
 			},
@@ -534,6 +635,8 @@ export class OpenAiCodexHandler implements ApiHandler {
 		})
 
 		this.responsesWs = ws
+		this.responsesWsCredentialContext = { ...credential }
+		this.ensureRuntimeMutationSubscription()
 		return ws
 	}
 
@@ -543,12 +646,14 @@ export class OpenAiCodexHandler implements ApiHandler {
 				this.responsesWs.close()
 			} catch {}
 			this.responsesWs = undefined
+			this.responsesWsCredentialContext = undefined
 		}
+		this.releaseRuntimeMutationSubscriptionIfIdle()
 	}
 
 	private async *createResponseEventsViaWebsocket(
 		params: OpenAI.Responses.ResponseCreateParamsStreaming,
-		accessToken: string,
+		credential: OpenAiCodexCredentialContext,
 		codexHeaders: Record<string, string>,
 	): AsyncGenerator<OpenAI.Responses.ResponseStreamEvent> {
 		if (this.websocketRequestInFlight) {
@@ -557,7 +662,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 			throw error
 		}
 
-		const ws = await this.ensureResponsesWebsocket(accessToken, codexHeaders)
+		const ws = await this.ensureResponsesWebsocket(credential, codexHeaders)
 		this.websocketRequestInFlight = true
 
 		const eventQueue: OpenAI.Responses.ResponseStreamEvent[] = []
@@ -586,8 +691,8 @@ export class OpenAiCodexHandler implements ApiHandler {
 
 				const parsed = JSON.parse(raw)
 				if (parsed?.type === "error" && parsed?.error) {
-					const error: Error & { code?: string } = new Error(parsed.error.message || "Codex Responses websocket error")
-					error.code = parsed.error.code
+					const error: Error & { code?: string } = new Error("Codex Responses websocket error")
+					error.code = this.safeErrorCode(parsed.error)
 					failure = error
 					completed = true
 					wake()
@@ -598,10 +703,8 @@ export class OpenAiCodexHandler implements ApiHandler {
 					const responseError = parsed.response?.error
 					// Preserve the upstream code: downstream retry classification needs it to
 					// tell a transient gateway failure apart from an account-level rejection.
-					const failedError: Error & { code?: string } = new Error(
-						responseError?.message || "Codex Responses websocket request failed",
-					)
-					failedError.code = responseError?.code
+					const failedError: Error & { code?: string } = new Error("Codex Responses websocket request failed")
+					failedError.code = this.safeErrorCode(responseError)
 					failure = failedError
 					completed = true
 					wake()
@@ -691,24 +794,25 @@ export class OpenAiCodexHandler implements ApiHandler {
 		}
 	}
 
-	private async *makeCodexRequest(requestBody: any, model: { id: string; info: ModelInfo }, accessToken: string): ApiStream {
+	private async *makeCodexRequest(
+		requestBody: any,
+		model: { id: string; info: ModelInfo },
+		credential: OpenAiCodexCredentialContext,
+	): ApiStream {
 		const url = `${CODEX_API_BASE_URL}/responses`
-
-		// Get ChatGPT account ID for organization subscriptions
-		const accountId = await openAiCodexOAuthManager.getAccountId(this.ctx.profile.id)
 
 		// Build headers with required Codex-specific fields
 		const headers: Record<string, string> = {
 			"Content-Type": "application/json",
-			Authorization: `Bearer ${accessToken}`,
+			Authorization: `Bearer ${credential.accessToken}`,
 			originator: "dline",
 			session_id: this.sessionId,
 			"User-Agent": `dline/${process.env.npm_package_version || "1.0.0"} (${os.platform()} ${os.release()}; ${os.arch()}) node/${process.version.slice(1)}`,
 		}
 
 		// Add ChatGPT-Account-Id if available
-		if (accountId) {
-			headers["ChatGPT-Account-Id"] = accountId
+		if (credential.accountId) {
+			headers["ChatGPT-Account-Id"] = credential.accountId
 		}
 
 		try {
@@ -720,23 +824,17 @@ export class OpenAiCodexHandler implements ApiHandler {
 			})
 
 			if (!response.ok) {
-				const errorText = await response.text()
-				let errorMessage = `Codex API request failed: ${response.status}`
-
+				let code: string | undefined
 				try {
-					const errorJson = JSON.parse(errorText)
-					if (errorJson.error?.message) {
-						errorMessage = errorJson.error.message
-					} else if (errorJson.message) {
-						errorMessage = errorJson.message
-					}
+					const payload = (await response.json()) as { error?: { code?: unknown }; code?: unknown }
+					code = this.safeErrorCode(payload.error ?? payload)
 				} catch {
-					if (errorText) {
-						errorMessage += ` - ${errorText}`
-					}
+					// The response body is intentionally discarded because it may contain account data.
 				}
-
-				throw new Error(errorMessage)
+				throw Object.assign(new Error("Codex API request rejected"), {
+					status: response.status,
+					...(code ? { code } : {}),
+				})
 			}
 
 			if (!response.body) {
@@ -748,10 +846,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 			if (isOutputLimitExceededError(error)) {
 				throw error
 			}
-			if (error instanceof Error) {
-				throw new Error(`Codex API error: ${error.message}`)
-			}
-			throw new Error("Unexpected error connecting to Codex API")
+			throw this.toSafeProviderError(error)
 		}
 	}
 
@@ -950,6 +1045,8 @@ export class OpenAiCodexHandler implements ApiHandler {
 		this.closeResponsesWebsocket()
 		this.abortController?.abort()
 		this.accountUsageController?.abort()
+		this.runtimeMutationDispose?.()
+		this.runtimeMutationDispose = undefined
 	}
 
 	getModel(): { id: OpenAiCodexModelId; info: ModelInfo } {

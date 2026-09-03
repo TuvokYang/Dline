@@ -1,3 +1,4 @@
+import { mockFetchForTesting } from "@shared/net"
 import { ServerTool } from "@shared/proto/dline/models/metadata"
 import { ApiProfile } from "@shared/proto/dline/profile"
 import { expect } from "chai"
@@ -20,7 +21,7 @@ const localTools: ChatCompletionTool[] = [
 
 function createHandler(): OpenAiCodexHandler {
 	return new OpenAiCodexHandler({
-		profile: ApiProfile.create({ provider: "openai-codex", modelId: "gpt-5.6-sol" }),
+		profile: ApiProfile.create({ id: "profile-a", provider: "openai-codex", modelId: "gpt-5.6-sol" }),
 		mode: "act",
 	})
 }
@@ -29,6 +30,16 @@ async function collect(stream: AsyncIterable<unknown>): Promise<unknown[]> {
 	const chunks: unknown[] = []
 	for await (const chunk of stream) chunks.push(chunk)
 	return chunks
+}
+
+function deferred<T>() {
+	let resolve!: (value: T | PromiseLike<T>) => void
+	let reject!: (reason?: unknown) => void
+	const promise = new Promise<T>((res, rej) => {
+		resolve = res
+		reject = rej
+	})
+	return { promise, resolve, reject }
 }
 
 describe("OpenAiCodexHandler hosted Web Search", () => {
@@ -45,7 +56,11 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 
 	it("projects hosted Web Search through the public request boundary", async () => {
 		const handler = createHandler()
-		vi.spyOn(openAiCodexOAuthManager, "getAccessToken").mockResolvedValue("access-token")
+		vi.spyOn(openAiCodexOAuthManager, "getCredentialContext").mockResolvedValue({
+			accessToken: "access-token",
+			expires: 1_900_000_000_000,
+			accountId: "account-a",
+		})
 		let requestBody: Record<string, unknown> | undefined
 		let fallbackRequestBody: Record<string, unknown> | undefined
 		vi.spyOn(handler as any, "executeRequest").mockImplementation(async function* (...args: unknown[]) {
@@ -181,7 +196,6 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 
 	it("surfaces Codex max_output_tokens as typed termination without HTTP fallback", async () => {
 		const handler = createHandler()
-		vi.spyOn(openAiCodexOAuthManager, "getAccountId").mockResolvedValue(null)
 		const responseStream = {
 			async *[Symbol.asyncIterator]() {
 				yield {
@@ -197,7 +211,15 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 
 		let caught: unknown
 		try {
-			await collect((handler as any).executeRequest({}, {}, handler.getModel(), "access-token", false))
+			await collect(
+				(handler as any).executeRequest(
+					{},
+					{},
+					handler.getModel(),
+					{ accessToken: "access-token", expires: 1_900_000_000_000 },
+					false,
+				),
+			)
 		} catch (error) {
 			caught = error
 		}
@@ -247,6 +269,135 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 		expect(cancelBody.mock.calls[0]?.[0]).to.equal(undefined)
 	})
 
+	it("rejects a Codex handler without a stable Profile ID", () => {
+		expect(
+			() =>
+				new OpenAiCodexHandler({
+					profile: ApiProfile.create({ provider: "openai-codex", modelId: "gpt-5.6-sol" }),
+					mode: "act",
+				}),
+		).to.throw("Profile ID")
+	})
+
+	it("passes one atomic credential context through the request transport", async () => {
+		const handler = createHandler()
+		const credential = { accessToken: "access-a", expires: 1_900_000_000_000, accountId: "account-a" }
+		const getCredential = vi.spyOn(openAiCodexOAuthManager, "getCredentialContext").mockResolvedValue(credential)
+		const legacyTokenProbe = vi
+			.spyOn(openAiCodexOAuthManager, "getAccessToken")
+			.mockRejectedValue(new Error("legacy token probe used"))
+		const execute = vi.spyOn(handler as any, "executeRequest").mockImplementation(async function* () {})
+
+		await collect(handler.createMessage("system", [{ role: "user", content: "hello" }]))
+
+		expect(getCredential.mock.calls).to.deep.equal([["profile-a"]])
+		expect(legacyTokenProbe.mock.calls).to.have.length(0)
+		expect(execute.mock.calls[0]?.[3]).to.equal(credential)
+	})
+
+	it("replaces token and account ID together when retrying a 401", async () => {
+		const handler = createHandler()
+		const first = { accessToken: "access-a", expires: 1_900_000_000_000, accountId: "account-a" }
+		const refreshed = { accessToken: "access-b", expires: 1_900_000_100_000, accountId: "account-b" }
+		vi.spyOn(openAiCodexOAuthManager, "getCredentialContext").mockResolvedValue(first)
+		const refresh = vi.spyOn(openAiCodexOAuthManager, "forceRefreshCredentialContext").mockResolvedValue(refreshed)
+		const contexts: unknown[] = []
+		vi.spyOn(handler as any, "executeRequest").mockImplementation(async function* (...args: unknown[]) {
+			contexts.push(args[3])
+			if (contexts.length === 1) throw Object.assign(new Error("request rejected"), { status: 401 })
+		})
+
+		await collect(handler.createMessage("system", [{ role: "user", content: "hello" }]))
+
+		expect(refresh.mock.calls).to.deep.equal([["profile-a"]])
+		expect(contexts).to.deep.equal([first, refreshed])
+	})
+
+	it("uses matching token and account ID snapshots for usage before and after a 401", async () => {
+		const handler = createHandler()
+		const first = { accessToken: "access-a", expires: 1_900_000_000_000, accountId: "account-a" }
+		const refreshed = { accessToken: "access-b", expires: 1_900_000_100_000, accountId: "account-b" }
+		vi.spyOn(openAiCodexOAuthManager, "getCredentialContext").mockResolvedValue(first)
+		vi.spyOn(openAiCodexOAuthManager, "forceRefreshCredentialContext").mockResolvedValue(refreshed)
+		const headers: Array<{ authorization: string | null; accountId: string | null }> = []
+		const transport = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
+			const requestHeaders = new Headers(init?.headers)
+			headers.push({
+				authorization: requestHeaders.get("Authorization"),
+				accountId: requestHeaders.get("ChatGPT-Account-Id"),
+			})
+			return headers.length === 1
+				? new Response(undefined, { status: 401 })
+				: new Response(JSON.stringify({ credits: { balance: "9" } }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					})
+		})
+
+		const usage = await mockFetchForTesting(transport, () => handler.getAccountUsage())
+
+		expect(usage?.remainingBalance).to.equal(9)
+		expect(headers).to.deep.equal([
+			{ authorization: "Bearer access-a", accountId: "account-a" },
+			{ authorization: "Bearer access-b", accountId: "account-b" },
+		])
+	})
+
+	it("aborts only when the active handler receives a mutation for its own Profile", async () => {
+		const handler = createHandler()
+		const gate = deferred<void>()
+		const started = deferred<void>()
+		vi.spyOn(openAiCodexOAuthManager, "getCredentialContext").mockResolvedValue({
+			accessToken: "access-a",
+			expires: 1_900_000_000_000,
+			accountId: "account-a",
+		})
+		vi.spyOn(handler as any, "executeRequest").mockImplementation(async function* () {
+			started.resolve()
+			await gate.promise
+		})
+		const abort = vi.spyOn(handler, "abort")
+		const request = collect(handler.createMessage("system", [{ role: "user", content: "hello" }]))
+		await started.promise
+
+		await (openAiCodexOAuthManager as any).publishRuntimeMutation("profile-b", "credential-cleared")
+		expect(abort.mock.calls).to.have.length(0)
+		await (openAiCodexOAuthManager as any).publishRuntimeMutation("profile-a", "credential-cleared")
+		expect(abort.mock.calls).to.have.length(1)
+
+		gate.resolve()
+		await request
+	})
+
+	it("matches WebSocket reuse against both token and account ID", () => {
+		const handler = createHandler()
+		const first = { accessToken: "access-a", expires: 1_900_000_000_000, accountId: "account-a" }
+
+		expect((handler as any).isSameCredentialContext(first, { ...first })).to.equal(true)
+		expect((handler as any).isSameCredentialContext(first, { ...first, accessToken: "access-b" })).to.equal(false)
+		expect((handler as any).isSameCredentialContext(first, { ...first, accountId: "account-b" })).to.equal(false)
+	})
+
+	it("does not expose raw provider errors from the request boundary", async () => {
+		const handler = createHandler()
+		const secret = "access_token=secret-token&account_payload=secret-account"
+		vi.spyOn(openAiCodexOAuthManager, "getCredentialContext").mockResolvedValue({
+			accessToken: "access-a",
+			expires: 1_900_000_000_000,
+			accountId: "account-a",
+		})
+		vi.spyOn(handler as any, "executeRequest").mockImplementation(async function* () {
+			throw Object.assign(new Error(secret), { status: 500, code: "provider_failure" })
+		})
+
+		const error = await collect(handler.createMessage("system", [{ role: "user", content: "hello" }])).catch(
+			(caught: unknown) => caught,
+		)
+
+		expect(String(error)).not.to.contain(secret)
+		expect(error).to.deep.include({ status: 500, code: "provider_failure" })
+	})
+
 	it("sends hosted Web Search over WebSocket without the HTTP-only stream field", async () => {
 		const handler = createHandler()
 		const listeners = new Map<string, Set<(event: any) => void>>()
@@ -274,7 +425,7 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 		await collect(
 			(handler as any).createResponseEventsViaWebsocket(
 				{ model: "gpt-5.6-sol", input: [], stream: true, tools: [{ type: "web_search" }] },
-				"access-token",
+				{ accessToken: "access-token", expires: 1_900_000_000_000 },
 				{},
 			),
 		)
