@@ -1,10 +1,27 @@
 import type { Mode } from "./storage/types"
 
+/**
+ * Characters of `HistoryItem.task` text retained per entry.
+ *
+ * `task` is a list label, not the task itself: the panel title, the history
+ * row, and search all use it as short text, while the authoritative task text
+ * lives in the task's own `ui_messages.jsonl`. Keeping it verbatim let the
+ * single global `taskHistory` key grow without bound, which is what made state
+ * pushes reach megabytes in long-running workspaces.
+ */
+export const MAX_HISTORY_TASK_TEXT_LENGTH = 512
+
+/** Shorten one task text to the history label length. */
+export function summarizeHistoryTaskText(taskText: string): string {
+	return taskText.length <= MAX_HISTORY_TASK_TEXT_LENGTH ? taskText : taskText.slice(0, MAX_HISTORY_TASK_TEXT_LENGTH)
+}
+
 export type HistoryItem = {
 	id: string
 	ulid?: string // ULID for better tracking and metrics
 	/** Timestamp of the latest persisted task edit/activity, in milliseconds. */
 	ts: number
+	/** Short label for lists and titles, bounded by MAX_HISTORY_TASK_TEXT_LENGTH. */
 	task: string
 	tokensIn: number
 	tokensOut: number

@@ -7,6 +7,8 @@ import { ExtensionState } from "@/shared/ExtensionMessage"
 import { Logger } from "@/shared/services/Logger"
 import { getRequestRegistry, StreamingResponseHandler } from "../grpc-handler"
 import { Controller } from "../index"
+import { degradeOversizedState } from "./stateSizeGuard"
+import { formatStateSizeBreakdown, measureStateFieldSizes } from "./stateSizeProbe"
 
 // Per-controller subscription sets to isolate state updates between
 // independent webviews (sidebar vs. editor panels). Each Controller
@@ -23,6 +25,15 @@ const pendingUpdates = new Map<Controller, PendingUpdate>()
 const debounceTimers = new Map<Controller, ReturnType<typeof setTimeout>>()
 const controllerSendChains = new Map<Controller, Promise<void>>()
 const SLOW_STATE_OPERATION_MS = 100
+/**
+ * Total serialized size above which a payload is attributed field by field.
+ *
+ * The breakdown costs about as much as serializing the state again, so it is
+ * reserved for payloads already far outside the normal range: an ordinary push
+ * is orders of magnitude below this, while the pushes under investigation were
+ * around 12.5 MB.
+ */
+const STATE_SIZE_PROBE_THRESHOLD_BYTES = 2 * 1024 * 1024
 
 export interface StateSubscriptionCleanupResult {
 	subscriberCount: number
@@ -238,8 +249,27 @@ async function sendStateToSubscribers(
 			)
 		}
 		recordStateSizeTelemetry(stateSizeBytes)
+		reportOversizedState(controller, state, stateSizeBytes)
+
+		// Bounding the field that was found does not prevent the next unbounded
+		// one, and a payload this size occupies the host main thread for as long
+		// as it takes to serialize. Degrade rather than drop: a webview that
+		// receives nothing renders a blank panel.
+		const { state: payload, droppedFields } = degradeOversizedState(state, stateSizeBytes)
+		let payloadJson = stateJson
+		let payloadBytes = stateSizeBytes
+		if (droppedFields.length > 0) {
+			// Re-serialize, or the oversized JSON would still be the one sent.
+			payloadJson = JSON.stringify(payload)
+			payloadBytes = Buffer.byteLength(payloadJson, "utf8")
+			Logger.warn(
+				`[StateUpdate] degraded oversized state: taskId=${controller.task?.taskId ?? "none"}, ` +
+					`originalBytes=${stateSizeBytes}, sentBytes=${payloadBytes}, dropped=${droppedFields.join(",")}`,
+			)
+		}
+
 		await enqueueControllerSend(controller, async () => {
-			await sendPayloadToSubscribers(controller, stateJson, finalAccountUsage, stateSizeBytes)
+			await sendPayloadToSubscribers(controller, payloadJson, finalAccountUsage, payloadBytes)
 		})
 	} catch (error) {
 		Logger.error("Error serializing state update:", error)
@@ -288,4 +318,21 @@ async function sendPayloadToSubscribers(
 
 function recordStateSizeTelemetry(sizeBytes: number): void {
 	telemetryService.captureGrpcResponseSize(sizeBytes, "cline.StateService", "subscribeToState")
+}
+
+/**
+ * Names the field responsible for a payload that is far outside normal size.
+ *
+ * Total size alone says a push is too large but not what to fix, and with
+ * several tasks broadcasting at once that attribution is what decides whether
+ * a fix targets the right field.
+ */
+function reportOversizedState(controller: Controller, state: ExtensionState, stateSizeBytes: number): void {
+	if (stateSizeBytes < STATE_SIZE_PROBE_THRESHOLD_BYTES) {
+		return
+	}
+	const breakdown = measureStateFieldSizes(state, stateSizeBytes)
+	Logger.warn(
+		`[StateUpdate] oversized state: taskId=${controller.task?.taskId ?? "none"} ${formatStateSizeBreakdown(breakdown)}`,
+	)
 }

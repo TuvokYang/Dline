@@ -79,6 +79,12 @@ export interface ExtensionState {
 	currentTaskItem?: HistoryItem
 	currentFocusChainChecklist?: string | null
 	focusChainHistory?: string | null
+	/**
+	 * Set when this payload was reduced because it exceeded the size a state
+	 * push may occupy. Some fields are then absent rather than empty, and the
+	 * webview must not read their absence as the user having no data.
+	 */
+	stateDegraded?: boolean
 	mcpMarketplaceEnabled?: boolean
 	mcpDisplayMode: McpDisplayMode
 	planActSeparateModelsSetting: boolean

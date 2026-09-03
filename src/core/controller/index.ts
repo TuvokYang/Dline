@@ -104,7 +104,9 @@ import { getClineOnboardingModels } from "./models/getClineOnboardingModels"
 import { appendClineStealthModels } from "./models/refreshOpenRouterModels"
 import { ProfileSwitchCoordinator } from "./profile-switch/ProfileSwitchCoordinator"
 import type { ProfileSwitchOperation, ResolvedProfileTarget } from "./profile-switch/types"
+import { projectFocusChainHistory } from "./state/focusChainHistoryProjection"
 import { cleanupStateSubscriptions, sendAccountUsageUpdate, sendStateUpdate } from "./state/subscribeToState"
+import { projectTaskHistory } from "./state/taskHistoryProjection"
 import { prepareHistoryTaskForDisplay, projectHistoryPreparingView } from "./task/history-task-readiness"
 import { startTaskLifecycle } from "./task/task-start-lifecycle"
 import { sendChatButtonClickedEvent } from "./ui/subscribeToChatButtonClicked"
@@ -1768,10 +1770,16 @@ export class Controller {
 		// firstItemIndex is managed by fetchMessage; default to latest window on init
 		const firstItemIndex = Math.max(0, totalMessageCount - 100)
 		const checkpointManagerErrorMessage = this.task?.taskState.checkpointManagerErrorMessage
-		const processedTaskHistory = (taskHistory || [])
-			.filter((item) => item.ts && item.task)
-			.sort((a, b) => b.ts - a.ts)
-			.slice(0, 100) // for now we're only getting the latest 100 tasks, but a better solution here is to only pass in 3 for recent task history, and then get the full task history on demand when going to the task history view (maybe with pagination?)
+		// The entry cap below bounds how many tasks are sent but not how many
+		// bytes: HistoryItem.task holds the verbatim task text, so a workspace
+		// with long tasks rebroadcasts megabytes on every push. Project the text
+		// down to an identifying prefix; the full text stays on disk.
+		const processedTaskHistory = projectTaskHistory(
+			(taskHistory || [])
+				.filter((item) => item.ts && item.task)
+				.sort((a, b) => b.ts - a.ts)
+				.slice(0, 100), // for now we're only getting the latest 100 tasks, but a better solution here is to only pass in 3 for recent task history, and then get the full task history on demand when going to the task history view (maybe with pagination?)
+		).items
 
 		const latestAnnouncementId = getLatestAnnouncementId()
 		const shouldShowAnnouncement = lastShownAnnouncementId !== latestAnnouncementId
@@ -1825,7 +1833,11 @@ export class Controller {
 			promptCacheHealth: this.task?.getPromptCacheHealth(),
 			promptFreshness: this.task?.getPromptFreshness(),
 			currentFocusChainChecklist: checklistForState,
-			focusChainHistory: this.task?.taskState.focusChainHistory || null,
+			// The history file is append-only and used to be projected whole on
+			// every push, which is what made a long-running task rebroadcast a
+			// multi-megabyte payload several times a second. The full file stays
+			// on disk and is still opened directly from the panel.
+			focusChainHistory: projectFocusChainHistory(this.task?.taskState.focusChainHistory).text,
 			checkpointManagerErrorMessage,
 			autoApprovalSettings,
 			browserSettings,
