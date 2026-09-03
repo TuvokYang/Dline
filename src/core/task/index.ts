@@ -413,6 +413,39 @@ function createInteractionPorts(
 	}
 }
 
+/**
+ * What a task knew about itself when a response arrived with no ask listening.
+ *
+ * The conversation position and runtime phase are the two facts that separate
+ * a response racing an ask that had not finished opening its window from input
+ * typed while the task was simply working. Without them the log names only the
+ * symptom and leaves the mismatch to be inferred from surrounding timestamps.
+ */
+export interface UnroutedAskResponseContext {
+	taskId: string
+	response: ClineAskResponse
+	text?: string
+	images?: string[]
+	files?: string[]
+	/** Conversation length, or -1 when the task could not report one. */
+	messageCount: number
+	phase: string
+}
+
+/**
+ * Renders the diagnostic for a response that no ask was listening for.
+ *
+ * Kept free of task state so it stays callable from the anomalous path and
+ * from tests without standing up a task.
+ */
+export function formatUnroutedAskResponse(context: UnroutedAskResponseContext): string {
+	return (
+		`[Task ${context.taskId}] Ask response arrived while no ask was listening; refused: ` +
+		`response=${context.response}, hasText=${Boolean(context.text)}, images=${context.images?.length ?? 0}, ` +
+		`files=${context.files?.length ?? 0}, messages=${context.messageCount}, phase=${context.phase}`
+	)
+}
+
 export class Task {
 	// Core task variables
 	readonly taskId: string
@@ -985,6 +1018,13 @@ export class Task {
 				return { providerId: info.providerId, modelId: info.model.id, mode: info.mode }
 			},
 			genTs: () => this.genMessageTs(),
+			recordAskLifecycle: (record) => {
+				const elapsed = record.elapsedMs === undefined ? "" : ` elapsedMs=${record.elapsedMs}`
+				const reason = record.reason === undefined ? "" : ` reason=${record.reason}`
+				Logger.debug(
+					`[Task ${this.taskId}] askLifecycle event=${record.event} ask=${record.ask} ts=${record.askTs}${elapsed}${reason}`,
+				)
+			},
 		})
 		this.taskController = new TaskController(channel)
 		this.contextCompactionSession = this.createContextCompactionSession()
@@ -3659,7 +3699,22 @@ export class Task {
 		// the task is working belongs in the input queue, which delivers it at
 		// a tool round or turn end.
 		if (!this.taskController.resolveAsk(askResponse, text, images, files)) {
-			Logger.warn("[Task] Discarded an ask response that no pending ask was waiting for")
+			// Refused rather than stored: with nothing waiting, keeping it would
+			// let it answer whatever question is asked next. The reason a
+			// no ask was listening still needs to be recoverable from the log.
+			// Both lookups are optional: this path is already anomalous, and a
+			// diagnostic that threw would replace the report with its own failure.
+			Logger.warn(
+				formatUnroutedAskResponse({
+					taskId: this.taskId,
+					response: askResponse,
+					text,
+					images,
+					files,
+					messageCount: this.messageStateHandler?.clineMessages?.length ?? -1,
+					phase: this.taskRuntime?.getState?.()?.phase ?? "unknown",
+				}),
+			)
 			return
 		}
 		const activeBlock = this.taskController.getActiveBlock()
@@ -7772,6 +7827,12 @@ export class Task {
 		apiIndex: number,
 		beforeApiRequestStarted?: () => Promise<void>,
 	): Promise<boolean> {
+		// The gate sits between the context projection and the provider request,
+		// and it can wait on an interaction. Without entry and exit records a
+		// wait here reads in the log as a request that was simply never sent,
+		// with the previous line hours earlier and nothing naming this stage.
+		const gateEnteredAt = performance.now()
+		Logger.debug(`[Task ${this.taskId}] requestGate phase=enter apiIndex=${apiIndex}`)
 		await beforeApiRequestStarted?.()
 		const autoApprovalSettings = this.stateManager.getGlobalSettingsKey("autoApprovalSettings")
 		const settingsVersion = autoApprovalSettings.version ?? 1
@@ -7785,6 +7846,7 @@ export class Task {
 		if (routingPlan.route === "hosted" && !hostedApprovalSatisfied) {
 			await this.interactionCoordinator.releaseApiContinuationForRequestGate()
 		}
+		const approvalRequestedAt = performance.now()
 		const approval = await requestHostedWebApproval(this.interactionCoordinator, {
 			taskId: this.taskId,
 			apiIndex,
@@ -7792,7 +7854,19 @@ export class Task {
 			routingPlan,
 			autoApproved: hostedApprovalSatisfied,
 		})
+		// Approval duration separates a gate blocked on a user decision from one
+		// blocked on a response that never arrived. Both stall the request, but
+		// only the second one is a defect.
+		Logger.debug(
+			`[Task ${this.taskId}] requestGate phase=approval apiIndex=${apiIndex} route=${routingPlan.route} ` +
+				`autoApproved=${hostedApprovalSatisfied} approved=${approval.approved} required=${approval.required} ` +
+				`waitedMs=${Math.round(performance.now() - approvalRequestedAt)}`,
+		)
 		if (!approval.approved) {
+			Logger.debug(
+				`[Task ${this.taskId}] requestGate phase=exit apiIndex=${apiIndex} outcome=rejected ` +
+					`elapsedMs=${Math.round(performance.now() - gateEnteredAt)}`,
+			)
 			const interactionId = `hosted-web-rejected:${this.taskId}:${apiIndex}`
 			const rejected = await this.dispatchRuntime({
 				type: "HOSTED_WEB_REQUEST_REJECTED",
@@ -7808,6 +7882,10 @@ export class Task {
 		}
 		if (approval.required) this.taskState.hostedWebApprovalLeaseVersion = settingsVersion
 		await this.admitApiRequest(apiIndex)
+		Logger.debug(
+			`[Task ${this.taskId}] requestGate phase=exit apiIndex=${apiIndex} outcome=admitted ` +
+				`elapsedMs=${Math.round(performance.now() - gateEnteredAt)}`,
+		)
 		return true
 	}
 
