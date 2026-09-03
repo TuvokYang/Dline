@@ -201,8 +201,19 @@ const ApiOptions = ({
 	}, [searchableItems, searchTerm, fuse, currentProviderLabel])
 
 	const handleProviderChange = (newProvider: string) => {
+		if (currentProfile?.provider === newProvider) {
+			setIsDropdownVisible(false)
+			setSelectedIndex(-1)
+			return
+		}
 		if (currentProfile) {
-			updateProfile(currentProfile.id, { provider: newProvider, modelId: "", modelInfo: undefined })
+			updateProfile(currentProfile.id, {
+				provider: newProvider,
+				apiKey: "",
+				baseUrl: undefined,
+				modelId: "",
+				modelInfo: undefined,
+			})
 		} else {
 			const newProfile = createEmptyApiProfile()
 			newProfile.provider = newProvider

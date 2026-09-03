@@ -111,6 +111,11 @@ export class OpenAiCodexOAuthManager {
 		return status === "authenticated" || status === "refreshable-expired"
 	}
 
+	getActiveAuthorizationFlow(profileId: string): { profileId: string; flowId: string } | undefined {
+		const flow = this.activeFlow
+		return flow?.profileId === profileId ? { profileId: flow.profileId, flowId: flow.flowId } : undefined
+	}
+
 	/** @deprecated TASK-005 migrates Provider consumers to the atomic credential context API. */
 	async getAccessToken(profileId: string): Promise<string | null> {
 		return (await this.getCredentialContext(profileId))?.accessToken ?? null
