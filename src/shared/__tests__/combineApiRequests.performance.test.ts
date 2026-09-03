@@ -19,6 +19,17 @@ const PAIR_SIZES = [1_000, 2_000, 4_000, 8_000] as const
 
 const ABSOLUTE_THRESHOLD_MS = 500
 const RATIO_THRESHOLD = 3.2
+/**
+ * Smallest baseline a doubling ratio is computed from.
+ *
+ * Below this the measurement is dominated by scheduling noise rather than the
+ * work being measured: with the linear implementation `t(1000)` lands around
+ * 1ms, so a single preemption while the suite runs its workers in parallel
+ * moves the ratio past the threshold without anything having regressed. The
+ * absolute assertions above still bound real growth, so skipping a too-small
+ * baseline drops noise rather than coverage.
+ */
+const MIN_RATIO_BASELINE_MS = 5
 
 function buildPairedApiRequestMessages(pairCount: number): ClineMessage[] {
 	const messages: ClineMessage[] = []
@@ -85,7 +96,10 @@ describe("combineApiRequests performance lock", () => {
 			const large = PAIR_SIZES[i]
 			const smallMs = timings.get(small)!
 			const largeMs = timings.get(large)!
-			const ratio = largeMs / Math.max(smallMs, 0.01)
+			if (smallMs < MIN_RATIO_BASELINE_MS) {
+				continue
+			}
+			const ratio = largeMs / smallMs
 
 			expect(
 				ratio,
