@@ -4,6 +4,8 @@ import {
 	type RuntimeTelemetryAuthorizationStatus,
 	TelemetryAuthorizationStore,
 } from "@/core/storage/secrets/TelemetryAuthorizationStore"
+import { RuntimeSampler } from "./performance/runtime-sampler"
+import { DEFAULT_METRIC_BUDGETS, type PolicyVerdict, ThresholdPolicy } from "./performance/threshold-policy"
 import { RuntimeEventBus } from "./runtime-event-bus"
 import { RuntimeTelemetryService } from "./runtime-telemetry-service"
 import { OtlpTransport, type OtlpTransportStats } from "./transports/otlp-transport"
@@ -44,6 +46,8 @@ export interface RuntimeTelemetryLifecycleOptions {
 	readonly journalMaxBytes?: number
 	/** Injectable for tests; defaults to the proxy-aware fetch inside the transport. */
 	readonly fetchImpl?: FetchLike
+	/** Runtime health sampling interval. Set to 0 to disable sampling entirely. */
+	readonly samplerIntervalMs?: number
 }
 
 export class RuntimeTelemetryLifecycle {
@@ -53,8 +57,11 @@ export class RuntimeTelemetryLifecycle {
 	private readonly bus: RuntimeEventBus
 	private readonly authorization: TelemetryAuthorizationStore
 
+	private readonly policy: ThresholdPolicy
+
 	private journal: SessionJournal | undefined
 	private transport: OtlpTransport | undefined
+	private sampler: RuntimeSampler | undefined
 	private enabled = false
 	private disposed = false
 
@@ -63,6 +70,7 @@ export class RuntimeTelemetryLifecycle {
 		this.bus = new RuntimeEventBus({ sessionId: options.sessionId, capacity: options.capacity })
 		this.authorization = new TelemetryAuthorizationStore({ dataDir: options.dataDir })
 		this.service = new RuntimeTelemetryService({ bus: this.bus, enabled: () => this.enabled })
+		this.policy = new ThresholdPolicy({ budgets: DEFAULT_METRIC_BUDGETS })
 	}
 
 	get isEnabled(): boolean {
@@ -151,7 +159,55 @@ export class RuntimeTelemetryLifecycle {
 			endpoint: this.options.otlpEndpoint ?? DEFAULT_OTLP_ENDPOINT,
 			fetchImpl: this.options.fetchImpl,
 		})
+		// Enable before starting the sampler: the service drops events while
+		// disabled, so a verdict arriving first would be silently discarded.
 		this.enabled = true
+		this.startSampler()
+	}
+
+	/**
+	 * Starts host health sampling, unless the caller opted out.
+	 *
+	 * Only breaches reach the bus. Publishing every healthy sample would make
+	 * the sampler the loudest producer in the system and bury the events that
+	 * actually indicate a problem.
+	 */
+	private startSampler(): void {
+		if (this.options.samplerIntervalMs === 0) return
+
+		this.sampler = new RuntimeSampler({
+			policy: this.policy,
+			intervalMs: this.options.samplerIntervalMs,
+			onVerdict: (verdict) => this.publishVerdict(verdict),
+		})
+		this.sampler.start()
+	}
+
+	private publishVerdict(verdict: PolicyVerdict): void {
+		if (verdict.anomaly) {
+			// The breached value is the duration for delay-like metrics and a
+			// ratio otherwise, so it is reported both as the phase duration and
+			// under its own metric name rather than being reinterpreted.
+			this.service.recordPhase(`${verdict.anomaly.metric}.breach`, verdict.anomaly.value, {
+				component: "runtime",
+				operation: "sample",
+				metric: verdict.anomaly.metric,
+				severity: verdict.anomaly.severity,
+				kind: verdict.anomaly.kind,
+				limit: verdict.anomaly.limit,
+				incidentId: verdict.anomaly.incidentId,
+				value: verdict.anomaly.value,
+			})
+		}
+		if (verdict.recovery) {
+			this.service.recordInfo("runtime.incident.recovered", {
+				component: "runtime",
+				operation: "recover",
+				metric: verdict.recovery.metric,
+				incidentId: verdict.recovery.incidentId,
+				durationMs: verdict.recovery.durationMs,
+			})
+		}
 	}
 
 	private async stop(options: { revokePairingCode: boolean }): Promise<void> {
@@ -159,6 +215,11 @@ export class RuntimeTelemetryLifecycle {
 			if (options.revokePairingCode) this.authorization.revokePairingCode()
 			return
 		}
+
+		// Stop sampling first so no new verdict lands after the final flush.
+		this.sampler?.dispose()
+		this.sampler = undefined
+		this.policy.reset()
 
 		// Flush before tearing down so events recorded while enabled survive.
 		await this.flush()

@@ -1,8 +1,36 @@
 import { RuntimeEventBus, type RuntimeEventBusOptions } from "./runtime-event-bus"
 import { RuntimeEventPriority, type RuntimeTelemetryContext } from "./types"
 
+export { IncidentCorrelator, type IncidentCorrelatorOptions } from "./analysis/incident-correlator"
+export { ANALYSIS_ATTRIBUTES, OUTCOME, RootCauseAnalyzer } from "./analysis/root-cause-analyzer"
+export {
+	DiagnosisConfidence,
+	type Incident,
+	MissingEvidence,
+	RootCauseCategory,
+	type RootCauseDiagnosis,
+} from "./analysis/root-cause-types"
 export { AttributeRejection, RuntimeContentPolicy, runtimeContentPolicyLimits } from "./content-policy"
 export { normalizeRuntimeError } from "./error-normalizer"
+export {
+	RUNTIME_METRICS,
+	RuntimeSampler,
+	type RuntimeSamplerClock,
+	type RuntimeSamplerOptions,
+	type RuntimeSnapshot,
+} from "./performance/runtime-sampler"
+export {
+	AnomalySeverity,
+	BreachKind,
+	DEFAULT_METRIC_BUDGETS,
+	type MetricBudget,
+	type MetricSample,
+	type PerformanceAnomaly,
+	type PolicyVerdict,
+	type RecoveryNotice,
+	ThresholdPolicy,
+	type ThresholdPolicyOptions,
+} from "./performance/threshold-policy"
 export { RuntimeEventBus, type RuntimeEventBusOptions } from "./runtime-event-bus"
 export { RuntimeTelemetryContextHolder, type RuntimeTelemetryScope } from "./runtime-telemetry-context"
 export { RuntimeTelemetryLifecycle, type RuntimeTelemetryLifecycleOptions } from "./runtime-telemetry-lifecycle"
