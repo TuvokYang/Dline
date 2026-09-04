@@ -1,4 +1,4 @@
-import { readdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises"
 import * as path from "node:path"
 import { expect, type Frame, type Locator, type Page, type TestInfo } from "@playwright/test"
 import type { ClineApiServerMock, MockApiTarget } from "./fixtures/server"
@@ -109,6 +109,15 @@ async function readProfileReasoning(dlineDir: string, profileName: string): Prom
 	const profile = profiles.find((candidate) => candidate.name === profileName)
 	if (!profile) throw new Error(`Missing E2E Profile: ${profileName}`)
 	return asRecord(asRecord(profile[profile.provider]).reasoning)
+}
+
+function enableOpenAiServiceTier(profile: StoredProfile): void {
+	const provider = asRecord(profile.openai)
+	profile.openai = {
+		...provider,
+		serviceTier: "default",
+		serviceTierEnabled: true,
+	}
 }
 
 function disableDeepSeekThinking(profile: StoredProfile): void {
@@ -895,6 +904,122 @@ e2e(
 			const nextRequest = server.getMockConsumptions("openai-compatible-chat")[1]
 			expect(nextRequest.thinking).toEqual({ mode: "effort", effort: "low" })
 			expect(nextRequest.requestBody).toMatchObject({ service_tier: "ultrafast" })
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app.close()
+		}
+	},
+)
+
+e2e(
+	"Task runtime controls - an explicit subagent Profile keeps its own Thinking effort",
+	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(240_000)
+		await configureDefaultProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, enableOpenAiServiceTier)
+		await configureDefaultProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAi, enableOpenAiServiceTier)
+		const subagentName = "e2e-profile-thinking"
+		const subagentTask = "E2E_SUBAGENT_PROFILE_THINKING_TASK"
+		const childResult = "E2E_SUBAGENT_PROFILE_THINKING_CHILD_DONE"
+		const parentCompletion = "E2E_SUBAGENT_PROFILE_THINKING_PARENT_DONE"
+		const systemPromptMarker = "E2E_SUBAGENT_PROFILE_THINKING_SYSTEM_PROMPT"
+		const subagentDirectory = path.join(workspaceDir, ".agents", "subagents")
+		await mkdir(subagentDirectory, { recursive: true })
+		await writeFile(
+			path.join(subagentDirectory, `${subagentName}.yml`),
+			`---
+name: ${subagentName}
+description: Verifies that explicit subagent Profile reasoning is isolated from parent Task overrides.
+profile: ${E2E_PROFILE_NAMES.mockOpenAiResponses}
+tools:
+  - attempt_completion
+---
+
+${systemPromptMarker}
+Return the requested result.`,
+			"utf8",
+		)
+
+		const app = await openVSCode(workspaceDir)
+		try {
+			const page = await app.firstWindow()
+			const sidebar = await openSidebar(page, helper)
+			server.resetOpenAiMock()
+			server.enqueueResponses(
+				"openai-compatible-chat",
+				{
+					type: "tool",
+					name: "qna_respond",
+					arguments: { response: "E2E_SUBAGENT_PROFILE_THINKING_READY" },
+				},
+				{
+					type: "tool",
+					id: "call_subagent_profile_thinking",
+					name: "use_subagent",
+					arguments: {
+						agent_name: subagentName,
+						task: subagentTask,
+						context: "Return the configured child Profile result.",
+						timeout: 60,
+					},
+				},
+				{
+					type: "tool",
+					id: "call_subagent_profile_thinking_parent_complete",
+					name: "attempt_completion",
+					arguments: { result: parentCompletion },
+					expectedToolResults: [
+						{
+							callId: "call_subagent_profile_thinking",
+							contentIncludes: childResult,
+						},
+					],
+				},
+			)
+			server.enqueueResponses("openai-compatible-responses", {
+				type: "tool",
+				id: "call_subagent_profile_thinking_child_complete",
+				name: "attempt_completion",
+				arguments: { result: childResult },
+				expectedRequestIncludes: [systemPromptMarker],
+			})
+
+			const input = sidebar.getByTestId("chat-input")
+			await input.fill("Start the Task and wait for a follow-up before running the configured subagent.")
+			await sidebar.getByTestId("send-button").click()
+			await expect.poll(() => server.getRequestCount("openai-compatible-chat"), { timeout: 30_000 }).toBe(1)
+			await expect(sidebar.getByText("E2E_SUBAGENT_PROFILE_THINKING_READY", { exact: true })).toBeVisible({
+				timeout: 60_000,
+			})
+
+			await selectThinkingOverride(sidebar, "Low")
+			await selectServiceTier(sidebar, "Ultrafast")
+
+			await input.fill("Run the explicit Profile subagent now.")
+			await input.press("Enter")
+			const approveButton = sidebar.getByText("Approve", { exact: true })
+			const subagentTaskRow = sidebar.getByText(subagentTask, { exact: true }).last()
+			await expect(approveButton.or(subagentTaskRow)).toBeVisible({ timeout: 60_000 })
+			if (await approveButton.isVisible()) await approveButton.click()
+			await expect(sidebar.getByText(parentCompletion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+
+			await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(3)
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(1)
+			const parentSubagentRequest = server.getMockConsumptions("openai-compatible-chat")[1]
+			expect(parentSubagentRequest.thinking).toEqual({ mode: "effort", effort: "low" })
+			expect(parentSubagentRequest.requestBody).toMatchObject({ service_tier: "ultrafast" })
+			const childRequest = server.getMockConsumptions("openai-compatible-responses")[0]
+			expect(childRequest.contractError).toBeUndefined()
+			expect(childRequest.thinking).toEqual({ mode: "effort", effort: "high" })
+			expect(childRequest.requestBody).toMatchObject({ service_tier: "ultrafast" })
+
+			await expect(subagentTaskRow).toBeVisible()
+			const subagentCard = subagentTaskRow.locator("xpath=ancestor::*[@data-testid='subagent-item'][1]")
+			const runtimeConfig = subagentCard.getByTestId("subagent-runtime-config")
+			await expect(runtimeConfig.getByTitle(`Profile: ${E2E_PROFILE_NAMES.mockOpenAiResponses}`)).toBeVisible()
+			await expect(runtimeConfig.getByTitle("Thinking: high")).toBeVisible()
+			await expect
+				.poll(() => readProfileReasoning(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses), { timeout: 15_000 })
+				.toMatchObject({ enableThinking: true, effort: "high" })
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
 			await app.close()

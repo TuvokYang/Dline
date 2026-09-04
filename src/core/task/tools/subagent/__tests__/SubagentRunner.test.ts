@@ -86,6 +86,10 @@ function createTaskConfig(nativeToolCallEnabled: boolean, options: any = {}): Ta
 		autoCondenseMaxReserveTokens: options.autoCondenseMaxReserveTokens,
 		autoCondenseMaxContextTokens: options.autoCondenseMaxContextTokens,
 	}
+	const apiConfiguration = {
+		actModeProfile: "anthropic",
+		planModeProfile: "anthropic",
+	}
 	return {
 		taskId: "task-1",
 		ulid: "ulid-1",
@@ -131,10 +135,11 @@ function createTaskConfig(nativeToolCallEnabled: boolean, options: any = {}): Ta
 				getRemoteConfigSettings: () => ({
 					remoteGlobalSkills: options.remoteGlobalSkills ?? [],
 				}),
-				getApiConfiguration: () => ({
-					actModeProfile: "anthropic",
-					planModeProfile: "anthropic",
-				}),
+				getApiConfiguration: () => apiConfiguration,
+				getApiConfigurationForTask: (taskId?: string) => {
+					assert.equal(taskId, "task-1")
+					return apiConfiguration
+				},
 			},
 		},
 		browserSettings: {},

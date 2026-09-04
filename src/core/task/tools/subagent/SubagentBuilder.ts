@@ -1,6 +1,8 @@
-import { buildApiHandler } from "@core/api"
+import { buildApiHandler, buildApiHandlerFromProfile } from "@core/api"
 import { applyTaskRuntimeOverrides } from "@core/api/runtime-profile"
 import { readApiProfiles } from "@core/controller/file/getApiProfiles"
+import { resolveProfileReference } from "@core/profiles/profile-binding"
+import type { ApiProfile } from "@shared/proto/dline/profile"
 import { resolveProfileReasoningConfig } from "@shared/task-reasoning"
 import { ClineDefaultTool } from "@shared/tools"
 import type { TaskConfig } from "../types/TaskConfig"
@@ -8,6 +10,15 @@ import type { AgentBaseConfig } from "./AgentConfigLoader"
 import { DEFAULT_SUBAGENT_ALLOWED_TOOLS, isDefaultSubagentName } from "./DefaultSubagentConfig"
 
 export type AgentConfig = Partial<AgentBaseConfig>
+
+type SubagentProfileSource = "configured" | "parent_fallback"
+
+interface SubagentProfileSelection {
+	readonly profile: ApiProfile | undefined
+	readonly profileName: string | undefined
+	readonly profileId: string | undefined
+	readonly source: SubagentProfileSource
+}
 
 export const SUBAGENT_DEFAULT_ALLOWED_TOOLS = DEFAULT_SUBAGENT_ALLOWED_TOOLS
 
@@ -41,17 +52,29 @@ export class SubagentBuilder {
 		this.agentConfig = agentConfig ?? {}
 		this.allowedTools = this.resolveAllowedTools(this.agentConfig.tools, !subagentName || isDefaultSubagentName(subagentName))
 
-		const apiConfiguration = this.baseConfig.services.stateManager.getApiConfiguration()
-		this.profileName = this.resolveProfile(this.agentConfig.profile, apiConfiguration.actModeProfile)
+		const apiConfiguration = this.baseConfig.services.stateManager.getApiConfigurationForTask(this.baseConfig.taskId)
+		const profiles = readApiProfiles()
+		const profileSelection = this.resolveProfile(
+			profiles,
+			this.agentConfig.profile,
+			apiConfiguration.actModeProfileId ?? apiConfiguration.actModeProfile,
+			apiConfiguration.actModeProfile,
+		)
+		this.profileName = profileSelection.profileName
 		const effectiveApiConfiguration = {
 			...apiConfiguration,
+			actModeProfileId: profileSelection.profileId,
 			actModeProfile: this.profileName,
+			actModeReasoningOverride:
+				profileSelection.source === "configured" ? undefined : apiConfiguration.actModeReasoningOverride,
 			ulid: this.baseConfig.ulid,
 		}
-		const profile = readApiProfiles().find((candidate) => candidate.name === this.profileName)
+		const profile = profileSelection.profile
 		const runtimeProfile = profile ? applyTaskRuntimeOverrides(profile, effectiveApiConfiguration, "act") : undefined
 		this.reasoningConfig = resolveProfileReasoningConfig(runtimeProfile)
-		this.apiHandler = buildApiHandler(effectiveApiConfiguration, "act")
+		this.apiHandler = profile
+			? buildApiHandlerFromProfile(effectiveApiConfiguration, "act", profile)
+			: buildApiHandler(effectiveApiConfiguration, "act")
 	}
 
 	getApiHandler(): ReturnType<typeof buildApiHandler> {
@@ -92,20 +115,36 @@ export class SubagentBuilder {
 	/**
 	 * Resolve the effective act profile for a subagent.
 	 *
+	 * @param profiles Catalog Profiles available to the current process.
 	 * @param configuredProfile Optional profile name from subagent YAML.
-	 * @param defaultProfile Act profile used when no valid subagent profile exists.
-	 * @returns Valid subagent profile name or the default act profile.
+	 * @param parentProfileReference Stable ID or legacy name bound to the parent Act mode.
+	 * @param parentProfileName Parent display name retained for the existing invalid-profile error path.
+	 * @returns Selected Profile snapshot and whether it is an explicit child binding or parent fallback.
 	 */
-	private resolveProfile(configuredProfile: string | null | undefined, defaultProfile?: string): string | undefined {
+	private resolveProfile(
+		profiles: ReturnType<typeof readApiProfiles>,
+		configuredProfile: string | null | undefined,
+		parentProfileReference: string | undefined,
+		parentProfileName: string | undefined,
+	): SubagentProfileSelection {
+		const parentResolution = resolveProfileReference(profiles, parentProfileReference)
+		const parentProfile =
+			parentResolution.status === "resolved" && parentResolution.profile.enabled ? parentResolution.profile : undefined
+		const parentFallback: SubagentProfileSelection = {
+			profile: parentProfile,
+			profileName: parentProfile?.name ?? parentProfileName,
+			profileId: parentProfile?.id,
+			source: "parent_fallback",
+		}
 		const profileName = configuredProfile?.trim()
-		if (!profileName) {
-			return defaultProfile
-		}
-		const profile = readApiProfiles().find((candidate) => candidate.name === profileName)
-		if (!profile?.enabled || !profile.usedFor.includes("subagents")) {
-			return defaultProfile
-		}
-		return profile.name
+		if (!profileName) return parentFallback
+
+		const resolution = resolveProfileReference(profiles, profileName)
+		if (resolution.status !== "resolved") return parentFallback
+		const profile = resolution.profile
+		if (!profile.enabled || !profile.usedFor.includes("subagents")) return parentFallback
+
+		return { profile, profileName: profile.name, profileId: profile.id, source: "configured" }
 	}
 
 	/**
