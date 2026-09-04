@@ -19,6 +19,9 @@ import { getBinaryLocation } from "@/utils/fs"
  */
 export type FileSearchSource = "host_index" | "ripgrep"
 
+/** A workspace entry produced by ripgrep enumeration or a host file index. */
+export type WorkspaceItem = { path: string; type: "file" | "folder"; label?: string }
+
 // Wrapper function for childProcess.spawn
 export type SpawnFunction = typeof childProcess.spawn
 export const getSpawnFunction = (): SpawnFunction => childProcess.spawn
@@ -34,10 +37,7 @@ export class RipgrepError extends Error {
 	}
 }
 
-export async function executeRipgrepForFiles(
-	workspacePath: string,
-	limit = 5000,
-): Promise<{ path: string; type: "file" | "folder"; label?: string }[]> {
+export async function executeRipgrepForFiles(workspacePath: string, limit = 5000): Promise<WorkspaceItem[]> {
 	const rgPath = await getBinaryLocation("rg")
 
 	return new Promise((resolve, reject) => {
@@ -147,6 +147,105 @@ async function getActiveFiles(): Promise<Set<string>> {
 	const request = GetOpenTabsRequest.create({})
 	const response = await HostProvider.window.getOpenTabs(request)
 	return new Set(response.paths)
+}
+
+type WorkspaceEnumerationEntry = {
+	/** Resolves to the enumeration; shared by every caller that joins in flight. */
+	readonly pending: Promise<readonly WorkspaceItem[]>
+	/** Set once the enumeration settles successfully. Absent while in flight. */
+	completedAt?: number
+}
+
+/**
+ * How long a completed ripgrep enumeration stays reusable.
+ *
+ * The `@`-mention picker debounces at 200ms and re-queries on every keystroke,
+ * so without reuse a short word costs one full-workspace walk per character.
+ * Five seconds covers a typing burst while keeping newly created files visible
+ * well inside a single editing session.
+ */
+export const WORKSPACE_ENUMERATION_CACHE_TTL_MS = 5_000
+
+/**
+ * Upper bound on cached workspaces. Multi-root setups stay small, so this only
+ * guards against unbounded growth if roots churn (worktrees, remote reconnects).
+ */
+const WORKSPACE_ENUMERATION_CACHE_MAX_ENTRIES = 8
+
+const workspaceEnumerationCache = new Map<string, WorkspaceEnumerationEntry>()
+
+/** Test seam: drop all cached enumerations so a case starts from a cold cache. */
+export function clearWorkspaceEnumerationCache(): void {
+	workspaceEnumerationCache.clear()
+}
+
+function evictExpiredEnumerations(now: number): void {
+	for (const [key, entry] of workspaceEnumerationCache) {
+		const isInFlight = entry.completedAt === undefined
+		if (isInFlight) {
+			continue
+		}
+		if (now - entry.completedAt! > WORKSPACE_ENUMERATION_CACHE_TTL_MS) {
+			workspaceEnumerationCache.delete(key)
+		}
+	}
+}
+
+function evictOldestWhenOverCapacity(): void {
+	while (workspaceEnumerationCache.size > WORKSPACE_ENUMERATION_CACHE_MAX_ENTRIES) {
+		// Map preserves insertion order, so the first completed key is the oldest
+		// reusable entry. In-flight entries are never evicted: dropping one would
+		// let the next caller spawn a second `rg` for a walk already running.
+		const oldestCompletedKey = findOldestCompletedKey()
+		if (oldestCompletedKey === undefined) {
+			// Every entry is still running. Stay over capacity until they settle.
+			return
+		}
+		workspaceEnumerationCache.delete(oldestCompletedKey)
+	}
+}
+
+function findOldestCompletedKey(): string | undefined {
+	for (const [key, entry] of workspaceEnumerationCache) {
+		if (entry.completedAt !== undefined) {
+			return key
+		}
+	}
+	return undefined
+}
+
+/**
+ * Enumerates the workspace through ripgrep, reusing a recent walk when possible.
+ *
+ * Concurrent callers for the same workspace join the in-flight promise instead
+ * of spawning another `rg` process. Failures are never cached, so the next call
+ * retries from scratch.
+ */
+async function enumerateWorkspaceFiles(workspacePath: string): Promise<readonly WorkspaceItem[]> {
+	const now = Date.now()
+	evictExpiredEnumerations(now)
+
+	const cached = workspaceEnumerationCache.get(workspacePath)
+	if (cached) {
+		return cached.pending
+	}
+
+	const pending = executeRipgrepForFiles(workspacePath, 5000)
+	const entry: WorkspaceEnumerationEntry = { pending }
+	workspaceEnumerationCache.set(workspacePath, entry)
+	evictOldestWhenOverCapacity()
+
+	try {
+		const items = await pending
+		entry.completedAt = Date.now()
+		return items
+	} catch (error) {
+		// A failed walk must not become a sticky empty result.
+		if (workspaceEnumerationCache.get(workspacePath) === entry) {
+			workspaceEnumerationCache.delete(workspacePath)
+		}
+		throw error
+	}
 }
 
 // Maximum number of candidates to ask the host for. The result is filtered &
@@ -265,7 +364,7 @@ export async function searchWorkspaceFiles(
 
 		const hostItems = await executeHostIndexForFiles(query, workspacePath, selectedType)
 
-		const allItems = hostItems ?? (await executeRipgrepForFiles(workspacePath, 5000))
+		const allItems = hostItems ?? (await enumerateWorkspaceFiles(workspacePath))
 		const source: FileSearchSource = hostItems ? "host_index" : "ripgrep"
 
 		// Combine active files with all items, removing duplicates (like the old WorkspaceTracker)

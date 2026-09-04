@@ -187,8 +187,11 @@ import {
 	PromptFreshnessInvalidationCoordinator,
 	type PromptFreshnessInvalidationSource,
 } from "@/core/prompts/system-prompt-cache/PromptFreshnessInvalidationCoordinator"
-import { PromptInputFileWatcher } from "@/core/prompts/system-prompt-cache/PromptInputFileWatcher"
 import { SystemPromptCacheService } from "@/core/prompts/system-prompt-cache/SystemPromptCacheService"
+import {
+	getWorkspacePromptInputWatcherRegistry,
+	type PromptInputWatcherSubscription,
+} from "@/core/prompts/system-prompt-cache/WorkspacePromptInputWatcherRegistry"
 import { HostProvider } from "@/hosts/host-provider"
 import { FileEditProvider } from "@/integrations/editor/FileEditProvider"
 import {
@@ -588,7 +591,7 @@ export class Task {
 	private readonly snapshotPersistence: TaskSnapshotPersistence
 	private readonly systemPromptCacheService: SystemPromptCacheService
 	private readonly promptFreshnessInvalidationCoordinator: PromptFreshnessInvalidationCoordinator
-	private promptInputFileWatcher?: PromptInputFileWatcher
+	private promptInputWatcherSubscription?: PromptInputWatcherSubscription
 	private promptInputFileWatcherInitialization?: Promise<void>
 	private promptFreshnessDisposed = false
 	private latestTaskSnapshot?: TaskSnapshot
@@ -5918,7 +5921,9 @@ export class Task {
 		try {
 			const globalRulesDirectory = await ensureRulesDirectoryExists()
 			if (this.promptFreshnessDisposed) return
-			const watcher = new PromptInputFileWatcher({
+			// Tasks of one workspace share a single recursive watch; only the
+			// invalidation callback stays task-local.
+			const subscription = await getWorkspacePromptInputWatcherRegistry().subscribe({
 				taskId: this.taskId,
 				cwd: this.cwd,
 				globalRulesDirectory,
@@ -5930,9 +5935,11 @@ export class Task {
 				// descends into trees that listing would skip anyway.
 				shouldIgnoreDirectory: (absolutePath) => this.ignoreController.shouldIgnoreDirectory(absolutePath),
 			})
-			this.promptInputFileWatcher = watcher
-			await watcher.start()
-			if (this.promptFreshnessDisposed) await watcher.dispose()
+			this.promptInputWatcherSubscription = subscription
+			if (this.promptFreshnessDisposed) {
+				this.promptInputWatcherSubscription = undefined
+				await subscription.dispose()
+			}
 		} catch (error) {
 			Logger.error(`[Task ${this.taskId}] Failed to initialize prompt input file watcher:`, error)
 		}
@@ -5940,8 +5947,9 @@ export class Task {
 
 	private async disposePromptInputFileWatcher(): Promise<void> {
 		await this.promptInputFileWatcherInitialization?.catch(() => undefined)
-		await this.promptInputFileWatcher?.dispose()
-		this.promptInputFileWatcher = undefined
+		const subscription = this.promptInputWatcherSubscription
+		this.promptInputWatcherSubscription = undefined
+		await subscription?.dispose()
 	}
 
 	/**
@@ -6806,10 +6814,7 @@ export class Task {
 
 		const messages = ensureApiMessages(managedMessages, apiConversationHistory)
 		const serverTools = Object.freeze([
-			...new Set([
-				...runtime.webSearchRoutingPlan.serverTools,
-				...requestScope.hostedImageGenerationPlan.serverTools,
-			]),
+			...new Set([...runtime.webSearchRoutingPlan.serverTools, ...requestScope.hostedImageGenerationPlan.serverTools]),
 		])
 
 		return { systemPrompt, messages, tools, serverTools, runtime, providerOutputCap: undefined }
