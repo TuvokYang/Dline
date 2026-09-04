@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { access, readFile, writeFile } from "node:fs/promises"
-import { createServer, get as httpGet, type IncomingMessage, type Server, type ServerResponse } from "node:http"
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
 import * as path from "node:path"
 import { expect, type Frame, type Locator, type Page } from "@playwright/test"
@@ -8,6 +8,7 @@ import type { ElectronApplication } from "playwright"
 import { getOpenAiCodexProfileAuthFileName } from "../../core/storage/secrets/OpenAiCodexProfileAuthPath"
 import { E2ETestHelper, e2e } from "./utils/helpers"
 import { MultiInstanceLauncher } from "./utils/multi-instance"
+import { resizePrimarySidebar } from "./utils/resize-primary-sidebar"
 
 interface OAuthScenario {
 	accountId: string
@@ -38,8 +39,6 @@ class CodexOAuthE2EServer {
 	private readonly callbackByState = new Map<string, string>()
 	private readonly callbacks: string[] = []
 	readonly authorizationRequests: string[] = []
-	readonly callbackDeliveryErrors: string[] = []
-	readonly callbackDeliveryStatuses: number[] = []
 	readonly codexRequests: CodexRequest[] = []
 	tokenRequestCount = 0
 	baseUrl = ""
@@ -133,17 +132,12 @@ class CodexOAuthE2EServer {
 			)
 			return
 		}
-		this.deliverCallback(callbackUri)
-		response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" })
-		response.end("<!doctype html><title>OAuth complete</title><p>Authorization completed. You can close this window.</p>")
-	}
-
-	private deliverCallback(callbackUri: string): void {
-		const request = httpGet(callbackUri, (response) => {
-			this.callbackDeliveryStatuses.push(response.statusCode ?? 0)
-			response.resume()
+		response.writeHead(302, {
+			"Cache-Control": "no-store",
+			Connection: "close",
+			Location: callbackUri,
 		})
-		request.on("error", (error) => this.callbackDeliveryErrors.push(error.message))
+		response.end()
 	}
 
 	private async token(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -266,16 +260,13 @@ async function signInProfile(sidebar: Frame, name: string, server: CodexOAuthE2E
 	await card.getByRole("button", { name: "Sign in with ChatGPT" }).click()
 	await expect.poll(() => server.authorizationRequests.length, { timeout: 30_000 }).toBeGreaterThan(authorizationCount)
 	await expect.poll(() => server.allCallbacks().length, { timeout: 30_000 }).toBeGreaterThan(callbackCount)
-	try {
-		await expect.poll(() => server.tokenRequestCount, { timeout: 30_000 }).toBeGreaterThan(tokenRequestCount)
-	} catch (error) {
-		throw new Error(
-			`OAuth callback did not reach token exchange; statuses=${JSON.stringify(server.callbackDeliveryStatuses)} deliveryErrors=${JSON.stringify(server.callbackDeliveryErrors)}`,
-			{ cause: error },
-		)
-	}
+	await expect
+		.poll(() => server.tokenRequestCount, {
+			timeout: 30_000,
+			message: "OAuth browser redirect did not reach token exchange",
+		})
+		.toBeGreaterThan(tokenRequestCount)
 	await expect(card.getByText("Signed in", { exact: true })).toBeVisible({ timeout: 30_000 })
-	expect(server.callbackDeliveryErrors).toEqual([])
 }
 
 async function selectProfile(sidebar: Frame, name: string): Promise<void> {
@@ -532,7 +523,7 @@ e2e(
 
 e2e(
 	"OpenAI Codex OAuth manual fallback accepts only the full active localhost callback URI",
-	async ({ dlineDir, helper, openVSCode, userDataDir, workspaceDir }) => {
+	async ({ dlineDir, helper, openVSCode, userDataDir, workspaceDir }, testInfo) => {
 		e2e.setTimeout(150_000)
 		const server = new CodexOAuthE2EServer()
 		await server.start()
@@ -548,13 +539,25 @@ e2e(
 			app = ready.app
 			const page = ready.page
 			const sidebar = ready.sidebar
+			await resizePrimarySidebar(page, 480)
 			await helper.signin(sidebar)
 			await openSettings(page, sidebar)
 			const card = await expandProfile(sidebar, profile.name)
+			await page.screenshot({
+				path: testInfo.outputPath("codex-provider-not-signed-in-480px.png"),
+			})
 			await card.getByRole("button", { name: "Sign in with ChatGPT" }).click()
 			await expect(card.getByText("Browser sign-in in progress", { exact: true })).toBeVisible()
 			const callback = await E2ETestHelper.waitForValue(() => server.latestCallback(), 30_000)
 			await card.getByRole("button", { name: "Use callback URI fallback" }).click()
+			const inProgressLayout = await sidebar.evaluate(() => ({
+				clientWidth: document.documentElement.clientWidth,
+				scrollWidth: document.documentElement.scrollWidth,
+			}))
+			expect(inProgressLayout.scrollWidth).toBeLessThanOrEqual(inProgressLayout.clientWidth + 1)
+			await page.screenshot({
+				path: testInfo.outputPath("codex-provider-browser-sign-in-progress-480px.png"),
+			})
 			const input = card.getByRole("textbox", { name: "Authorization callback URI" })
 			await input.fill("http://localhost:1455/auth/callback?code=wrong&state=wrong")
 			await card.getByRole("button", { name: "Complete sign-in" }).click()
@@ -564,6 +567,14 @@ e2e(
 			await input.fill(callback)
 			await card.getByRole("button", { name: "Complete sign-in" }).click()
 			await expect(card.getByText("Signed in", { exact: true })).toBeVisible({ timeout: 30_000 })
+			const signedInLayout = await sidebar.evaluate(() => ({
+				clientWidth: document.documentElement.clientWidth,
+				scrollWidth: document.documentElement.scrollWidth,
+			}))
+			expect(signedInLayout.scrollWidth).toBeLessThanOrEqual(signedInLayout.clientWidth + 1)
+			await page.screenshot({
+				path: testInfo.outputPath("codex-provider-signed-in-480px.png"),
+			})
 
 			const authPath = path.join(dlineDir, "data", "secrets", getOpenAiCodexProfileAuthFileName(profile.id))
 			await expect.poll(() => pathExists(authPath)).toBe(true)

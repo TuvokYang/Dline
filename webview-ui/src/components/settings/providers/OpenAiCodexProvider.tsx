@@ -66,17 +66,19 @@ function OpenAiCodexOAuthControl({ profileId }: { profileId: string }) {
 	const [status, setStatus] = useState(OpenAiCodexAuthStatus.OPEN_AI_CODEX_AUTH_STATUS_UNSPECIFIED)
 	const [flowId, setFlowId] = useState<string>()
 	const [callbackUri, setCallbackUri] = useState("")
-	const [error, setError] = useState<string>()
+	const [statusError, setStatusError] = useState<string>()
+	const [actionError, setActionError] = useState<string>()
 	const [busy, setBusy] = useState(false)
 
 	const refreshStatus = useCallback(async () => {
 		try {
 			const response = await AccountServiceClient.getOpenAiCodexAuthStatus({ profileId })
 			if (response.profileId !== profileId) return
+			setStatusError(undefined)
 			setStatus(response.status)
 			setFlowId(isAuthenticated(response.status) ? undefined : response.flowId || undefined)
 		} catch {
-			setError("Could not read OpenAI Codex sign-in status. Please try again.")
+			setStatusError("Could not read OpenAI Codex sign-in status. Please try again.")
 		}
 	}, [profileId])
 
@@ -84,7 +86,8 @@ function OpenAiCodexOAuthControl({ profileId }: { profileId: string }) {
 		setStatus(OpenAiCodexAuthStatus.OPEN_AI_CODEX_AUTH_STATUS_UNSPECIFIED)
 		setFlowId(undefined)
 		setCallbackUri("")
-		setError(undefined)
+		setStatusError(undefined)
+		setActionError(undefined)
 		void refreshStatus()
 	}, [profileId, refreshStatus])
 
@@ -95,12 +98,12 @@ function OpenAiCodexOAuthControl({ profileId }: { profileId: string }) {
 
 	const startSignIn = async () => {
 		setBusy(true)
-		setError(undefined)
+		setActionError(undefined)
 		try {
 			const flow = await AccountServiceClient.startOpenAiCodexSignIn({ profileId })
 			if (flow.profileId === profileId) setFlowId(flow.flowId)
 		} catch {
-			setError("Could not start OpenAI Codex sign-in. Please try again.")
+			setActionError("Could not start OpenAI Codex sign-in. Please try again.")
 		} finally {
 			setBusy(false)
 		}
@@ -110,11 +113,11 @@ function OpenAiCodexOAuthControl({ profileId }: { profileId: string }) {
 		const submittedCallbackUri = callbackUri.trim()
 		setCallbackUri("")
 		if (!flowId || !submittedCallbackUri) {
-			setError("Paste the full authorization callback URI before continuing.")
+			setActionError("Paste the full authorization callback URI before continuing.")
 			return
 		}
 		setBusy(true)
-		setError(undefined)
+		setActionError(undefined)
 		try {
 			const response = await AccountServiceClient.completeOpenAiCodexCallbackUri({
 				profileId,
@@ -124,7 +127,7 @@ function OpenAiCodexOAuthControl({ profileId }: { profileId: string }) {
 			if (response.profileId === profileId) setStatus(response.status)
 			if (isAuthenticated(response.status)) setFlowId(undefined)
 		} catch {
-			setError("Could not complete OpenAI Codex sign-in. Check the callback URI and try again.")
+			setActionError("Could not complete OpenAI Codex sign-in. Check the callback URI and try again.")
 		} finally {
 			setBusy(false)
 		}
@@ -133,13 +136,13 @@ function OpenAiCodexOAuthControl({ profileId }: { profileId: string }) {
 	const cancelSignIn = async () => {
 		if (!flowId) return
 		setBusy(true)
-		setError(undefined)
+		setActionError(undefined)
 		try {
 			await AccountServiceClient.cancelOpenAiCodexSignIn({ profileId, flowId })
 			setFlowId(undefined)
 			await refreshStatus()
 		} catch {
-			setError("Could not cancel OpenAI Codex sign-in. Please try again.")
+			setActionError("Could not cancel OpenAI Codex sign-in. Please try again.")
 		} finally {
 			setBusy(false)
 		}
@@ -147,13 +150,13 @@ function OpenAiCodexOAuthControl({ profileId }: { profileId: string }) {
 
 	const signOut = async () => {
 		setBusy(true)
-		setError(undefined)
+		setActionError(undefined)
 		try {
 			await AccountServiceClient.signOutOpenAiCodexProfile({ profileId })
 			setFlowId(undefined)
 			setStatus(OpenAiCodexAuthStatus.OPEN_AI_CODEX_AUTH_STATUS_MISSING)
 		} catch {
-			setError("Could not sign out this OpenAI Codex Profile. Please try again.")
+			setActionError("Could not sign out this OpenAI Codex Profile. Please try again.")
 		} finally {
 			setBusy(false)
 		}
@@ -167,7 +170,8 @@ function OpenAiCodexOAuthControl({ profileId }: { profileId: string }) {
 				variant={presentation.warning ? "warning" : "info"}>
 				{flowId ? "Complete authorization in the browser, or use the callback URI fallback below." : presentation.detail}
 			</ProfileNotice>
-			{error ? <ProfileNotice variant="error">{error}</ProfileNotice> : null}
+			{statusError ? <ProfileNotice variant="error">{statusError}</ProfileNotice> : null}
+			{actionError ? <ProfileNotice variant="error">{actionError}</ProfileNotice> : null}
 			<ProfileActionRow className="justify-start">
 				{flowId ? (
 					<button
