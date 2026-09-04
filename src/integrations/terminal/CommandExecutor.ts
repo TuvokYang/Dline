@@ -728,7 +728,8 @@ export class CommandExecutor {
 				await this.markCommandMessageCancelled(cmd.id, commandTs)
 				detachedActivityIds.add(cmd.id)
 				cancelled = true
-				Logger.info(`Cancelled background command: ${cmd.command}`)
+				// The command line is user content; only its identity is logged.
+				Logger.info(`Cancelled background command: activityId=${cmd.id}`)
 			} else {
 				this.cancelledActivityIds.delete(cmd.id)
 			}

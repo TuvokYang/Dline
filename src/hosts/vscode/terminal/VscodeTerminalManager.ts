@@ -304,9 +304,9 @@ export class VscodeTerminalManager implements ITerminalManager {
 		const expectedShellPath = this.getConfiguredShellPath(this.defaultTerminalProfile)
 		const expectedConfigurationId = launchConfiguration?.configurationId
 
-		// Find available terminal from our pool first (created for this task)
-		Logger.log(`[TerminalManager] Looking for terminal in cwd: ${cwd}`)
-		Logger.log(`[TerminalManager] Available terminals: ${terminals.length}`)
+		// Find available terminal from our pool first (created for this task).
+		// Workspace paths identify the user's machine, so only counts are logged.
+		Logger.log(`[TerminalManager] Looking for a terminal among ${terminals.length} available`)
 
 		const matchingTerminal = terminals.find((t) => {
 			if (t.busy) {
@@ -324,7 +324,7 @@ export class VscodeTerminalManager implements ITerminalManager {
 				return false
 			}
 			const matches = arePathsEqual(vscode.Uri.file(cwd).fsPath, terminalCwd.fsPath)
-			Logger.log(`[TerminalManager] Terminal ${t.id} cwd: ${terminalCwd.fsPath}, matches: ${matches}`)
+			Logger.log(`[TerminalManager] Terminal ${t.id} cwd matches: ${matches}`)
 			return matches
 		})
 		if (matchingTerminal) {

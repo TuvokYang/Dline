@@ -1,0 +1,175 @@
+import path from "node:path"
+import type { TelemetrySetting } from "@shared/TelemetrySetting"
+import {
+	type RuntimeTelemetryAuthorizationStatus,
+	TelemetryAuthorizationStore,
+} from "@/core/storage/secrets/TelemetryAuthorizationStore"
+import { RuntimeEventBus } from "./runtime-event-bus"
+import { RuntimeTelemetryService } from "./runtime-telemetry-service"
+import { OtlpTransport, type OtlpTransportStats } from "./transports/otlp-transport"
+import { SessionJournal, type SessionJournalStats } from "./transports/session-journal"
+import type { RuntimeDropAccounting } from "./types"
+
+/**
+ * Turns the user's "Allow error and usage reporting" choice into a running (or
+ * stopped) runtime telemetry pipeline.
+ *
+ * This is the only place that decides whether diagnostics may touch the disk or
+ * the network. Keeping the decision here means the bus, journal and transport
+ * stay unaware of consent, and a disabled user provably produces neither a
+ * journal file nor a collector request — the property the tests assert.
+ *
+ * Events reach the sinks only through `flush`, which drains the bus queue.
+ * The bus is the single buffer, so its bounded capacity and priority eviction
+ * are what actually protect memory; a second delivery path would both
+ * duplicate records and bypass that protection.
+ *
+ * Ordering matters on disable: events already recorded are flushed before the
+ * sinks close, so turning telemetry off does not destroy evidence the user
+ * produced while it was on.
+ */
+
+/** Default local collector, per the WS-017 transport contract. */
+const DEFAULT_OTLP_ENDPOINT = "http://127.0.0.1:4318/v1/logs"
+
+type FetchLike = (url: string, init?: RequestInit) => Promise<Response>
+
+export interface RuntimeTelemetryLifecycleOptions {
+	/** Root of the Dline data directory; the journal lives under `telemetry/`. */
+	readonly dataDir: string
+	readonly sessionId: string
+	readonly otlpEndpoint?: string
+	readonly capacity?: number
+	readonly journalFlushIntervalMs?: number
+	readonly journalMaxBytes?: number
+	/** Injectable for tests; defaults to the proxy-aware fetch inside the transport. */
+	readonly fetchImpl?: FetchLike
+}
+
+export class RuntimeTelemetryLifecycle {
+	readonly service: RuntimeTelemetryService
+
+	private readonly options: RuntimeTelemetryLifecycleOptions
+	private readonly bus: RuntimeEventBus
+	private readonly authorization: TelemetryAuthorizationStore
+
+	private journal: SessionJournal | undefined
+	private transport: OtlpTransport | undefined
+	private enabled = false
+	private disposed = false
+
+	constructor(options: RuntimeTelemetryLifecycleOptions) {
+		this.options = options
+		this.bus = new RuntimeEventBus({ sessionId: options.sessionId, capacity: options.capacity })
+		this.authorization = new TelemetryAuthorizationStore({ dataDir: options.dataDir })
+		this.service = new RuntimeTelemetryService({ bus: this.bus, enabled: () => this.enabled })
+	}
+
+	get isEnabled(): boolean {
+		return this.enabled
+	}
+
+	get dropAccounting(): RuntimeDropAccounting {
+		return this.bus.drops
+	}
+
+	get transportStats(): OtlpTransportStats {
+		return this.transport?.stats ?? { sentEvents: 0, failedBatches: 0, droppedEvents: 0 }
+	}
+
+	get journalStats(): SessionJournalStats {
+		return this.journal?.stats ?? { written: 0, failed: 0, truncated: 0 }
+	}
+
+	/**
+	 * Apply the user's telemetry choice.
+	 *
+	 * `unset` is deliberately treated as "not yet consented" rather than as an
+	 * implicit yes: the onboarding banner still owns that decision.
+	 */
+	async applyConsent(setting: TelemetrySetting): Promise<void> {
+		if (this.disposed) return
+		if (setting === "enabled") {
+			await this.start()
+			return
+		}
+		await this.stop({ revokePairingCode: setting === "disabled" })
+	}
+
+	/** Public projection of the pairing credential; never contains the code. */
+	getStatus(): RuntimeTelemetryAuthorizationStatus {
+		return this.authorization.getStatus()
+	}
+
+	/**
+	 * Hand the pairing code to a future remote transport exactly once.
+	 *
+	 * The local OTLP transport never calls this: a loopback collector needs no
+	 * credential, and sending one would leak it into local capture files.
+	 */
+	consumePairingCodeForRemoteExchange(): string | undefined {
+		return this.authorization.consumePairingCode()
+	}
+
+	/**
+	 * Push everything buffered to the journal and the collector.
+	 *
+	 * Draining unconditionally keeps a disabled pipeline from accumulating
+	 * events that would be written later if the user re-enables telemetry.
+	 */
+	async flush(): Promise<void> {
+		const events = this.bus.drain()
+		if (!this.enabled) return
+
+		for (const event of events) {
+			// The journal is the durable record and the transport is
+			// best-effort, so a collector problem never blocks the disk write.
+			this.journal?.append(event)
+			this.transport?.enqueue(event)
+		}
+		await Promise.all([this.journal?.flush(), this.transport?.flush()])
+	}
+
+	async dispose(): Promise<void> {
+		if (this.disposed) return
+		await this.stop({ revokePairingCode: false })
+		this.disposed = true
+		this.bus.dispose()
+	}
+
+	private async start(): Promise<void> {
+		if (this.enabled) return
+
+		this.authorization.ensurePairingCode()
+		this.journal = new SessionJournal({
+			directory: path.join(this.options.dataDir, "telemetry", "sessions"),
+			sessionId: this.options.sessionId,
+			flushIntervalMs: this.options.journalFlushIntervalMs,
+			maxBytes: this.options.journalMaxBytes,
+		})
+		this.transport = new OtlpTransport({
+			endpoint: this.options.otlpEndpoint ?? DEFAULT_OTLP_ENDPOINT,
+			fetchImpl: this.options.fetchImpl,
+		})
+		this.enabled = true
+	}
+
+	private async stop(options: { revokePairingCode: boolean }): Promise<void> {
+		if (!this.enabled) {
+			if (options.revokePairingCode) this.authorization.revokePairingCode()
+			return
+		}
+
+		// Flush before tearing down so events recorded while enabled survive.
+		await this.flush()
+		this.enabled = false
+
+		const journal = this.journal
+		const transport = this.transport
+		this.journal = undefined
+		this.transport = undefined
+		await Promise.all([journal?.dispose(), transport?.dispose()])
+
+		if (options.revokePairingCode) this.authorization.revokePairingCode()
+	}
+}

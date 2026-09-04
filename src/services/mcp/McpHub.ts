@@ -546,7 +546,9 @@ export class McpHub {
 						this.publishPromptCatalogIfChanged()
 					}
 
-					Logger.debug(`[MCP ${name}] spawning: ${expandedConfig.command} ${(expandedConfig.args || []).join(" ")}`)
+					// The command line and its arguments can carry tokens and local paths, so
+					// only their shape is logged. The full configuration stays in mcpSettings.
+					Logger.debug(`[MCP ${name}] spawning: argCount=${(expandedConfig.args || []).length}`)
 					await transport.start()
 					Logger.debug(`[MCP ${name}] process spawned, pid: ${transport.pid}`)
 					const stderrStream = transport.stderr
@@ -555,9 +557,10 @@ export class McpHub {
 							const output = data.toString()
 							const isInfoLog = !/\berror\b/i.test(output)
 							if (isInfoLog) {
-								Logger.debug(`[McpHub] ${name}: ${output}`)
+								// Server stderr is third-party output that may echo user content.
+								Logger.debug(`[McpHub] ${name}: stdout chars=${output.length}`)
 							} else {
-								Logger.debug(`[McpHub] ${name} stderr: ${output}`)
+								Logger.debug(`[McpHub] ${name} stderr: chars=${output.length}`)
 								const connection = this.findConnection(name, source)
 								if (connection) {
 									this.appendErrorMessage(connection, output)

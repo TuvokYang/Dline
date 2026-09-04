@@ -26,7 +26,8 @@ import type { Controller } from "../index"
 export async function executeQuickWin(controller: Controller, request: ExecuteQuickWinRequest): Promise<Empty> {
 	try {
 		const { command, title } = request
-		Logger.log(`Received executeQuickWin: command='${command}', title='${title}'`)
+		// The command and title are user content; only their shape reaches the log channel.
+		Logger.log(`Received executeQuickWin: commandChars=${command.length} titleChars=${title.length}`)
 		await controller.initTask(title)
 		return Empty.create({})
 	} catch (error) {

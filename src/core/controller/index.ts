@@ -1334,7 +1334,8 @@ export class Controller {
 			for (const provider of panels) {
 				if (provider instanceof VscodeWebviewPanelProvider && provider.hasController() && provider.controller === this) {
 					provider.updateTitle(resolvedTitle)
-					Logger.debug(`[Controller] Panel title synced: ${resolvedTitle.slice(0, 64)}`)
+					// The title is derived from the user's task text, so only its size is logged.
+					Logger.debug(`[Controller] Panel title synced: chars=${resolvedTitle.length}`)
 					break
 				}
 			}

@@ -1,4 +1,5 @@
 import { envFlagEnabled } from "../env"
+import { formatDiagnosticArgument, redactDiagnosticString } from "./logging/safe-diagnostic-value"
 
 /**
  * Simple Logger utility for the extension's backend code.
@@ -11,53 +12,12 @@ import { envFlagEnabled } from "../env"
  *   - "trace": all above + trace
  *
  * Migration can be skipped via DLINE_SKIP_MIGRATION=1.
+ *
+ * Arbitrary logged values are normalized by `safe-diagnostic-value` before they
+ * reach a subscriber, so a call site cannot leak command bodies, MCP payloads,
+ * task titles, or credentials into Dline Output by passing a raw object.
  */
-const SENSITIVE_LOG_KEYS = new Set([
-	"authorization",
-	"proxyauthorization",
-	"apikey",
-	"xapikey",
-	"accesstoken",
-	"refreshtoken",
-	"idtoken",
-	"clientsecret",
-	"password",
-	"cookie",
-	"setcookie",
-	"secret",
-	"token",
-])
-
-const AUTHORIZATION_VALUE_PATTERN = /\b(?:Bearer|Basic)\s+[^\s"'}]+/gi
-
-function redactLogString(value: string): string {
-	return value.replace(AUTHORIZATION_VALUE_PATTERN, (match) => `${match.slice(0, match.indexOf(" ") + 1)}[REDACTED]`)
-}
-
-function isSensitiveLogKey(key: string): boolean {
-	return SENSITIVE_LOG_KEYS.has(key.toLowerCase().replaceAll("-", "").replaceAll("_", ""))
-}
-
-function redactLogValue(value: unknown, seen = new WeakSet<object>()): unknown {
-	if (typeof value === "string") return redactLogString(value)
-	if (value === null || typeof value !== "object") return value
-	if (seen.has(value)) return "[Circular]"
-	seen.add(value)
-
-	if (Array.isArray(value)) return value.map((item) => redactLogValue(item, seen))
-
-	const result: Record<string, unknown> = {}
-	if (value instanceof Error) {
-		result.name = redactLogString(value.name)
-		result.message = redactLogString(value.message)
-		if (value.stack) result.stack = redactLogString(value.stack)
-	}
-	for (const key of Object.keys(value)) {
-		result[key] = isSensitiveLogKey(key) ? "[REDACTED]" : redactLogValue(value[key as keyof typeof value], seen)
-	}
-	return result
-}
-
+// biome-ignore lint/complexity/noStaticOnlyClass: Preserve the existing Logger static facade used across the codebase.
 export class Logger {
 	/** Runtime log level, read once at module load. Defaults to "info". */
 	private static readonly logLevel = Logger.readLogLevel()
@@ -131,17 +91,9 @@ export class Logger {
 			const now = new Date()
 			const pad = (value: number, length = 2) => value.toString().padStart(length, "0")
 			const timestamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}.${pad(now.getMilliseconds(), 3)}`
-			let fullMessage = `${timestamp} [${level.toLowerCase()}] ${redactLogString(message)}`
+			let fullMessage = `${timestamp} [${level.toLowerCase()}] ${redactDiagnosticString(message)}`
 			if (args.length > 0) {
-				fullMessage += ` ${args
-					.map((arg) => {
-						try {
-							return JSON.stringify(redactLogValue(arg))
-						} catch {
-							return String(arg)
-						}
-					})
-					.join(" ")}`
+				fullMessage += ` ${args.map(formatDiagnosticArgument).join(" ")}`
 			}
 			Logger.output(fullMessage)
 		} catch {

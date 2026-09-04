@@ -102,7 +102,7 @@ export class VscodeWebviewPanelProvider extends WebviewProvider {
 	 * Called by the WebviewPanelSerializer registered in extension.ts.
 	 */
 	static async restorePanel(context: ClineExtensionContext, panel: vscode.WebviewPanel, state: PanelState): Promise<void> {
-		Logger.debug(`[VscodeWebviewPanelProvider] restorePanel called, state=${JSON.stringify(state)}`)
+		Logger.debug(`[VscodeWebviewPanelProvider] restorePanel called, taskId=${state?.taskId ?? "none"}`)
 		const provider = new VscodeWebviewPanelProvider(context, { deferController: false })
 		provider.panel = panel
 		dlineEditorGroup.register(panel)
@@ -161,7 +161,8 @@ export class VscodeWebviewPanelProvider extends WebviewProvider {
 					onHistoryTaskReadyToDisplay: revealRestoredTask,
 				})
 				.then(() => {
-					Logger.log(`[VscodeWebviewPanelProvider] Task ${taskId} restored in panel: ${title}`)
+					// The panel title is user task text; only its size is logged.
+					Logger.log(`[VscodeWebviewPanelProvider] Task ${taskId} restored in panel: titleChars=${title.length}`)
 				})
 				.catch(async (error) => {
 					Logger.warn(`[VscodeWebviewPanelProvider] Failed to restore task ${taskId}, showing blank state:`, error)
@@ -295,7 +296,8 @@ export class VscodeWebviewPanelProvider extends WebviewProvider {
 				break
 			}
 			default: {
-				Logger.error("Received unhandled WebviewMessage type:", JSON.stringify(message))
+				// The message body can hold user text; only the discriminator identifies the defect.
+				Logger.error(`Received unhandled WebviewMessage type: ${message.type}`)
 			}
 		}
 	}
