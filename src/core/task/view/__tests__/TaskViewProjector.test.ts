@@ -34,7 +34,38 @@ function active(kind: ActiveInteraction["kind"], messageType: "ask" | "say" = "a
 	}
 }
 
+/** Create a completion interaction entered through the completed-task resume ask. */
+function activeCompletionResume(): ActiveInteraction {
+	const interaction = active("completion")
+	interaction.anchor = { messageTs: 100, messageType: "ask", taskAsk: "resume_completed_task" }
+	return interaction
+}
+
 describe("projectTaskView", () => {
+	// A completed task reopened from history anchors on `resume_completed_task`,
+	// but the `completion` kind statically declares `completion_result`. Projecting
+	// the static value leaves the Webview unable to match its own anchor, which
+	// silently blocks every submit path. The anchor is the only causal truth here.
+	it("projects the anchor ask when completion is entered through a resume", () => {
+		const view = projectTaskView(runtime(TaskPhase.AWAITING_APPROVAL, activeCompletionResume()))
+
+		expect(view.activeInteraction).toMatchObject({
+			kind: "completion",
+			taskAsk: "resume_completed_task",
+			askMessageTs: 100,
+		})
+	})
+
+	it("keeps the completion presentation and actions across both entry asks", () => {
+		const direct = projectTaskView(runtime(TaskPhase.AWAITING_APPROVAL, active("completion")))
+		const resumed = projectTaskView(runtime(TaskPhase.AWAITING_APPROVAL, activeCompletionResume()))
+
+		expect(direct.activeInteraction?.taskAsk).toBe("completion_result")
+		expect(resumed.activeInteraction?.presentationKind).toBe(direct.activeInteraction?.presentationKind)
+		expect(resumed.footer.actions.map((action) => action.type)).toEqual(direct.footer.actions.map((action) => action.type))
+		expect(resumed.input.enterAction).toBe(direct.input.enterAction)
+	})
+
 	it("projects tool approval from the active interaction", () => {
 		const view = projectTaskView(runtime(TaskPhase.AWAITING_APPROVAL, active("tool_approval")))
 

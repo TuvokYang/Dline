@@ -255,7 +255,10 @@ function bindPersistedInteraction(snapshot: TaskSnapshot, message: ClineMessage,
 		kind,
 		status,
 		createdRevision: existing?.createdRevision ?? snapshot.revision ?? 0,
-		anchor: { messageTs: message.ts, messageType: "ask" },
+		// A completed task rebinds through `resume_completed_task` while still
+		// driving the `completion` kind, so the kind cannot name its entry ask.
+		// Persist the ask actually presented for the Webview to match against.
+		anchor: { messageTs: message.ts, messageType: "ask", ...(message.ask ? { taskAsk: message.ask } : {}) },
 		...(status === "resolving" && existing?.acceptedResponse ? { acceptedResponse: existing.acceptedResponse } : {}),
 	}
 	snapshot.anchor = {

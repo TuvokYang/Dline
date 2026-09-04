@@ -1,3 +1,4 @@
+import type { ClineAsk } from "@shared/ExtensionMessage"
 import type { InteractionKind } from "./Interaction"
 import { getInteraction } from "./InteractionRegistry"
 import type { InteractionResponse, InteractionResponseErrorCode } from "./InteractionResponse"
@@ -6,6 +7,11 @@ import type { InteractionResponse, InteractionResponseErrorCode } from "./Intera
 export interface InteractionAnchor {
 	messageTs: number
 	messageType: "ask" | "say"
+	// Several asks map onto one kind: a completed task resumes through
+	// `resume_completed_task` but still drives the `completion` interaction.
+	// The kind cannot name its own entry ask, so the anchor carries the ask
+	// actually presented; the Webview matches its row against this value.
+	taskAsk?: ClineAsk
 }
 
 /** Runtime state for one primary interaction. */

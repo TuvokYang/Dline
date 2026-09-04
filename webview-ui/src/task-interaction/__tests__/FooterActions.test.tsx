@@ -87,14 +87,20 @@ describe("FooterActions", () => {
 		)
 	})
 
-	it("retains the draft when the backend rejects the interaction", async () => {
+	// Every submit path now clears optimistically, so the draft survives a
+	// rejection through rollback rather than by never being cleared. The user
+	// still ends up with their text; only the mechanism changed.
+	it("hands the draft back when the backend rejects the interaction", async () => {
 		const dispatch = vi.fn(async () => ({ accepted: false, result: "stale interaction" }))
 		const onDraftAccepted = vi.fn()
+		const onDraftRejected = vi.fn()
+		const draft = { text: "keep me", images: ["image"], files: ["file"] }
 		render(
 			<FooterActions
 				dispatch={dispatch}
-				draft={{ text: "keep me", images: ["image"], files: ["file"] }}
+				draft={draft}
 				onDraftAccepted={onDraftAccepted}
+				onDraftRejected={onDraftRejected}
 				view={approvalView()}
 			/>,
 		)
@@ -102,9 +108,37 @@ describe("FooterActions", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Reject" }))
 
 		await waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
-		expect(onDraftAccepted).not.toHaveBeenCalled()
+		const settlement = {
+			taskId: "task-1",
+			turnId: "turn-1",
+			interactionId: "interaction-1",
+			stateRevision: 8,
+			draft: { ...draft, activeQuote: null, ownerRevision: undefined },
+		}
+		expect(onDraftAccepted).toHaveBeenCalledWith(settlement)
+		await waitFor(() => expect(onDraftRejected).toHaveBeenCalledWith(settlement))
 		expect(await screen.findByRole("alert")).toHaveTextContent("Interaction was not accepted: stale interaction")
 		expect(screen.getByRole("button", { name: "Reject" })).toBeEnabled()
+	})
+
+	it("hands the draft back when the dispatch itself fails", async () => {
+		const dispatch = vi.fn(async () => {
+			throw new Error("transport failed")
+		})
+		const onDraftRejected = vi.fn()
+		render(
+			<FooterActions
+				dispatch={dispatch}
+				draft={{ text: "keep me", images: [], files: [] }}
+				onDraftRejected={onDraftRejected}
+				view={approvalView()}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: "Reject" }))
+
+		await waitFor(() => expect(onDraftRejected).toHaveBeenCalledOnce())
+		expect(onDraftRejected.mock.calls[0][0]).toMatchObject({ draft: { text: "keep me" } })
 	})
 
 	it("confirms Condense Conversation without submitting or settling the current draft", async () => {
