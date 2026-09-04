@@ -17,6 +17,10 @@ import { Project, SyntaxKind } from "ts-morph"
 
 const STATE_KEYS_PATH = "src/shared/storage/state-keys.ts"
 const STATE_PROTO_PATH = "proto/dline/state.proto"
+const RESERVED_PROTO_LINES = {
+	Secrets: ["reserved 48;", 'reserved "openai_codex_oauth_credentials";'],
+	Settings: [],
+}
 
 /**
  * Convert field name to valid snake_case proto field name.
@@ -364,8 +368,8 @@ function assignFieldNumbers(fields, existingNumbers, startNumber = 1) {
 /**
  * Generate proto message definition
  */
-function generateProtoMessage(messageName, fields, fieldNumbers) {
-	const lines = [`message ${messageName} {`]
+function generateProtoMessage(messageName, fields, fieldNumbers, reservedLines = []) {
+	const lines = [`message ${messageName} {`, ...reservedLines.map((line) => `  ${line}`)]
 
 	// Sort fields by field number for consistent output
 	const sortedFields = [...fields].sort((a, b) => fieldNumbers[a.name] - fieldNumbers[b.name])
@@ -391,7 +395,7 @@ function generateSecretsMessage(secretsKeys, fieldNumbers) {
 		protoType: "string",
 	}))
 
-	return generateProtoMessage("Secrets", fields, fieldNumbers)
+	return generateProtoMessage("Secrets", fields, fieldNumbers, RESERVED_PROTO_LINES.Secrets)
 }
 
 /**
@@ -440,7 +444,7 @@ async function main() {
 
 	// Generate messages
 	const secretsMessage = generateSecretsMessage(secretsKeys, secretsFieldNumbers)
-	const settingsMessage = generateProtoMessage("Settings", settingsFields, settingsFieldNumbers)
+	const settingsMessage = generateProtoMessage("Settings", settingsFields, settingsFieldNumbers, RESERVED_PROTO_LINES.Settings)
 
 	// Read existing proto file
 	let protoContent = await fs.readFile(STATE_PROTO_PATH, "utf-8")

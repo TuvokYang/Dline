@@ -1513,14 +1513,19 @@ export class Task {
 	}
 
 	/** Rebuild the active handler from one fresh Profile snapshot. */
-	public async rebuildApiHandler(options: { validateCredentials?: boolean } = {}): Promise<ApiProfileValidity> {
+	public async rebuildApiHandler(
+		options: { validateCredentials?: boolean; abortPrevious?: boolean } = {},
+	): Promise<ApiProfileValidity> {
 		const mode = this.taskSm.mode
-		const previousPromptScope = this.getApiHandlerPromptScope(this.api)
+		const previousApi = this.api
+		const previousPromptScope = this.getApiHandlerPromptScope(previousApi)
 		const profileResolution = await resolveTaskApiProfileFresh(this.getEffectiveApiConfiguration(), mode)
-		this.api =
+		const nextApi =
 			profileResolution.error || !profileResolution.resolvedApiProfile
 				? createUnavailableApiHandler(profileResolution.error ?? "Profile not valid: resolved Profile is unavailable.")
 				: buildApiHandlerFromProfile(profileResolution.configuration, mode, profileResolution.resolvedApiProfile)
+		if (options.abortPrevious === true || !this.taskState.isStreaming) previousApi.abort?.()
+		this.api = nextApi
 		if (!profileResolution.usedFallback && profileResolution.resolvedProfileId && profileResolution.resolvedProfile) {
 			this.taskSm.adoptResolvedProfileIdentity(mode, profileResolution.resolvedProfileId, profileResolution.resolvedProfile)
 		}

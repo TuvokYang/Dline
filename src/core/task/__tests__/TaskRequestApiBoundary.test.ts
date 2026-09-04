@@ -14,6 +14,22 @@ function extractMethod(source: string, startMarker: string, endMarker: string): 
 }
 
 describe("Task request API boundary", () => {
+	it("builds the replacement handler before aborting and committing the previous handler", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const method = extractMethod(source, "public async rebuildApiHandler(", "/** Capture the handler fields")
+		const previousCapture = method.indexOf("const previousApi = this.api")
+		const nextBuild = method.indexOf("const nextApi =")
+		const conditionalAbort = method.indexOf("options.abortPrevious === true || !this.taskState.isStreaming")
+		const oldAbort = method.indexOf("previousApi.abort?.()", conditionalAbort)
+		const commit = method.indexOf("this.api = nextApi")
+
+		expect(previousCapture).toBeGreaterThanOrEqual(0)
+		expect(nextBuild).toBeGreaterThan(previousCapture)
+		expect(conditionalAbort).toBeGreaterThan(nextBuild)
+		expect(oldAbort).toBeGreaterThan(conditionalAbort)
+		expect(commit).toBeGreaterThan(oldAbort)
+	})
+
 	it("refreshes the latest Profile before freezing the request API scope", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")

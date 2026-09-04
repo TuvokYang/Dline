@@ -19,6 +19,7 @@ import { UpdateApiProfilesRequest } from "@shared/proto/dline/profile"
 import { Logger } from "@shared/services/Logger"
 import type { Controller } from ".."
 import { applyRegistryModelDefaults, normalizeApiProfile } from "./getApiProfiles"
+import { reconcileOpenAiCodexProfileAuth } from "./openAiCodexProfileAuthLifecycle"
 
 let updateApiProfilesQueue: Promise<Empty> = Promise.resolve(Empty.create({}))
 
@@ -94,6 +95,14 @@ async function updateApiProfilesImpl(controller: Controller, request: UpdateApiP
 	} catch (error) {
 		Logger.error("[updateApiProfiles] Failed to commit Profile Catalog:", error)
 		throw new Error("Failed to save Profile Catalog", { cause: error })
+	}
+
+	try {
+		await reconcileOpenAiCodexProfileAuth(previous, profiles)
+	} catch {
+		await publishCommittedCatalog(controller, previous, profiles)
+		Logger.error("[updateApiProfiles] Profile Catalog was saved but OpenAI Codex OAuth cleanup failed.")
+		throw new Error("Profile Catalog was saved, but OpenAI Codex OAuth cleanup could not be completed")
 	}
 
 	const keyChanges = buildApiKeyChanges(previous, profiles, new Set(request.clearApiKeyProfileIds))

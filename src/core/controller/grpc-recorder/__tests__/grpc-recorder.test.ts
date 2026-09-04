@@ -147,6 +147,37 @@ describe("grpc-recorder", () => {
 			expect(sessionLog.entries).length(0)
 		})
 
+		it("never records OAuth requests or responses that carry transient secrets", () => {
+			const secureRecorder = GrpcRecorder.builder().enableIf(true).build()
+			const methods = [
+				["cline.AccountService", "openAiCodexSignIn"],
+				["cline.AccountService", "startOpenAiCodexSignIn"],
+				["cline.AccountService", "getOpenAiCodexAuthStatus"],
+				["cline.AccountService", "completeOpenAiCodexCallbackUri"],
+				["cline.AccountService", "importOpenAiCodexOAuthJson"],
+				["cline.AccountService", "importOpenAiCodexCredentialJson"],
+				["cline.FileService", "copyToClipboard"],
+				["cline.WebService", "openInBrowser"],
+			] as const
+
+			for (const [index, [service, method]] of methods.entries()) {
+				const requestId = `oauth-${index}`
+				secureRecorder.recordRequest({
+					service,
+					method,
+					message: { oauthJson: "secret-token", callbackUri: "http://localhost/?code=secret&state=secret" },
+					request_id: requestId,
+					is_streaming: false,
+				})
+				secureRecorder.recordResponse(requestId, {
+					request_id: requestId,
+					message: { authorizationUrl: "https://auth.example/?state=secret" },
+				})
+			}
+
+			expect(secureRecorder.getSessionLog().entries).length(0)
+		})
+
 		it("cleanupSyntheticEntries removes synthetic entries from session log", async () => {
 			const testRecorder = GrpcRecorder.builder().enableIf(true).build()
 

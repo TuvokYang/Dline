@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto"
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import * as os from "node:os"
 import * as path from "node:path"
 import { expect, test } from "@playwright/test"
+import { getOpenAiCodexProfileAuthFileName } from "../../core/storage/secrets/OpenAiCodexProfileAuthPath"
 import { E2E_PROFILE_NAMES, prepareE2EState } from "./utils/api-profile"
 
 interface PreparedProfile {
@@ -16,6 +18,10 @@ test("mock E2E profile preprocessing ignores local profiles, secrets, and live e
 	const root = await mkdtemp(path.join(os.tmpdir(), "dline-e2e-mock-profile-preprocess-"))
 	const sourceDataDir = path.join(root, "source", "data")
 	const dlineDir = path.join(root, "isolated")
+	const staleProfileId = "stale-codex-profile"
+	const sourceProfileId = "source-codex-profile"
+	const staleToken = randomUUID()
+	const sourceToken = randomUUID()
 
 	try {
 		await Promise.all([
@@ -39,9 +45,10 @@ test("mock E2E profile preprocessing ignores local profiles, secrets, and live e
 					secrets: { token: "stale-provider-secret" },
 				},
 			}),
-			writeJson(path.join(dlineDir, "data", "secrets", "openai_codex_oauth.json"), {
-				type: "openai-codex",
-				access_token: "stale-oauth-token",
+			writeJson(path.join(dlineDir, "data", "secrets", getOpenAiCodexProfileAuthFileName(staleProfileId)), {
+				access_token: staleToken,
+				refresh_token: randomUUID(),
+				expires: 1_900_000_000_000,
 			}),
 			writeJson(path.join(sourceDataDir, "settings", "api_profiles.json"), [
 				{
@@ -52,13 +59,22 @@ test("mock E2E profile preprocessing ignores local profiles, secrets, and live e
 					usedFor: ["act"],
 					enabled: true,
 				},
+				{
+					id: sourceProfileId,
+					name: "Must Not Copy Codex Profile",
+					provider: "openai-codex",
+					modelId: "gpt-5.6-sol",
+					usedFor: ["act"],
+					enabled: true,
+				},
 			]),
 			writeJson(path.join(sourceDataDir, "secrets", "api_keys.json"), {
 				"must-not-copy-profile": { apiKey: "must-not-copy-secret", name: "Must Not Copy Profile" },
 			}),
-			writeJson(path.join(sourceDataDir, "secrets", "openai_codex_oauth.json"), {
-				type: "openai-codex",
-				access_token: "must-not-copy-oauth",
+			writeJson(path.join(sourceDataDir, "secrets", getOpenAiCodexProfileAuthFileName(sourceProfileId)), {
+				access_token: sourceToken,
+				refresh_token: randomUUID(),
+				expires: 1_900_000_000_000,
 			}),
 			writeJson(path.join(sourceDataDir, "secrets", "provider_secrets.json"), {
 				"must-not-copy-profile": {
@@ -81,6 +97,7 @@ test("mock E2E profile preprocessing ignores local profiles, secrets, and live e
 		expect(result.liveProfiles).toEqual([])
 		expect(result.profileNames).toEqual(expect.arrayContaining(Object.values(E2E_PROFILE_NAMES)))
 		expect(result.profileNames).not.toContain("Must Not Copy Profile")
+		expect(result.profileNames).not.toContain("Must Not Copy Codex Profile")
 		expect(result.profileNames).not.toContain("Stale Real Profile")
 		expect(result.profileNames).not.toContain("deepseek:deepseek-v4-pro")
 
@@ -91,9 +108,12 @@ test("mock E2E profile preprocessing ignores local profiles, secrets, and live e
 		expect(Object.values(apiKeys).every(({ apiKey }) => apiKey === "dline-e2e-api-key")).toBe(true)
 		expect(Object.values(apiKeys).map(({ name }) => name)).toEqual(expect.arrayContaining(Object.values(E2E_PROFILE_NAMES)))
 		expect(await readdir(path.join(dlineDir, "data", "secrets"))).toEqual(["api_keys.json"])
-		await expect(readFile(path.join(dlineDir, "data", "secrets", "openai_codex_oauth.json"), "utf8")).rejects.toMatchObject({
-			code: "ENOENT",
-		})
+		await expect(
+			readFile(path.join(dlineDir, "data", "secrets", getOpenAiCodexProfileAuthFileName(staleProfileId)), "utf8"),
+		).rejects.toMatchObject({ code: "ENOENT" })
+		await expect(
+			readFile(path.join(dlineDir, "data", "secrets", getOpenAiCodexProfileAuthFileName(sourceProfileId)), "utf8"),
+		).rejects.toMatchObject({ code: "ENOENT" })
 		await expect(readFile(path.join(dlineDir, "data", "secrets", "provider_secrets.json"), "utf8")).rejects.toMatchObject({
 			code: "ENOENT",
 		})
@@ -106,6 +126,9 @@ test("live E2E profile preprocessing copies only api_profiles.json and secrets/*
 	const root = await mkdtemp(path.join(os.tmpdir(), "dline-e2e-profile-preprocess-"))
 	const sourceDataDir = path.join(root, "source", "data")
 	const dlineDir = path.join(root, "isolated")
+	const codexProfileId = "local-codex-profile"
+	const codexAccessToken = randomUUID()
+	const codexRefreshToken = randomUUID()
 
 	try {
 		await Promise.all([
@@ -118,6 +141,14 @@ test("live E2E profile preprocessing copies only api_profiles.json and secrets/*
 					usedFor: ["act", "plan"],
 					enabled: true,
 				},
+				{
+					id: codexProfileId,
+					name: "Local Codex Profile",
+					provider: "openai-codex",
+					modelId: "gpt-5.6-sol",
+					usedFor: ["act"],
+					enabled: true,
+				},
 			]),
 			writeJson(path.join(sourceDataDir, "settings", "settings.json"), {
 				actModeProfile: "Local Profile",
@@ -127,12 +158,18 @@ test("live E2E profile preprocessing copies only api_profiles.json and secrets/*
 			writeJson(path.join(sourceDataDir, "secrets", "api_keys.json"), {
 				"local-profile": { apiKey: "local-secret", name: "Local Profile" },
 			}),
+			writeJson(path.join(sourceDataDir, "secrets", getOpenAiCodexProfileAuthFileName(codexProfileId)), {
+				access_token: codexAccessToken,
+				refresh_token: codexRefreshToken,
+				expires: 1_900_000_000_000,
+				accountId: "local-codex-account",
+			}),
 			writeJson(path.join(sourceDataDir, "secrets", "openai_codex_oauth.json"), {
-				type: "openai-codex",
-				access_token: "codex-access-token",
-				refresh_token: "codex-refresh-token",
+				access_token: randomUUID(),
+				refresh_token: randomUUID(),
 				expires: 1_900_000_000_000,
 			}),
+			writeJson(path.join(sourceDataDir, "secrets", "must-not-copy.json"), { token: randomUUID() }),
 			writeJson(path.join(sourceDataDir, "secrets", "provider_secrets.json"), {
 				"local-profile": { name: "Local Profile", provider: "deepseek", secrets: { custom: "provider-secret" } },
 			}),
@@ -152,7 +189,7 @@ test("live E2E profile preprocessing copies only api_profiles.json and secrets/*
 		})
 
 		expect(result.selectedProfileName).toBe(E2E_PROFILE_NAMES.mockOpenAi)
-		expect(result.localProfileNames).toEqual(["Local Profile"])
+		expect(result.localProfileNames).toEqual(["Local Profile", "Local Codex Profile"])
 		expect(result.liveProfiles).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
@@ -161,6 +198,13 @@ test("live E2E profile preprocessing copies only api_profiles.json and secrets/*
 					profileName: "Local Profile",
 					provider: "deepseek",
 					modelId: "local-model",
+				}),
+				expect.objectContaining({
+					credentialSource: "local",
+					profileId: codexProfileId,
+					profileName: "Local Codex Profile",
+					provider: "openai-codex",
+					modelId: "gpt-5.6-sol",
 				}),
 				expect.objectContaining({
 					credentialSource: "environment",
@@ -178,7 +222,7 @@ test("live E2E profile preprocessing copies only api_profiles.json and secrets/*
 				}),
 			]),
 		)
-		expect(result.liveProfiles).toHaveLength(3)
+		expect(result.liveProfiles).toHaveLength(4)
 		const profiles = await readJson<PreparedProfile[]>(path.join(dlineDir, "data", "settings", "api_profiles.json"))
 		const deepseek = profiles.find((profile) => profile.name === "deepseek:deepseek-v4-pro")
 		const compatible = profiles.find((profile) => profile.name === "openai:custom-model")
@@ -219,14 +263,23 @@ test("live E2E profile preprocessing copies only api_profiles.json and secrets/*
 		)
 		expect(apiKeys[deepseekLive!.profileId].apiKey).toBe("ci-deepseek-key")
 		expect(apiKeys[compatibleLive!.profileId].apiKey).toBe("ci-compatible-key")
-		expect(await readJson(path.join(dlineDir, "data", "secrets", "openai_codex_oauth.json"))).toMatchObject({
-			access_token: "codex-access-token",
-			refresh_token: "codex-refresh-token",
+		expect(
+			await readJson(path.join(dlineDir, "data", "secrets", getOpenAiCodexProfileAuthFileName(codexProfileId))),
+		).toMatchObject({
+			access_token: codexAccessToken,
+			refresh_token: codexRefreshToken,
+			accountId: "local-codex-account",
 		})
 		expect(await readJson(path.join(dlineDir, "data", "secrets", "provider_secrets.json"))).toMatchObject({
 			"local-profile": { secrets: { custom: "provider-secret" } },
 		})
 
+		await expect(readFile(path.join(dlineDir, "data", "secrets", "openai_codex_oauth.json"), "utf8")).rejects.toMatchObject({
+			code: "ENOENT",
+		})
+		await expect(readFile(path.join(dlineDir, "data", "secrets", "must-not-copy.json"), "utf8")).rejects.toMatchObject({
+			code: "ENOENT",
+		})
 		await expect(readFile(path.join(dlineDir, "data", "secrets.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" })
 
 		const settings = await readJson<Record<string, unknown>>(path.join(dlineDir, "data", "settings", "settings.json"))

@@ -1,11 +1,11 @@
 import { OpenAiCodexProviderConfig } from "@shared/proto/dline/provider/openai_codex"
 import { buildEffectiveModelInfo } from "@shared/providers/effective-model-info"
 import { OPENAI_REASONING_EFFORT_OPTIONS } from "@shared/storage/types"
-import { ApiKeyField } from "../common/ApiKeyField"
 import { ModelInfoView } from "../common/ModelInfoView"
 import { ModelSelector } from "../common/ModelSelector"
 import OpenAIServiceTierSelector from "../OpenAIServiceTierSelector"
 import ThinkingControl from "../ThinkingControl"
+import { OpenAiCodexOAuthControl } from "./OpenAiCodexOAuthControl"
 import type { ApiProfile } from "./ProviderProfile"
 import { useProviderModels } from "./useProviderModels"
 
@@ -36,13 +36,8 @@ export const OpenAiCodexProvider = ({ showModelOptions, isPopup, profile, onUpda
 		pricing: pc.pricing,
 	})
 	return (
-		<div>
-			<ApiKeyField
-				initialValue={profile.apiKey}
-				onChange={(v) => onUpdate({ apiKey: v })}
-				providerName="OpenAI Codex"
-				signupUrl="https://platform.openai.com/api-keys"
-			/>
+		<div className="flex flex-col gap-4">
+			<OpenAiCodexOAuthControl profileId={profile.id} />
 			{showModelOptions && (
 				<>
 					<ModelSelector

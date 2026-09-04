@@ -26,6 +26,8 @@ export interface MultiInstanceLauncherOptions {
 	readonly dlineDocsDir: string
 	/** Extension host storage shared by every instance of the current worker. */
 	readonly extensionsDir: string
+	readonly environment?: Readonly<Record<string, string>>
+	readonly recordVideo?: boolean
 	readonly server: ClineApiServerMock
 	readonly testInfo: TestInfo
 	readonly workspaceDir: string
@@ -133,6 +135,7 @@ export class MultiInstanceLauncher {
 				DLINE_HOME_DIR: this.options.dlineDir,
 				DLINE_E2E_API_BASE_URL: this.options.server.baseUrl,
 				DLINE_SKIP_MIGRATION: "1",
+				...this.options.environment,
 				DLINE_DOCS_DIR: this.options.dlineDocsDir,
 				DLINE_E2E_TASK_HISTORY_CONTROL_DIR: controlDirectory,
 				GRPC_RECORDER_FILE_NAME: E2ETestHelper.generateTestFileName(
@@ -141,13 +144,16 @@ export class MultiInstanceLauncher {
 				),
 				DEV_WORKSPACE_FOLDER: E2ETestHelper.CODEBASE_ROOT_DIR,
 			},
-			recordVideo: {
-				dir: E2ETestHelper.getResultsDir(
-					this.options.testInfo.title,
-					`${label}-recordings`,
-					`${this.options.testInfo.testId}-retry-${this.options.testInfo.retry}`,
-				),
-			},
+			recordVideo:
+				this.options.recordVideo === false
+					? undefined
+					: {
+							dir: E2ETestHelper.getResultsDir(
+								this.options.testInfo.title,
+								`${label}-recordings`,
+								`${this.options.testInfo.testId}-retry-${this.options.testInfo.retry}`,
+							),
+						},
 			args: [
 				"--no-sandbox",
 				"--disable-updates",

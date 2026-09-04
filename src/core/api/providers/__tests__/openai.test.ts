@@ -1149,6 +1149,7 @@ describe("OpenAiCodexHandler request configuration", () => {
 	it("adds service tier to the shared SDK and fallback request body", () => {
 		const handler = new OpenAiCodexHandler({
 			profile: ApiProfile.create({
+				id: "codex-service-tier",
 				provider: "openai-codex",
 				modelId: "gpt-5.6-sol",
 				openaiCodex: OpenAiCodexProviderConfig.create({ serviceTier: "scale" }),
@@ -1168,6 +1169,7 @@ describe("OpenAiCodexHandler request configuration", () => {
 	it("suppresses service tier when the Codex Profile disables Service Tier", () => {
 		const handler = new OpenAiCodexHandler({
 			profile: ApiProfile.create({
+				id: "codex-service-tier-disabled",
 				provider: "openai-codex",
 				modelId: "gpt-5.6-sol",
 				openaiCodex: OpenAiCodexProviderConfig.create({ serviceTier: "scale", serviceTierEnabled: false }),
@@ -1191,8 +1193,11 @@ describe("OpenAiCodexHandler account usage", () => {
 	})
 
 	it("maps the short and weekly Codex quota windows", async () => {
-		vi.spyOn(openAiCodexOAuthManager, "getAccessToken").mockResolvedValue("access-token")
-		vi.spyOn(openAiCodexOAuthManager, "getAccountId").mockResolvedValue("account-123")
+		vi.spyOn(openAiCodexOAuthManager, "getCredentialContext").mockResolvedValue({
+			accessToken: "access-token",
+			accountId: "account-123",
+			expires: 1_900_000_000_000,
+		})
 		const request = vi.fn().mockResolvedValue({
 			ok: true,
 			status: 200,
@@ -1213,7 +1218,7 @@ describe("OpenAiCodexHandler account usage", () => {
 			}),
 		})
 		const handler = new OpenAiCodexHandler({
-			profile: ApiProfile.create({ provider: "openai-codex", modelId: "gpt-5.6-sol" }),
+			profile: ApiProfile.create({ id: "codex-usage", provider: "openai-codex", modelId: "gpt-5.6-sol" }),
 			mode: "act",
 		})
 

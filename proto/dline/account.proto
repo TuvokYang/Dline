@@ -47,16 +47,105 @@ service AccountService {
   // Returns a link the webview can use to redirect back to the user's IDE.
   rpc getRedirectUrl(EmptyRequest) returns (String);
 
-  // OpenAI Codex OAuth authentication
-  // Starts the OAuth flow and opens browser for user to sign in with ChatGPT Plus/Pro
-  rpc openAiCodexSignIn(EmptyRequest) returns (Empty);
+  // Deprecated compatibility RPC. It no longer infers an active Profile.
+  rpc openAiCodexSignIn(EmptyRequest) returns (Empty) {
+    option deprecated = true;
+  }
 
-  // Signs out of OpenAI Codex and clears stored credentials
-  rpc openAiCodexSignOut(EmptyRequest) returns (Empty);
+  // Starts a browser OAuth flow for one OpenAI Codex Profile.
+  rpc startOpenAiCodexSignIn(OpenAiCodexProfileRequest) returns (OpenAiCodexAuthFlow);
+
+  // Returns the current OAuth status for one OpenAI Codex Profile.
+  rpc getOpenAiCodexAuthStatus(OpenAiCodexProfileRequest) returns (OpenAiCodexAuthStatusResponse);
+
+  // Completes an existing flow from the full localhost callback URI.
+  rpc completeOpenAiCodexCallbackUri(OpenAiCodexCallbackUriRequest) returns (OpenAiCodexAuthStatusResponse);
+
+  // Imports a complete OAuth credential JSON object for one OpenAI Codex Profile.
+  rpc importOpenAiCodexCredentialJson(OpenAiCodexOAuthJsonRequest) returns (OpenAiCodexAuthStatusResponse);
+
+  // Cancels an existing OAuth flow owned by one OpenAI Codex Profile.
+  rpc cancelOpenAiCodexSignIn(OpenAiCodexAuthFlowRequest) returns (Empty);
+
+  // Deprecated compatibility RPC. It no longer infers an active Profile.
+  rpc openAiCodexSignOut(EmptyRequest) returns (Empty) {
+    option deprecated = true;
+  }
+
+  // Signs out one OpenAI Codex Profile and clears only its credential.
+  rpc signOutOpenAiCodexProfile(OpenAiCodexProfileRequest) returns (Empty);
 
   // Submits a spend limit increase request to the user's org admin.
   // Called when the user hits a SPEND_LIMIT_EXCEEDED (429) error and clicks "Request Increase".
   rpc submitLimitIncreaseRequest(EmptyRequest) returns (SubmitLimitIncreaseResponse);
+}
+
+enum OpenAiCodexAuthStatus {
+  OPEN_AI_CODEX_AUTH_STATUS_UNSPECIFIED = 0;
+  OPEN_AI_CODEX_AUTH_STATUS_MISSING = 1;
+  OPEN_AI_CODEX_AUTH_STATUS_MALFORMED = 2;
+  OPEN_AI_CODEX_AUTH_STATUS_LEGACY_SHARED = 3;
+  OPEN_AI_CODEX_AUTH_STATUS_AUTHENTICATED = 4;
+  OPEN_AI_CODEX_AUTH_STATUS_REFRESHABLE_EXPIRED = 5;
+  OPEN_AI_CODEX_AUTH_STATUS_REAUTHENTICATION_REQUIRED = 6;
+}
+
+enum OpenAiCodexBrowserOpenStatus {
+  OPEN_AI_CODEX_BROWSER_OPEN_STATUS_UNSPECIFIED = 0;
+  OPEN_AI_CODEX_BROWSER_OPEN_STATUS_OPENED = 1;
+  OPEN_AI_CODEX_BROWSER_OPEN_STATUS_FAILED = 2;
+}
+
+enum OpenAiCodexFlowStatus {
+  OPEN_AI_CODEX_FLOW_STATUS_UNSPECIFIED = 0;
+  OPEN_AI_CODEX_FLOW_STATUS_COMPLETED = 1;
+  OPEN_AI_CODEX_FLOW_STATUS_CANCELLED = 2;
+  OPEN_AI_CODEX_FLOW_STATUS_TIMED_OUT = 3;
+  OPEN_AI_CODEX_FLOW_STATUS_FAILED = 4;
+}
+
+message OpenAiCodexProfileRequest {
+  string profile_id = 1;
+}
+
+message OpenAiCodexAuthFlowRequest {
+  string profile_id = 1;
+  string flow_id = 2;
+}
+
+message OpenAiCodexCallbackUriRequest {
+  string profile_id = 1;
+  string flow_id = 2;
+  string callback_uri = 3;
+}
+
+message OpenAiCodexOAuthJsonRequest {
+  string profile_id = 1;
+  string oauth_json = 2;
+}
+
+message OpenAiCodexAuthFlow {
+  string profile_id = 1;
+  string flow_id = 2;
+  string authorization_url = 3;
+  string redirect_uri = 4;
+  int64 expires_at_ms = 5;
+  OpenAiCodexBrowserOpenStatus browser_open_status = 6;
+}
+
+message OpenAiCodexFlowOutcome {
+  string profile_id = 1;
+  string flow_id = 2;
+  OpenAiCodexFlowStatus status = 3;
+  int64 ended_at_ms = 4;
+}
+
+message OpenAiCodexAuthStatusResponse {
+  string profile_id = 1;
+  OpenAiCodexAuthStatus status = 2;
+  string flow_id = 3;
+  OpenAiCodexAuthFlow active_flow = 4;
+  OpenAiCodexFlowOutcome last_flow_outcome = 5;
 }
 
 message AuthStateChangedRequest {

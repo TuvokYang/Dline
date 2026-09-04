@@ -78,7 +78,6 @@ export const ProviderToApiKeyMap: Partial<Record<ApiProvider, keyof Secrets | (k
 	"vercel-ai-gateway": "vercelAiGatewayApiKey",
 	zai: "zaiApiKey",
 	oca: ["ocaApiKey", "ocaRefreshToken"],
-	"openai-codex": "openai-codex-oauth-credentials",
 	aihubmix: "aihubmixApiKey",
 	minimax: "minimaxApiKey",
 	hicap: "hicapApiKey",

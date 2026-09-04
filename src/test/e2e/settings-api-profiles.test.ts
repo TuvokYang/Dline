@@ -6,6 +6,7 @@ import { ApiFormat } from "../../shared/proto/dline/models/metadata"
 import PROVIDERS from "../../shared/providers/providers.json"
 import { E2E_PROFILE_NAMES } from "./utils/api-profile"
 import { E2ETestHelper, e2e } from "./utils/helpers"
+import { resizePrimarySidebar } from "./utils/resize-primary-sidebar"
 
 interface StoredProfile {
 	id: string
@@ -61,7 +62,6 @@ const API_KEY_LABELS: Partial<Record<string, string>> = {
 	nebius: "Nebius API Key",
 	nousResearch: "Nous Research API Key",
 	ollama: "Ollama API Key",
-	"openai-codex": "OpenAI Codex API Key",
 	openai: "OpenAI API Key",
 	openrouter: "OpenRouter API Key",
 	qwen: "Qwen API Key",
@@ -134,6 +134,7 @@ e2e(
 			await helper.signin(firstSidebar)
 			await firstPage.getByRole("button", { name: "Settings", exact: true }).click()
 			await expect(firstSidebar.getByRole("heading", { name: "API Configuration" })).toBeVisible()
+			await firstSidebar.getByRole("button", { name: `Expand ${E2E_PROFILE_NAMES.persistence}` }).click()
 
 			const profileNameInput = await openProfileNameInput(firstSidebar, E2E_PROFILE_NAMES.persistence)
 			await profileNameInput.fill(renamedProfile)
@@ -155,6 +156,7 @@ e2e(
 			const reopenedSidebar = await helper.getSidebar(reopenedPage)
 			await helper.signin(reopenedSidebar)
 			await reopenedPage.getByRole("button", { name: "Settings", exact: true }).click()
+			await reopenedSidebar.getByRole("button", { name: `Expand ${renamedProfile}` }).click()
 
 			await expect(getProfileCard(reopenedSidebar, renamedProfile)).toHaveCount(1)
 			await expect(getProfileCard(reopenedSidebar, E2E_PROFILE_NAMES.persistence)).toHaveCount(0)
@@ -540,3 +542,36 @@ e2e(
 		}
 	},
 )
+
+e2e("Settings API Config - exposes OAuth-only controls for OpenAI Codex", async ({ helper, page, sidebar }, testInfo) => {
+	await helper.signin(sidebar)
+	await page.getByRole("button", { name: "Settings", exact: true }).click()
+	await expect(sidebar.getByRole("heading", { name: "API Configuration" })).toBeVisible()
+	await sidebar.getByRole("button", { name: "Add profile" }).click()
+
+	const profileCard = sidebar.getByTestId("api-profile-card").last()
+	await profileCard.getByRole("combobox", { name: "Provider", exact: true }).selectOption("openai-codex")
+	await expect(profileCard.getByRole("button", { name: "Sign in with ChatGPT" })).toBeVisible()
+	await expect(profileCard.getByText("Not signed in", { exact: true })).toBeVisible({ timeout: 15_000 })
+	await expect(profileCard.getByText("Could not read OpenAI Codex sign-in status. Please try again.")).toHaveCount(0)
+	await expect(profileCard.getByRole("textbox", { name: /API Key|Access Token|Refresh Token|OAuth JSON/i })).toHaveCount(0)
+
+	for (const sidebarWidth of [320, 480, 700]) {
+		const actualSidebarWidth = await resizePrimarySidebar(page, sidebarWidth)
+		const cardBox = await profileCard.boundingBox()
+		expect(cardBox, "Codex Profile card should have a bounding box").not.toBeNull()
+		expect(cardBox?.width ?? 0, `Codex Profile card should grow with the ${sidebarWidth}px sidebar`).toBeGreaterThanOrEqual(
+			actualSidebarWidth - 195,
+		)
+		const layout = await sidebar.evaluate(() => ({
+			clientWidth: document.documentElement.clientWidth,
+			scrollWidth: document.documentElement.scrollWidth,
+		}))
+		expect(layout.scrollWidth, `Codex Provider should not overflow at ${sidebarWidth}px`).toBeLessThanOrEqual(
+			layout.clientWidth + 1,
+		)
+		await profileCard.screenshot({
+			path: testInfo.outputPath(`codex-provider-not-signed-in-${sidebarWidth}px.png`),
+		})
+	}
+})

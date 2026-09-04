@@ -33,6 +33,15 @@ export async function readTextFromClipboard(): Promise<string> {
 	}
 }
 
+export function redactExternalUrl(value: string): string {
+	try {
+		const url = new URL(value)
+		return `${url.protocol}//${url.host}${url.pathname}`
+	} catch {
+		return "<invalid-url>"
+	}
+}
+
 /**
  * Opens an external URL in the default browser.
  * Uses the host bridge RPC first (VS Code's openExternal which handles remote environments).
@@ -41,20 +50,20 @@ export async function readTextFromClipboard(): Promise<string> {
  * @returns Promise that resolves when the operation is complete
  */
 export async function openExternal(url: string): Promise<void> {
-	Logger.log("Opening browser:", url)
+	Logger.log("Opening external URL:", redactExternalUrl(url))
 	try {
 		await HostProvider.env.openExternal(StringRequest.create({ value: url }))
-	} catch (error) {
-		// Fallback for hosts that don't implement openExternal (e.g., JetBrains plugin)
-		Logger.warn(`Host openExternal RPC failed, falling back to 'open' package: ${error}`)
+	} catch {
+		// Fallback for hosts that don't implement openExternal (e.g., JetBrains plugin).
+		Logger.warn("Host openExternal RPC failed; falling back to the local open package.")
 		try {
 			const open = (await import("open")).default
 			await open(url)
-		} catch (fallbackError) {
-			Logger.error(`Fallback 'open' also failed: ${fallbackError}`)
+		} catch {
+			Logger.error("Fallback external URL opening failed.")
 			HostProvider.window.showMessage({
 				type: ShowMessageType.ERROR,
-				message: `Failed to open URL: ${url}`,
+				message: "Failed to open the external URL.",
 			})
 		}
 	}

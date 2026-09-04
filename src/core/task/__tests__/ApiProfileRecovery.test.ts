@@ -329,7 +329,14 @@ describe("resolveTaskApiProfile", () => {
 		expect(validity).toMatchObject({ status: "invalid", reason: "credential_unavailable" })
 	})
 
-	it("delegates OAuth availability to the provider-specific probe", async () => {
+	it.each([
+		["missing", "invalid", "credential_unavailable"],
+		["malformed", "invalid", "credential_malformed"],
+		["legacy-shared", "invalid", "credential_legacy_shared"],
+		["reauthentication-required", "invalid", "reauthentication_required"],
+		["refreshable-expired", "valid", undefined],
+		["authenticated", "valid", undefined],
+	] as const)("maps Codex OAuth status %s to Profile validity", async (authStatus, status, reason) => {
 		const result = await validateApiProfileCredentials(
 			{
 				id: "codex-id",
@@ -339,9 +346,9 @@ describe("resolveTaskApiProfile", () => {
 				apiKey: "",
 				enabled: true,
 			} as ApiProfile,
-			{ isOpenAiCodexAuthenticated: async () => false },
+			{ getOpenAiCodexAuthStatus: async (profile) => (profile.id === "codex-id" ? authStatus : "missing") },
 		)
 
-		expect(result).toMatchObject({ status: "invalid", reason: "credential_unavailable" })
+		expect(result).toMatchObject(reason ? { status, reason } : { status })
 	})
 })
