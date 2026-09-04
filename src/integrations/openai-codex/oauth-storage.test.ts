@@ -56,8 +56,8 @@ describe("OpenAI Codex OAuth strategy and Profile storage", () => {
 
 		await expect(repository.read("profile-a")).resolves.toEqual({ status: "valid", credential: credentials("a") })
 		await expect(repository.read("profile-b")).resolves.toEqual({ status: "valid", credential: credentials("b") })
-		await expect(manager.getAccessToken("profile-a")).resolves.toBe("a-access")
-		await expect(manager.getAccessToken("profile-b")).resolves.toBe("b-access")
+		await expect(manager.getCredentialContext("profile-a")).resolves.toMatchObject({ accessToken: "a-access" })
+		await expect(manager.getCredentialContext("profile-b")).resolves.toMatchObject({ accessToken: "b-access" })
 		await expect(fs.access(path.join(root, "data", "secrets.json"))).rejects.toMatchObject({ code: "ENOENT" })
 	})
 
@@ -94,8 +94,10 @@ describe("OpenAI Codex OAuth strategy and Profile storage", () => {
 			profileCatalogLoader: async () => [{ id: "profile-a", provider: "openai-codex" }],
 		})
 
-		await expect(manager.getAccessToken("profile-a")).resolves.toBe("legacy-access")
-		await expect(manager.getAccountId("profile-a")).resolves.toBe("legacy-account")
+		await expect(manager.getCredentialContext("profile-a")).resolves.toMatchObject({
+			accessToken: "legacy-access",
+			accountId: "legacy-account",
+		})
 		await expect(repository.read("profile-a")).resolves.toEqual({ status: "valid", credential: credentials("legacy") })
 		await expect(fs.access(legacyPath)).rejects.toMatchObject({ code: "ENOENT" })
 	})

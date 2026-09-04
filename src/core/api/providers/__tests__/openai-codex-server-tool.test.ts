@@ -283,15 +283,11 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 		const handler = createHandler()
 		const credential = { accessToken: "access-a", expires: 1_900_000_000_000, accountId: "account-a" }
 		const getCredential = vi.spyOn(openAiCodexOAuthManager, "getCredentialContext").mockResolvedValue(credential)
-		const legacyTokenProbe = vi
-			.spyOn(openAiCodexOAuthManager, "getAccessToken")
-			.mockRejectedValue(new Error("legacy token probe used"))
 		const execute = vi.spyOn(handler as any, "executeRequest").mockImplementation(async function* () {})
 
 		await collect(handler.createMessage("system", [{ role: "user", content: "hello" }]))
 
 		expect(getCredential.mock.calls).to.deep.equal([["profile-a"]])
-		expect(legacyTokenProbe.mock.calls).to.have.length(0)
 		expect(execute.mock.calls[0]?.[3]).to.equal(credential)
 	})
 

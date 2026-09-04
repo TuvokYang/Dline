@@ -610,7 +610,13 @@ export const e2e = test
 			await use(testDirectories.dlineDocsDir)
 		},
 	})
-	.extend<{ openVSCode: (workspacePath: string) => Promise<ElectronApplication> }>({
+	.extend<{
+		openVSCode: (
+			workspacePath: string,
+			environmentOverrides?: Readonly<Record<string, string>>,
+			launchOptions?: { recordVideo?: boolean },
+		) => Promise<ElectronApplication>
+	}>({
 		openVSCode: async (
 			{
 				launchIsolation,
@@ -675,7 +681,7 @@ export const e2e = test
 				)
 			}
 
-			await use(async (workspacePath: string) => {
+			await use(async (workspacePath: string, environmentOverrides = {}, launchOptions = {}) => {
 				const app = await _electron.launch({
 					executablePath,
 					env: {
@@ -687,6 +693,7 @@ export const e2e = test
 						DLINE_HOME_DIR: dlineHomeDir,
 						DLINE_E2E_API_BASE_URL: server.baseUrl,
 						DLINE_SKIP_MIGRATION: "1",
+						...environmentOverrides,
 						DLINE_DOCS_DIR: dlineDocsDir,
 						...(forceStaleInitialState ? { DLINE_E2E_FORCE_STALE_INITIAL_STATE: "true" } : {}),
 						...(grpcUnaryFaults ? { DLINE_E2E_GRPC_UNARY_FAULTS: grpcUnaryFaults } : {}),
@@ -696,13 +703,16 @@ export const e2e = test
 						// IS_DEV: "true",
 						DEV_WORKSPACE_FOLDER: E2ETestHelper.CODEBASE_ROOT_DIR,
 					},
-					recordVideo: {
-						dir: E2ETestHelper.getResultsDir(
-							testInfo.title,
-							"recordings",
-							`${testInfo.testId}-retry-${testInfo.retry}`,
-						),
-					},
+					recordVideo:
+						launchOptions.recordVideo === false
+							? undefined
+							: {
+									dir: E2ETestHelper.getResultsDir(
+										testInfo.title,
+										"recordings",
+										`${testInfo.testId}-retry-${testInfo.retry}`,
+									),
+								},
 					args: [
 						"--no-sandbox",
 						...(cdpPort !== undefined ? [`--remote-debugging-port=${cdpPort}`] : []),

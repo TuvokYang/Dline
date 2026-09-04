@@ -61,7 +61,6 @@ const API_KEY_LABELS: Partial<Record<string, string>> = {
 	nebius: "Nebius API Key",
 	nousResearch: "Nous Research API Key",
 	ollama: "Ollama API Key",
-	"openai-codex": "OpenAI Codex API Key",
 	openai: "OpenAI API Key",
 	openrouter: "OpenRouter API Key",
 	qwen: "Qwen API Key",
@@ -80,8 +79,8 @@ e2e("Settings API Config - shows configured profiles without changing them", asy
 	await page.getByRole("button", { name: "Settings", exact: true }).click()
 
 	await expect(sidebar.getByRole("heading", { name: "API Configuration" })).toBeVisible()
-	await expect(sidebar.getByText("Add API")).toBeVisible()
-	await expect(sidebar.getByRole("textbox").first()).toBeVisible()
+	await expect(sidebar.getByRole("button", { name: "Add profile" })).toBeVisible()
+	await expect(sidebar.getByTestId("api-profile-card").first()).toBeVisible()
 })
 
 e2e(
@@ -100,6 +99,7 @@ e2e(
 			await helper.signin(firstSidebar)
 			await firstPage.getByRole("button", { name: "Settings", exact: true }).click()
 			await expect(firstSidebar.getByRole("heading", { name: "API Configuration" })).toBeVisible()
+			await firstSidebar.getByRole("button", { name: `Expand ${E2E_PROFILE_NAMES.persistence}` }).click()
 
 			const profileNameInput = firstSidebar.locator(`input[value="${E2E_PROFILE_NAMES.persistence}"]`)
 			await expect(profileNameInput).toBeVisible()
@@ -122,6 +122,7 @@ e2e(
 			const reopenedSidebar = await helper.getSidebar(reopenedPage)
 			await helper.signin(reopenedSidebar)
 			await reopenedPage.getByRole("button", { name: "Settings", exact: true }).click()
+			await reopenedSidebar.getByRole("button", { name: `Expand ${renamedProfile}` }).click()
 
 			await expect(reopenedSidebar.locator(`input[value="${renamedProfile}"]`)).toBeVisible()
 			await expect(reopenedSidebar.locator(`input[value="${E2E_PROFILE_NAMES.persistence}"]`)).toHaveCount(0)
@@ -153,7 +154,7 @@ e2e(
 			await expect(firstSidebar.getByRole("heading", { name: "API Configuration" })).toBeVisible()
 
 			const existingProfileIds = new Set((await readJson<StoredProfile[]>(profilesPath)).map((profile) => profile.id))
-			await firstSidebar.getByRole("button", { name: "Add API" }).click()
+			await firstSidebar.getByRole("button", { name: "Add profile" }).click()
 			const profileCard = firstSidebar.getByTestId("api-profile-card").last()
 			const profileId = await E2ETestHelper.waitForValue(async () => {
 				const profiles = await readJson<StoredProfile[]>(profilesPath)
@@ -237,7 +238,7 @@ e2e(
 
 			const addProviderProfile = async (provider: string) => {
 				const existingIds = new Set((await readJson<StoredProfile[]>(profilesPath)).map((profile) => profile.id))
-				await firstSidebar.getByRole("button", { name: "Add API" }).click()
+				await firstSidebar.getByRole("button", { name: "Add profile" }).click()
 				const card = firstSidebar.getByTestId("api-profile-card").last()
 				const id = await E2ETestHelper.waitForValue(async () => {
 					const profiles = await readJson<StoredProfile[]>(profilesPath)
@@ -373,7 +374,7 @@ e2e(
 			await helper.signin(sidebar)
 			await page.getByRole("button", { name: "Settings", exact: true }).click()
 
-			await sidebar.getByRole("button", { name: "Add API" }).click()
+			await sidebar.getByRole("button", { name: "Add profile" }).click()
 			const profileCard = sidebar.getByTestId("api-profile-card").last()
 			await profileCard.getByRole("combobox", { name: "Provider", exact: true }).selectOption("deepseek")
 			const apiFormatSelector = profileCard.getByRole("combobox", { name: "API Format" })
@@ -408,7 +409,7 @@ e2e(
 
 		const profilesPath = path.join(dlineDir, "data", "settings", "api_profiles.json")
 		const existingProfileIds = new Set((await readJson<StoredProfile[]>(profilesPath)).map((profile) => profile.id))
-		await sidebar.getByRole("button", { name: "Add API" }).click()
+		await sidebar.getByRole("button", { name: "Add profile" }).click()
 		const profileCard = sidebar.getByTestId("api-profile-card").last()
 		await expect(profileCard.locator('input[value="New Model"]')).toBeVisible()
 		const profileId = await E2ETestHelper.waitForValue(async () => {
@@ -466,7 +467,7 @@ e2e(
 		const profilesPath = path.join(dlineDir, "data", "settings", "api_profiles.json")
 		const apiKeysPath = path.join(dlineDir, "data", "secrets", "api_keys.json")
 		const existingProfileIds = new Set((await readJson<StoredProfile[]>(profilesPath)).map((profile) => profile.id))
-		await sidebar.getByRole("button", { name: "Add API" }).click()
+		await sidebar.getByRole("button", { name: "Add profile" }).click()
 		const profileCard = sidebar.getByTestId("api-profile-card").last()
 		const profileId = await E2ETestHelper.waitForValue(async () => {
 			const profiles = await readJson<StoredProfile[]>(profilesPath)
@@ -513,3 +514,15 @@ e2e(
 		}
 	},
 )
+
+e2e("Settings API Config - exposes OAuth-only controls for OpenAI Codex", async ({ helper, page, sidebar }) => {
+	await helper.signin(sidebar)
+	await page.getByRole("button", { name: "Settings", exact: true }).click()
+	await expect(sidebar.getByRole("heading", { name: "API Configuration" })).toBeVisible()
+	await sidebar.getByRole("button", { name: "Add profile" }).click()
+
+	const profileCard = sidebar.getByTestId("api-profile-card").last()
+	await profileCard.getByRole("combobox", { name: "Provider", exact: true }).selectOption("openai-codex")
+	await expect(profileCard.getByRole("button", { name: "Sign in with ChatGPT" })).toBeVisible()
+	await expect(profileCard.getByRole("textbox", { name: /API Key|Access Token|Refresh Token|OAuth JSON/i })).toHaveCount(0)
+})

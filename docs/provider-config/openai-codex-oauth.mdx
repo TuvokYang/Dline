@@ -1,0 +1,75 @@
+---
+title: "OpenAI Codex Profile OAuth"
+description: "使用浏览器 OAuth 为每个 OpenAI Codex Profile 建立独立凭据。"
+---
+
+OpenAI Codex 使用 ChatGPT 订阅账户的 OAuth 授权。每个 Dline API Profile 都是独立的凭据所有者；一个 Profile 的登录、刷新、退出或删除不会复用或修改另一个 Profile 的凭据。
+
+## 浏览器登录
+
+1. 打开 Dline 设置并进入 **API Configuration**。
+2. 新建或展开一个 Provider 为 **ChatGPT Subscription** 的 Profile。
+3. 点击 **Sign in with ChatGPT**。
+4. Dline 会先启动本地 callback server，再使用系统浏览器打开授权页面。
+5. 在浏览器中完成授权。浏览器返回本机 localhost callback 后，Profile 会显示 **Signed in**。
+
+如果需要使用多个 Codex Profile，请分别展开每个 Profile 并完成一次登录。即使多个 Profile 使用同一个 OpenAI 账户，它们仍拥有彼此隔离的凭据文件和运行时会话。
+
+## Callback URI 兜底
+
+浏览器无法自动回到 Dline 时，可以使用当前登录流程提供的手工兜底：
+
+1. 保持 **Browser sign-in in progress** 状态，不要取消流程。
+2. 展开 **Use callback URI fallback**。
+3. 从浏览器地址栏复制授权完成后的**完整 localhost callback URI**。
+4. 将完整 URI 粘贴到 **Authorization callback URI**，然后点击 **Complete sign-in**。
+
+该 URI 必须属于当前仍在进行的 Profile 登录流程，并包含匹配的 callback 地址、授权码和 state。Dline 不会把 callback URI 保存到 Profile。
+
+不要在设置中粘贴 OAuth JSON、access token、refresh token、ID token 或单独的授权码。Codex Profile UI 不提供这些敏感值的输入入口。
+
+## 凭据存储
+
+每个 Profile 的 OAuth 凭据保存在独立文件中：
+
+```text
+data/secrets/openai_codex_<profile-id-sha256-prefix>.json
+```
+
+文件名使用 Profile 稳定 ID 的 SHA-256 前 32 个十六进制字符，而不是 Profile 显示名称。因此：
+
+- 重命名 Profile 不会改变或丢失凭据；
+- 不同 Profile 不会共享同一个 OAuth 文件；
+- Dline 发起请求时，Bearer token 与 `ChatGPT-Account-Id` 来自同一份 Profile 凭据快照；
+- Codex 不读取、写入、迁移或创建废弃的 `data/secrets.json`。
+
+不要手工复制、合并或编辑这些文件。需要更换账户时，请使用 Profile 中的 **Re-authenticate**。
+
+## 旧凭据迁移
+
+升级后，Dline 会按现有 Codex Profile 数量安全处理旧的单文件凭据：
+
+- **只有一个 Codex Profile**：旧凭据可以迁移为该 Profile 独占的凭据文件；
+- **存在多个 Codex Profile**：Dline 不会猜测凭据归属，也不会把可轮换的 refresh token 复制到多个 Profile。相关 Profile 会要求分别重新登录；
+- 损坏或无法确认归属的旧数据不会被静默当作有效凭据使用。
+
+迁移完成后，每个 Profile 仍必须满足“一份 Profile 身份对应一份 OAuth 文件”的规则。
+
+## Profile 生命周期
+
+以下操作只影响目标 Profile：
+
+- **Sign out**：删除该 Profile 的 OAuth 凭据；
+- **Delete Profile**：删除该 Profile 及其 OAuth 凭据；
+- **切换到其他 Provider**：清理该 Profile 原有的 Codex OAuth 凭据；
+- **Rename、修改模型、推理设置或启用状态**：保留该 Profile 的 OAuth 凭据；
+- **Re-authenticate**：用新授权原子替换该 Profile 的旧凭据。
+
+多个 VS Code 窗口共享同一 Dline 数据目录时，同一时间只允许一个本地 OAuth flow 持有跨进程 lease。其他窗口不能抢占、取消或覆盖当前窗口正在进行的授权。
+
+## 安全说明
+
+- OAuth URL、callback URI、授权码、state、JWT 和 token 不应出现在 Dline 日志、Profile Catalog、通知或普通状态消息中；
+- 本地 callback server 只监听 loopback 地址，并校验 callback URI、PKCE 和 state；
+- access token 过期时，刷新只更新所属 Profile；刷新失败需要重新登录时，也只使该 Profile 失效；
+- 请勿将 `data/secrets/openai_codex_*.json` 提交到版本控制、上传到工单或发送给他人。

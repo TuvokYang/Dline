@@ -8,6 +8,7 @@ import * as os from "os"
 import { MessageEvent as UndiciMessageEvent, WebSocket as UndiciWebSocket } from "undici"
 import { v7 as uuidv7 } from "uuid"
 import { type OpenAiCodexCredentialContext, openAiCodexOAuthManager } from "@/integrations/openai-codex/oauth"
+import { resolveOpenAiCodexRuntimeConfig } from "@/integrations/openai-codex/runtime-config"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { featureFlagsService } from "@/services/feature-flags"
 import { ClineStorageMessage } from "@/shared/messages/content"
@@ -26,13 +27,6 @@ import {
 import { ApiStream, ApiStreamUsageChunk } from "../transform/stream"
 import { mapResponsesWebSearchEvent } from "../utils/responses_api_support"
 
-/**
- * OpenAI Codex base URL for API requests
- * Routes to chatgpt.com/backend-api/codex
- */
-const CODEX_API_BASE_URL = "https://chatgpt.com/backend-api/codex"
-const CODEX_RESPONSES_WEBSOCKET_URL = "wss://chatgpt.com/backend-api/codex/responses"
-const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 const CODEX_USAGE_TIMEOUT_MS = 10_000
 const SAFE_CODEX_ERROR_CODES = new Set([
 	"authentication_error",
@@ -87,6 +81,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 	private readonly profileId: string
 	private runtimeMutationDispose?: () => void
 	private activeRuntimeOperations = 0
+	private readonly runtimeConfig = resolveOpenAiCodexRuntimeConfig()
 	// Track request-local Responses item and function identities.
 	private responsesRegistry: ResponsesIdentityRegistry = createResponsesRegistry("openai-codex")
 
@@ -247,7 +242,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 			}
 
 			for (let attempt = 0; attempt < 2; attempt++) {
-				const response = await fetch(CODEX_USAGE_URL, {
+				const response = await fetch(this.runtimeConfig.usageUrl, {
 					headers: {
 						Authorization: `Bearer ${credential.accessToken}`,
 						originator: "dline",
@@ -507,7 +502,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 					this.client ??
 					new OpenAI({
 						apiKey: credential.accessToken,
-						baseURL: CODEX_API_BASE_URL,
+						baseURL: this.runtimeConfig.apiBaseUrl,
 						defaultHeaders: codexHeaders,
 						fetch: providerFetch,
 					})
@@ -603,7 +598,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 
 		this.closeResponsesWebsocket()
 
-		const ws = new UndiciWebSocket(CODEX_RESPONSES_WEBSOCKET_URL, {
+		const ws = new UndiciWebSocket(this.runtimeConfig.responsesWebsocketUrl, {
 			headers: {
 				Authorization: `Bearer ${credential.accessToken}`,
 				"OpenAI-Beta": "responses_websockets=2026-02-06",
@@ -799,7 +794,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 		model: { id: string; info: ModelInfo },
 		credential: OpenAiCodexCredentialContext,
 	): ApiStream {
-		const url = `${CODEX_API_BASE_URL}/responses`
+		const url = `${this.runtimeConfig.apiBaseUrl}/responses`
 
 		// Build headers with required Codex-specific fields
 		const headers: Record<string, string> = {

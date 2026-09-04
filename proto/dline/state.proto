@@ -60,6 +60,8 @@ message AutoApprovalSettings {
 // NOTE: Add the new secret fields under SECRETS_KEYS in src/shared/storage/state-keys.ts
 // and use the scripts/generate-state-proto.mjs script to regenerate this list.
 message Secrets {
+  reserved 48;
+  reserved "openai_codex_oauth_credentials";
   optional string api_key = 1;
   optional string cline_account_id = 2;
   optional string open_router_api_key = 3;
@@ -104,7 +106,6 @@ message Secrets {
   optional string oca_refresh_token = 42;
   optional string mcp_o_auth_secrets = 43;
   optional string cline_api_key = 44;
-  optional string openai_codex_oauth_credentials = 48;
   optional string wandb_api_key = 50;
   optional string searxng_search_token = 51;
 }

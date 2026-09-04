@@ -18,6 +18,7 @@ import {
 	type OAuthFlowStarted,
 } from "@/services/oauth"
 import { openExternal } from "@/utils/env"
+import { resolveOpenAiCodexRuntimeConfig } from "./runtime-config"
 import {
 	type OpenAiCodexCredentialContext,
 	type OpenAiCodexProfileAuthStatus,
@@ -140,21 +141,6 @@ export class OpenAiCodexOAuthManager {
 
 	getRuntimeRevision(profileId: string): number {
 		return this.runtimeRevisions.get(profileId) ?? 0
-	}
-
-	/** @deprecated TASK-005 migrates Provider consumers to the atomic credential context API. */
-	async getAccessToken(profileId: string): Promise<string | null> {
-		return (await this.getCredentialContext(profileId))?.accessToken ?? null
-	}
-
-	/** @deprecated TASK-005 migrates Provider consumers to the atomic credential context API. */
-	async forceRefreshAccessToken(profileId: string): Promise<string | null> {
-		return (await this.forceRefreshCredentialContext(profileId))?.accessToken ?? null
-	}
-
-	/** @deprecated TASK-005 migrates Provider consumers to the atomic credential context API. */
-	async getAccountId(profileId: string): Promise<string | null> {
-		return (await this.getCredentialContext(profileId))?.accountId ?? null
 	}
 
 	async saveCredentials(profileId: string, credentials: OpenAiCodexCredentials): Promise<void> {
@@ -323,4 +309,23 @@ export class OpenAiCodexOAuthManager {
 	}
 }
 
-export const openAiCodexOAuthManager = new OpenAiCodexOAuthManager()
+async function rejectUnconfiguredE2EOAuth(): Promise<void> {
+	throw new OAuthFlowError("BROWSER_OPEN_FAILED", "OpenAI Codex OAuth E2E requires an explicit loopback authorization server.")
+}
+
+function createDefaultOpenAiCodexOAuthManager(): OpenAiCodexOAuthManager {
+	const runtimeConfig = resolveOpenAiCodexRuntimeConfig()
+	if (!runtimeConfig.e2eOAuth) {
+		return new OpenAiCodexOAuthManager({
+			...(process.env.E2E_TEST === "true" ? { openExternal: rejectUnconfiguredE2EOAuth } : {}),
+		})
+	}
+
+	const { authorizationEndpoint, tokenEndpoint } = runtimeConfig.e2eOAuth
+	return new OpenAiCodexOAuthManager({
+		strategy: new OpenAiCodexOAuthStrategy({ configuration: { authorizationEndpoint, tokenEndpoint } }),
+		openExternal,
+	})
+}
+
+export const openAiCodexOAuthManager = createDefaultOpenAiCodexOAuthManager()

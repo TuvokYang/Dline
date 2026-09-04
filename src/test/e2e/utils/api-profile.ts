@@ -3,6 +3,7 @@ import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import * as os from "node:os"
 import * as path from "node:path"
 import { allProviderModels } from "../../../core/api/providers/models"
+import { getOpenAiCodexProfileAuthFileName } from "../../../core/storage/secrets/OpenAiCodexProfileAuthPath"
 import { getE2EMockProviderBaseUrl } from "../fixtures/server/api"
 
 export const E2E_PROFILE_NAMES = {
@@ -72,7 +73,7 @@ interface LocalProfileSource {
 	profiles: StoredApiProfile[]
 	apiKeys: Record<string, ApiKeyEntry>
 	providerSecrets: Record<string, ProviderSecretEntry>
-	hasOpenAiCodexAuth: boolean
+	openAiCodexProfileIds: ReadonlySet<string>
 }
 
 const PROFILE_IDS = {
@@ -212,12 +213,6 @@ async function copyFileIfPresent(sourcePath: string, destinationPath: string): P
 	await cp(sourcePath, destinationPath)
 }
 
-async function copyDirectoryIfPresent(sourcePath: string, destinationPath: string): Promise<void> {
-	if (!(await pathExists(sourcePath))) return
-	await mkdir(path.dirname(destinationPath), { recursive: true })
-	await cp(sourcePath, destinationPath, { recursive: true })
-}
-
 async function readJson<T>(filePath: string, fallback: T): Promise<T> {
 	if (!(await pathExists(filePath))) return fallback
 	return JSON.parse(await readFile(filePath, "utf8")) as T
@@ -238,7 +233,7 @@ function localLiveProfiles(source: LocalProfileSource): LiveE2EProfile[] {
 			if (!profile.enabled || !profile.provider || !profile.modelId) return false
 			if (source.apiKeys[profile.id]?.apiKey.trim()) return true
 			if (hasNonEmptyValues(source.providerSecrets[profile.id]?.secrets)) return true
-			return profile.provider === "openai-codex" && source.hasOpenAiCodexAuth
+			return profile.provider === "openai-codex" && source.openAiCodexProfileIds.has(profile.id)
 		})
 		.map((profile) => ({
 			credentialSource: "local" as const,
@@ -258,31 +253,36 @@ function mergeLiveProfiles(...sources: readonly LiveE2EProfile[][]): LiveE2EProf
 }
 
 async function loadLocalProfileSource(sourceDataDir: string, destinationDataDir: string): Promise<LocalProfileSource> {
+	const sourceSettingsDir = path.join(sourceDataDir, "settings")
+	const sourceSecretsDir = path.join(sourceDataDir, "secrets")
 	const settingsDir = path.join(destinationDataDir, "settings")
 	const secretsDir = path.join(destinationDataDir, "secrets")
-	await Promise.all([
-		copyDirectoryIfPresent(path.join(sourceDataDir, "secrets"), secretsDir),
-		copyFileIfPresent(path.join(sourceDataDir, "settings", "api_profiles.json"), path.join(settingsDir, "api_profiles.json")),
-	])
+	const profilesPath = path.join(settingsDir, "api_profiles.json")
+	await copyFileIfPresent(path.join(sourceSettingsDir, "api_profiles.json"), profilesPath)
+	const storedProfiles = await readJson<StoredApiProfile[]>(profilesPath, [])
 
-	const [storedProfiles, apiKeys, providerSecrets, openAiCodexAuth] = await Promise.all([
-		readJson<StoredApiProfile[]>(path.join(settingsDir, "api_profiles.json"), []),
+	await Promise.all([
+		copyFileIfPresent(path.join(sourceSecretsDir, "api_keys.json"), path.join(secretsDir, "api_keys.json")),
+		copyFileIfPresent(path.join(sourceSecretsDir, "provider_secrets.json"), path.join(secretsDir, "provider_secrets.json")),
+	])
+	const openAiCodexProfileIds = new Set<string>()
+	for (const profile of storedProfiles) {
+		if (profile.provider !== "openai-codex") continue
+		const fileName = getOpenAiCodexProfileAuthFileName(profile.id)
+		const sourcePath = path.join(sourceSecretsDir, fileName)
+		if (!(await pathExists(sourcePath))) continue
+		await copyFileIfPresent(sourcePath, path.join(secretsDir, fileName))
+		openAiCodexProfileIds.add(profile.id)
+	}
+
+	const [apiKeys, providerSecrets] = await Promise.all([
 		readJson<Record<string, ApiKeyEntry>>(path.join(secretsDir, "api_keys.json"), {}),
 		readJson<Record<string, ProviderSecretEntry>>(path.join(secretsDir, "provider_secrets.json"), {}),
-		readJson<Record<string, unknown>>(path.join(secretsDir, "openai_codex_oauth.json"), {}),
 	])
 	const profiles: StoredApiProfile[] = []
 	for (const profile of storedProfiles) upsertProfile(profiles, profile)
 
-	return {
-		profiles,
-		apiKeys,
-		providerSecrets,
-		hasOpenAiCodexAuth:
-			openAiCodexAuth.type === "openai-codex" &&
-			typeof openAiCodexAuth.access_token === "string" &&
-			openAiCodexAuth.access_token.length > 0,
-	}
+	return { profiles, apiKeys, providerSecrets, openAiCodexProfileIds }
 }
 
 async function loadEnvironmentProfileSource(env: NodeJS.ProcessEnv): Promise<EnvironmentE2EProfile[]> {
@@ -423,7 +423,7 @@ export async function prepareE2EState(options: PrepareE2EStateOptions): Promise<
 						profiles: [],
 						apiKeys: {},
 						providerSecrets: {},
-						hasOpenAiCodexAuth: false,
+						openAiCodexProfileIds: new Set<string>(),
 					} satisfies LocalProfileSource,
 					[],
 				]

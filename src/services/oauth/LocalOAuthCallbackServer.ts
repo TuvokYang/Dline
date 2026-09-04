@@ -11,6 +11,11 @@ export interface LocalOAuthCallbackServerOptions {
 const SUCCESS_HTML = "<!doctype html><html><body><h1>Authentication complete</h1><p>You can close this window.</p></body></html>"
 const FAILURE_HTML =
 	"<!doctype html><html><body><h1>Authentication failed</h1><p>Return to the application and try again.</p></body></html>"
+const CALLBACK_RESPONSE_HEADERS = {
+	"Cache-Control": "no-store",
+	Connection: "close",
+	"Content-Type": "text/html; charset=utf-8",
+} as const
 
 export class LocalOAuthCallbackServer {
 	private constructor(
@@ -24,17 +29,17 @@ export class LocalOAuthCallbackServer {
 		const server = http.createServer(async (request, response) => {
 			const callback = new URL(request.url ?? "/", baseUrl)
 			if (callback.pathname !== options.callbackPath) {
-				response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" })
+				response.writeHead(404, { ...CALLBACK_RESPONSE_HEADERS, "Content-Type": "text/plain; charset=utf-8" })
 				response.end("Not Found")
 				return
 			}
 			try {
 				await options.onCallback(callback.toString())
-				response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" })
+				response.writeHead(200, CALLBACK_RESPONSE_HEADERS)
 				response.end(SUCCESS_HTML)
 			} catch (error) {
 				const status = error instanceof OAuthFlowError && error.code === "TOKEN_EXCHANGE_FAILED" ? 500 : 400
-				response.writeHead(status, { "Content-Type": "text/html; charset=utf-8" })
+				response.writeHead(status, CALLBACK_RESPONSE_HEADERS)
 				response.end(FAILURE_HTML)
 			}
 		})

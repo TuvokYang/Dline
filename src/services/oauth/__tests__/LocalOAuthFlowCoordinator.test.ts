@@ -74,6 +74,28 @@ describe("LocalOAuthFlowCoordinator", () => {
 		return new URL(authorizationUrl)
 	}
 
+	async function getAvailablePort(): Promise<number> {
+		const server = http.createServer()
+		await new Promise<void>((resolve, reject) => {
+			server.once("error", reject)
+			server.listen(0, "127.0.0.1", resolve)
+		})
+		const address = server.address()
+		if (!address || typeof address === "string") throw new Error("expected TCP address")
+		await new Promise<void>((resolve) => server.close(() => resolve()))
+		return address.port
+	}
+
+	function requestWithAgent(url: string, agent: http.Agent): Promise<{ status: number; headers: http.IncomingHttpHeaders }> {
+		return new Promise((resolve, reject) => {
+			const request = http.get(url, { agent }, (response) => {
+				response.resume()
+				response.once("end", () => resolve({ status: response.statusCode ?? 0, headers: response.headers }))
+			})
+			request.once("error", reject)
+		})
+	}
+
 	it("listens before opening the browser and completes from a pasted callback URI", async () => {
 		let listenedRedirectUri = ""
 		let openedAuthorizationUrl = ""
@@ -110,6 +132,31 @@ describe("LocalOAuthFlowCoordinator", () => {
 		const response = await fetch(`${redirectUri}?code=browser-code&state=${state}`)
 		expect(response.status).toBe(200)
 		await expect(flow.result).resolves.toMatchObject({ code: "browser-code" })
+	})
+
+	it("closes a fixed-port callback connection before the next flow starts", async () => {
+		const port = await getAvailablePort()
+		const coordinator = await createCoordinator({ strategy: new TestStrategy(port) })
+		const agent = new http.Agent({ keepAlive: true, maxSockets: 1 })
+		try {
+			for (const [profileId, code] of [
+				["profile-a", "browser-code-a"],
+				["profile-b", "browser-code-b"],
+			] as const) {
+				const flow = await coordinator.startFlow({ profileId })
+				const authorization = lastAuthorizationUrl()
+				const redirectUri = authorization.searchParams.get("redirect_uri")!
+				const state = authorization.searchParams.get("state")!
+				const response = await requestWithAgent(`${redirectUri}?code=${code}&state=${state}`, agent)
+
+				expect(response.status).toBe(200)
+				expect(response.headers.connection).toBe("close")
+				expect(response.headers["cache-control"]).toBe("no-store")
+				await expect(flow.result).resolves.toMatchObject({ code })
+			}
+		} finally {
+			agent.destroy()
+		}
 	})
 
 	it("rejects a wrong state without terminating the pending flow", async () => {
