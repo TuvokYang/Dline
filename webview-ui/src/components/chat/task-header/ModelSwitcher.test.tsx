@@ -32,9 +32,18 @@ const mocks = vi.hoisted(() => ({
 				legacyNames: ["old-large-profile"],
 				provider: "test",
 				modelId: "large",
-				usedFor: [],
+				usedFor: ["act", "plan"],
+				enabled: true,
 			},
-			{ id: "small-id", name: "small-profile", legacyNames: [], provider: "test", modelId: "small", usedFor: [] },
+			{
+				id: "small-id",
+				name: "small-profile",
+				legacyNames: [],
+				provider: "test",
+				modelId: "small",
+				usedFor: ["act", "plan"],
+				enabled: true,
+			},
 		],
 		loaded: true,
 		error: undefined as Error | undefined,
@@ -81,6 +90,7 @@ describe("ModelSwitcher Profile transitions", () => {
 			actModeProfileId: "large-id",
 			actModeProfile: "large-profile",
 		}
+		mocks.state.planActSeparateModelsSetting = false
 		mocks.profileStore.profiles = [
 			{
 				id: "large-id",
@@ -88,9 +98,18 @@ describe("ModelSwitcher Profile transitions", () => {
 				legacyNames: ["old-large-profile"],
 				provider: "test",
 				modelId: "large",
-				usedFor: [],
+				usedFor: ["act", "plan"],
+				enabled: true,
 			},
-			{ id: "small-id", name: "small-profile", legacyNames: [], provider: "test", modelId: "small", usedFor: [] },
+			{
+				id: "small-id",
+				name: "small-profile",
+				legacyNames: [],
+				provider: "test",
+				modelId: "small",
+				usedFor: ["act", "plan"],
+				enabled: true,
+			},
 		]
 		mocks.profileStore.loaded = true
 		mocks.profileStore.error = undefined
@@ -255,5 +274,159 @@ describe("ModelSwitcher Profile transitions", () => {
 
 		expect(mocks.selectProfiles).toHaveBeenCalledWith("small-id", ["plan", "act"], undefined, false)
 		expect(mocks.requestSwitch).not.toHaveBeenCalled()
+	})
+
+	it("hides Profiles that no conversational mode uses, even without Split Model", () => {
+		mocks.profileStore.profiles = [
+			...mocks.profileStore.profiles,
+			{
+				id: "subagent-only-id",
+				name: "subagent-only-profile",
+				legacyNames: [],
+				provider: "test",
+				modelId: "sub",
+				usedFor: ["subagents"],
+				enabled: true,
+			},
+			{
+				id: "image-only-id",
+				name: "image-only-profile",
+				legacyNames: [],
+				provider: "test",
+				modelId: "img",
+				usedFor: ["image"],
+				enabled: true,
+			},
+		]
+
+		render(<ModelSwitcher onOpenSettings={vi.fn()} />)
+		fireEvent.click(screen.getByRole("button", { name: "Select model" }))
+
+		expect(screen.getByRole("option", { name: /large-profile/ })).toBeInTheDocument()
+		expect(screen.queryByRole("option", { name: /subagent-only-profile/ })).not.toBeInTheDocument()
+		expect(screen.queryByRole("option", { name: /image-only-profile/ })).not.toBeInTheDocument()
+	})
+
+	it("treats an empty usedFor as unavailable rather than every mode", () => {
+		mocks.profileStore.profiles = [
+			...mocks.profileStore.profiles,
+			{
+				id: "unassigned-id",
+				name: "unassigned-profile",
+				legacyNames: [],
+				provider: "test",
+				modelId: "none",
+				usedFor: [],
+				enabled: true,
+			},
+		]
+
+		render(<ModelSwitcher onOpenSettings={vi.fn()} />)
+		fireEvent.click(screen.getByRole("button", { name: "Select model" }))
+
+		expect(screen.queryByRole("option", { name: /unassigned-profile/ })).not.toBeInTheDocument()
+	})
+
+	it("hides a disabled Profile the display state would immediately reject", () => {
+		mocks.profileStore.profiles = [
+			...mocks.profileStore.profiles,
+			{
+				id: "disabled-id",
+				name: "disabled-profile",
+				legacyNames: [],
+				provider: "test",
+				modelId: "off",
+				usedFor: ["act", "plan"],
+				enabled: false,
+			},
+		]
+
+		render(<ModelSwitcher onOpenSettings={vi.fn()} />)
+		fireEvent.click(screen.getByRole("button", { name: "Select model" }))
+
+		expect(screen.queryByRole("option", { name: /disabled-profile/ })).not.toBeInTheDocument()
+	})
+
+	it("restricts each tab to its own mode once Split Model is enabled", () => {
+		mocks.state.planActSeparateModelsSetting = true
+		mocks.profileStore.profiles = [
+			{
+				id: "act-only-id",
+				name: "act-only-profile",
+				legacyNames: [],
+				provider: "test",
+				modelId: "a",
+				usedFor: ["act"],
+				enabled: true,
+			},
+			{
+				id: "plan-only-id",
+				name: "plan-only-profile",
+				legacyNames: [],
+				provider: "test",
+				modelId: "p",
+				usedFor: ["plan"],
+				enabled: true,
+			},
+		]
+
+		render(<ModelSwitcher onOpenSettings={vi.fn()} />)
+		fireEvent.click(screen.getByRole("button", { name: "Select model" }))
+
+		expect(screen.getByRole("option", { name: /act-only-profile/ })).toBeInTheDocument()
+		expect(screen.queryByRole("option", { name: /plan-only-profile/ })).not.toBeInTheDocument()
+
+		fireEvent.click(screen.getByRole("button", { name: "Plan" }))
+
+		expect(screen.getByRole("option", { name: /plan-only-profile/ })).toBeInTheDocument()
+		expect(screen.queryByRole("option", { name: /act-only-profile/ })).not.toBeInTheDocument()
+	})
+
+	it("selects by stable identity when a display name collides with another Profile", () => {
+		// "test:small" is small-profile's fallback label and also large-profile's actual name,
+		// so a name-based lookup would resolve the wrong entry.
+		mocks.profileStore.profiles = [
+			{
+				id: "collision-id",
+				name: "test:small",
+				legacyNames: [],
+				provider: "test",
+				modelId: "large",
+				usedFor: ["act", "plan"],
+				enabled: true,
+			},
+			{
+				id: "small-id",
+				name: "",
+				legacyNames: [],
+				provider: "test",
+				modelId: "small",
+				usedFor: ["act", "plan"],
+				enabled: true,
+			},
+		]
+
+		render(<ModelSwitcher onOpenSettings={vi.fn()} />)
+		fireEvent.click(screen.getByRole("button", { name: "Select model" }))
+
+		const options = screen.getAllByRole("option")
+		fireEvent.click(options[1])
+
+		expect(mocks.requestSwitch).toHaveBeenCalledWith("small-id", ["plan", "act"])
+	})
+
+	it("marks the selected option from the stable binding instead of the first entry", () => {
+		mocks.state.apiConfiguration = {
+			planModeProfileId: "small-id",
+			planModeProfile: "renamed-away",
+			actModeProfileId: "small-id",
+			actModeProfile: "renamed-away",
+		}
+
+		render(<ModelSwitcher onOpenSettings={vi.fn()} />)
+		fireEvent.click(screen.getByRole("button", { name: "Select model" }))
+
+		expect(screen.getByRole("option", { name: /small-profile/ })).toHaveAttribute("aria-selected", "true")
+		expect(screen.getByRole("option", { name: /large-profile/ })).toHaveAttribute("aria-selected", "false")
 	})
 })

@@ -1,11 +1,12 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import * as path from "node:path"
 import { expect } from "@playwright/test"
-import type { ElectronApplication } from "playwright"
+import type { ElectronApplication, Frame, Locator } from "playwright"
 import { ApiFormat } from "../../shared/proto/dline/models/metadata"
 import PROVIDERS from "../../shared/providers/providers.json"
 import { E2E_PROFILE_NAMES } from "./utils/api-profile"
 import { E2ETestHelper, e2e } from "./utils/helpers"
+import { resizePrimarySidebar } from "./utils/resize-primary-sidebar"
 
 interface StoredProfile {
 	id: string
@@ -61,7 +62,6 @@ const API_KEY_LABELS: Partial<Record<string, string>> = {
 	nebius: "Nebius API Key",
 	nousResearch: "Nous Research API Key",
 	ollama: "Ollama API Key",
-	"openai-codex": "OpenAI Codex API Key",
 	openai: "OpenAI API Key",
 	openrouter: "OpenRouter API Key",
 	qwen: "Qwen API Key",
@@ -75,13 +75,47 @@ const API_KEY_LABELS: Partial<Record<string, string>> = {
 	zai: "Z AI API Key",
 }
 
+/**
+ * Matches on the expand/collapse toggle, whose accessible name always carries
+ * the profile name. Plain `hasText` would also match a card whose expanded
+ * body happens to contain the name, such as a provider dropdown option.
+ */
+function getProfileCard(sidebar: Frame, profileName: string): Locator {
+	return sidebar.getByTestId("api-profile-card").filter({
+		has: sidebar.getByRole("button", { name: new RegExp(`^(Expand|Collapse) ${escapeForRegExp(profileName)}$`) }),
+	})
+}
+
+function escapeForRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+/** Expanding is idempotent: the toggle is only clicked while it still offers to expand. */
+async function expandProfileCard(card: Locator): Promise<void> {
+	const expandToggle = card.getByRole("button", { name: /^Expand / })
+	if (await expandToggle.isVisible()) {
+		await expandToggle.click()
+	}
+	await expect(card.getByRole("button", { name: /^Collapse / })).toBeVisible()
+}
+
+/** Expands the named profile and returns its editable name field. */
+async function openProfileNameInput(sidebar: Frame, profileName: string): Promise<Locator> {
+	const card = getProfileCard(sidebar, profileName)
+	await expect(card).toHaveCount(1)
+	await expandProfileCard(card)
+	const nameInput = card.locator('input[aria-label="Profile name"]')
+	await expect(nameInput).toBeVisible()
+	return nameInput
+}
+
 e2e("Settings API Config - shows configured profiles without changing them", async ({ helper, page, sidebar }) => {
 	await helper.signin(sidebar)
 	await page.getByRole("button", { name: "Settings", exact: true }).click()
 
 	await expect(sidebar.getByRole("heading", { name: "API Configuration" })).toBeVisible()
-	await expect(sidebar.getByText("Add API")).toBeVisible()
-	await expect(sidebar.getByRole("textbox").first()).toBeVisible()
+	await expect(sidebar.getByRole("button", { name: "Add profile" })).toBeVisible()
+	await expect(sidebar.getByTestId("api-profile-card").first()).toBeVisible()
 })
 
 e2e(
@@ -100,9 +134,9 @@ e2e(
 			await helper.signin(firstSidebar)
 			await firstPage.getByRole("button", { name: "Settings", exact: true }).click()
 			await expect(firstSidebar.getByRole("heading", { name: "API Configuration" })).toBeVisible()
+			await firstSidebar.getByRole("button", { name: `Expand ${E2E_PROFILE_NAMES.persistence}` }).click()
 
-			const profileNameInput = firstSidebar.locator(`input[value="${E2E_PROFILE_NAMES.persistence}"]`)
-			await expect(profileNameInput).toBeVisible()
+			const profileNameInput = await openProfileNameInput(firstSidebar, E2E_PROFILE_NAMES.persistence)
 			await profileNameInput.fill(renamedProfile)
 			await profileNameInput.blur()
 
@@ -122,9 +156,10 @@ e2e(
 			const reopenedSidebar = await helper.getSidebar(reopenedPage)
 			await helper.signin(reopenedSidebar)
 			await reopenedPage.getByRole("button", { name: "Settings", exact: true }).click()
+			await reopenedSidebar.getByRole("button", { name: `Expand ${renamedProfile}` }).click()
 
-			await expect(reopenedSidebar.locator(`input[value="${renamedProfile}"]`)).toBeVisible()
-			await expect(reopenedSidebar.locator(`input[value="${E2E_PROFILE_NAMES.persistence}"]`)).toHaveCount(0)
+			await expect(getProfileCard(reopenedSidebar, renamedProfile)).toHaveCount(1)
+			await expect(getProfileCard(reopenedSidebar, E2E_PROFILE_NAMES.persistence)).toHaveCount(0)
 		} finally {
 			await reopenedApp?.close()
 			await firstApp?.close()
@@ -153,7 +188,7 @@ e2e(
 			await expect(firstSidebar.getByRole("heading", { name: "API Configuration" })).toBeVisible()
 
 			const existingProfileIds = new Set((await readJson<StoredProfile[]>(profilesPath)).map((profile) => profile.id))
-			await firstSidebar.getByRole("button", { name: "Add API" }).click()
+			await firstSidebar.getByRole("button", { name: "Add profile" }).click()
 			const profileCard = firstSidebar.getByTestId("api-profile-card").last()
 			const profileId = await E2ETestHelper.waitForValue(async () => {
 				const profiles = await readJson<StoredProfile[]>(profilesPath)
@@ -175,7 +210,7 @@ e2e(
 
 			const storedProfile = (await readJson<StoredProfile[]>(profilesPath)).find((profile) => profile.id === profileId)
 			if (!storedProfile) throw new Error("Created Anthropic Profile is missing")
-			const profileNameInput = profileCard.getByRole("textbox", { name: storedProfile.name, exact: true })
+			const profileNameInput = profileCard.locator('input[aria-label="Profile name"]')
 			await profileNameInput.fill(renamedProfile)
 			await profileNameInput.blur()
 			await E2ETestHelper.waitUntil(async () => {
@@ -196,11 +231,9 @@ e2e(
 			await helper.signin(reopenedSidebar)
 			await reopenedPage.getByRole("button", { name: "Settings", exact: true }).click()
 
-			const reopenedCard = reopenedSidebar
-				.getByTestId("api-profile-card")
-				.filter({ has: reopenedSidebar.locator(`input[value="${renamedProfile}"]`) })
+			const reopenedCard = getProfileCard(reopenedSidebar, renamedProfile)
 			await expect(reopenedCard).toHaveCount(1)
-			await reopenedCard.locator('[role="button"][tabindex="0"]').press("Enter")
+			await expandProfileCard(reopenedCard)
 			await expect(reopenedCard.getByRole("combobox", { name: "Provider", exact: true })).toBeVisible()
 			await expect(reopenedCard.getByRole("textbox", { name: "Anthropic API Key", exact: true })).toHaveValue(apiKey)
 			expect((await readJson<Record<string, { apiKey?: string }>>(apiKeysPath))[profileId]?.apiKey).toBe(apiKey)
@@ -237,7 +270,7 @@ e2e(
 
 			const addProviderProfile = async (provider: string) => {
 				const existingIds = new Set((await readJson<StoredProfile[]>(profilesPath)).map((profile) => profile.id))
-				await firstSidebar.getByRole("button", { name: "Add API" }).click()
+				await firstSidebar.getByRole("button", { name: "Add profile" }).click()
 				const card = firstSidebar.getByTestId("api-profile-card").last()
 				const id = await E2ETestHelper.waitForValue(async () => {
 					const profiles = await readJson<StoredProfile[]>(profilesPath)
@@ -304,11 +337,9 @@ e2e(
 			await helper.signin(reopenedSidebar)
 			await reopenedPage.getByRole("button", { name: "Settings", exact: true }).click()
 
-			const reopenedBedrock = reopenedSidebar
-				.getByTestId("api-profile-card")
-				.filter({ has: reopenedSidebar.getByRole("textbox", { name: bedrock.name, exact: true }) })
+			const reopenedBedrock = getProfileCard(reopenedSidebar, bedrock.name)
 			await expect(reopenedBedrock).toHaveCount(1)
-			await reopenedBedrock.getByRole("button").first().press("Enter")
+			await expandProfileCard(reopenedBedrock)
 			await expect(reopenedBedrock.getByRole("textbox", { name: "AWS Access Key", exact: true })).toHaveValue(
 				"E2E_BEDROCK_ACCESS",
 			)
@@ -319,11 +350,9 @@ e2e(
 				"E2E_BEDROCK_SESSION",
 			)
 
-			const reopenedSap = reopenedSidebar
-				.getByTestId("api-profile-card")
-				.filter({ has: reopenedSidebar.getByRole("textbox", { name: sap.name, exact: true }) })
+			const reopenedSap = getProfileCard(reopenedSidebar, sap.name)
 			await expect(reopenedSap).toHaveCount(1)
-			await reopenedSap.getByRole("button").first().press("Enter")
+			await expandProfileCard(reopenedSap)
 			await expect(reopenedSap.getByRole("textbox", { name: "Client ID", exact: true })).toHaveValue("E2E_SAP_CLIENT_ID")
 			await expect(reopenedSap.getByRole("textbox", { name: "Client Secret", exact: true })).toHaveValue(
 				"E2E_SAP_CLIENT_SECRET",
@@ -373,7 +402,7 @@ e2e(
 			await helper.signin(sidebar)
 			await page.getByRole("button", { name: "Settings", exact: true }).click()
 
-			await sidebar.getByRole("button", { name: "Add API" }).click()
+			await sidebar.getByRole("button", { name: "Add profile" }).click()
 			const profileCard = sidebar.getByTestId("api-profile-card").last()
 			await profileCard.getByRole("combobox", { name: "Provider", exact: true }).selectOption("deepseek")
 			const apiFormatSelector = profileCard.getByRole("combobox", { name: "API Format" })
@@ -408,9 +437,9 @@ e2e(
 
 		const profilesPath = path.join(dlineDir, "data", "settings", "api_profiles.json")
 		const existingProfileIds = new Set((await readJson<StoredProfile[]>(profilesPath)).map((profile) => profile.id))
-		await sidebar.getByRole("button", { name: "Add API" }).click()
+		await sidebar.getByRole("button", { name: "Add profile" }).click()
 		const profileCard = sidebar.getByTestId("api-profile-card").last()
-		await expect(profileCard.locator('input[value="New Model"]')).toBeVisible()
+		await expect(profileCard.locator('input[aria-label="Profile name"]')).toHaveValue("New Model")
 		const profileId = await E2ETestHelper.waitForValue(async () => {
 			const profiles = await readJson<StoredProfile[]>(profilesPath)
 			return profiles.find((profile) => !existingProfileIds.has(profile.id))?.id
@@ -440,7 +469,7 @@ e2e(
 		catalog.models[modelId] = { ...templateModel, id: modelId, name: modelId }
 		await writeFile(providerPath, `${JSON.stringify(catalog, null, 2)}\n`, "utf8")
 
-		const modelSelector = profileCard.locator("vscode-dropdown#model-id")
+		const modelSelector = profileCard.getByRole("combobox", { name: "Model", exact: true })
 		await expect(modelSelector.locator(`vscode-option[value="${modelId}"]`)).toHaveCount(1, { timeout: 15_000 })
 		await modelSelector.evaluate((element, value) => {
 			;(element as HTMLInputElement).value = value
@@ -466,7 +495,7 @@ e2e(
 		const profilesPath = path.join(dlineDir, "data", "settings", "api_profiles.json")
 		const apiKeysPath = path.join(dlineDir, "data", "secrets", "api_keys.json")
 		const existingProfileIds = new Set((await readJson<StoredProfile[]>(profilesPath)).map((profile) => profile.id))
-		await sidebar.getByRole("button", { name: "Add API" }).click()
+		await sidebar.getByRole("button", { name: "Add profile" }).click()
 		const profileCard = sidebar.getByTestId("api-profile-card").last()
 		const profileId = await E2ETestHelper.waitForValue(async () => {
 			const profiles = await readJson<StoredProfile[]>(profilesPath)
@@ -513,3 +542,36 @@ e2e(
 		}
 	},
 )
+
+e2e("Settings API Config - exposes OAuth-only controls for OpenAI Codex", async ({ helper, page, sidebar }, testInfo) => {
+	await helper.signin(sidebar)
+	await page.getByRole("button", { name: "Settings", exact: true }).click()
+	await expect(sidebar.getByRole("heading", { name: "API Configuration" })).toBeVisible()
+	await sidebar.getByRole("button", { name: "Add profile" }).click()
+
+	const profileCard = sidebar.getByTestId("api-profile-card").last()
+	await profileCard.getByRole("combobox", { name: "Provider", exact: true }).selectOption("openai-codex")
+	await expect(profileCard.getByRole("button", { name: "Sign in with ChatGPT" })).toBeVisible()
+	await expect(profileCard.getByText("Not signed in", { exact: true })).toBeVisible({ timeout: 15_000 })
+	await expect(profileCard.getByText("Could not read OpenAI Codex sign-in status. Please try again.")).toHaveCount(0)
+	await expect(profileCard.getByRole("textbox", { name: /API Key|Access Token|Refresh Token|OAuth JSON/i })).toHaveCount(0)
+
+	for (const sidebarWidth of [320, 480, 700]) {
+		const actualSidebarWidth = await resizePrimarySidebar(page, sidebarWidth)
+		const cardBox = await profileCard.boundingBox()
+		expect(cardBox, "Codex Profile card should have a bounding box").not.toBeNull()
+		expect(cardBox?.width ?? 0, `Codex Profile card should grow with the ${sidebarWidth}px sidebar`).toBeGreaterThanOrEqual(
+			actualSidebarWidth - 195,
+		)
+		const layout = await sidebar.evaluate(() => ({
+			clientWidth: document.documentElement.clientWidth,
+			scrollWidth: document.documentElement.scrollWidth,
+		}))
+		expect(layout.scrollWidth, `Codex Provider should not overflow at ${sidebarWidth}px`).toBeLessThanOrEqual(
+			layout.clientWidth + 1,
+		)
+		await profileCard.screenshot({
+			path: testInfo.outputPath(`codex-provider-not-signed-in-${sidebarWidth}px.png`),
+		})
+	}
+})

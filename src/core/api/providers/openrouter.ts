@@ -1,5 +1,5 @@
 import { setTimeout as setTimeoutPromise } from "node:timers/promises"
-import { StateManager } from "@core/storage/StateManager"
+import { findCatalogModel } from "@core/model-registry/provider-model-lookup"
 import { ModelInfo, openRouterDefaultModelId, openRouterDefaultModelInfo } from "@shared/api"
 import { shouldSkipReasoningForModel } from "@utils/model-utils"
 import axios from "axios"
@@ -14,6 +14,8 @@ import { createOpenRouterStream } from "../transform/openrouter-stream"
 import { ApiStream, ApiStreamUsageChunk } from "../transform/stream"
 import { ToolCallProcessor } from "../transform/tool-call-processor"
 import { OpenRouterErrorResponse } from "./types"
+
+const OPENROUTER_PROVIDER_ID = "openrouter"
 
 export class OpenRouterHandler implements ApiHandler {
 	private client: OpenAI | undefined
@@ -236,10 +238,11 @@ export class OpenRouterHandler implements ApiHandler {
 
 	getModel(): { id: string; info: ModelInfo } {
 		const modelId = this.modelId || openRouterDefaultModelId
-		const cachedModelInfo = StateManager.get().getModelInfo("openRouter", modelId)
+		// The discovered catalog wins, then the profile's stored info, then the built-in default.
+		const catalogModelInfo = findCatalogModel(OPENROUTER_PROVIDER_ID, modelId)
 		return {
 			id: modelId,
-			info: cachedModelInfo || this.modelInfo || openRouterDefaultModelInfo,
+			info: catalogModelInfo || this.modelInfo || openRouterDefaultModelInfo,
 		}
 	}
 }

@@ -73,19 +73,19 @@ describe("useProfileSwitch", () => {
 		)
 	})
 
-	it("describes target-Profile compaction through the published status text", () => {
-		const { result } = renderHook(() => useProfileSwitch({ profileSwitch: snapshot("compacting") }))
+	it("describes the advisory window check through the published status text", () => {
+		const { result } = renderHook(() => useProfileSwitch({ profileSwitch: snapshot("preflighting") }))
 
-		expect(result.current.statusText).toBe("Compacting with small-profile...")
+		expect(result.current.statusText).toBe("Checking target context window...")
 	})
 
-	it("keeps terminal compaction failure out of the persistent Profile selector status", () => {
+	it("keeps a terminal failure out of the persistent Profile selector status", () => {
 		const { result } = renderHook(() =>
-			useProfileSwitch({ profileSwitch: { ...snapshot("failed"), error: "Compaction failed." } }),
+			useProfileSwitch({ profileSwitch: { ...snapshot("failed"), error: "Profile switch state changed before commit." } }),
 		)
 
 		expect(result.current.statusText).toBeUndefined()
-		expect(result.current.error).toBe("Compaction failed.")
+		expect(result.current.error).toBe("Profile switch state changed before commit.")
 	})
 
 	it("publishes no status text once the backend returns to idle", () => {

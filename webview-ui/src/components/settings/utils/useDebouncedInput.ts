@@ -84,16 +84,24 @@ export function useDebouncedInput<T>(
 
 	// Sync local state when initialValue changes externally (e.g., when switching tabs).
 	useEffect(() => {
-		if (prevInitialValueRef.current !== initialValue) {
-			if (Object.is(localValueRef.current, prevInitialValueRef.current)) {
-				localValueRef.current = initialValue
-				setLocalValue(initialValue)
-				prevInitialValueRef.current = initialValue
-			} else {
-				// User is editing — keep the local draft until it is committed.
-				prevInitialValueRef.current = localValueRef.current
-			}
+		if (Object.is(prevInitialValueRef.current, initialValue)) {
+			return
 		}
+
+		// An uncommitted draft must survive; anything else adopts the incoming value.
+		// The draft is only uncommitted while it differs from both the value it was
+		// derived from and the value now arriving, which is how a round-tripped save
+		// is told apart from an edit that has not been saved yet.
+		const hasUncommittedDraft =
+			!Object.is(localValueRef.current, prevInitialValueRef.current) && !Object.is(localValueRef.current, initialValue)
+
+		prevInitialValueRef.current = initialValue
+		if (hasUncommittedDraft) {
+			return
+		}
+
+		localValueRef.current = initialValue
+		setLocalValue(initialValue)
 	}, [initialValue])
 
 	// Register the flusher so SettingsView can commit every mounted input before Done.

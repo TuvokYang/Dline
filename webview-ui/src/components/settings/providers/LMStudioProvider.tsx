@@ -1,18 +1,14 @@
+import { StringRequest } from "@shared/proto/dline/common"
 import { LmStudioProviderConfig } from "@shared/proto/dline/provider/lmstudio"
 import { VSCodeDropdown, VSCodeLink, VSCodeOption, VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
-import { useCallback, useEffect, useMemo, useState } from "react"
-import { useInterval } from "react-use"
+import { useCallback, useMemo } from "react"
 import UseCustomPromptCheckbox from "@/components/settings/UseCustomPromptCheckbox"
+import { ModelsServiceClient } from "@/services/grpc-client"
 import { BaseUrlField } from "../common/BaseUrlField"
 import { DebouncedTextField } from "../common/DebouncedTextField"
 import { DropdownContainer } from "../common/ModelSelector"
 import type { ApiProfile } from "./ProviderProfile"
-
-interface LMStudioApiModel {
-	id: string
-	object?: "model"
-	type?: string
-}
+import { useModelProbe } from "./useModelProbe"
 
 interface LMStudioProviderProps {
 	showModelOptions: boolean
@@ -24,27 +20,27 @@ interface LMStudioProviderProps {
 /** LM Studio provider �?baseUrl, apiKey, modelId from ApiProfile. */
 export const LMStudioProvider = ({ showModelOptions, isPopup: _isPopup, profile, onUpdate }: LMStudioProviderProps) => {
 	const pc = profile.lmstudio ?? LmStudioProviderConfig.create()
-	const [lmStudioModels, setLmStudioModels] = useState<LMStudioApiModel[]>([])
 
-	const fetchModels = useCallback(async () => {
-		try {
-			const base = profile.baseUrl || "http://localhost:1234"
-			const r = await fetch(`${base}/v1/models`)
-			if (r.ok) {
-				const d = await r.json()
-				setLmStudioModels(d?.data || [])
-			}
-		} catch {
-			setLmStudioModels([])
-		}
+	const probeLmStudioModels = useCallback(async () => {
+		const response = await ModelsServiceClient.getLmStudioModels(StringRequest.create({ value: profile.baseUrl ?? "" }))
+		return response?.values ?? []
 	}, [profile.baseUrl])
 
-	useEffect(() => {
-		fetchModels()
-	}, [fetchModels])
-	useInterval(fetchModels, 3000)
+	const { models: probedModels, refresh: refreshLmStudioModels } = useModelProbe({
+		enabled: true,
+		probe: probeLmStudioModels,
+		selectedModelId: profile.modelId || undefined,
+	})
 
-	const modelOptions = useMemo(() => lmStudioModels.map((m) => ({ value: m.id, label: m.id })), [lmStudioModels])
+	// The manual-entry fallback must stay reachable when discovery finds
+	// nothing, so the current selection alone does not count as an option.
+	const modelOptions = useMemo(
+		() =>
+			Object.keys(probedModels)
+				.filter((modelId) => modelId !== profile.modelId)
+				.map((modelId) => ({ value: modelId, label: modelId })),
+		[probedModels, profile.modelId],
+	)
 
 	return (
 		<div className="flex flex-col gap-2">
@@ -62,6 +58,7 @@ export const LMStudioProvider = ({ showModelOptions, isPopup: _isPopup, profile,
 					<VSCodeDropdown
 						id="lmstudio-model"
 						onChange={(e) => onUpdate({ modelId: (e.target as HTMLInputElement).value })}
+						onFocus={refreshLmStudioModels}
 						style={{ width: "100%" }}
 						value={profile.modelId || ""}>
 						<VSCodeOption value="">Select a model...</VSCodeOption>
@@ -74,6 +71,7 @@ export const LMStudioProvider = ({ showModelOptions, isPopup: _isPopup, profile,
 				) : (
 					<VSCodeTextField
 						id="lmstudio-model"
+						onFocus={refreshLmStudioModels}
 						onInput={(e: any) => onUpdate({ modelId: (e.target as HTMLInputElement).value })}
 						placeholder="e.g. llama-3.2-3b-instruct"
 						style={{ width: "100%" }}

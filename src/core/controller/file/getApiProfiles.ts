@@ -730,7 +730,7 @@ async function migrateFromProviders(controller: Controller): Promise<ApiProfile[
 			try {
 				const val = stateManager.getSecretKey(field as any)
 				if (!val) continue
-				// JSON credentials (e.g. openai-codex-oauth-credentials) — keep as serialized string
+				// Structured JSON credentials remain serialized at this compatibility boundary.
 				if (typeof val === "object") {
 					keyParts.push(JSON.stringify(val))
 				} else if (typeof val === "string" && val.length > 0) {

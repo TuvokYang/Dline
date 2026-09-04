@@ -24,15 +24,18 @@ describe("ContextTransition architecture", () => {
 		expect(profileAdapter).not.toMatch(/private\s+(?:readonly\s+)?(?:snapshot|operation)\b/)
 	})
 
-	it("keeps Profile projection from fabricating a result for the awaiting interaction", async () => {
-		const task = await read("task/index.ts")
-		const start = task.indexOf("async projectProfileSwitchTargetUsage(")
-		const end = task.indexOf("\n\t/** Assemble one non-destructive complete target candidate", start)
-		const method = task.slice(start, end)
+	it("keeps a Profile switch free of target projection and compaction", async () => {
+		const [task, policy] = await Promise.all([
+			read("task/index.ts"),
+			read("controller/context-transition/policies/ProfileTransitionPolicy.ts"),
+		])
 
-		expect(start).toBeGreaterThanOrEqual(0)
-		expect(end).toBeGreaterThan(start)
-		expect(method).not.toContain("projectContextTransitionCompactionContinuation")
+		// Selecting a Profile only rebinds handlers, so no Profile path may rebuild a
+		// target request or schedule compaction: both once blocked the switch outright.
+		expect(task).not.toContain("projectProfileSwitchTargetUsage")
+		expect(task).toContain("getOccupiedContextTokens()")
+		expect(policy).not.toContain("createCompactionRequest")
+		expect(policy).not.toContain("compactionError")
 	})
 
 	it("keeps the context-window indicator free of compact checkpoint and restore lineage", async () => {

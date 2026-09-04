@@ -11,6 +11,24 @@ import {
 } from "@/core/controller/grpc-recorder/types"
 import { Logger } from "@/shared/services/Logger"
 
+const SENSITIVE_METHODS_BY_SERVICE: Readonly<Record<string, ReadonlySet<string>>> = {
+	AccountService: new Set([
+		"openAiCodexSignIn",
+		"startOpenAiCodexSignIn",
+		"getOpenAiCodexAuthStatus",
+		"completeOpenAiCodexCallbackUri",
+		"importOpenAiCodexOAuthJson",
+		"importOpenAiCodexCredentialJson",
+	]),
+	FileService: new Set(["copyToClipboard"]),
+	WebService: new Set(["openInBrowser"]),
+}
+
+function isSensitiveRequest(request: GrpcRequest): boolean {
+	const serviceName = request.service.slice(request.service.lastIndexOf(".") + 1)
+	return SENSITIVE_METHODS_BY_SERVICE[serviceName]?.has(request.method) ?? false
+}
+
 export class GrpcRecorderNoops implements IRecorder {
 	recordRequest(_request: GrpcRequest): void {}
 	recordResponse(_requestId: string, _response: GrpcResponse): void {}
@@ -44,6 +62,7 @@ export interface IRecorder {
 export class GrpcRecorder implements IRecorder {
 	private sessionLog: GrpcSessionLog
 	private pendingRequests: Map<string, { entry: GrpcLogEntry; startTime: number }> = new Map()
+	private filteredRequestIds = new Set<string>()
 
 	constructor(
 		private fileHandler: ILogFileHandler,
@@ -75,6 +94,7 @@ export class GrpcRecorder implements IRecorder {
 	 */
 	public recordRequest(request: GrpcRequest, synthetic = false): void {
 		if (this.shouldFilter(request)) {
+			this.filteredRequestIds.add(request.request_id)
 			return
 		}
 
@@ -116,6 +136,10 @@ export class GrpcRecorder implements IRecorder {
 	 * @param response - The corresponding gRPC response.
 	 */
 	public recordResponse(requestId: string, response: GrpcResponse): void {
+		if (this.filteredRequestIds.has(requestId)) {
+			if (!response?.is_streaming) this.filteredRequestIds.delete(requestId)
+			return
+		}
 		const pendingRequest = this.pendingRequests.get(requestId)
 
 		if (!pendingRequest) {
@@ -180,6 +204,7 @@ export class GrpcRecorder implements IRecorder {
 	 * @param error - Error message.
 	 */
 	public recordError(requestId: string, error: string): void {
+		if (this.filteredRequestIds.delete(requestId)) return
 		const pendingRequest = this.pendingRequests.get(requestId)
 		if (!pendingRequest) {
 			Logger.warn(`No pending request found for error with ID: ${requestId}`)
@@ -221,6 +246,6 @@ export class GrpcRecorder implements IRecorder {
 	}
 
 	private shouldFilter(request: GrpcRequest): boolean {
-		return this.requestFilters.some((filter) => filter(request))
+		return isSensitiveRequest(request) || this.requestFilters.some((filter) => filter(request))
 	}
 }

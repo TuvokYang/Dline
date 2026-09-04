@@ -1,10 +1,10 @@
 import { LiteLlmHandler, type LiteLlmModelInfoResponse } from "@core/api/providers/litellm"
 import { convertToOpenAiMessages } from "@core/api/transform/openai-format"
+import { ModelRegistry } from "@core/model-registry/ModelRegistry" // used in getModel tests
 import { liteLlmModelInfoSaneDefaults } from "@shared/api" // used in getModel tests
 import { ApiProfile } from "@shared/proto/dline/profile"
 import { expect } from "chai"
 import { afterEach, beforeEach, describe, it, vi } from "vitest"
-import { StateManager } from "@/core/storage/StateManager" // used in getModel tests
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { mockFetchForTesting } from "@/shared/net"
 
@@ -255,16 +255,21 @@ describe("LiteLlmHandler", () => {
 	})
 
 	describe("getModel", () => {
-		let stateManagerStub: any /* sinon.SinonStub → vitest */
+		let registryStub: ReturnType<typeof vi.spyOn>
+
+		const stubCatalog = (models: Record<string, unknown>) => {
+			registryStub.mockReturnValue({
+				getProviderModels: (providerId: string) => (providerId === "litellm" ? { models } : undefined),
+			} as any)
+		}
 
 		beforeEach(() => {
-			stateManagerStub = vi.spyOn(StateManager, "get").mockReturnValue({
-				getModelInfo: () => null,
-			} as any)
+			registryStub = vi.spyOn(ModelRegistry, "getInstance")
+			stubCatalog({})
 		})
 
 		afterEach(() => {
-			stateManagerStub.mockRestore()
+			registryStub.mockRestore()
 		})
 
 		it("returns sane defaults when no liteLlmModelInfo option is provided", () => {
@@ -277,7 +282,7 @@ describe("LiteLlmHandler", () => {
 			expect(model.info?.capabilities?.contextWindow).to.equal(liteLlmModelInfoSaneDefaults.capabilities?.contextWindow)
 		})
 
-		it("returns user-configured model info when liteLlmModelInfo is provided and no cache exists", () => {
+		it("returns user-configured model info when liteLlmModelInfo is provided and the catalog has no entry", () => {
 			const h = new LiteLlmHandler({
 				profile: ApiProfile.create({
 					provider: "litellm",
@@ -301,15 +306,13 @@ describe("LiteLlmHandler", () => {
 			expect(model.info?.capabilities?.contextWindow).to.equal(1_000_000)
 		})
 
-		it("prefers StateManager cached model info over user-configured liteLlmModelInfo", () => {
-			const cachedInfo = {
+		it("prefers the discovered catalog model info over user-configured liteLlmModelInfo", () => {
+			const catalogInfo = {
 				id: "claude-sonnet-4-6",
 				capabilities: { contextWindow: 200_000, maxTokens: 4096, supportsImages: true, supportsPromptCache: true },
 				pricing: { inputPrice: 0, outputPrice: 0 },
 			}
-			stateManagerStub.mockReturnValue({
-				getModelInfo: () => cachedInfo,
-			} as any)
+			stubCatalog({ "claude-sonnet-4-6": catalogInfo })
 
 			const h = new LiteLlmHandler({
 				profile: ApiProfile.create({

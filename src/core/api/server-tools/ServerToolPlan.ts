@@ -3,17 +3,22 @@ import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import { ImageGenerationSource } from "@shared/proto/dline/profile"
 import { WebSearchMode } from "@shared/proto/dline/provider/common"
 
-const KNOWN_SERVER_TOOLS = new Set<ServerTool>([ServerTool.WEB_SEARCH, ServerTool.IMAGE_GENERATION])
+const KNOWN_SERVER_TOOLS = new Set<ServerTool>([
+	ServerTool.WEB_SEARCH,
+	ServerTool.CODE_EXECUTION,
+	ServerTool.IMAGE_GENERATION,
+])
 
 const SUPPORTED_TOOLS_BY_API_FORMAT: Readonly<Partial<Record<ApiFormat, ReadonlySet<ServerTool>>>> = {
-	[ApiFormat.ANTHROPIC_CHAT]: new Set([ServerTool.WEB_SEARCH]),
+	[ApiFormat.ANTHROPIC_CHAT]: new Set([ServerTool.WEB_SEARCH, ServerTool.CODE_EXECUTION]),
 	[ApiFormat.OPENAI_RESPONSES]: new Set([ServerTool.WEB_SEARCH, ServerTool.IMAGE_GENERATION]),
 	[ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE]: new Set([ServerTool.WEB_SEARCH, ServerTool.IMAGE_GENERATION]),
 }
 
 export type ServerToolDeclaration =
 	| Readonly<{ type: "web_search" }>
-	| Readonly<{ type: "web_search_20260209"; name: "web_search" }>
+	| Readonly<{ type: "web_search_20260318"; name: "web_search"; allowed_callers: readonly ["direct"] }>
+	| Readonly<{ type: "code_execution_20260120"; name: "code_execution"; allowed_callers: readonly ["direct"] }>
 	| Readonly<{ type: "image_generation" }>
 
 export interface ServerToolProjection {
@@ -143,7 +148,15 @@ function createWebSearchRoutingPlan(
 		serverToolPlan,
 		localToolEnabled: route === "local",
 		localFallbackAvailable: localAvailable,
-		serverTools: Object.freeze(route === "hosted" ? [ServerTool.WEB_SEARCH] : []),
+		// The sandbox is a capability of its own: it rides on the hosted route but is
+		// never routed through web search, so a search never spends its call budget.
+		serverTools: Object.freeze(
+			route === "hosted"
+				? serverToolPlan.active.includes(ServerTool.CODE_EXECUTION)
+					? [ServerTool.WEB_SEARCH, ServerTool.CODE_EXECUTION]
+					: [ServerTool.WEB_SEARCH]
+				: [],
+		),
 		...(unavailableReason === undefined ? {} : { unavailableReason }),
 	})
 }
@@ -222,8 +235,25 @@ export function projectServerTools(plan: WebSearchRoutingPlan): ServerToolProjec
 				declarations: Object.freeze([{ type: "web_search" as const }]),
 			})
 		case ApiFormat.ANTHROPIC_CHAT:
+			// `direct` names the model itself: both tools are invoked by the model, and
+			// neither is reachable from inside the sandbox.
 			return Object.freeze({
-				declarations: Object.freeze([{ type: "web_search_20260209" as const, name: "web_search" as const }]),
+				declarations: Object.freeze([
+					{
+						type: "web_search_20260318" as const,
+						name: "web_search" as const,
+						allowed_callers: Object.freeze(["direct"] as const),
+					},
+					...(plan.serverTools.includes(ServerTool.CODE_EXECUTION)
+						? [
+								{
+									type: "code_execution_20260120" as const,
+									name: "code_execution" as const,
+									allowed_callers: Object.freeze(["direct"] as const),
+								},
+							]
+						: []),
+				]),
 			})
 		default:
 			return Object.freeze({ declarations: Object.freeze([]) })

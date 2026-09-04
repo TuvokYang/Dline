@@ -148,6 +148,18 @@ export function getWorkspaceHistoryManager(workspacePath: string, ports: Workspa
 	return manager
 }
 
+/**
+ * Drain every live manager's queued writes.
+ *
+ * Managers are process-static and one per workspace, so a shutdown barrier that
+ * only drains the manager a single controller happens to hold would drop writes
+ * still queued for the other workspaces. Callers must invoke this while the
+ * store is still open.
+ */
+export async function flushAllWorkspaceHistoryManagers(): Promise<void> {
+	await Promise.all([...managers.values()].map((manager) => manager.flush()))
+}
+
 export function clearWorkspaceHistoryManagersForTests(): void {
 	managers.clear()
 }

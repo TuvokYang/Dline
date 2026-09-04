@@ -7,6 +7,7 @@ import type { ModeSwitchDraft } from "@/components/chat/mode-switch/useModeSwitc
 import QuotedMessagePreview from "@/components/chat/QuotedMessagePreview"
 import type { AcceptedInteractionSettlement, InteractionDraft } from "@/task-interaction/types"
 import { ChatState, MessageHandlers, ScrollBehavior } from "../../types/chatTypes"
+import { resolveSendDisposition } from "./submit-or-enqueue"
 
 interface InputSectionProps {
 	chatState: ChatState
@@ -184,12 +185,20 @@ export const InputSection: React.FC<InputSectionProps> = ({
 		clearComposerDraft()
 	}
 
+	// Every entry point — the Enter key, the send button and a resume — decides
+	// here, so a send behaves the same way whichever one raised it.
 	const handleSend = (capturedDraft?: ModeSwitchDraft) => {
-		if (capturedDraft && onSubmit && enabled === false) {
-			enqueueBlockedDraft(capturedDraft)
+		const canSubmit = !(capturedDraft && onSubmit && enabled === false)
+		const disposition = resolveSendDisposition({ canSubmit, queueCanDeliver })
+		if (disposition === "submit") {
+			void submitDraft(capturedDraft)
 			return
 		}
-		void submitDraft(capturedDraft)
+		// `retain` leaves the draft in the composer: nothing can carry it now,
+		// so it stays where the user can still see and resend it.
+		if (disposition === "enqueue" && capturedDraft) {
+			enqueueBlockedDraft(capturedDraft)
+		}
 	}
 
 	/**

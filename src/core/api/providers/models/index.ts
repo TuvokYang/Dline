@@ -279,6 +279,7 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 		baseUrl: "https://openrouter.ai/api/v1",
 		billingMode: "token",
 		models: emptyModels,
+		deferred: true,
 	},
 	openai: {
 		provider: "openai",
@@ -349,6 +350,7 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 		baseUrl: "https://ai-gateway.vercel.sh/v1",
 		billingMode: "token",
 		models: emptyModels,
+		deferred: true,
 	},
 	oca: {
 		provider: "oca",

@@ -1,4 +1,7 @@
-import { ContextTransitionEngine } from "@core/controller/context-transition/ContextTransitionEngine"
+import {
+	ContextTransitionEngine,
+	type ContextTransitionEngineDeps,
+} from "@core/controller/context-transition/ContextTransitionEngine"
 import { ProfileTransitionPolicy } from "@core/controller/context-transition/policies/ProfileTransitionPolicy"
 import type { ProfileSwitchRequestResult, ProfileSwitchSnapshot } from "@shared/profile-switch"
 import type { ProfileSwitchDependencies, ProfileSwitchRequest } from "./types"
@@ -21,13 +24,13 @@ export class ProfileSwitchCoordinator {
 		}
 		this.engine = new ContextTransitionEngine({
 			lease: deps.lease,
-			compaction: deps.compaction,
+			compaction: inertCompaction(),
 			postState: deps.postState,
 			createId: deps.createId,
 		})
 		this.policy = new ProfileTransitionPolicy({
 			bindings: deps.bindings,
-			pressure: deps.pressure,
+			occupied: deps.occupied,
 			commit: deps.commit,
 			getTaskId: deps.getTaskId,
 		})
@@ -38,7 +41,7 @@ export class ProfileSwitchCoordinator {
 		return this.engine.request(this.policy, input)
 	}
 
-	/** Confirm one awaiting Profile transition and compact with its frozen target handler. */
+	/** Adopt the target bindings after the user acknowledges the window notice. */
 	async confirm(operationId: string): Promise<ProfileSwitchRequestResult> {
 		return this.engine.confirm(operationId)
 	}
@@ -60,5 +63,20 @@ export class ProfileSwitchCoordinator {
 	/** Release resources during task lifecycle cleanup. */
 	async reset(reason = "Profile switch reset."): Promise<void> {
 		await this.engine.reset(reason)
+	}
+}
+
+/**
+ * Supply the engine with a compaction port a Profile switch can never reach.
+ *
+ * A standalone Profile coordinator owns no Mode transition, and its policy never
+ * requests compaction, so this port exists only to satisfy the shared engine
+ * contract without granting the switch any compaction authority.
+ */
+function inertCompaction(): ContextTransitionEngineDeps["compaction"] {
+	return {
+		compact: async () => "completed" as const,
+		abort: async () => undefined,
+		complete: async () => undefined,
 	}
 }

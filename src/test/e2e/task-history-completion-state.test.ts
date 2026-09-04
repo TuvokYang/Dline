@@ -1,9 +1,10 @@
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises"
+import { readdir } from "node:fs/promises"
 import * as path from "node:path"
 import { expect, type Frame, type Page } from "@playwright/test"
 import type { HistoryItem } from "@shared/HistoryItem"
 import type { ElectronApplication } from "playwright"
 import { E2ETestHelper, e2e } from "./utils/helpers"
+import { readStoredTaskHistoryItem, seedLegacyTaskHistory } from "./utils/task-history-store"
 
 const TASK_TEXT = "E2E_TASK_HISTORY_COMPLETION_STATE"
 const FIRST_COMPLETION = "E2E_TASK_HISTORY_COMPLETION_FIRST"
@@ -81,13 +82,7 @@ async function onlyTaskId(dlineDocsDir: string): Promise<string> {
 }
 
 async function readHistoryItem(dlineDocsDir: string, taskId: string): Promise<HistoryItem | undefined> {
-	const historyPath = path.join(dlineDocsDir, "tasks", "taskHistory.jsonl")
-	const content = await readFile(historyPath, "utf8").catch(() => "")
-	const items = content
-		.split(/\r?\n/)
-		.filter(Boolean)
-		.map((line) => JSON.parse(line) as HistoryItem)
-	return [...items].reverse().find((item) => item.id === taskId)
+	return await readStoredTaskHistoryItem(dlineDocsDir, taskId)
 }
 
 async function expectPersistedCompletion(
@@ -249,8 +244,6 @@ e2e(
 e2e(
 	"Task history ignores a legacy completed boolean without a runtime revision",
 	async ({ dlineDocsDir, helper, openVSCode, userDataDir, workspaceDir }) => {
-		const tasksDir = path.join(dlineDocsDir, "tasks")
-		await mkdir(tasksDir, { recursive: true })
 		const historyItem: HistoryItem = {
 			id: "e2e-legacy-unrevisioned-completion",
 			ts: Date.now(),
@@ -258,7 +251,8 @@ e2e(
 			cwdOnTaskInitialization: workspaceDir,
 			isCompleted: true,
 		}
-		await writeFile(path.join(tasksDir, "taskHistory.jsonl"), `${JSON.stringify(historyItem)}\n`, "utf8")
+		// Seeding the legacy file also exercises the one-time import on first launch.
+		await seedLegacyTaskHistory(dlineDocsDir, [historyItem])
 
 		const app = await openVSCode(workspaceDir)
 		try {

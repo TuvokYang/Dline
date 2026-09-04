@@ -47,7 +47,10 @@ export function projectInteraction(interaction: Readonly<ActiveInteraction>, sta
 			kind: interaction.kind,
 			status: interaction.status,
 			stateRevision,
-			taskAsk: definition.taskAsk,
+			// The anchor is the ask the Webview actually rendered. Falling back to
+			// the definition only covers first presentation, where the two agree
+			// because the ask was raised from this very definition.
+			taskAsk: interaction.anchor.taskAsk ?? definition.taskAsk,
 			// Keep the legacy renderer key only at the Webview presentation boundary.
 			presentationKind: interaction.kind === "change_todo_list" ? "focus_chain_change" : definition.presentationKind,
 			askMessageTs: interaction.anchor.messageTs,

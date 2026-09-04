@@ -29,6 +29,9 @@ describe("built-in hosted Web Search metadata", () => {
 				supportsPromptCache: true,
 				supportsReasoning: true,
 				supportsTools: true,
+				// Hosted search only. The sandbox is deliberately not advertised: the
+				// account's code execution quota gates it at the provider, so declaring
+				// it would offer a capability that cannot currently run.
 				tools: [ServerTool.WEB_SEARCH],
 			},
 			pricing: {

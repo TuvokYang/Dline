@@ -17,9 +17,11 @@ vi.mock("@/core/storage/backend/jsonl/jsonl-utils", async (importOriginal) => {
 	return { ...actual, readJsonl: vi.fn() }
 })
 
-// buildState also probes OpenAI Codex auth status; keep it hermetic in unit tests.
+const oauthMocks = vi.hoisted(() => ({ isAuthenticated: vi.fn(async () => false) }))
+
+// The compatibility field must not probe Profile OAuth state during ordinary state pushes.
 vi.mock("@/integrations/openai-codex/oauth", () => ({
-	openAiCodexOAuthManager: { isAuthenticated: vi.fn(async () => false) },
+	openAiCodexOAuthManager: { isAuthenticated: oauthMocks.isAuthenticated },
 }))
 
 // The full task-view projection needs a complete runtime state; header sourcing
@@ -120,6 +122,7 @@ describe("buildState header sourcing", () => {
 
 		expect(getTaskHeaderTextMock).not.toHaveBeenCalled()
 		expect(readJsonlMock).not.toHaveBeenCalled()
+		expect(oauthMocks.isAuthenticated).not.toHaveBeenCalled()
 	})
 
 	it("keeps returning the in-memory header even when disk is unavailable", async () => {

@@ -5,6 +5,9 @@ import type { Controller } from "@/core/controller"
 import type { HistoryItem } from "@/shared/HistoryItem"
 import { Logger } from "@/shared/services/Logger"
 
+const REQUEST_SUFFIX = ".request.json"
+const RESPONSE_SUFFIX = ".response.json"
+
 interface TaskHistoryControlRequest {
 	id: string
 	action: "update-and-flush"
@@ -37,6 +40,9 @@ export async function startTaskHistoryControl(
 	const processed = new Set<string>()
 
 	const processRequest = async (requestPath: string): Promise<void> => {
+		// The watcher reports every file in the directory, including the
+		// responses written back here, so only requests are answered.
+		if (!requestPath.endsWith(REQUEST_SUFFIX)) return
 		if (disposed || processed.has(requestPath)) return
 		processed.add(requestPath)
 		let request: TaskHistoryControlRequest | undefined
@@ -59,11 +65,16 @@ export async function startTaskHistoryControl(
 			}
 		}
 
-		const responsePath = requestPath.replace(/\.request\.json$/u, ".response.json")
+		const responsePath = `${requestPath.slice(0, -REQUEST_SUFFIX.length)}${RESPONSE_SUFFIX}`
 		await fs.writeFile(responsePath, `${JSON.stringify(response)}\n`, "utf8")
 	}
 
-	watcher = chokidar.watch(path.join(controlDirectory, "*.request.json"), {
+	// Watch the directory rather than a glob: chokidar removed glob support in
+	// v4, so a glob path is taken literally and never matches a real file,
+	// leaving every request unanswered. `ignoreInitial: false` also delivers a
+	// request that was written before the watcher started.
+	watcher = chokidar.watch(controlDirectory, {
+		depth: 0,
 		ignoreInitial: false,
 		awaitWriteFinish: { stabilityThreshold: 50, pollInterval: 10 },
 	})

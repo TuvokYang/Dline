@@ -15,6 +15,17 @@ function expectContains(source: string, expected: string): void {
 	expect(source.includes(expected), `Expected Task metrics boundary to contain: ${expected}`).toBe(true)
 }
 
+/**
+ * Asserts a call chain is present without depending on where it wraps.
+ *
+ * These are source-text assertions, so a formatter moving `.catch()` onto its
+ * own line would otherwise read as a missing recovery path.
+ */
+function expectChain(source: string, ...segments: string[]): void {
+	const pattern = new RegExp(segments.map((segment) => segment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s*"))
+	expect(pattern.test(source), `Expected Task metrics boundary to chain: ${segments.join(" … ")}`).toBe(true)
+}
+
 function expectNotContains(source: string, unexpected: string): void {
 	expect(source.includes(unexpected), `Expected Task metrics boundary not to contain: ${unexpected}`).toBe(false)
 }
@@ -51,8 +62,8 @@ describe("Task API rate metrics boundary", () => {
 			"waitForExecutionPersistence: () => this.apiRequestRoundLifecycle.waitForExecutionPersistence()",
 		)
 		expectContains(source, "return this.taskRateMetricsQueryService.query(query)")
-		expectContains(source, "this.apiRequestRoundLifecycle.initializeRounds().catch((error) =>")
-		expectContains(source, "this.apiRequestRoundLifecycle.initializeExecutions().catch((error) =>")
+		expectChain(source, "this.apiRequestRoundLifecycle", ".initializeRounds()", ".catch((error) =>")
+		expectChain(source, "this.apiRequestRoundLifecycle", ".initializeExecutions()", ".catch((error) =>")
 		expectNotContains(source, "private readonly apiRateTracker: ApiRateTracker")
 		expectContains(headerSnapshot, "const active = this.apiRateMetricsService.getSnapshot()")
 		expectContains(headerSnapshot, "const rounds = this.apiRequestRoundLifecycle.getSnapshot()")
@@ -62,18 +73,31 @@ describe("Task API rate metrics boundary", () => {
 		expectContains(headerSnapshot, "tokensPerMinute: active.tokensPerMinute")
 	})
 
-	it("initializes metrics before new or restored Task work can reach an API request", async () => {
+	/**
+	 * A new Task must have metrics ready before it can issue a request, but a
+	 * restored one must not: metrics are a secondary projection there, and
+	 * awaiting them would hold back the historical surface the user is waiting
+	 * to see. The two paths therefore assert opposite things on purpose.
+	 */
+	it("initializes metrics before a new Task can reach an API request", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const startTask = extractMethod(source, "public async startTask(", "/**\n\t * Load and display historical task messages")
-		const displayHistory = extractMethod(source, "public async displayHistory(", "/**\n\t * Reconcile a historical task")
 
 		expect(startTask.indexOf("await this.ensureApiRateMetricsInitialized()")).toBeGreaterThanOrEqual(0)
 		expect(startTask.indexOf("await this.ensureApiRateMetricsInitialized()")).toBeLessThan(
 			startTask.indexOf("TASK_INITIALIZE_REQUESTED"),
 		)
-		expect(displayHistory.indexOf("await this.ensureApiRateMetricsInitialized()")).toBeGreaterThanOrEqual(0)
-		expect(displayHistory.indexOf("await this.ensureApiRateMetricsInitialized()")).toBeLessThan(
-			displayHistory.indexOf("this.taskState.isInitialized = true"),
+	})
+
+	it("starts metrics without delaying a restored Task's historical surface", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const prepareFromHistory = extractMethod(source, "public async prepareFromHistory(", "const isCurrent =")
+
+		// Started, not awaited, and after the surface is ready to display.
+		expectChain(prepareFromHistory, "void this.ensureApiRateMetricsInitialized()", ".catch((error) =>")
+		expect(prepareFromHistory).not.toContain("await this.ensureApiRateMetricsInitialized()")
+		expect(prepareFromHistory.indexOf("await options?.onReadyToDisplay?.()")).toBeLessThan(
+			prepareFromHistory.indexOf("void this.ensureApiRateMetricsInitialized()"),
 		)
 	})
 

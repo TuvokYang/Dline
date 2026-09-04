@@ -59,7 +59,14 @@ export interface ContextTransitionPolicy<
 	prepareWithoutLease?(request: Request, operationId: string): Operation | undefined
 	prepare(request: Request, operationId: string): Promise<ContextTransitionPreparation<Operation>>
 	validate(operation: Operation): boolean
-	createCompactionRequest(operation: Operation): ContextTransitionCompactionRequest
+	/**
+	 * Describe the compaction this transition must run after confirmation.
+	 *
+	 * Policies that only need an advisory confirmation omit this member: the
+	 * engine then commits directly, so an acknowledged notice can never pull the
+	 * transition into a compaction it did not ask for.
+	 */
+	createCompactionRequest?(operation: Operation): ContextTransitionCompactionRequest
 	commit(operation: Operation): Promise<void>
 	createSnapshot(
 		operation: Operation,
@@ -68,7 +75,7 @@ export interface ContextTransitionPolicy<
 		context?: ContextTransitionSnapshotContext,
 	): Snapshot
 	cancelledError(): string
-	compactionError(result: Exclude<ContextTransitionCompactionResult, "completed">): string
+	compactionError?(result: Exclude<ContextTransitionCompactionResult, "completed">): string
 	staleConfirmationError(): string
 	staleCancellationError(): string
 	stateChangedError(): string
@@ -172,7 +179,7 @@ export class ContextTransitionEngine {
 		try {
 			preparation = await policy.prepare(request, operationId)
 		} catch (error) {
-			return this.failPreparation(policy.kind, operationId, error)
+			return this.failPreparation(policy.kind, operationId, request.taskId, error)
 		}
 		if (!this.isActive(operationId, policy.kind)) {
 			// Preflight awaits an expensive context projection. Returning without discarding
@@ -182,8 +189,7 @@ export class ContextTransitionEngine {
 			return { status: "rejected", operationId, error: "Context transition became stale during preflight." }
 		}
 		if (preparation.kind === "rejected") {
-			await this.clearActive(operationId)
-			return { status: "rejected", operationId, error: preparation.error }
+			return this.failPreparation(policy.kind, operationId, request.taskId, new Error(preparation.error))
 		}
 
 		this.active.operation = preparation.operation
@@ -215,6 +221,7 @@ export class ContextTransitionEngine {
 		}
 
 		try {
+			const createCompactionRequest = active.policy.createCompactionRequest?.bind(active.policy)
 			if (active.policy.confirmationOrder === "commit_then_compact") {
 				active.phase = "committing"
 				await this.publish(
@@ -225,6 +232,13 @@ export class ContextTransitionEngine {
 				)
 				await active.policy.commit(active.operation)
 				active.targetAdopted = true
+				if (!createCompactionRequest) {
+					await this.clearActive(active.operationId)
+					return { status: "switched", operationId: active.operationId }
+				}
+			}
+			if (!createCompactionRequest) {
+				return this.commitActive(active.policy, active.operation, false)
 			}
 
 			active.phase = "compacting"
@@ -235,13 +249,16 @@ export class ContextTransitionEngine {
 					targetAdopted: active.targetAdopted,
 				}),
 			)
-			const compaction = active.policy.createCompactionRequest(active.operation)
+			const compaction = createCompactionRequest(active.operation)
 			const compactResult = await this.deps.compaction.compact({
 				trigger: active.kind === "profile" ? "profile_switch" : "mode_switch",
 				...compaction,
 			})
 			if (compactResult !== "completed") {
-				return this.failActive(active.policy.compactionError(compactResult), true)
+				return this.failActive(
+					active.policy.compactionError?.(compactResult) ?? "Context transition compaction failed.",
+					true,
+				)
 			}
 			active.compactionCompleted = true
 			if (active.policy.confirmationOrder === "commit_then_compact") {
@@ -313,15 +330,23 @@ export class ContextTransitionEngine {
 		}
 	}
 
+	/**
+	 * Release a transition whose preflight threw, and keep the failure visible.
+	 *
+	 * Publishing `idle` here erased the reason from the shared snapshot, so a
+	 * rejected switch looked exactly like no request at all and the real cause
+	 * stayed invisible across several investigations.
+	 */
 	private async failPreparation(
 		kind: ContextTransitionKind,
 		operationId: string,
+		taskId: string,
 		error: unknown,
 	): Promise<ContextTransitionRequestResult> {
 		const reason = error instanceof Error ? error.message : "Context transition preflight failed."
-		if (this.isActive(operationId, kind)) {
-			await this.clearActive(operationId)
-		}
+		if (this.active?.operationId === operationId) this.active = undefined
+		this.deps.lease.release(operationId)
+		await this.publish(kind, { phase: "failed", operationId, taskId, error: reason })
 		return { status: "rejected", operationId, error: reason }
 	}
 

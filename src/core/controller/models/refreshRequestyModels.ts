@@ -1,12 +1,12 @@
-import { findEnabledProfiles } from "@core/controller/file/getApiProfiles"
-import * as SecretsManager from "@core/storage/secrets"
+import { resolveSavedCredentials } from "@core/model-registry/remote/model-credentials"
+import { discoverProviderModels } from "@core/model-registry/remote/model-refresh"
 import { EmptyRequest } from "@shared/proto/dline/common"
-import { OpenRouterCompatibleModelInfo, OpenRouterModelInfo } from "@shared/proto/dline/models"
-import axios from "axios"
-import { toRequestyServiceUrl } from "@/shared/clients/requesty"
-import { getAxiosSettings } from "@/shared/net"
+import { OpenRouterCompatibleModelInfo } from "@shared/proto/dline/models"
+import { toProtobufModels } from "@/shared/proto-conversions/models/typeConversion"
 import { Logger } from "@/shared/services/Logger"
 import { Controller } from ".."
+
+const REQUESTY_PROVIDER_ID = "requesty"
 
 /**
  * Refreshes the Requesty models and returns the updated model list
@@ -15,59 +15,14 @@ import { Controller } from ".."
  * @returns Response containing the Requesty models
  */
 export async function refreshRequestyModels(controller: Controller, _: EmptyRequest): Promise<OpenRouterCompatibleModelInfo> {
-	const parsePrice = (price: any) => {
-		if (price) {
-			return Number.parseFloat(price) * 1_000_000
-		}
-		return undefined
+	// Requesty keeps its router URL in global settings rather than on the profile.
+	const baseUrl = controller.stateManager.getGlobalSettingsKey("requestyBaseUrl") as string | undefined
+	const credentials = { ...resolveSavedCredentials(REQUESTY_PROVIDER_ID), baseUrl }
+	const models = await discoverProviderModels(REQUESTY_PROVIDER_ID, credentials, { persist: true })
+
+	if (Object.keys(models).length === 0) {
+		Logger.error("Invalid response from Requesty API")
 	}
 
-	const models: Record<string, OpenRouterModelInfo> = {}
-	try {
-		// Find the first enabled requesty profile with a valid apiKey
-		let apiKey: string | undefined
-		for (const p of findEnabledProfiles("requesty")) {
-			const key = SecretsManager.getApiKey(p.id)
-			if (key) {
-				apiKey = key
-				break
-			}
-		}
-		const baseUrl = controller.stateManager.getGlobalSettingsKey("requestyBaseUrl") as string | undefined
-
-		const resolvedUrl = toRequestyServiceUrl(baseUrl)
-		const url = resolvedUrl != null ? new URL(`${resolvedUrl.pathname}/models`, resolvedUrl).toString() : undefined
-
-		if (url == null) {
-			throw new Error("URL is not valid.")
-		}
-
-		const headers = {
-			Authorization: `Bearer ${apiKey}`,
-		}
-		const response = await axios.get(url, { headers, ...getAxiosSettings() })
-		if (response.data?.data) {
-			for (const model of response.data.data) {
-				const modelInfo: OpenRouterModelInfo = OpenRouterModelInfo.create({
-					maxTokens: model.max_output_tokens || undefined,
-					contextWindow: model.context_window,
-					supportsImages: model.supports_vision || undefined,
-					supportsPromptCache: model.supports_caching || undefined,
-					inputPrice: parsePrice(model.input_price) || 0,
-					outputPrice: parsePrice(model.output_price) || 0,
-					cacheWritesPrice: parsePrice(model.caching_price) || 0,
-					cacheReadsPrice: parsePrice(model.cached_price) || 0,
-					description: model.description,
-				})
-				models[model.id] = modelInfo
-			}
-			Logger.log("Requesty models fetched", models)
-		} else {
-			Logger.error("Invalid response from Requesty API")
-		}
-	} catch (error) {
-		Logger.error("Error fetching Requesty models:", error)
-	}
-
-	return OpenRouterCompatibleModelInfo.create({ models })
+	return OpenRouterCompatibleModelInfo.create({ models: toProtobufModels(models) })
 }

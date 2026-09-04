@@ -1,44 +1,50 @@
 import * as fs from "node:fs"
 import * as vscode from "vscode"
-import { FileEdit, RenameSymbolRequest, RenameSymbolResponse, TextEdit } from "@/shared/proto/dline/host/language"
+import {
+	FileEdit,
+	LanguageFailureKind,
+	RenameSymbolRequest,
+	RenameSymbolResponse,
+	TextEdit,
+} from "@/shared/proto/dline/host/language"
 import { Logger } from "@/shared/services/Logger"
 
-/** Command IDs that indicate missing LSP support in the host. */
+/** Error text fragments that indicate the host itself lacks the LSP command. */
 const LSP_UNAVAILABLE_PATTERNS = ["not found", "not supported", "command 'vscode.executeDocumentRenameProvider'"]
 
+/** A failed pre-flight check, carrying both its category and an actionable message. */
+interface PreCheckFailure {
+	kind: LanguageFailureKind
+	message: string
+}
+
 /**
- * Run pre-flight checks before calling the LSP to diagnose why rename may fail.
- * Returns an error message string, or empty string if all checks pass.
+ * Verify the request can reach the LSP at all.
+ *
+ * Only conditions that make the LSP call meaningless are checked here. Whether a
+ * language server actually handles the file is left to the provider call itself,
+ * since the installed-extension list cannot reliably predict provider registration.
+ *
+ * @returns the failure, or undefined when the request may proceed.
  */
-async function runLspPreChecks(uri: vscode.Uri): Promise<string> {
-	// Check 1: file exists on disk
+async function runLspPreChecks(uri: vscode.Uri): Promise<PreCheckFailure | undefined> {
 	try {
 		await fs.promises.access(uri.fsPath, fs.constants.R_OK)
 	} catch {
-		return `File not found or not readable: ${uri.fsPath}`
-	}
-
-	// Check 2: file belongs to a workspace folder
-	const wsFolder = vscode.workspace.getWorkspaceFolder(uri)
-	if (!wsFolder) {
-		return `File is not inside any workspace folder. LSP cannot rename symbols outside the workspace: ${uri.fsPath}`
-	}
-
-	// Check 3: a language extension is active for this file type
-	try {
-		const doc = await vscode.workspace.openTextDocument(uri)
-		const langId = doc.languageId
-		const matchingExts = vscode.extensions.all.filter(
-			(e) => e.isActive && e.packageJSON?.contributes?.languages?.some((l: { id: string }) => l.id === langId),
-		)
-		if (matchingExts.length === 0) {
-			return `No active language extension found for '${langId}'. LSP rename may not be available for this file type.`
+		return {
+			kind: LanguageFailureKind.LANGUAGE_FAILURE_KIND_INVALID_PATH,
+			message: `File not found or not readable: ${uri.fsPath}`,
 		}
-	} catch {
-		return `Unable to open document for language detection: ${uri.fsPath}`
 	}
 
-	return ""
+	if (!vscode.workspace.getWorkspaceFolder(uri)) {
+		return {
+			kind: LanguageFailureKind.LANGUAGE_FAILURE_KIND_OUTSIDE_WORKSPACE,
+			message: `File is not inside any workspace folder. LSP cannot rename symbols outside the workspace: ${uri.fsPath}`,
+		}
+	}
+
+	return undefined
 }
 
 /**
@@ -49,16 +55,17 @@ export async function renameSymbol(request: RenameSymbolRequest): Promise<Rename
 	try {
 		const uri = vscode.Uri.file(request.filePath)
 
-		// Run pre-flight checks before calling LSP
-		const preCheckError = await runLspPreChecks(uri)
-		if (preCheckError) {
+		const preCheckFailure = await runLspPreChecks(uri)
+		if (preCheckFailure) {
+			// The host has LSP; this specific request cannot use it.
 			return {
 				success: false,
 				filesChanged: 0,
 				totalChanges: 0,
-				hasLspSupport: false,
-				errorMessage: preCheckError,
+				hasLspSupport: true,
+				errorMessage: preCheckFailure.message,
 				preview: [],
+				failureKind: preCheckFailure.kind,
 			}
 		}
 
@@ -80,6 +87,7 @@ export async function renameSymbol(request: RenameSymbolRequest): Promise<Rename
 				errorMessage:
 					"LSP returned no edits for this rename. The symbol may not be renamable, or the language server may not support rename for this file type.",
 				preview: [],
+				failureKind: LanguageFailureKind.LANGUAGE_FAILURE_KIND_NO_LANGUAGE_SUPPORT,
 			}
 		}
 
@@ -96,6 +104,7 @@ export async function renameSymbol(request: RenameSymbolRequest): Promise<Rename
 				hasLspSupport: true,
 				errorMessage: "",
 				preview: fileEdits,
+				failureKind: LanguageFailureKind.LANGUAGE_FAILURE_KIND_NONE,
 			}
 		}
 
@@ -109,6 +118,7 @@ export async function renameSymbol(request: RenameSymbolRequest): Promise<Rename
 				hasLspSupport: true,
 				errorMessage: "VSCode failed to apply the rename edit.",
 				preview: [],
+				failureKind: LanguageFailureKind.LANGUAGE_FAILURE_KIND_PROVIDER_ERROR,
 			}
 		}
 
@@ -125,6 +135,7 @@ export async function renameSymbol(request: RenameSymbolRequest): Promise<Rename
 			hasLspSupport: true,
 			errorMessage: "",
 			preview: fileEdits,
+			failureKind: LanguageFailureKind.LANGUAGE_FAILURE_KIND_NONE,
 		}
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error)
@@ -137,6 +148,9 @@ export async function renameSymbol(request: RenameSymbolRequest): Promise<Rename
 			hasLspSupport,
 			errorMessage: message,
 			preview: [],
+			failureKind: hasLspSupport
+				? LanguageFailureKind.LANGUAGE_FAILURE_KIND_PROVIDER_ERROR
+				: LanguageFailureKind.LANGUAGE_FAILURE_KIND_NO_LSP_HOST,
 		}
 	}
 }

@@ -20,6 +20,7 @@ export interface FooterActionsProps {
 	dispatch: DispatchInteraction
 	dispatchTaskAction?: (action: TaskViewAction) => Promise<void>
 	onDraftAccepted?: (settlement: AcceptedInteractionSettlement) => void
+	onDraftRejected?: (settlement: AcceptedInteractionSettlement) => void
 	onSuccessorAccepted?: (transfer: PendingSuccessorDraftTransfer) => void
 	successorContext?: string
 }
@@ -36,6 +37,7 @@ export function FooterActions({
 	dispatch,
 	dispatchTaskAction,
 	onDraftAccepted,
+	onDraftRejected,
 	onSuccessorAccepted,
 	successorContext,
 }: FooterActionsProps) {
@@ -114,14 +116,21 @@ export function FooterActions({
 								const interactionScope = dispatchScope
 								setError(undefined)
 								beginPending()
+								// Clear before dispatching so every submit path answers "when does
+								// the composer empty?" the same way. The rollback below is what
+								// makes that safe: a refused or failed dispatch puts the draft back.
+								const settlement = createAcceptedInteractionSettlement(request, capturedDraft)
+								if (carriesDraft) {
+									onDraftAccepted?.(settlement)
+								}
 								void dispatch(request)
 									.then((response) => {
 										if (!response.accepted) {
 											setError(`Interaction was not accepted: ${response.result || "unknown error"}`)
+											if (carriesDraft) {
+												onDraftRejected?.(settlement)
+											}
 											return
-										}
-										if (carriesDraft) {
-											onDraftAccepted?.(createAcceptedInteractionSettlement(request, capturedDraft))
 										}
 										if (startsSuccessor && successorContext) {
 											onSuccessorAccepted?.({
@@ -131,7 +140,12 @@ export function FooterActions({
 											})
 										}
 									})
-									.catch((cause: unknown) => setError(errorMessage(cause)))
+									.catch((cause: unknown) => {
+										setError(errorMessage(cause))
+										if (carriesDraft) {
+											onDraftRejected?.(settlement)
+										}
+									})
 									.finally(() => endPending(interactionScope))
 							}}
 							role="button">

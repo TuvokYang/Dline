@@ -11,6 +11,10 @@ const prompts: Record<string, string> = {
 	characterInstruction: "1-based character offset on the line where the symbol starts.",
 	// Handler messages
 	noLspSupport: "Error: LSP not available. Use search_files instead.",
+	invalidPath: "Error: file not found at '@PATH@'. Pass a path that exists in the workspace.",
+	outsideWorkspace:
+		"Error: '@PATH@' is outside the workspace, so the language server does not index it. Use search_files instead.",
+	noLanguageSupport: "Error: no language server handles this file type. Use search_files instead.",
 	noReferences: "Error: no references found for the symbol.",
 	foundReferences: "Found {count} references in the workspace:",
 	errorPrefix: "Error: @ERROR@",

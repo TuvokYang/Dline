@@ -15,15 +15,37 @@ export interface HostedServerToolUpdate {
 	readonly operation: HostedWebSearchOperation
 	readonly result?: unknown
 	readonly error?: string
+	/**
+	 * Provider-native call input, forwarded verbatim.
+	 *
+	 * `operation` and `query` are Web Search projections and cannot express a
+	 * sandbox invocation, so a consumer rendering code execution needs the raw
+	 * payload to recover the code or command that actually ran.
+	 */
+	readonly input?: unknown
+	/** Provider-native failure payload, forwarded verbatim for error-code recovery. */
+	readonly errorDetail?: unknown
 }
 
 interface HostedServerToolState {
 	readonly functionId: string
+	readonly tool: ServerTool
 	phase: ApiStreamServerToolChunk["phase"]
 	query: string
 	operation: HostedWebSearchOperation
+	/** Last non-empty provider input seen for this call. */
+	input: unknown
 	terminal: boolean
 	resultEmitted: boolean
+}
+
+/** Fallback label for a call that ends before the provider described its work. */
+function defaultQueryFor(tool: ServerTool): string {
+	return tool === ServerTool.CODE_EXECUTION ? "Provider-hosted code execution" : "Provider-hosted web search"
+}
+
+function defaultFailureFor(tool: ServerTool): string {
+	return tool === ServerTool.CODE_EXECUTION ? "Provider-hosted code execution failed" : "Provider-hosted web search failed"
 }
 
 const PHASE_RANK: Readonly<Record<ApiStreamServerToolChunk["phase"], number>> = {
@@ -121,7 +143,6 @@ export class ServerToolLifecycle {
 			this.enabled &&
 			this.routingPlan?.route === "hosted" &&
 			this.routingPlan.serverTools.includes(chunk.tool) &&
-			chunk.tool === ServerTool.WEB_SEARCH &&
 			typeof chunk.dline_tid === "string" &&
 			chunk.dline_tid.length > 0 &&
 			typeof chunk.function_id === "string" &&
@@ -143,6 +164,9 @@ export class ServerToolLifecycle {
 
 		const existing = this.calls.get(chunk.dline_tid)
 		if (existing?.functionId !== undefined && existing.functionId !== chunk.function_id) return false
+		// One trace identity belongs to one hosted call; a different tool under the same
+		// identity would otherwise overwrite an unrelated call's state.
+		if (existing !== undefined && existing.tool !== chunk.tool) return false
 		if (existing?.terminal) {
 			if (existing.phase !== "completed" || chunk.phase === "failed") return true
 
@@ -155,10 +179,16 @@ export class ServerToolLifecycle {
 			const operationChanged = !operationsEqual(enrichedOperation, existing.operation)
 			const queryChanged = enrichedQuery !== existing.query
 			const hasNewResult = chunk.phase === "completed" && chunk.result !== undefined && !existing.resultEmitted
-			if (!operationChanged && !queryChanged && !hasNewResult) return true
+			// Only a first-time input is worth re-emitting for. Provider payloads are
+			// fresh objects on every event, so comparing them by reference would treat
+			// an unchanged input as new and duplicate the terminal update.
+			const gainedInput = chunk.input !== undefined && existing.input === undefined
+			const enrichedInput = chunk.input ?? existing.input
+			if (!operationChanged && !queryChanged && !hasNewResult && !gainedInput) return true
 
 			existing.operation = enrichedOperation
 			existing.query = enrichedQuery
+			existing.input = enrichedInput
 			if (hasNewResult) existing.resultEmitted = true
 			await this.emit({
 				dlineTid: chunk.dline_tid,
@@ -168,13 +198,14 @@ export class ServerToolLifecycle {
 				partial: false,
 				query: enrichedQuery,
 				operation: enrichedOperation,
+				...(enrichedInput === undefined ? {} : { input: enrichedInput }),
 				...(hasNewResult ? { result: chunk.result } : {}),
 			})
 			return true
 		}
 
 		const operation = resolveOperation(chunk, existing?.operation)
-		const query = operationText(operation) ?? textFromUnknown(chunk.input) ?? existing?.query ?? "Provider-hosted web search"
+		const query = operationText(operation) ?? textFromUnknown(chunk.input) ?? existing?.query ?? defaultQueryFor(chunk.tool)
 		const currentRank = existing ? PHASE_RANK[existing.phase] : -1
 		if (existing && PHASE_RANK[chunk.phase] < currentRank) return true
 		if (existing && PHASE_RANK[chunk.phase] === currentRank && chunk.phase !== "completed" && chunk.phase !== "failed") {
@@ -182,17 +213,24 @@ export class ServerToolLifecycle {
 			return true
 		}
 
+		// A later event may omit input that an earlier one carried; keeping the last
+		// non-empty payload preserves the code across the call's whole lifecycle.
+		const input = chunk.input ?? existing?.input
+
 		const state: HostedServerToolState = existing ?? {
 			functionId: chunk.function_id,
+			tool: chunk.tool,
 			phase: chunk.phase,
 			query,
 			operation,
+			input,
 			terminal: false,
 			resultEmitted: false,
 		}
 		state.phase = chunk.phase
 		state.query = query
 		state.operation = operation
+		state.input = input
 		state.terminal = chunk.phase === "completed" || chunk.phase === "failed"
 		state.resultEmitted = chunk.phase === "completed" && chunk.result !== undefined
 		this.calls.set(chunk.dline_tid, state)
@@ -207,8 +245,14 @@ export class ServerToolLifecycle {
 			partial: !state.terminal,
 			query,
 			operation,
+			...(input === undefined ? {} : { input }),
 			...(status === "completed" && chunk.result !== undefined ? { result: chunk.result } : {}),
-			...(status === "failed" ? { error: errorFromUnknown(chunk.error, "Provider-hosted web search failed") } : {}),
+			...(status === "failed"
+				? {
+						error: errorFromUnknown(chunk.error, defaultFailureFor(chunk.tool)),
+						...(chunk.error === undefined ? {} : { errorDetail: chunk.error }),
+					}
+				: {}),
 		})
 		return true
 	}
@@ -222,11 +266,12 @@ export class ServerToolLifecycle {
 			await this.emit({
 				dlineTid,
 				functionId: state.functionId,
-				tool: ServerTool.WEB_SEARCH,
+				tool: state.tool,
 				status: "failed",
 				partial: false,
 				query: state.query,
 				operation: state.operation,
+				...(state.input === undefined ? {} : { input: state.input }),
 				error: reason,
 			})
 		}

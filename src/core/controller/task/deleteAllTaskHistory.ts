@@ -1,13 +1,7 @@
 import { DeleteAllTaskHistoryCount } from "@shared/proto/dline/task"
 import fs from "fs/promises"
 import path from "path"
-import {
-	// (async () => true)() removed — use TaskHistory
-	getDlineCheckpointsDir,
-	getDlineDocumentsPath,
-	// (async () => {})() removed — use TaskHistory
-	writeTaskHistoryToState,
-} from "@/core/storage/disk"
+import { getDlineCheckpointsDir, getDlineDocumentsPath } from "@/core/storage/disk"
 import { HostProvider } from "@/hosts/host-provider"
 import { ShowMessageRequest, ShowMessageType } from "@/shared/proto/dline/host/window"
 import { Logger } from "@/shared/services/Logger"
@@ -57,8 +51,9 @@ export async function deleteAllTaskHistory(controller: Controller): Promise<Dele
 			if (favoritedTasks.length > 0) {
 				controller.stateManager.setGlobalState("taskHistory", favoritedTasks)
 
-				// TaskHistory handles locking internally via FileLock
-				await writeTaskHistoryToState(favoritedTasks)
+				// The store owns the index; deleting there keeps the durable rows
+				// and the cache in agreement.
+				await controller.stateManager.taskHistory.deleteAllExceptFavorites()
 
 				// Delete non-favorited task directories
 				const preserveTaskIds = favoritedTasks.map((task) => task.id)
@@ -97,16 +92,14 @@ export async function deleteAllTaskHistory(controller: Controller): Promise<Dele
 
 		// Delete everything (not preserving favorites)
 		controller.stateManager.setGlobalState("taskHistory", [])
-
-		// TaskHistory handles locking internally via FileLock
-		await writeTaskHistoryToState([])
+		await controller.stateManager.taskHistory.clearAll()
 
 		try {
-			// Remove all contents of tasks directory
-			const taskDirPath = path.join(await getDlineDocumentsPath(), "tasks")
-			if (await fileExistsAtPath(taskDirPath)) {
-				await fs.rm(taskDirPath, { recursive: true, force: true })
-			}
+			// Remove the per-task directories only. The task history database also
+			// lives under `tasks/`, and it is open right now, so removing the whole
+			// directory would either fail or destroy the store this process still
+			// writes to.
+			await cleanupTaskFiles([])
 
 			// Remove checkpoints directory contents
 			const checkpointsDirPath = await getDlineCheckpointsDir()
@@ -137,14 +130,19 @@ export async function deleteAllTaskHistory(controller: Controller): Promise<Dele
 }
 
 /**
- * Helper function to cleanup task files while preserving specified tasks
+ * Remove per-task directories, keeping the ones named in `preserveTaskIds`.
+ *
+ * Only directories are considered: `tasks/` also holds the task history
+ * database, and deleting that file out from under the open store would discard
+ * the index this process is still writing to.
  */
 async function cleanupTaskFiles(preserveTaskIds: string[]) {
 	const taskDirPath = path.join(await getDlineDocumentsPath(), "tasks")
 
 	try {
 		if (await fileExistsAtPath(taskDirPath)) {
-			const taskDirs = await fs.readdir(taskDirPath)
+			const entries = await fs.readdir(taskDirPath, { withFileTypes: true })
+			const taskDirs = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)
 			Logger.debug(`[cleanupTaskFiles] Found ${taskDirs.length} task directories`)
 
 			// Delete only non-preserved task directories

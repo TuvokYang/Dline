@@ -270,7 +270,9 @@ function searchMechanisms(consumption: MockApiConsumption): SearchMechanisms {
 		const type = tool.type
 		const name = tool.name
 		const functionName = (tool.function as { name?: unknown } | undefined)?.name
-		if (type === "web_search" || type === "web_search_20260209") hosted.push(tool)
+		// Match any dated hosted search revision: pinning one version here would make
+		// a version bump look like "no hosted search" instead of failing outright.
+		if (type === "web_search" || (typeof type === "string" && /^web_search_\d{8}$/.test(type))) hosted.push(tool)
 		if (
 			(type === "function" && (functionName === "web_search" || name === "web_search")) ||
 			(type === undefined && name === "web_search")
@@ -1008,7 +1010,9 @@ e2e(
 				async () => server.getMockConsumptions("anthropic-messages")[0],
 				30_000,
 			)
-			expect(searchMechanisms(firstRequest).hosted).toEqual([{ type: "web_search_20260209", name: "web_search" }])
+			expect(searchMechanisms(firstRequest).hosted).toEqual([
+				{ type: "web_search_20260318", name: "web_search", allowed_callers: ["direct"] },
+			])
 			await expect(opened.sidebar.getByText("Dline searched the web for:", { exact: true })).toHaveCount(0)
 			await expect(opened.sidebar.getByTestId("web-search-card")).toHaveCount(0)
 			expect(server.getSearxngSearchRequests()).toHaveLength(0)

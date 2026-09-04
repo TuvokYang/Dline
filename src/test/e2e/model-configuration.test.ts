@@ -99,17 +99,35 @@ async function openApiSettings(page: Page, sidebar: Frame): Promise<void> {
 	await expect(sidebar.getByRole("heading", { name: "API Configuration" })).toBeVisible()
 }
 
+/**
+ * Matches on the expand/collapse toggle, whose accessible name always carries
+ * the profile name. Plain `hasText` would also match a card whose expanded
+ * body happens to contain the name, such as a provider dropdown option.
+ */
 function getProfileCard(sidebar: Frame, profileName: string): Locator {
-	return sidebar.getByTestId("api-profile-card").filter({ has: sidebar.locator(`input[value=${JSON.stringify(profileName)}]`) })
+	return sidebar.getByTestId("api-profile-card").filter({
+		has: sidebar.getByRole("button", { name: new RegExp(`^(Expand|Collapse) ${escapeForRegExp(profileName)}$`) }),
+	})
+}
+
+function escapeForRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+/** Expanding is idempotent: the toggle is only clicked while it still offers to expand. */
+async function expandProfileCard(card: Locator): Promise<void> {
+	const expandToggle = card.getByRole("button", { name: /^Expand / })
+	if (await expandToggle.isVisible()) {
+		await expandToggle.click()
+	}
+	await expect(card.getByRole("button", { name: /^Collapse / })).toBeVisible()
 }
 
 async function openProfileEditor(sidebar: Frame, profileName: string): Promise<Locator> {
 	const card = getProfileCard(sidebar, profileName)
 	await expect(card).toHaveCount(1)
+	await expandProfileCard(card)
 	const providerSelector = card.getByRole("combobox", { name: "Provider" })
-	if (!(await providerSelector.isVisible())) {
-		await card.getByRole("button").first().press("Enter")
-	}
 	await expect(providerSelector).toBeVisible()
 	return card
 }
@@ -117,11 +135,10 @@ async function openProfileEditor(sidebar: Frame, profileName: string): Promise<L
 async function openModelConfiguration(sidebar: Frame, profileName: string): Promise<Locator> {
 	const card = getProfileCard(sidebar, profileName)
 	await expect(card).toHaveCount(1)
+	await expandProfileCard(card)
 
-	const modelConfiguration = card.getByText("Model Configuration", { exact: true })
-	if (!(await modelConfiguration.isVisible())) {
-		await card.getByRole("button").first().press("Enter")
-	}
+	// "Model Configuration" is a disclosure button; its fields only mount once opened.
+	const modelConfiguration = card.getByRole("button", { name: "Model Configuration" })
 	await expect(modelConfiguration).toBeVisible()
 
 	const contextWindow = card.getByRole("textbox", { name: "Context Window Size" })
@@ -236,7 +253,7 @@ e2e(
 			await openApiSettings(firstPage, firstSidebar)
 
 			const officialCard = await openModelConfiguration(firstSidebar, E2E_PROFILE_NAMES.mockOpenAiOfficialResponses)
-			await expect(officialCard.locator("vscode-dropdown#model-id")).toContainText("gpt-5.4-mini")
+			await expect(officialCard.getByRole("combobox", { name: "Model", exact: true })).toContainText("gpt-5.4-mini")
 			const officialApiFormat = officialCard.getByRole("combobox", { name: "API Format" })
 			await expect(officialApiFormat).toHaveValue(String(ApiFormat.OPENAI_RESPONSES))
 			expect(await officialApiFormat.evaluate((element) => (element as HTMLElement).style.backgroundColor)).toBe(
@@ -349,7 +366,9 @@ e2e(
 			await waitForProfile(dlineDir, profileName, (profile) => profile.openai?.reasoning?.effort === "ultra")
 			await setCapability(card, "Enable Service Tier", false)
 			await expect(card.getByText("Service Tier", { exact: true }).last()).not.toBeVisible()
-			await waitForProfile(dlineDir, profileName, (profile) => profile.openai?.serviceTierEnabled === false)
+			// The stored profile omits a disabled flag rather than writing false, so
+			// "off" covers both an absent and an explicitly false value.
+			await waitForProfile(dlineDir, profileName, (profile) => profile.openai?.serviceTierEnabled !== true)
 			await setCapability(card, "Enable Service Tier", true)
 			await expect(card.getByText("Service Tier", { exact: true }).last()).toBeVisible()
 			await waitForProfile(dlineDir, profileName, (profile) => profile.openai?.serviceTierEnabled === true)
@@ -448,6 +467,8 @@ e2e(
 
 		const mockCard = await openModelConfiguration(sidebar, E2E_PROFILE_NAMES.mockOpenAi)
 		await setTextField(mockCard, "Context Window Size", "131072")
+		// The tier list only renders once the profile opts in.
+		await setCapability(mockCard, "Enable Service Tier", true)
 		await selectLabeledOption(mockCard, sidebar, "Service Tier", "Priority")
 		await waitForProfile(
 			dlineDir,
@@ -463,6 +484,8 @@ e2e(
 		await setCapability(responsesCard, "Enable Thinking", true)
 		await selectLabeledOption(responsesCard, sidebar, "Thinking Mode", "Reasoning Effort")
 		await selectLabeledOption(responsesCard, sidebar, "Reasoning Effort", "Ultra")
+		// The tier list only renders once the profile opts in.
+		await setCapability(responsesCard, "Enable Service Tier", true)
 		await selectLabeledOption(responsesCard, sidebar, "Service Tier", "Flex")
 		await waitForProfile(
 			dlineDir,
@@ -527,7 +550,9 @@ e2e(
 
 		await openApiSettings(page, sidebar)
 		const renamedProfile = `${E2E_PROFILE_NAMES.mockOpenAi} Renamed`
-		const profileNameInput = sidebar.locator(`input[value=${JSON.stringify(E2E_PROFILE_NAMES.mockOpenAi)}]`)
+		const renameCard = getProfileCard(sidebar, E2E_PROFILE_NAMES.mockOpenAi)
+		await expandProfileCard(renameCard)
+		const profileNameInput = renameCard.locator('input[aria-label="Profile name"]')
 		await profileNameInput.fill(renamedProfile)
 		await profileNameInput.blur()
 		await waitForProfile(dlineDir, renamedProfile, () => true)
@@ -591,7 +616,7 @@ e2e(
 			E2E_PROFILE_NAMES.mockAnthropic,
 			(profile) => profile.webSearchMode === "WEB_SEARCH_MODE_FORCE_OFF",
 		)
-		const anthropicModel = anthropicCard.locator("vscode-dropdown#model-id")
+		const anthropicModel = anthropicCard.getByRole("combobox", { name: "Model", exact: true })
 		await expect(anthropicModel.locator('vscode-option[value="claude-opus-4-8"]')).toHaveCount(1)
 		await anthropicModel.evaluate((element, value) => {
 			;(element as HTMLInputElement).value = value
@@ -671,7 +696,9 @@ e2e(
 			id: "call_mode_profile_act_completion",
 			name: "attempt_completion",
 			arguments: { result: "E2E_MODE_PROFILE_ACT_ANTHROPIC_OK" },
-			expectedRequestIncludes: ["E2E_MODE_PROFILE_PLAN_TURN", "ACT MODE"],
+			// The Act turn must carry the Plan history plus the new Act message, so
+			// this proves the mode's own Profile served the follow-up request.
+			expectedRequestIncludes: ["E2E_MODE_PROFILE_PLAN_TURN", "E2E_MODE_PROFILE_ACT_TURN", "ACT MODE"],
 		})
 
 		const input = sidebar.getByTestId("chat-input")
@@ -696,6 +723,12 @@ e2e(
 		await actMode.evaluate((element) => element.click())
 		await expect(actMode).toHaveAttribute("aria-checked", "true")
 		await expect(modelSwitcher).toHaveText(E2E_PROFILE_NAMES.mockAnthropic)
+
+		// A Q&A answer is the user's to give, so switching to Act only rebinds the
+		// mode and its Profile. Sending the next message is what runs the Act turn,
+		// which is the routing this test covers.
+		await input.fill("E2E_MODE_PROFILE_ACT_TURN")
+		await sidebar.getByTestId("send-button").click()
 		await expect(sidebar.getByText("E2E_MODE_PROFILE_ACT_ANTHROPIC_OK", { exact: false }).last()).toBeVisible({
 			timeout: 60_000,
 		})

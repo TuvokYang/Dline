@@ -204,6 +204,7 @@ describe("TaskCheckpointManager checkpoint initialization", () => {
 		const tracker = {
 			setTaskFileTracker: vi.fn(),
 			commit: vi.fn().mockResolvedValue(completionHash),
+			getConsecutiveStagingFailures: vi.fn().mockReturnValue(0),
 		} as unknown as CheckpointTracker
 		const harness = createManager(vi.fn<CreateCheckpointTracker>().mockResolvedValue(tracker), undefined, {
 			messages,

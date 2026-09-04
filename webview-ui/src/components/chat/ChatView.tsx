@@ -20,11 +20,11 @@ import {
 	type AcceptedInteractionSettlement,
 	buildInteractionRequest,
 	canApplyAcceptedInteractionSettlement,
+	canRestoreRejectedInteractionDraft,
 	captureInteractionDraft,
 	createAcceptedInteractionSettlement,
 	type InteractionDraft,
 	isActiveInteractionSynchronized,
-	isSameInteractionDraft,
 	type PendingSuccessorDraftTransfer,
 } from "@/task-interaction/types"
 import { Navbar } from "../menu/Navbar"
@@ -185,6 +185,22 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 			setSelectedImages([])
 			setSelectedFiles([])
 			setActiveQuote(null)
+		},
+		[setActiveQuote, setInputValue, setSelectedFiles, setSelectedImages],
+	)
+	// Pairs with clearOwnedDraft: every submit path clears optimistically, so a
+	// refused or failed dispatch has to hand the draft back. Restoring is only
+	// safe while the composer is still empty; anything typed during the round
+	// trip is newer and keeps priority.
+	const restoreRejectedDraft = useCallback(
+		(settlement: AcceptedInteractionSettlement): void => {
+			if (!canRestoreRejectedInteractionDraft(currentTaskIdRef.current, currentDraftRef.current, settlement)) {
+				return
+			}
+			setInputValue(settlement.draft.text)
+			setSelectedImages([...settlement.draft.images])
+			setSelectedFiles([...settlement.draft.files])
+			setActiveQuote(settlement.draft.activeQuote ?? null)
 		},
 		[setActiveQuote, setInputValue, setSelectedFiles, setSelectedImages],
 	)
@@ -453,10 +469,19 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 			}
 			const settlement = createAcceptedInteractionSettlement(request, capturedDraft)
 			clearOwnedDraft(settlement)
-			const response = await TaskServiceClient.dispatchInteraction(request)
-			return response.accepted ? settlement : undefined
+			try {
+				const response = await TaskServiceClient.dispatchInteraction(request)
+				if (!response.accepted) {
+					restoreRejectedDraft(settlement)
+					return undefined
+				}
+				return settlement
+			} catch (error: unknown) {
+				restoreRejectedDraft(settlement)
+				throw error
+			}
 		},
-		[clearOwnedDraft, interactionSynchronized, taskViewState],
+		[clearOwnedDraft, interactionSynchronized, restoreRejectedDraft, taskViewState],
 	)
 	const submitOrdinaryTaskDraft = useCallback(
 		async (draft: InteractionDraft): Promise<undefined> => {
@@ -465,23 +490,37 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 				return undefined
 			}
 			const capturedDraft = captureInteractionDraft(draft)
-			await TaskServiceClient.askResponse(
-				AskResponseRequest.create({
-					responseType: "messageResponse",
-					text: capturedDraft.text,
-					images: capturedDraft.images,
-					files: capturedDraft.files,
-				}),
-			)
-			if (currentTaskIdRef.current === view.taskId && isSameInteractionDraft(currentDraftRef.current, capturedDraft)) {
-				setInputValue("")
-				setSelectedImages([])
-				setSelectedFiles([])
-				setActiveQuote(null)
+			// A task without an active interaction has no interaction identity to
+			// settle against, so the ask itself is the causal anchor. Reusing the
+			// settlement type keeps this path on the same clear/restore contract as
+			// the interaction and footer paths instead of clearing inline.
+			// This path is guarded to run only without an active interaction, so
+			// there is no turn or interaction identity to carry; the empty ids say
+			// exactly that. Task and draft identity still gate the rollback.
+			const settlement: AcceptedInteractionSettlement = {
+				taskId: view.taskId,
+				turnId: "",
+				interactionId: "",
+				stateRevision: view.stateRevision,
+				draft: capturedDraft,
+			}
+			clearOwnedDraft(settlement)
+			try {
+				await TaskServiceClient.askResponse(
+					AskResponseRequest.create({
+						responseType: "messageResponse",
+						text: capturedDraft.text,
+						images: capturedDraft.images,
+						files: capturedDraft.files,
+					}),
+				)
+			} catch (error: unknown) {
+				restoreRejectedDraft(settlement)
+				throw error
 			}
 			return undefined
 		},
-		[interactionSynchronized, setActiveQuote, setInputValue, setSelectedFiles, setSelectedImages, taskViewState],
+		[clearOwnedDraft, interactionSynchronized, restoreRejectedDraft, taskViewState],
 	)
 	const taskInputEnabled = Boolean(taskViewState?.input.enabled && taskViewState.input.enterAction && interactionSynchronized)
 	// The queue is drained at a turn end or a tool round, and only a task that
@@ -651,6 +690,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 						draft={interactionDraft}
 						messages={modifiedMessages}
 						onDraftAccepted={clearOwnedDraft}
+						onDraftRejected={restoreRejectedDraft}
 						onSuccessorAccepted={retainSuccessorDraft}
 						showTimeline={false}
 						view={taskViewState}

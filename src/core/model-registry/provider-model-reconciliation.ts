@@ -1,6 +1,6 @@
 import type { ImageModelInfo, ModelInfo, ProviderModelsConfig } from "@shared/providers/types"
 
-export type ProviderModelReconciliationMode = "fill-missing" | "refresh-built-ins"
+export type ProviderModelReconciliationMode = "fill-missing" | "refresh-built-ins" | "overlay-remote" | "replace"
 
 function mergeBuiltInModelDefaults(seed: ModelInfo, stored: ModelInfo): ModelInfo {
 	return {
@@ -49,6 +49,56 @@ function reconcileImageModels(
 	return Object.keys(models).length > 0 ? models : undefined
 }
 
+/** Drop keys whose value is undefined so that a spread never erases an existing field. */
+function withoutUndefined<T extends object>(source: T): Partial<T> {
+	return Object.fromEntries(Object.entries(source).filter(([, value]) => value !== undefined)) as Partial<T>
+}
+
+/**
+ * Overlay one remote listing entry on top of the stored model.
+ *
+ * Vendor listings are a supplement to the local catalog rather than a
+ * replacement: fields the vendor does not report keep their stored values. This
+ * matters most for pricing, which several listing endpoints omit entirely.
+ */
+function overlayRemoteModel(remote: ModelInfo, stored: ModelInfo): ModelInfo {
+	return {
+		...stored,
+		...withoutUndefined(remote),
+		capabilities:
+			remote.capabilities || stored.capabilities
+				? { ...stored.capabilities, ...(remote.capabilities ? withoutUndefined(remote.capabilities) : {}) }
+				: undefined,
+		pricing: remote.pricing ? { ...stored.pricing, ...withoutUndefined(remote.pricing) } : stored.pricing,
+		apiFormats: remote.apiFormats ?? stored.apiFormats,
+		userDefined: stored.userDefined === true ? true : false,
+	}
+}
+
+/**
+ * Merge a remote catalog into the stored one.
+ *
+ * Models the vendor no longer lists are kept, because a listing outage must not
+ * erase a working local configuration. Explicit user models are never touched.
+ */
+function overlayRemoteModels(remote: ProviderModelsConfig, stored: ProviderModelsConfig): Record<string, ModelInfo> {
+	const models: Record<string, ModelInfo> = {}
+
+	for (const [modelId, storedModel] of Object.entries(stored.models)) {
+		models[modelId] = storedModel
+	}
+
+	for (const [modelId, remoteModel] of Object.entries(remote.models)) {
+		const storedModel = stored.models[modelId]
+		if (storedModel?.userDefined === true) {
+			continue
+		}
+		models[modelId] = storedModel ? overlayRemoteModel(remoteModel, storedModel) : { ...remoteModel, userDefined: false }
+	}
+
+	return models
+}
+
 /**
  * Reconcile a persisted provider catalog with the current built-in metadata.
  * Explicit and unknown user models are preserved; known built-ins are either
@@ -59,6 +109,20 @@ export function reconcileProviderModels(
 	stored: ProviderModelsConfig,
 	mode: ProviderModelReconciliationMode,
 ): ProviderModelsConfig {
+	if (mode === "replace") {
+		return seed
+	}
+
+	if (mode === "overlay-remote") {
+		return {
+			...stored,
+			...seed,
+			models: overlayRemoteModels(seed, stored),
+			imageModels: reconcileImageModels(seed, stored, "fill-missing"),
+			defaultImageModelId: stored.defaultImageModelId ?? seed.defaultImageModelId,
+		}
+	}
+
 	if (mode === "fill-missing") {
 		return {
 			...stored,

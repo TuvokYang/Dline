@@ -15,6 +15,8 @@ import {
 	isClaudeAdaptiveThinkingEnabledByDefault,
 	isClaudeOpusAdaptiveThinkingModel,
 	resolveClaudeOpusAdaptiveThinking,
+	resolveClaudeThinkingDisplay,
+	supportsClaudeForcedToolUse,
 } from "@shared/utils/reasoning-support"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { ClineStorageMessage } from "@/shared/messages/content"
@@ -55,7 +57,7 @@ export class AnthropicHandler implements ApiHandler {
 	}
 
 	supportsServerTool(tool: ServerTool): boolean {
-		return tool === ServerTool.WEB_SEARCH
+		return tool === ServerTool.WEB_SEARCH || tool === ServerTool.CODE_EXECUTION
 	}
 
 	private contextWindowTiersEnabled(modelId: string): boolean {
@@ -175,7 +177,14 @@ export class AnthropicHandler implements ApiHandler {
 		const requestTools = mergeAnthropicServerTools(tools, options?.serverTools)
 		// Tools are available only when local functions or resolved hosted tools are enabled.
 		const nativeToolsOn = requestTools !== undefined && requestTools.length > 0
-		const reasoningOn = requestedThinkingEnabled && (model.info.capabilities?.supportsReasoning ?? false) && budget_tokens !== 0
+		// `tool_choice: any` only admits client tools, so forcing it would make a merged
+		// hosted server tool unreachable for the whole request.
+		const hostedServerToolsOn = (options?.serverTools?.length ?? 0) > 0
+		// Fable 5.1 rejects a forced tool choice outright, so it must fall back to auto
+		// rather than inheriting the adaptive-thinking branch that forces `any`.
+		const forcedToolUseOn = supportsClaudeForcedToolUse(modelId)
+		const reasoningOn =
+			requestedThinkingEnabled && (model.info.capabilities?.supportsReasoning ?? false) && budget_tokens !== 0
 
 		// Effective model metadata is authoritative for built-in adaptive-thinking support.
 		const modelThinking = model.info.capabilities?.thinking ?? anthropicModels[modelId]?.capabilities?.thinking
@@ -205,14 +214,18 @@ export class AnthropicHandler implements ApiHandler {
 				? "max"
 				: adaptiveThinking?.effort
 		const thinkingEnabled = isAdaptiveThinkingModel ? adaptiveThinkingEnabled : reasoningOn
+		// An unset display is omitted from the request so the API default applies.
+		// The disabled config carries no thinking content, so it takes no display.
+		const thinkingDisplay = resolveClaudeThinkingDisplay(this.config?.reasoning?.display)
+		const displayField = thinkingDisplay ? { display: thinkingDisplay } : {}
 		const thinkingConfig = isAdaptiveThinkingModel
 			? adaptiveThinkingEnabled
-				? { type: "adaptive" as const }
+				? { type: "adaptive" as const, ...displayField }
 				: disableAdaptiveThinkingRequested && canDisableClaudeAdaptiveThinking(modelId)
 					? { type: "disabled" as const }
 					: undefined
 			: reasoningOn
-				? { type: "enabled" as const, budget_tokens: budget_tokens }
+				? { type: "enabled" as const, budget_tokens: budget_tokens, ...displayField }
 				: undefined
 		const outputConfig =
 			isAdaptiveThinkingModel && adaptiveThinkingEnabled && adaptiveThinkingEffort
@@ -249,7 +262,13 @@ export class AnthropicHandler implements ApiHandler {
 				// - auto: allows Claude to decide whether to call any provided tools or not. This is the default value when tools are provided.
 				// - any: tells Claude that it must use one of the provided tools, but doesn't force a particular tool.
 				// Manual extended thinking cannot force tools, but adaptive thinking supports tool_choice.
-				tool_choice: localNativeToolsOn && (!thinkingEnabled || isAdaptiveThinkingModel) ? { type: "any" } : undefined,
+				tool_choice: !localNativeToolsOn
+					? undefined
+					: hostedServerToolsOn || !forcedToolUseOn
+						? { type: "auto" }
+						: !thinkingEnabled || isAdaptiveThinkingModel
+							? { type: "any" }
+							: undefined,
 			}
 			if (outputConfig) {
 				requestBody.output_config = outputConfig
@@ -259,9 +278,7 @@ export class AnthropicHandler implements ApiHandler {
 				? await createFastModeMessage(requestBody)
 				: await client.messages.create(
 						requestBody,
-						enable1mContextWindow
-							? { headers: { "anthropic-beta": "context-1m-2025-08-07" } }
-							: undefined,
+						enable1mContextWindow ? { headers: { "anthropic-beta": "context-1m-2025-08-07" } } : undefined,
 					)
 		} else {
 			const requestBody: AnthropicMessageCreateParamsStreaming & Record<string, unknown> = {
@@ -283,9 +300,7 @@ export class AnthropicHandler implements ApiHandler {
 				? await createFastModeMessage(requestBody)
 				: await client.messages.create(
 						requestBody,
-						enable1mContextWindow
-							? { headers: { "anthropic-beta": "context-1m-2025-08-07" } }
-							: undefined,
+						enable1mContextWindow ? { headers: { "anthropic-beta": "context-1m-2025-08-07" } } : undefined,
 					)
 		}
 

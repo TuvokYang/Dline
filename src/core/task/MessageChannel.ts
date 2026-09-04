@@ -34,6 +34,30 @@ export interface AskResult {
 	askTs?: number
 }
 
+/**
+ * A point in an ask's life that has to be recoverable from a log.
+ *
+ * A stranded ask leaves no trace of its own: the wait is silent and the task
+ * simply stops progressing. Naming the transitions is what separates an ask
+ * still waiting for a user from one whose answer never reached it.
+ *
+ * - `window_open`: the channel began accepting a response for this ask.
+ * - `ui_presented`: the question reached the webview and can be answered.
+ * - `response_received`: the wait ended with an answer.
+ * - `abandoned`: the wait ended without one, superseded or aborted.
+ */
+export type AskLifecycleEvent = "window_open" | "ui_presented" | "response_received" | "abandoned"
+
+export interface AskLifecycleRecord {
+	event: AskLifecycleEvent
+	ask: ClineAsk
+	askTs: number
+	/** Milliseconds since the receive window opened; absent before it opens. */
+	elapsedMs?: number
+	/** Set on `abandoned` to say which exit was taken. */
+	reason?: "superseded" | "aborted"
+}
+
 export interface MessageChannelConfig {
 	pushMessage: (msg: ClineMessage) => void | Promise<void>
 	syncState: () => Promise<void>
@@ -41,6 +65,12 @@ export interface MessageChannelConfig {
 	taskState: TaskState
 	getProviderInfo: () => ClineMessageModelInfo
 	genTs: () => number
+	/**
+	 * Reports ask lifecycle transitions. Optional so the channel keeps working
+	 * without a diagnostics sink, and injected rather than imported so the
+	 * channel stays free of logging dependencies and stays assertable.
+	 */
+	recordAskLifecycle?: (record: AskLifecycleRecord) => void
 }
 
 // ── MessageChannel ──
@@ -59,6 +89,7 @@ export class MessageChannel {
 	private taskState: TaskState
 	private getProviderInfo: () => ClineMessageModelInfo
 	private genTs: () => number
+	private recordAskLifecycle?: (record: AskLifecycleRecord) => void
 	/**
 	 * Whether an `ask()` call is currently waiting for a response.
 	 *
@@ -77,6 +108,7 @@ export class MessageChannel {
 		this.taskState = config.taskState
 		this.getProviderInfo = config.getProviderInfo
 		this.genTs = config.genTs
+		this.recordAskLifecycle = config.recordAskLifecycle
 	}
 
 	// ── Helpers ──
@@ -276,6 +308,19 @@ export class MessageChannel {
 			throw new Error("Dline instance aborted")
 		}
 
+		// Set when the receive window opens, so every later record can report
+		// how long this ask has been waiting rather than only that it is.
+		let windowOpenedAt: number | undefined
+		const reportLifecycle = (event: AskLifecycleEvent, askTs: number, reason?: AskLifecycleRecord["reason"]): void => {
+			this.recordAskLifecycle?.({
+				event,
+				ask: type,
+				askTs,
+				elapsedMs: windowOpenedAt === undefined ? undefined : Math.round(performance.now() - windowOpenedAt),
+				reason,
+			})
+		}
+
 		let didNotifyAskVisible = false
 		const notifyAskVisible = async (askTs: number) => {
 			if (!options?.onAskVisible || didNotifyAskVisible) {
@@ -285,11 +330,9 @@ export class MessageChannel {
 			await options.onAskVisible(askTs)
 		}
 
-		let askTs: number
 		let invalidationStartIndex = 0
+		const askTs = options?.existingTs ?? this.genTs()
 		if (partial !== undefined) {
-			askTs = options?.existingTs ?? this.genTs()
-
 			if (partial) {
 				const upserted = await this.messageStateHandler.upsertClineMessageInMemory({
 					ts: askTs,
@@ -309,6 +352,9 @@ export class MessageChannel {
 
 			// partial=false: finalize
 			this.taskState.lastMessageTs = askTs
+			this.openAskReceiveWindow()
+			windowOpenedAt = performance.now()
+			reportLifecycle("window_open", askTs)
 			const finalized = await this.messageStateHandler.finalizeClineMessage({
 				ts: askTs,
 				type: "ask",
@@ -322,11 +368,14 @@ export class MessageChannel {
 			await this.postStateToWebview()
 			options?.onTsCreated?.(askTs)
 			await notifyAskVisible(askTs)
+			reportLifecycle("ui_presented", askTs)
 			invalidationStartIndex = this.messageStateHandler.clineMessages.length
 		} else {
 			// Non-partial ask
-			askTs = options?.existingTs ?? this.genTs()
 			this.taskState.lastMessageTs = askTs
+			this.openAskReceiveWindow()
+			windowOpenedAt = performance.now()
+			reportLifecycle("window_open", askTs)
 			if (options?.existingTs !== undefined) {
 				const msgs = this.messageStateHandler.clineMessages
 				const idx = msgs.findIndex((m) => m.ts === options?.existingTs)
@@ -367,20 +416,19 @@ export class MessageChannel {
 			const msgs = this.messageStateHandler.clineMessages
 			this.pushMessage(msgs[msgs.length - 1])
 			await notifyAskVisible(askTs)
+			reportLifecycle("ui_presented", askTs)
 			invalidationStartIndex = this.messageStateHandler.clineMessages.length
 		}
 
-		// Clear previous response state
-		this.taskState.askResponse = undefined
-		this.taskState.askResponseText = undefined
-		this.taskState.askResponseImages = undefined
-		this.taskState.askResponseFiles = undefined
+		// The receive window was opened before this ask became visible, so the
+		// response state must not be cleared here. A response captured in the
+		// meantime is a legitimate answer to this very ask, and discarding it
+		// would leave this wait with nothing left to wake it.
 
 		// Notification hook handled by Task.ask() wrapper
 
 		// Wait for response
 		const shouldWakeOnAbort = type !== "resume_task" && type !== "resume_completed_task"
-		this.isAwaitingAskResponse = true
 		try {
 			await pWaitFor(
 				() =>
@@ -396,11 +444,14 @@ export class MessageChannel {
 			this.isAwaitingAskResponse = false
 		}
 		if (shouldWakeOnAbort && this.taskState.abort && this.taskState.askResponse === undefined) {
+			reportLifecycle("abandoned", askTs, "aborted")
 			throw new Error("Dline instance aborted")
 		}
 		if (this.taskState.askResponse === undefined && this.isAskPromiseSuperseded(invalidationStartIndex)) {
+			reportLifecycle("abandoned", askTs, "superseded")
 			throw new Error("Current ask promise was ignored")
 		}
+		reportLifecycle("response_received", askTs)
 
 		const result: AskResult = {
 			response: this.taskState.askResponse!,
@@ -416,6 +467,27 @@ export class MessageChannel {
 	}
 
 	// ── resolve ──
+
+	/**
+	 * Open the window during which a user response belongs to the ask that is
+	 * about to be presented.
+	 *
+	 * This must run before any await that can make the ask visible. The user can
+	 * answer as soon as the question reaches the screen, and a response arriving
+	 * while the window is still closed is refused by {@link resolve} and lost —
+	 * leaving the ask waiting for an answer that is never repeated.
+	 *
+	 * Clearing the previous response and opening the window stay in one
+	 * synchronous block on purpose: an await between them would discard a
+	 * response that had already been captured for this ask.
+	 */
+	private openAskReceiveWindow(): void {
+		this.taskState.askResponse = undefined
+		this.taskState.askResponseText = undefined
+		this.taskState.askResponseImages = undefined
+		this.taskState.askResponseFiles = undefined
+		this.isAwaitingAskResponse = true
+	}
 
 	/**
 	 * Resolve a pending ask with the webview's response.

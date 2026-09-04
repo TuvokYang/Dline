@@ -106,10 +106,10 @@ describe("FeatureSettingsSection", () => {
 	it("renders Image Generation in the Agent section and persists its independent feature gate", () => {
 		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
 
-		const imageGenerationSwitch = container.querySelector('[id="Image Generation"]')
+		const imageGenerationSwitch = container.querySelector('[id="Enable Image Generation"]')
 		const agentSection = container.querySelector("#agent-features")
 		expect(imageGenerationSwitch).toBeTruthy()
-		expect(agentSection?.querySelector('[id="Image Generation"]')).toBeTruthy()
+		expect(agentSection?.querySelector('[id="Enable Image Generation"]')).toBeTruthy()
 
 		fireEvent.click(imageGenerationSwitch as Element)
 

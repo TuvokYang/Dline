@@ -25,6 +25,16 @@ import { type ChatRestoreBoundary, resolveChatRestoreBoundary } from "./chat-res
 import { CHECKPOINT_TRACKER_ATTEMPT_TIMEOUT_MS } from "./initializer"
 import { ICheckpointManager } from "./types"
 
+/**
+ * Consecutive staging failures tolerated before the user is told that
+ * checkpoints stopped recording. One failure can be a transient lock or a
+ * file removed mid-flight; a run of them means no restore point is produced.
+ */
+const CHECKPOINT_STAGING_FAILURE_ALERT_THRESHOLD = 3
+
+/** Prefix identifying the message this manager raises for staging failures. */
+const STAGING_FAILURE_MESSAGE_PREFIX = "Checkpoints could not record"
+
 // Type definitions for better code organization
 type SayFunction = (
 	type: ClineSay,
@@ -192,11 +202,13 @@ export class TaskCheckpointManager implements ICheckpointManager {
 					if (commitHash) {
 						await this.persistCheckpointHash(checkpointMessageIndex, commitHash)
 					}
+					await this.reportStagingHealth()
 				} catch (error) {
 					Logger.error(
 						`[TaskCheckpointManager] Failed to create checkpoint commit for task ${this.task.taskId}:`,
 						error,
 					)
+					await this.reportStagingHealth()
 				}
 				return
 			}
@@ -209,6 +221,7 @@ export class TaskCheckpointManager implements ICheckpointManager {
 			}
 
 			const commitHash = await this.state.checkpointTracker.commit()
+			await this.reportStagingHealth()
 			if (!commitHash) {
 				Logger.debug(
 					`[TaskCheckpointManager] No file checkpoint hash for completion message in task ${this.task.taskId}; using chat checkpoint only`,
@@ -232,6 +245,40 @@ export class TaskCheckpointManager implements ICheckpointManager {
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : "Unknown error"
 			Logger.error(`[TaskCheckpointManager] Failed to save checkpoint for task ${this.task.taskId}:`, errorMessage)
+		}
+	}
+
+	/**
+	 * Surface repeated staging failures that happen after initialization.
+	 *
+	 * Initialization failures already reach the user, but a tracker that
+	 * initializes and then fails to stage produces no restore points at all
+	 * while the UI still looks healthy. Only sustained failure is reported so a
+	 * single transient error does not raise a false alarm.
+	 */
+	private async reportStagingHealth(): Promise<void> {
+		const tracker = this.state.checkpointTracker
+		if (!tracker) {
+			return
+		}
+		try {
+			const failures = tracker.getConsecutiveStagingFailures()
+			if (failures >= CHECKPOINT_STAGING_FAILURE_ALERT_THRESHOLD) {
+				await this.setcheckpointManagerErrorMessage(
+					`${STAGING_FAILURE_MESSAGE_PREFIX} the last ${failures} change sets. ` +
+						`Files inside nested repositories are not covered by checkpoints; ` +
+						`other paths may be unreadable or locked.`,
+				)
+				return
+			}
+			// A later success clears only the message this method raised.
+			if (failures === 0 && this.state.checkpointManagerErrorMessage?.startsWith(STAGING_FAILURE_MESSAGE_PREFIX)) {
+				await this.setcheckpointManagerErrorMessage(undefined)
+			}
+		} catch (error) {
+			// Health reporting is diagnostic only. It must never prevent a
+			// successful checkpoint hash from being bound to its message.
+			Logger.debug(`[TaskCheckpointManager] Skipped staging health report for task ${this.task.taskId}:`, error)
 		}
 	}
 

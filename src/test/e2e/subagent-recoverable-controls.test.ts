@@ -95,6 +95,234 @@ function countOccurrences(text: string, marker: string): number {
 	return text.split(marker).length - 1
 }
 
+async function measureSubagentWorkGeometry(card: Locator) {
+	return card.evaluate((element) => {
+		const taskScroll = element.querySelector<HTMLElement>('[data-testid="subagent-task-scroll"]')
+		const toolsScroll = element.querySelector<HTMLElement>('[data-testid="subagent-tools-scroll"]')
+		const taskContent = taskScroll?.firstElementChild as HTMLElement | null
+		const toolsContent = toolsScroll?.querySelector<HTMLElement>('[data-testid="subagent-tool-timeline"]')
+		const taskSection = taskScroll?.parentElement
+		const toolsSection = toolsScroll?.parentElement
+		if (!taskScroll || !toolsScroll || !taskContent || !toolsContent || !taskSection || !toolsSection) {
+			throw new Error("Expected complete subagent Work layout")
+		}
+		const trailingSpace = (scroll: HTMLElement, content: HTMLElement) => {
+			const paddingBottom = Number.parseFloat(getComputedStyle(scroll).paddingBottom) || 0
+			return scroll.getBoundingClientRect().bottom - paddingBottom - content.getBoundingClientRect().bottom
+		}
+		const cardStyle = getComputedStyle(element)
+		return {
+			cardHeight: element.getBoundingClientRect().height,
+			maxHeight: Number.parseFloat(cardStyle.maxHeight),
+			viewportHeight: window.innerHeight,
+			taskClientHeight: taskScroll.clientHeight,
+			taskScrollHeight: taskScroll.scrollHeight,
+			taskSectionHeight: taskSection.getBoundingClientRect().height,
+			taskTrailingSpace: trailingSpace(taskScroll, taskContent),
+			toolsClientHeight: toolsScroll.clientHeight,
+			toolsScrollHeight: toolsScroll.scrollHeight,
+			toolsSectionHeight: toolsSection.getBoundingClientRect().height,
+			toolsTrailingSpace: trailingSpace(toolsScroll, toolsContent),
+		}
+	})
+}
+
+e2e(
+	"Subagent Work layout - short sections stay compact and a long Task receives the bounded space",
+	async ({ helper, server, sidebar, userDataDir, workspaceDir }, testInfo) => {
+		e2e.setTimeout(240_000)
+		const agentName = "e2e-work-layout"
+		const evidenceFileName = "e2e-subagent-work-layout.txt"
+		const evidenceMarker = "E2E_SUBAGENT_WORK_LAYOUT_EVIDENCE"
+		await writeResponsesSubagent(workspaceDir, agentName, "E2E Work card content sizing agent")
+		await writeFile(path.join(workspaceDir, evidenceFileName), evidenceMarker, "utf8")
+		await helper.signin(sidebar)
+
+		const runCompletedSubagent = async ({
+			runId,
+			parentTask,
+			childTask,
+			childContext,
+		}: {
+			runId: string
+			parentTask: string
+			childTask: string
+			childContext: string
+		}) => {
+			const childResult = `E2E_SUBAGENT_WORK_LAYOUT_CHILD_${runId}`
+			const parentResult = `E2E_SUBAGENT_WORK_LAYOUT_PARENT_${runId}`
+			const subagentCallId = `call_work_layout_subagent_${runId}`
+			const readCallId = `call_work_layout_read_${runId}`
+			server.resetOpenAiMock()
+			server.enqueueOpenAiResponses(
+				{
+					type: "tool",
+					id: subagentCallId,
+					name: "use_subagent",
+					arguments: {
+						agent_name: agentName,
+						task: childTask,
+						context: childContext,
+						timeout: 120,
+					},
+				},
+				{
+					type: "tool",
+					id: `call_work_layout_parent_complete_${runId}`,
+					name: "attempt_completion",
+					arguments: { result: parentResult },
+					expectedToolResults: [{ callId: subagentCallId, contentIncludes: childResult }],
+				},
+			)
+			server.enqueueResponses(
+				"openai-compatible-responses",
+				{
+					type: "tool",
+					id: readCallId,
+					name: "read_file",
+					arguments: { path: evidenceFileName },
+				},
+				{
+					type: "tool",
+					id: `call_work_layout_child_complete_${runId}`,
+					name: "attempt_completion",
+					arguments: { result: childResult },
+					expectedToolResults: [{ callId: readCallId, contentIncludes: evidenceMarker }],
+				},
+			)
+
+			await sendTask(sidebar, parentTask)
+			await expect(sidebar.getByText(parentResult, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+			const taskMarker = childTask.split("\n", 1)[0]
+			const taskHeading = sidebar.getByRole("heading", { name: new RegExp(taskMarker) }).last()
+			await expect(taskHeading).toBeVisible()
+			const card = taskHeading.locator("xpath=ancestor::*[@data-testid='subagent-item'][1]")
+			await expect(card).toHaveCount(1)
+			return card
+		}
+
+		const shortCard = await runCompletedSubagent({
+			runId: "SHORT",
+			parentTask: "Render a completed subagent with compact Work content.",
+			childTask: "E2E_SUBAGENT_WORK_LAYOUT_SHORT_TASK",
+			childContext: "Short context.",
+		})
+		await shortCard.evaluate((element) => {
+			element.style.width = "900px"
+		})
+		await expect
+			.poll(() => shortCard.evaluate((element) => element.getBoundingClientRect().width))
+			.toBeGreaterThanOrEqual(899)
+		const shortGeometry = await measureSubagentWorkGeometry(shortCard)
+		await testInfo.attach("subagent-work-layout-short-geometry", {
+			body: JSON.stringify(shortGeometry, null, 2),
+			contentType: "application/json",
+		})
+		const shortGeometryMessage = JSON.stringify(shortGeometry)
+		expect(Math.abs(shortGeometry.maxHeight - shortGeometry.viewportHeight * 0.3), shortGeometryMessage).toBeLessThanOrEqual(
+			2,
+		)
+		expect(shortGeometry.cardHeight, shortGeometryMessage).toBeLessThan(shortGeometry.maxHeight - 4)
+		expect(shortGeometry.taskScrollHeight, shortGeometryMessage).toBeLessThanOrEqual(shortGeometry.taskClientHeight + 1)
+		expect(shortGeometry.toolsScrollHeight, shortGeometryMessage).toBeLessThanOrEqual(shortGeometry.toolsClientHeight + 1)
+		expect(shortGeometry.taskTrailingSpace, shortGeometryMessage).toBeGreaterThanOrEqual(-1)
+		expect(shortGeometry.taskTrailingSpace, shortGeometryMessage).toBeLessThanOrEqual(8)
+		expect(shortGeometry.toolsTrailingSpace, shortGeometryMessage).toBeGreaterThanOrEqual(-1)
+		expect(shortGeometry.toolsTrailingSpace, shortGeometryMessage).toBeLessThanOrEqual(8)
+		await attachLocatorScreenshot(shortCard, testInfo, "subagent-work-layout-short")
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Subagent Work layout - long Task and short Tools remain independently scrollable without blank space",
+	async ({ helper, server, sidebar, userDataDir, workspaceDir }, testInfo) => {
+		e2e.setTimeout(180_000)
+		const agentName = "e2e-work-layout-mixed"
+		const evidenceFileName = "e2e-subagent-work-layout-mixed.txt"
+		const evidenceMarker = "E2E_SUBAGENT_WORK_LAYOUT_MIXED_EVIDENCE"
+		const childResult = "E2E_SUBAGENT_WORK_LAYOUT_CHILD_MIXED"
+		const parentResult = "E2E_SUBAGENT_WORK_LAYOUT_PARENT_MIXED"
+		const childTask = [
+			"E2E_SUBAGENT_WORK_LAYOUT_LONG_TASK",
+			...Array.from({ length: 48 }, (_, index) => `E2E_SUBAGENT_WORK_LAYOUT_LINE_${index + 1}`),
+		].join("\n")
+		await writeResponsesSubagent(workspaceDir, agentName, "E2E mixed Work card sizing agent")
+		await writeFile(path.join(workspaceDir, evidenceFileName), evidenceMarker, "utf8")
+		await helper.signin(sidebar)
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				id: "call_work_layout_subagent_MIXED",
+				name: "use_subagent",
+				arguments: {
+					agent_name: agentName,
+					task: childTask,
+					context: "Keep the short tool timeline visible while Task scrolls.",
+					timeout: 120,
+				},
+			},
+			{
+				type: "tool",
+				id: "call_work_layout_parent_complete_MIXED",
+				name: "attempt_completion",
+				arguments: { result: parentResult },
+				expectedToolResults: [{ callId: "call_work_layout_subagent_MIXED", contentIncludes: childResult }],
+			},
+		)
+		server.enqueueResponses(
+			"openai-compatible-responses",
+			{
+				type: "tool",
+				id: "call_work_layout_read_MIXED",
+				name: "read_file",
+				arguments: { path: evidenceFileName },
+			},
+			{
+				type: "tool",
+				id: "call_work_layout_child_complete_MIXED",
+				name: "attempt_completion",
+				arguments: { result: childResult },
+				expectedToolResults: [{ callId: "call_work_layout_read_MIXED", contentIncludes: evidenceMarker }],
+			},
+		)
+
+		await sendTask(sidebar, "Render a completed subagent with a long Task and one tool.")
+		await expect(sidebar.getByText(parentResult, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+		const taskHeading = sidebar.getByRole("heading", { name: /E2E_SUBAGENT_WORK_LAYOUT_LONG_TASK/ }).last()
+		await expect(taskHeading).toBeVisible()
+		const mixedCard = taskHeading.locator("xpath=ancestor::*[@data-testid='subagent-item'][1]")
+		await mixedCard.evaluate((element) => {
+			element.style.width = "900px"
+		})
+		await expect
+			.poll(() => mixedCard.evaluate((element) => element.getBoundingClientRect().width))
+			.toBeGreaterThanOrEqual(899)
+		const mixedGeometry = await measureSubagentWorkGeometry(mixedCard)
+		const mixedGeometryMessage = JSON.stringify(mixedGeometry)
+		expect(mixedGeometry.cardHeight, mixedGeometryMessage).toBeLessThanOrEqual(mixedGeometry.maxHeight + 2)
+		expect(Math.abs(mixedGeometry.cardHeight - mixedGeometry.maxHeight), mixedGeometryMessage).toBeLessThanOrEqual(2)
+		expect(mixedGeometry.taskScrollHeight, mixedGeometryMessage).toBeGreaterThan(mixedGeometry.taskClientHeight)
+		expect(mixedGeometry.toolsScrollHeight, mixedGeometryMessage).toBeGreaterThan(mixedGeometry.toolsClientHeight)
+		expect(mixedGeometry.toolsTrailingSpace, mixedGeometryMessage).toBeLessThanOrEqual(8)
+		expect(mixedGeometry.taskSectionHeight, mixedGeometryMessage).toBeGreaterThan(mixedGeometry.toolsSectionHeight)
+		await expect(mixedCard.getByTestId("subagent-tool-step").first()).toBeVisible()
+		const mixedTaskScroll = mixedCard.getByTestId("subagent-task-scroll")
+		await mixedTaskScroll.evaluate((element) => {
+			element.scrollTop = element.scrollHeight
+		})
+		await expect.poll(() => mixedTaskScroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
+		const mixedToolsScroll = mixedCard.getByTestId("subagent-tools-scroll")
+		await mixedToolsScroll.evaluate((element) => {
+			element.scrollTop = element.scrollHeight
+		})
+		await expect.poll(() => mixedToolsScroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
+		await attachLocatorScreenshot(mixedCard, testInfo, "subagent-work-layout-mixed")
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
 e2e(
 	"Subagent recovery controls - Finish renders in Work and Activities and enforces completion-only recovery",
 	async ({ helper, server, sidebar, userDataDir, workspaceDir }, testInfo) => {

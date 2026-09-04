@@ -87,6 +87,10 @@ function createTaskConfig(nativeToolCallEnabled: boolean, options: any = {}): Ta
 		autoCondenseMaxReserveTokens: options.autoCondenseMaxReserveTokens,
 		autoCondenseMaxContextTokens: options.autoCondenseMaxContextTokens,
 	}
+	const apiConfiguration = {
+		actModeProfile: "anthropic",
+		planModeProfile: "anthropic",
+	}
 	return {
 		taskId: "task-1",
 		ulid: "ulid-1",
@@ -132,16 +136,10 @@ function createTaskConfig(nativeToolCallEnabled: boolean, options: any = {}): Ta
 				getRemoteConfigSettings: () => ({
 					remoteGlobalSkills: options.remoteGlobalSkills ?? [],
 				}),
-				getApiConfiguration: () => ({
-					actModeProfile: "shared-cursor-profile",
-					planModeProfile: "shared-cursor-profile",
-				}),
-				getApiConfigurationForTask: (taskId: string) => {
+				getApiConfiguration: () => apiConfiguration,
+				getApiConfigurationForTask: (taskId?: string) => {
 					assert.equal(taskId, "task-1")
-					return {
-						actModeProfile: "anthropic",
-						planModeProfile: "anthropic",
-					}
+					return apiConfiguration
 				},
 			},
 			imageGenerationService: {
@@ -299,6 +297,10 @@ describe("SubagentRunner", () => {
 		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
 		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
 		stubApiHandler(createMessage)
+		// The explicit subagent Profile resolves, so the builder takes the
+		// Profile-bound handler path; without this double the mock Profile has no
+		// credentials and the run fails while constructing a real provider client.
+		vi.spyOn(coreApi, "buildApiHandlerFromProfile").mockImplementation(() => coreApi.buildApiHandler({} as never, "act"))
 		initializeHostProvider()
 		const config = createTaskConfig(false)
 		const derivedImageService = { hasAvailableProfile: vi.fn(() => true) }
@@ -1612,6 +1614,98 @@ describe("SubagentRunner", () => {
 
 		assert.equal(result.status, "completed", result.error)
 		assert.equal(createMessage.mock.calls.length, 2)
+	})
+
+	// BUGFIX-028: Anthropic adaptive thinking emits a thinking block before any answer.
+	// `signature_delta` maps to a reasoning chunk whose text is empty, so the prefix carries
+	// no observable output and the whole backoff sequence must still run.
+	it("retries an upstream stream_read_error after an empty-content reasoning prefix", async () => {
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			yield { type: "usage", inputTokens: 1_200, outputTokens: 0 }
+			yield { type: "reasoning", reasoning: "Considering the request" }
+			yield { type: "reasoning", reasoning: "", signature: "sig_adaptive" }
+			throw Object.assign(new Error("stream_read_error"), {
+				code: "stream_read_error",
+				error: { code: "stream_read_error", message: "stream_read_error", type: "upstream_error" },
+			})
+		})
+		const setTimeoutSpy = vi.spyOn(global, "setTimeout").mockImplementation(((callback: (...args: unknown[]) => void) => {
+			queueMicrotask(callback)
+			return {} as NodeJS.Timeout
+		}) as typeof setTimeout)
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false)).run("Retry after reasoning prefix", () => {})
+
+		assert.equal(result.status, "failed")
+		assert.equal(result.retryable, true)
+		assert.equal(createMessage.mock.calls.length, 6)
+		assert.deepEqual(
+			setTimeoutSpy.mock.calls.map(([, timeout]) => timeout),
+			[5_000, 8_000, 11_000, 14_000, 17_000],
+		)
+	})
+
+	// BUGFIX-028: Anthropic emits a standalone "\n" separator for text blocks at index > 0,
+	// and Codex emits equivalent whitespace-only prefixes. Whitespace is not observable
+	// output, so replaying it cannot duplicate anything the user has seen.
+	it("retries an upstream stream_read_error after a whitespace-only text prefix", async () => {
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			yield { type: "usage", inputTokens: 800, outputTokens: 0 }
+			yield { type: "text", text: "\n" }
+			throw Object.assign(new Error("stream_read_error"), { code: "stream_read_error" })
+		})
+		const setTimeoutSpy = vi.spyOn(global, "setTimeout").mockImplementation(((callback: (...args: unknown[]) => void) => {
+			queueMicrotask(callback)
+			return {} as NodeJS.Timeout
+		}) as typeof setTimeout)
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false)).run("Retry after whitespace prefix", () => {})
+
+		assert.equal(result.status, "failed")
+		assert.equal(result.retryable, true)
+		assert.equal(createMessage.mock.calls.length, 6)
+		assert.deepEqual(
+			setTimeoutSpy.mock.calls.map(([, timeout]) => timeout),
+			[5_000, 8_000, 11_000, 14_000, 17_000],
+		)
+	})
+
+	// BUGFIX-028 guard: once real assistant text is observable, replaying the attempt would
+	// duplicate content. The retry sequence must stay disabled for that case.
+	it("does not retry after observable assistant text has been produced", async () => {
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			yield { type: "usage", inputTokens: 900, outputTokens: 0 }
+			yield { type: "text", text: "Partial answer already streamed" }
+			throw Object.assign(new Error("stream_read_error"), { code: "stream_read_error" })
+		})
+		const setTimeoutSpy = vi.spyOn(global, "setTimeout").mockImplementation(((callback: (...args: unknown[]) => void) => {
+			queueMicrotask(callback)
+			return {} as NodeJS.Timeout
+		}) as typeof setTimeout)
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false)).run("Do not replay observable text", () => {})
+
+		assert.equal(result.status, "failed")
+		assert.equal(createMessage.mock.calls.length, 1)
+		assert.deepEqual(
+			setTimeoutSpy.mock.calls.map(([, timeout]) => timeout),
+			[],
+		)
 	})
 
 	it("retries structured Responses server errors before the first chunk", async () => {

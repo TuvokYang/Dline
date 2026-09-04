@@ -78,6 +78,28 @@ export function canApplyAcceptedInteractionSettlement(
 	return currentTaskId === settlement.taskId && isSameInteractionDraft(currentDraft, settlement.draft)
 }
 
+/** Whether a draft holds nothing the user would lose by overwriting it. */
+function isEmptyInteractionDraft(draft: InteractionDraft): boolean {
+	return draft.text === "" && draft.images.length === 0 && draft.files.length === 0
+}
+
+/**
+ * Guard the rollback that follows a rejected dispatch.
+ *
+ * Every submit path clears optimistically, so a rejection has to put the
+ * submitted draft back or the user silently loses it. The owner revision has
+ * already moved on by then, which is why this cannot reuse the accepted-
+ * settlement guard: restoring is safe exactly while the composer is still
+ * empty. Anything typed during the round trip is newer and must win.
+ */
+export function canRestoreRejectedInteractionDraft(
+	currentTaskId: string | undefined,
+	currentDraft: InteractionDraft,
+	settlement: AcceptedInteractionSettlement,
+): boolean {
+	return currentTaskId === settlement.taskId && isEmptyInteractionDraft(currentDraft)
+}
+
 /** Injectable causal protocol boundary used by interaction components. */
 export type DispatchInteraction = (request: DispatchInteractionRequest) => Promise<DispatchInteractionResponse>
 

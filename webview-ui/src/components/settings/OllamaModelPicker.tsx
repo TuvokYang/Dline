@@ -11,6 +11,8 @@ export interface OllamaModelPickerProps {
 	selectedModelId: string
 	onModelChange: (modelId: string) => void
 	placeholder?: string
+	/** Called when the field gains focus, so the owner can refresh the list on demand. */
+	onFocus?: () => void
 }
 
 const OllamaModelPicker: React.FC<OllamaModelPickerProps> = ({
@@ -18,6 +20,7 @@ const OllamaModelPicker: React.FC<OllamaModelPickerProps> = ({
 	selectedModelId,
 	onModelChange,
 	placeholder = "Search and select a model...",
+	onFocus,
 }) => {
 	const [searchTerm, setSearchTerm] = useState(selectedModelId || "")
 	const [isDropdownVisible, setIsDropdownVisible] = useState(false)
@@ -131,7 +134,10 @@ const OllamaModelPicker: React.FC<OllamaModelPickerProps> = ({
 			<DropdownWrapper ref={dropdownRef}>
 				<VSCodeTextField
 					id="ollama-model-search"
-					onFocus={() => setIsDropdownVisible(true)}
+					onFocus={() => {
+						setIsDropdownVisible(true)
+						onFocus?.()
+					}}
 					onInput={(e) => {
 						const value = (e.target as HTMLInputElement)?.value || ""
 						handleModelChange(value)

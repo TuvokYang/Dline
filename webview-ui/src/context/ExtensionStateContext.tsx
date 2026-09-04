@@ -101,10 +101,40 @@ const hasExactInteractionAnchor = (messages: readonly ClineMessage[], interactio
 const interactionFetchKey = (taskViewKey: string | undefined, interaction: ActiveInteractionView): string =>
 	`${taskViewKey ?? ""}:${interaction.stateRevision}:${interaction.interactionId}:${interaction.askMessageTs}`
 
+/**
+ * Turns whatever a failed subscription produced into a message a user can act
+ * on. gRPC errors, thrown values and plain strings all reach this path, and a
+ * rendered `[object Object]` would be no more useful than the blank panel it
+ * replaces.
+ */
+function describeHydrationFailure(error: unknown): string {
+	if (error instanceof Error) {
+		return error.message
+	}
+	if (typeof error === "string") {
+		return error
+	}
+	return "Unknown state subscription failure"
+}
+
+/**
+ * How far the webview has got towards having state to render.
+ *
+ * Hydration used to be a single boolean that only ever moved forward on
+ * success. A parse failure or a subscription error left it false with no way
+ * to tell the two apart, and the view rendered nothing at all — the blank
+ * panel. Naming the failure separately is what makes it reportable.
+ */
+export type HydrationStatus = { status: "pending" } | { status: "failed"; reason: string } | { status: "ready" }
+
 export interface ExtensionStateContextType extends ExtensionState {
 	clineMessages: ClineMessage[]
 	setClineMessages: React.Dispatch<React.SetStateAction<ClineMessage[]>>
 	didHydrateState: boolean
+	/** Hydration progress, including why it failed when it did. */
+	hydration: HydrationStatus
+	/** Re-establishes the state subscription after a failure. */
+	retryHydration: () => void
 	showWelcome: boolean
 	onboardingModels: OnboardingModelGroup | undefined
 	clineModels: Record<string, ModelInfo> | null
@@ -379,7 +409,15 @@ export const ExtensionStateContextProvider: React.FC<{
 		taskLockStatus: undefined,
 	})
 	const [expandTaskHeader, setExpandTaskHeader] = useState(true)
-	const [didHydrateState, setDidHydrateState] = useState(false)
+	const [hydration, setHydration] = useState<HydrationStatus>({ status: "pending" })
+	const didHydrateState = hydration.status === "ready"
+	// Bumping this re-runs the subscription effect, which is what a retry needs:
+	// the failed stream is torn down by the effect cleanup and replaced.
+	const [hydrationAttempt, setHydrationAttempt] = useState(0)
+	const retryHydration = useCallback(() => {
+		setHydration({ status: "pending" })
+		setHydrationAttempt((attempt) => attempt + 1)
+	}, [])
 
 	// Atomic sliding window state via React 18 auto-batching
 	const [clineMessages, setClineMessages] = useState<ClineMessage[]>([])
@@ -716,20 +754,39 @@ export const ExtensionStateContextProvider: React.FC<{
 								setOnboardingModels(undefined)
 							}
 
-							setDidHydrateState(true)
+							setHydration({ status: "ready" })
 
 							return newState
 						})
 					} catch (error) {
 						console.error("Error parsing state JSON:", error)
+						// Only a first payload that cannot be parsed blocks the
+						// view. Once state has rendered, a later bad payload is
+						// better ignored than allowed to blank a working panel.
+						setHydration((current) =>
+							current.status === "ready" ? current : { status: "failed", reason: describeHydrationFailure(error) },
+						)
 					}
 				}
 			},
 			onError: (error) => {
 				console.error("Error in state subscription:", error)
+				// Without this the stream dies silently and the view waits for a
+				// payload that will never arrive, which is the blank panel.
+				setHydration((current) =>
+					current.status === "ready" ? current : { status: "failed", reason: describeHydrationFailure(error) },
+				)
 			},
 			onComplete: () => {
 				console.log("State subscription completed")
+				// A stream that ends before delivering state leaves nothing to
+				// render, and is as terminal as an error for a panel that never
+				// hydrated.
+				setHydration((current) =>
+					current.status === "ready"
+						? current
+						: { status: "failed", reason: "State subscription closed before any state arrived" },
+				)
 			},
 		})
 
@@ -1020,6 +1077,9 @@ export const ExtensionStateContextProvider: React.FC<{
 		navigateToWorktrees, // When settings button is clicked, navigate to settings
 		navigateToSettings,
 		navigateToAccount,
+		// A retry re-runs this effect, so the cleanup above tears down the
+		// failed stream before a fresh subscription replaces it.
+		hydrationAttempt,
 	])
 
 	// Safety net for task switches while HistoryView is open. The primary
@@ -1193,6 +1253,8 @@ export const ExtensionStateContextProvider: React.FC<{
 		...state,
 		clineMessages,
 		didHydrateState,
+		hydration,
+		retryHydration,
 		showWelcome,
 		onboardingModels,
 		clineModels,

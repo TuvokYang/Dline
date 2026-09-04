@@ -2,18 +2,12 @@ import { OcaModelInfo } from "@shared/api"
 import { StringRequest } from "@shared/proto/dline/common"
 import { OcaCompatibleModelInfo, OcaModelInfo as ProtoOcaModelInfo } from "@shared/proto/dline/models"
 import { ApiFormat } from "@shared/proto/dline/models/metadata"
-import axios from "axios"
+import { persistProviderCatalog } from "@/core/model-registry/provider-catalog-storage"
+import { ocaModelSource } from "@/core/model-registry/remote/vendors/oca"
 import { HostProvider } from "@/hosts/host-provider"
 import { OcaAuthService } from "@/services/auth/oca/OcaAuthService"
-import {
-	CHAT_COMPLETIONS_API,
-	DEFAULT_EXTERNAL_OCA_BASE_URL,
-	DEFAULT_INTERNAL_OCA_BASE_URL,
-	MESSAGES_API,
-	RESPONSES_API,
-} from "@/services/auth/oca/utils/constants"
+import { DEFAULT_EXTERNAL_OCA_BASE_URL, DEFAULT_INTERNAL_OCA_BASE_URL } from "@/services/auth/oca/utils/constants"
 import { createOcaHeaders } from "@/services/auth/oca/utils/utils"
-import { getAxiosSettings } from "@/shared/net"
 import { ShowMessageType } from "@/shared/proto/dline/host"
 import { Logger } from "@/shared/services/Logger"
 import { GlobalStateAndSettings } from "@/shared/storage/state-keys"
@@ -69,12 +63,6 @@ function toAppOcaModelInfo(protoModel: ProtoOcaModelInfo, modelId: string): OcaM
  * @returns Response containing the Oca models
  */
 export async function refreshOcaModels(controller: Controller, request: StringRequest): Promise<OcaCompatibleModelInfo> {
-	const parsePrice = (price: any) => {
-		if (price) {
-			return Number.parseFloat(price) * 1_000_000
-		}
-		return undefined
-	}
 	const models: Record<string, ProtoOcaModelInfo> = {}
 	let defaultModelId: string | undefined
 	const ocaAccessToken = await OcaAuthService.getInstance().getAuthToken()
@@ -87,140 +75,123 @@ export async function refreshOcaModels(controller: Controller, request: StringRe
 	}
 	const ocaMode = controller.stateManager.getGlobalSettingsKey("ocaMode") || "internal"
 	const baseUrl = request.value || (ocaMode === "internal" ? DEFAULT_INTERNAL_OCA_BASE_URL : DEFAULT_EXTERNAL_OCA_BASE_URL)
-	const modelsUrl = `${baseUrl}/v1/model/info`
 	const headers = await createOcaHeaders(ocaAccessToken!, "models-refresh")
 	try {
 		Logger.log(`Making refresh oca model request with customer opc-request-id: ${headers["opc-request-id"]}`)
-		const response = await axios.get(modelsUrl, { headers, ...getAxiosSettings() })
-		if (response.data?.data) {
-			if (response.data.data.length === 0) {
-				HostProvider.window.showMessage({
-					type: ShowMessageType.ERROR,
-					message: "No models found. Did you set up your OCA access (possibly through entitlements)?",
-				})
+		const listing = await ocaModelSource.fetchModelsWithExtras({ baseUrl, apiKey: ocaAccessToken })
+		if (Object.keys(listing.models).length === 0) {
+			Logger.error("Invalid response from OCA API")
+			HostProvider.window.showMessage({
+				type: ShowMessageType.ERROR,
+				message: "No models found. Did you set up your OCA access (possibly through entitlements)?",
+			})
+			return OcaCompatibleModelInfo.create({ models })
+		}
+
+		await persistProviderCatalog({
+			providerId: ocaModelSource.providerId,
+			providerName: ocaModelSource.providerName,
+			baseUrl,
+			billingMode: ocaModelSource.billingMode,
+			models: listing.models,
+			reconciliationMode: ocaModelSource.reconciliation,
+		})
+
+		for (const [modelId, catalogModel] of Object.entries(listing.models)) {
+			if (!defaultModelId) {
+				defaultModelId = modelId
 			}
-			for (const model of response.data.data) {
-				const modelId = model.litellm_params?.model
-				if (typeof modelId !== "string" || !modelId) {
-					continue
-				}
-				if (!defaultModelId) {
-					defaultModelId = modelId
-				}
-				const modelInfo = model.model_info
-				const supportedApiList = modelInfo.supported_api_list ?? [CHAT_COMPLETIONS_API]
+			// Banner, survey and reasoning-effort options are OCA-specific and
+			// have no place in the shared catalog, so they travel separately to
+			// the OCA settings UI.
+			const extras = listing.extras[modelId]
 
-				let apiFormat: ApiFormat = ApiFormat.OPENAI_CHAT
-				if (supportsChatCompletions(supportedApiList)) {
-					apiFormat = ApiFormat.OPENAI_CHAT
-				} else if (supportsResponses(supportedApiList)) {
-					apiFormat = ApiFormat.OPENAI_RESPONSES
-				} else if (supportsMessages(supportedApiList)) {
-					apiFormat = ApiFormat.ANTHROPIC_CHAT
-				}
+			models[modelId] = ProtoOcaModelInfo.create({
+				maxTokens: catalogModel.capabilities?.maxTokens ?? -1,
+				contextWindow: catalogModel.capabilities?.contextWindow,
+				supportsImages: catalogModel.capabilities?.supportsImages ?? false,
+				supportsPromptCache: catalogModel.capabilities?.supportsPromptCache ?? false,
+				inputPrice: catalogModel.pricing?.inputPrice ?? 0,
+				outputPrice: catalogModel.pricing?.outputPrice ?? 0,
+				cacheWritesPrice: catalogModel.pricing?.cacheWritesPrice ?? 0,
+				cacheReadsPrice: catalogModel.pricing?.cacheReadsPrice ?? 0,
+				description: catalogModel.description,
+				thinkingConfig: catalogModel.capabilities?.thinking,
+				temperature: catalogModel.temperature ?? 0,
+				modelName: modelId,
+				apiFormat: catalogModel.apiFormats?.[0] ?? ApiFormat.OPENAI_CHAT,
+				supportsReasoning: catalogModel.capabilities?.supportsReasoning ?? false,
+				banner: extras?.banner,
+				surveyId: extras?.surveyId,
+				surveyContent: extras?.surveyContent,
+				reasoningEffortOptions: extras?.reasoningEffortOptions ?? [],
+			})
+		}
+		Logger.log("OCA models fetched", models)
 
-				models[modelId] = ProtoOcaModelInfo.create({
-					maxTokens: model.litellm_params?.max_tokens || -1,
-					contextWindow: modelInfo.context_window,
-					supportsImages: modelInfo.supports_vision || false,
-					supportsPromptCache: modelInfo.supports_caching || false,
-					inputPrice: parsePrice(modelInfo.input_price) || 0,
-					outputPrice: parsePrice(modelInfo.output_price) || 0,
-					cacheWritesPrice: parsePrice(modelInfo.caching_price) || 0,
-					cacheReadsPrice: parsePrice(modelInfo.cached_price) || 0,
-					description: modelInfo.description,
-					thinkingConfig: modelInfo.thinking_config,
-					surveyContent: modelInfo.survey_content,
-					surveyId: modelInfo.survey_id,
-					temperature: modelInfo.temperature || 0,
-					banner: modelInfo.banner,
-					modelName: modelId,
-					apiFormat: apiFormat,
-					supportsReasoning: modelInfo.is_reasoning_model || false,
-					reasoningEffortOptions: modelInfo.reasoning_effort_options || [],
-				})
-			}
-			Logger.log("OCA models fetched", models)
+		// Fetch current OCA model selections from global settings
+		const planActSeparateModelsSetting = controller.stateManager.getGlobalSettingsKey("planActSeparateModelsSetting")
+		const currentMode = controller.stateManager.getGlobalSettingsKey("mode")
+		const savedPlanModelId = controller.stateManager.getGlobalSettingsKey("planModeOcaModelId")
+		const savedActModelId = controller.stateManager.getGlobalSettingsKey("actModeOcaModelId")
+		const savedPlanReasoningEffort = controller.stateManager.getGlobalSettingsKey("planModeOcaReasoningEffort")
+		const savedActReasoningEffort = controller.stateManager.getGlobalSettingsKey("actModeOcaReasoningEffort")
 
-			// Fetch current OCA model selections from global settings
-			const planActSeparateModelsSetting = controller.stateManager.getGlobalSettingsKey("planActSeparateModelsSetting")
-			const currentMode = controller.stateManager.getGlobalSettingsKey("mode")
-			const savedPlanModelId = controller.stateManager.getGlobalSettingsKey("planModeOcaModelId")
-			const savedActModelId = controller.stateManager.getGlobalSettingsKey("actModeOcaModelId")
-			const savedPlanReasoningEffort = controller.stateManager.getGlobalSettingsKey("planModeOcaReasoningEffort")
-			const savedActReasoningEffort = controller.stateManager.getGlobalSettingsKey("actModeOcaReasoningEffort")
+		const planModeSelectedModelId = savedPlanModelId && models[savedPlanModelId] ? savedPlanModelId : defaultModelId!
+		const actModeSelectedModelId = savedActModelId && models[savedActModelId] ? savedActModelId : defaultModelId!
 
-			const planModeSelectedModelId = savedPlanModelId && models[savedPlanModelId] ? savedPlanModelId : defaultModelId!
-			const actModeSelectedModelId = savedActModelId && models[savedActModelId] ? savedActModelId : defaultModelId!
+		let planModeOcaReasoningEffort: string | undefined
+		let actModeOcaReasoningEffort: string | undefined
+		if (
+			models[planModeSelectedModelId].supportsReasoning &&
+			models[planModeSelectedModelId].reasoningEffortOptions.length > 0
+		) {
+			planModeOcaReasoningEffort = savedPlanReasoningEffort
+				? savedPlanReasoningEffort
+				: models[planModeSelectedModelId].reasoningEffortOptions[0]
+		}
+		if (
+			models[actModeSelectedModelId].supportsReasoning &&
+			models[actModeSelectedModelId].reasoningEffortOptions.length > 0
+		) {
+			actModeOcaReasoningEffort = savedActReasoningEffort
+				? savedActReasoningEffort
+				: models[actModeSelectedModelId].reasoningEffortOptions[0]
+		}
 
-			let planModeOcaReasoningEffort: string | undefined
-			let actModeOcaReasoningEffort: string | undefined
-			if (
-				models[planModeSelectedModelId].supportsReasoning &&
-				models[planModeSelectedModelId].reasoningEffortOptions.length > 0
-			) {
-				planModeOcaReasoningEffort = savedPlanReasoningEffort
-					? savedPlanReasoningEffort
-					: models[planModeSelectedModelId].reasoningEffortOptions[0]
-			}
-			if (
-				models[actModeSelectedModelId].supportsReasoning &&
-				models[actModeSelectedModelId].reasoningEffortOptions.length > 0
-			) {
-				actModeOcaReasoningEffort = savedActReasoningEffort
-					? savedActReasoningEffort
-					: models[actModeSelectedModelId].reasoningEffortOptions[0]
-			}
+		// Build updates object based on plan/act mode setting
+		const updates: Partial<GlobalStateAndSettings> = {}
 
-			// Build updates object based on plan/act mode setting
-			const updates: Partial<GlobalStateAndSettings> = {}
-
-			if (planActSeparateModelsSetting) {
-				if (currentMode === "plan") {
-					updates.planModeOcaModelId = planModeSelectedModelId
-					updates.planModeOcaModelInfo = toAppOcaModelInfo(models[planModeSelectedModelId], planModeSelectedModelId)
-					updates.planModeOcaReasoningEffort = planModeOcaReasoningEffort
-				} else {
-					updates.actModeOcaModelId = actModeSelectedModelId
-					updates.actModeOcaModelInfo = toAppOcaModelInfo(models[actModeSelectedModelId], actModeSelectedModelId)
-					updates.actModeOcaReasoningEffort = actModeOcaReasoningEffort
-				}
-			} else {
+		if (planActSeparateModelsSetting) {
+			if (currentMode === "plan") {
 				updates.planModeOcaModelId = planModeSelectedModelId
 				updates.planModeOcaModelInfo = toAppOcaModelInfo(models[planModeSelectedModelId], planModeSelectedModelId)
 				updates.planModeOcaReasoningEffort = planModeOcaReasoningEffort
+			} else {
 				updates.actModeOcaModelId = actModeSelectedModelId
 				updates.actModeOcaModelInfo = toAppOcaModelInfo(models[actModeSelectedModelId], actModeSelectedModelId)
 				updates.actModeOcaReasoningEffort = actModeOcaReasoningEffort
 			}
-
-			// Update state directly using batch method
-			controller.stateManager.setGlobalStateBatch(updates)
-
-			HostProvider.window.showMessage({
-				type: ShowMessageType.INFORMATION,
-				message: `Refreshed OCA models from ${baseUrl}`,
-			})
-			await controller.postStateToWebview?.()
 		} else {
-			Logger.error("Invalid response from OCA API")
-			HostProvider.window.showMessage({
-				type: ShowMessageType.ERROR,
-				message: `Failed to fetch OCA models. Please check your configuration from ${baseUrl}`,
-			})
+			updates.planModeOcaModelId = planModeSelectedModelId
+			updates.planModeOcaModelInfo = toAppOcaModelInfo(models[planModeSelectedModelId], planModeSelectedModelId)
+			updates.planModeOcaReasoningEffort = planModeOcaReasoningEffort
+			updates.actModeOcaModelId = actModeSelectedModelId
+			updates.actModeOcaModelInfo = toAppOcaModelInfo(models[actModeSelectedModelId], actModeSelectedModelId)
+			updates.actModeOcaReasoningEffort = actModeOcaReasoningEffort
 		}
-	} catch (err) {
-		let userMsg
-		if (err.response) {
-			// The request was made and the server responded with a status code that falls out of the range of 2xx
-			userMsg = `Did you set up your OCA access (possibly through entitlements)? OCA service returned ${err.response.status} ${err.response.statusText}.`
-		} else if (err.request) {
-			// The request was made but no response was received
-			userMsg = `Unable to access the OCA backend. Is your endpoint and proxy configured properly? Please see the troubleshooting guide.`
-		} else {
-			userMsg = err.message
-			Logger.error(userMsg, err)
-		}
+
+		// Update state directly using batch method
+		controller.stateManager.setGlobalStateBatch(updates)
+
+		HostProvider.window.showMessage({
+			type: ShowMessageType.INFORMATION,
+			message: `Refreshed OCA models from ${baseUrl}`,
+		})
+		await controller.postStateToWebview?.()
+	} catch (err: unknown) {
+		const userMsg = describeOcaFailure(err)
+		Logger.error(userMsg, err)
 		HostProvider.window.showMessage({
 			type: ShowMessageType.ERROR,
 			message: `Error refreshing OCA models. ${userMsg} opc-request-id: ${headers["opc-request-id"]}`,
@@ -230,14 +201,18 @@ export async function refreshOcaModels(controller: Controller, request: StringRe
 	return OcaCompatibleModelInfo.create({ models })
 }
 
-function supportsChatCompletions(modelSupportedApiList: any): boolean {
-	return modelSupportedApiList.includes(CHAT_COMPLETIONS_API)
-}
-
-function supportsResponses(modelSupportedApiList: any): boolean {
-	return modelSupportedApiList.includes(RESPONSES_API)
-}
-
-function supportsMessages(modelSupportedApiList: any): boolean {
-	return modelSupportedApiList.includes(MESSAGES_API)
+/**
+ * The listing rejects with an HTTP status message for a refused request and
+ * with a transport error when the backend cannot be reached at all; the two
+ * need different remedies, so they get different guidance.
+ */
+function describeOcaFailure(err: unknown): string {
+	const message = err instanceof Error ? err.message : String(err)
+	if (/\b(4\d{2}|5\d{2})\b/.test(message)) {
+		return `Did you set up your OCA access (possibly through entitlements)? OCA service returned: ${message}`
+	}
+	if (err instanceof TypeError || /timed out|aborted|ECONN|ENOTFOUND|fetch failed/i.test(message)) {
+		return "Unable to access the OCA backend. Is your endpoint and proxy configured properly? Please see the troubleshooting guide."
+	}
+	return message
 }

@@ -86,7 +86,15 @@ export class VscodeWebviewPanelProvider extends WebviewProvider {
 			this.disposables,
 		)
 
-		Logger.debug(`[VscodeWebviewPanelProvider] Panel created: ${this.pendingTaskId}`)
+		// A panel opened for a new task legitimately has no task id yet; the id
+		// arrives later through setPendingTaskId. Printing the raw value made
+		// that ordinary case read as `undefined` and look like the defect being
+		// investigated, so the two cases are named instead.
+		Logger.debug(
+			this.pendingTaskId === undefined
+				? "[VscodeWebviewPanelProvider] Panel created for a new task; task id pending"
+				: `[VscodeWebviewPanelProvider] Panel created for task ${this.pendingTaskId}`,
+		)
 	}
 
 	/**

@@ -9,6 +9,7 @@ import { BrowserSettings } from "./BrowserSettings"
 import type { ChatInputSendShortcut } from "./ChatInputSendShortcut"
 import { ClineFeatureSetting } from "./ClineFeatureSetting"
 import { ClineRulesToggles } from "./cline-rules"
+import type { CodeExecutionPresentationV1 } from "./code-execution-tools"
 import type { ContextWindowIndicatorSnapshot } from "./context-window-indicator"
 import { FocusChainSettings } from "./FocusChainSettings"
 import { HistoryItem } from "./HistoryItem"
@@ -79,6 +80,12 @@ export interface ExtensionState {
 	currentTaskItem?: HistoryItem
 	currentFocusChainChecklist?: string | null
 	focusChainHistory?: string | null
+	/**
+	 * Set when this payload was reduced because it exceeded the size a state
+	 * push may occupy. Some fields are then absent rather than empty, and the
+	 * webview must not read their absence as the user having no data.
+	 */
+	stateDegraded?: boolean
 	mcpMarketplaceEnabled?: boolean
 	mcpDisplayMode: McpDisplayMode
 	planActSeparateModelsSetting: boolean
@@ -489,6 +496,7 @@ export interface ClineSayTool {
 		| "searchFiles"
 		| "webFetch"
 		| "webSearch"
+		| "codeExecution"
 		| "summarizeTask"
 		| "useSkill"
 		| "loadCapability"
@@ -540,6 +548,8 @@ export interface ClineSayTool {
 	webSearch?: WebSearchPresentationV1
 	webFetch?: WebFetchPresentationV1
 	imageGeneration?: ImageGenerationPresentationV1
+	/** Provider-hosted sandbox run: the code sent, what it printed, and how it ended. */
+	codeExecution?: CodeExecutionPresentationV1
 	regex?: string
 	filePattern?: string
 	operationIsLocatedInWorkspace?: boolean

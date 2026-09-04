@@ -50,8 +50,14 @@ describe("Vitest project isolation", () => {
 		for (const project of [...backendProjects.map((entry) => entry.test), webview]) {
 			expect(project?.environment).toBe(project === webview ? "jsdom" : "node")
 			expect(project?.setupFiles).toEqual(project === webview ? ["./src/setupTests.ts"] : ["src/test/setup.ts"])
-			expect(project?.pool).toBe("vmThreads")
-			expect(project?.maxWorkers).toBe(2)
+			// The two roots pool differently on purpose. Backend runs on worker
+			// threads because a VM context cannot share the Node module cache, so
+			// every file rebuilt the whole module graph and import cost dominated
+			// the suite; `isolate` still gives each file a fresh module registry.
+			// Webview keeps `vmThreads` because its jsdom globals need a real VM
+			// context per file.
+			expect(project?.pool).toBe(project === webview ? "vmThreads" : "threads")
+			expect(project?.maxWorkers).toBe(4)
 			expect(project?.minWorkers).toBe(project === webview ? undefined : 1)
 			expect(project?.vmMemoryLimit).toBeUndefined()
 		}

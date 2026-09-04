@@ -19,6 +19,23 @@ service LanguageService {
   rpc renameSymbol(RenameSymbolRequest) returns (RenameSymbolResponse);
 }
 
+// Why a language request failed. Callers map this to an actionable message
+// instead of reporting every failure as "LSP unavailable".
+enum LanguageFailureKind {
+  // The request succeeded; no failure occurred.
+  LANGUAGE_FAILURE_KIND_NONE = 0;
+  // The file path does not exist or is not readable.
+  LANGUAGE_FAILURE_KIND_INVALID_PATH = 1;
+  // The file exists but lies outside every workspace folder, so it is not indexed.
+  LANGUAGE_FAILURE_KIND_OUTSIDE_WORKSPACE = 2;
+  // No language server handles this file type.
+  LANGUAGE_FAILURE_KIND_NO_LANGUAGE_SUPPORT = 3;
+  // The host itself provides no LSP integration.
+  LANGUAGE_FAILURE_KIND_NO_LSP_HOST = 4;
+  // The language server was reachable but returned an error.
+  LANGUAGE_FAILURE_KIND_PROVIDER_ERROR = 5;
+}
+
 // ---- findReferences ----
 
 message FindReferencesRequest {
@@ -33,10 +50,13 @@ message FindReferencesRequest {
 message FindReferencesResponse {
   // All reference locations found. Empty if none or LSP unavailable.
   repeated ReferenceLocation references = 1;
-  // False when the host lacks LSP support.
+  // False only when the host itself provides no LSP integration.
+  // A reachable LSP that rejects one request keeps this true.
   bool has_lsp_support = 2;
   // Non-empty when an error occurred (e.g. LSP unavailable, file not found).
   string error_message = 3;
+  // Why the request failed. NONE when references were resolved successfully.
+  LanguageFailureKind failure_kind = 4;
 }
 
 message ReferenceLocation {
@@ -76,12 +96,15 @@ message RenameSymbolResponse {
   uint32 files_changed = 2;
   // Total number of occurrences changed.
   uint32 total_changes = 3;
-  // False when the host lacks LSP support.
+  // False only when the host itself provides no LSP integration.
+  // A reachable LSP that rejects one rename keeps this true.
   bool has_lsp_support = 4;
   // Non-empty when an error occurred.
   string error_message = 5;
   // Ordered list of per-file edits. Populated for both dry_run and applied renames.
   repeated FileEdit preview = 6;
+  // Why the rename failed. NONE when the rename succeeded or previewed cleanly.
+  LanguageFailureKind failure_kind = 7;
 }
 
 message FileEdit {

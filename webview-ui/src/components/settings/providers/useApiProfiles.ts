@@ -27,6 +27,13 @@ let sharedFailedCatalogRevision: number | undefined
 const CATALOG_LOAD_RETRY_DELAYS_MS = [500, 1_500, 4_000] as const
 let sharedPersistQueue: Promise<void> = Promise.resolve()
 let sharedSelectionQueue: Promise<void> = Promise.resolve()
+/**
+ * Counts local Catalog writes. A Catalog read answers with the backend state as
+ * of the moment it ran, so a write committed while that read is in flight is
+ * missing from its response. Comparing this counter across the read separates a
+ * current response from one that would revert that write.
+ */
+let sharedLocalWriteGeneration = 0
 const profileListeners = new Set<() => void>()
 
 function notifyProfileListeners(): void {
@@ -66,13 +73,21 @@ function loadSharedProfiles(catalogRevision?: number, force = false): Promise<Ap
 		return Promise.resolve(sharedProfiles)
 	}
 
+	const writeGenerationAtRequest = sharedLocalWriteGeneration
 	const request = FileServiceClient.getApiProfiles({} as EmptyRequest)
 		.then((response: ApiProfilesResponse) => {
-			sharedProfiles = response.profiles || []
 			sharedLoaded = true
 			if (catalogRevision !== undefined) sharedCatalogRevision = catalogRevision
 			sharedFailedCatalogRevision = undefined
 			sharedLoadError = undefined
+			// Committing a Catalog write advances the backend revision, which asks
+			// this Webview to read the Catalog again. When an edit lands between the
+			// read leaving and its response arriving, that response predates the edit
+			// and adopting it would silently undo it. The edit is already queued for
+			// the backend, so local state stays authoritative until a later read.
+			if (sharedLocalWriteGeneration === writeGenerationAtRequest) {
+				sharedProfiles = response.profiles || []
+			}
 			notifyProfileListeners()
 			return sharedProfiles
 		})
@@ -204,6 +219,7 @@ export function useApiProfiles() {
 
 	const persist = useCallback((profiles: ApiProfile[], clearApiKeyProfileIds: readonly string[] = []) => {
 		if (!sharedLoaded) return
+		sharedLocalWriteGeneration += 1
 		replaceSharedProfiles(profiles)
 		persistSharedProfiles(profiles, clearApiKeyProfileIds)
 	}, [])

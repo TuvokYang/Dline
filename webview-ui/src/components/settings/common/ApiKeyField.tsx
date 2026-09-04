@@ -2,6 +2,7 @@ import { VSCodeLink, VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
 import { useId } from "react"
 import { ProfileField } from "../profile-ui"
 import { useDebouncedInput } from "../utils/useDebouncedInput"
+import { useTextFieldHost } from "../utils/useTextFieldHost"
 
 /**
  * Props for the ApiKeyField component
@@ -29,6 +30,7 @@ export const ApiKeyField = ({
 	const [localValue, setLocalValue] = useDebouncedInput(initialValue, onChange)
 	const inputId = useId()
 	const label = `${providerName} API Key`
+	const textFieldHostProps = useTextFieldHost(label, localValue)
 
 	return (
 		<ProfileField
@@ -39,7 +41,8 @@ export const ApiKeyField = ({
 						<>
 							{" "}
 							<VSCodeLink className="inline text-inherit" href={signupUrl}>
-								You can get a{/^[aeiou]/i.test(providerName) ? "n" : ""} {providerName} API key by signing up here.
+								You can get a{/^[aeiou]/i.test(providerName) ? "n" : ""} {providerName} API key by signing up
+								here.
 							</VSCodeLink>
 						</>
 					) : null}
@@ -48,6 +51,7 @@ export const ApiKeyField = ({
 			htmlFor={inputId}
 			label={label}>
 			<VSCodeTextField
+				{...textFieldHostProps}
 				aria-label={label}
 				className="min-h-7 w-full"
 				id={inputId}

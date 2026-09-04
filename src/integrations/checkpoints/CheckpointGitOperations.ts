@@ -6,11 +6,27 @@ import { getDlineCheckpointsDir } from "@/core/storage/disk"
 import { telemetryService } from "@/services/telemetry"
 import { Logger } from "@/shared/services/Logger"
 import { getLfsPatterns, loadWorkspaceIgnoreContent, writeExcludesFile } from "./CheckpointExclusions"
-import { type CheckpointRepositoryBoundary, detectCheckpointWorkspaceTopology } from "./CheckpointWorkspaceTopology"
+import { detectCheckpointWorkspaceTopology } from "./CheckpointWorkspaceTopology"
+import { NestedRepositoryBoundaryDetector } from "./NestedRepositoryBoundaryDetector"
 
-interface CheckpointAddResult {
+export interface CheckpointAddResult {
 	success: boolean
+	/** Number of paths handed to Git for staging. */
+	stagedCount: number
+	/**
+	 * Worktree-relative paths Git refused to stage. The caller must stop
+	 * retrying them, otherwise one poisoned path replays on every checkpoint.
+	 */
+	rejectedPaths: string[]
 }
+
+/**
+ * Git validates every pathspec before staging anything, so a single rejected
+ * path fails the whole batch. Batching bounds the blast radius and keeps the
+ * command line below the Windows `CreateProcess` limit of 32767 characters.
+ */
+const MAX_PATHS_PER_ADD = 100
+const MAX_PATHSPEC_BYTES_PER_ADD = 24_000
 
 interface AddCheckpointFilesOptions {
 	git: SimpleGit
@@ -51,6 +67,30 @@ async function canonicalizeDirectory(directoryPath: string): Promise<string> {
 	}
 }
 
+/**
+ * Restore the on-disk spelling of a file name.
+ *
+ * Callers normalise tracked paths to lower case for de-duplication, which is
+ * harmless on Windows but makes the path unusable as a Git pathspec on a
+ * case-sensitive filesystem. Directory segments are already restored by
+ * `canonicalizeDirectory`; only the final segment needs a directory lookup.
+ */
+async function restoreEntryNameCase(parentDirectory: string, entryName: string): Promise<string> {
+	try {
+		const entries = await fs.readdir(parentDirectory)
+		if (entries.includes(entryName)) {
+			return entryName
+		}
+		const lowered = entryName.toLowerCase()
+		const matches = entries.filter((entry) => entry.toLowerCase() === lowered)
+		// Ambiguous only on case-sensitive filesystems holding several spellings;
+		// without further information the caller's spelling stays authoritative.
+		return matches.length === 1 ? matches[0] : entryName
+	} catch {
+		return entryName
+	}
+}
+
 /** Resolve one file against the canonical worktree, including symlinked parent directories. */
 export async function resolveCheckpointWorktreePath(
 	worktree: string,
@@ -59,7 +99,8 @@ export async function resolveCheckpointWorktreePath(
 	const canonicalWorktree = await canonicalizeDirectory(worktree)
 	const absoluteInput = path.resolve(filePath)
 	const canonicalParent = await canonicalizeDirectory(path.dirname(absoluteInput))
-	const absolute = path.resolve(canonicalParent, path.basename(absoluteInput))
+	const entryName = await restoreEntryNameCase(canonicalParent, path.basename(absoluteInput))
+	const absolute = path.resolve(canonicalParent, entryName)
 	const relative = path.relative(canonicalWorktree, absolute)
 	if (!relative || isOutsideDirectory(relative)) return undefined
 	return { absolute, relative: relative.split(path.sep).join("/") }
@@ -80,8 +121,15 @@ export async function resolveCheckpointWorktreePath(
  */
 export class GitOperations {
 	private cwd: string
-	/** Nested repository boundaries excluded from the root shadow repository. */
-	private repositoryBoundaries: CheckpointRepositoryBoundary[] = []
+	/**
+	 * Resolves nested repository ownership per file.
+	 *
+	 * Ownership must be resolved lazily: a submodule or linked worktree can be
+	 * created at any point during a task, and `git add -f` bypasses the shadow
+	 * `info/exclude` rules, so this detector is the only guard on the tracked
+	 * staging path.
+	 */
+	private boundaryDetector: NestedRepositoryBoundaryDetector
 
 	/**
 	 * Creates a new GitOperations instance.
@@ -90,6 +138,7 @@ export class GitOperations {
 	 */
 	constructor(cwd: string) {
 		this.cwd = cwd
+		this.boundaryDetector = new NestedRepositoryBoundaryDetector(cwd)
 	}
 
 	/**
@@ -122,7 +171,9 @@ export class GitOperations {
 			return ""
 		})
 		const topology = await detectCheckpointWorkspaceTopology(cwd)
-		this.repositoryBoundaries = topology.boundaries
+		// The scan only seeds already-known boundaries; per-file detection stays
+		// authoritative so repositories created later are still recognised.
+		this.boundaryDetector.seed(topology.boundaries.map((boundary) => boundary.relativePath))
 		Logger.info(
 			`[Task ${taskId}] Checkpoint workspace topology: relation=${topology.repository.relation}, ` +
 				`head=${topology.repository.head}, boundaries=${topology.boundaries.length}`,
@@ -339,11 +390,11 @@ export class GitOperations {
 		const startTime = performance.now()
 		if (mode === "tracked" && explicitFiles.length === 0) {
 			Logger.error(`[Task ${taskId}] tracked checkpoint add requires explicit files`)
-			return { success: false }
+			return { success: false, stagedCount: 0, rejectedPaths: [] }
 		}
 		if ((mode === "baseline" || mode === "workspace-scan") && explicitFiles.length > 0) {
 			Logger.error(`[Task ${taskId}] ${mode} checkpoint add must not receive explicit fileList`)
-			return { success: false }
+			return { success: false, stagedCount: 0, rejectedPaths: [] }
 		}
 		Logger.info(`[Task ${taskId}] Starting checkpoint add operation (${mode})...`)
 		try {
@@ -353,23 +404,29 @@ export class GitOperations {
 				)
 				if (resolvedFiles.some((file) => file === undefined)) {
 					Logger.error(`[Task ${taskId}] Checkpoint add rejected a tracked path outside ${this.cwd}`)
-					return { success: false }
+					return { success: false, stagedCount: 0, rejectedPaths: [] }
 				}
 				const ownedFiles = resolvedFiles as CheckpointWorktreePath[]
-				const safeFiles = ownedFiles.filter((file) => !this.isRepositoryBoundaryFile(file.absolute)) as Array<{
-					absolute: string
-					relative: string
-				}>
-				if (safeFiles.length === 0) {
-					Logger.warn(
-						`[Task ${taskId}] Checkpoint add skipped: all tracked files belong to nested repository boundaries`,
-					)
-					return { success: false }
+				const nestedOwnership = await Promise.all(
+					ownedFiles.map((file) => this.boundaryDetector.isInsideNestedRepository(file.absolute)),
+				)
+				const nestedFiles = ownedFiles.filter((_file, index) => nestedOwnership[index])
+				const safeFiles = ownedFiles.filter((_file, index) => !nestedOwnership[index])
+				if (nestedFiles.length > 0) {
+					Logger.warn(`[Task ${taskId}] Checkpoint add excluded ${nestedFiles.length} nested repository file(s)`)
 				}
-				if (safeFiles.length !== ownedFiles.length) {
-					Logger.warn(
-						`[Task ${taskId}] Checkpoint add excluded ${ownedFiles.length - safeFiles.length} nested repository file(s)`,
+				if (safeFiles.length === 0) {
+					// Every tracked file lives in a submodule or linked worktree.
+					// That is a normal situation, not a staging failure: the caller
+					// must be able to drop these paths and continue.
+					Logger.debug(
+						`[Task ${taskId}] Checkpoint add staged nothing: all tracked files belong to nested repositories`,
 					)
+					return {
+						success: true,
+						stagedCount: 0,
+						rejectedPaths: nestedFiles.map((file) => file.relative),
+					}
 				}
 
 				const existence = await Promise.all(safeFiles.map((file) => fileExistsAtPath(file.absolute)))
@@ -387,42 +444,120 @@ export class GitOperations {
 				const stageFiles = safeFiles.filter(
 					(file, index) => existence[index] || indexedPaths.has(this.normalizeGitPath(file.relative)),
 				)
-				if (stageFiles.length === 0) {
-					Logger.warn(`[Task ${taskId}] Checkpoint add skipped: no tracked path exists in the worktree or shadow index`)
-					return { success: true }
-				}
-				if (stageFiles.length !== safeFiles.length) {
+				const absentPaths = safeFiles.filter((file) => !stageFiles.includes(file)).map((file) => file.relative)
+				if (absentPaths.length > 0) {
 					Logger.warn(
-						`[Task ${taskId}] Checkpoint add ignored ${safeFiles.length - stageFiles.length} path(s) absent from both worktree and shadow index`,
+						`[Task ${taskId}] Checkpoint add ignored ${absentPaths.length} path(s) absent from both worktree and shadow index`,
 					)
 				}
-				await git.add(["-A", "-f", "--", ...stageFiles.map((file) => toLiteralGitPathspec(file.relative))])
-				Logger.debug(`[Task ${taskId}] Checkpoint add operation: staged ${stageFiles.length} tracked file(s)`)
-			} else {
-				if (mode === "baseline") {
-					// Rebuild the complete index so newly ignored or newly excluded files
-					// are removed from the current baseline as well as omitted from additions.
-					await git.raw(["read-tree", "--empty"])
+				// Absent and nested paths can never be staged; reporting them lets the
+				// caller drop them instead of replaying the same batch forever.
+				const unstageablePaths = [...nestedFiles.map((file) => file.relative), ...absentPaths]
+				if (stageFiles.length === 0) {
+					Logger.debug(
+						`[Task ${taskId}] Checkpoint add staged nothing: no tracked path exists in the worktree or shadow index`,
+					)
+					return { success: true, stagedCount: 0, rejectedPaths: unstageablePaths }
 				}
-				await git.add([".", "--ignore-errors"])
-				Logger.debug(`[Task ${taskId}] Checkpoint add operation: staged workspace via ${mode}`)
+				const staging = await this.stageInBatches(
+					git,
+					stageFiles.map((file) => file.relative),
+					taskId,
+				)
+				const durationMs = Math.round(performance.now() - startTime)
+				Logger.debug(`Checkpoint add operation completed in ${durationMs}ms`)
+				return {
+					// Only a total staging failure is a failure: partial progress still
+					// produces a usable checkpoint once the bad paths are dropped.
+					success: staging.stagedCount > 0 || staging.rejectedPaths.length === 0,
+					stagedCount: staging.stagedCount,
+					rejectedPaths: [...unstageablePaths, ...staging.rejectedPaths],
+				}
 			}
+			if (mode === "baseline") {
+				// Rebuild the complete index so newly ignored or newly excluded files
+				// are removed from the current baseline as well as omitted from additions.
+				await git.raw(["read-tree", "--empty"])
+			}
+			await git.add([".", "--ignore-errors"])
+			Logger.debug(`[Task ${taskId}] Checkpoint add operation: staged workspace via ${mode}`)
 			const durationMs = Math.round(performance.now() - startTime)
 			Logger.debug(`Checkpoint add operation completed in ${durationMs}ms`)
-			return { success: true }
+			return { success: true, stagedCount: 0, rejectedPaths: [] }
 		} catch (error) {
 			Logger.error(`[Task ${taskId}] Checkpoint add operation failed (${mode}):`, error)
-			return { success: false }
+			return { success: false, stagedCount: 0, rejectedPaths: [] }
 		}
 	}
 
-	private isRepositoryBoundaryFile(filePath: string): boolean {
-		const absolutePath = path.resolve(filePath)
-		return this.repositoryBoundaries.some((boundary) => {
-			const boundaryPath = path.resolve(this.cwd, boundary.relativePath)
-			const relative = path.relative(boundaryPath, absolutePath)
-			return relative === "" || !isOutsideDirectory(relative)
-		})
+	/**
+	 * Stage worktree-relative paths in bounded batches, isolating rejects.
+	 *
+	 * A batch that Git refuses is retried one path at a time so a single
+	 * unstageable entry cannot discard the rest of the checkpoint.
+	 */
+	private async stageInBatches(
+		git: SimpleGit,
+		relativePaths: string[],
+		taskId?: string,
+	): Promise<{ stagedCount: number; rejectedPaths: string[] }> {
+		let stagedCount = 0
+		const rejectedPaths: string[] = []
+
+		for (const batch of this.splitIntoPathspecBatches(relativePaths)) {
+			try {
+				await git.add(["-A", "-f", "--", ...batch.map(toLiteralGitPathspec)])
+				stagedCount += batch.length
+				continue
+			} catch (error) {
+				if (batch.length === 1) {
+					rejectedPaths.push(batch[0])
+					Logger.warn(`[Task ${taskId}] Checkpoint add rejected '${batch[0]}':`, error)
+					continue
+				}
+				Logger.warn(
+					`[Task ${taskId}] Checkpoint add batch of ${batch.length} path(s) failed; isolating rejected paths`,
+					error,
+				)
+			}
+			for (const relativePath of batch) {
+				try {
+					await git.add(["-A", "-f", "--", toLiteralGitPathspec(relativePath)])
+					stagedCount += 1
+				} catch (error) {
+					rejectedPaths.push(relativePath)
+					Logger.warn(`[Task ${taskId}] Checkpoint add rejected '${relativePath}':`, error)
+				}
+			}
+		}
+
+		Logger.debug(
+			`[Task ${taskId}] Checkpoint add operation: staged ${stagedCount} tracked file(s), rejected ${rejectedPaths.length}`,
+		)
+		return { stagedCount, rejectedPaths }
+	}
+
+	/** Split paths so each batch stays within the count and command-line budgets. */
+	private splitIntoPathspecBatches(relativePaths: string[]): string[][] {
+		const batches: string[][] = []
+		let current: string[] = []
+		let currentBytes = 0
+
+		for (const relativePath of relativePaths) {
+			const cost = Buffer.byteLength(toLiteralGitPathspec(relativePath), "utf8") + 1
+			const exceedsBudget = current.length >= MAX_PATHS_PER_ADD || currentBytes + cost > MAX_PATHSPEC_BYTES_PER_ADD
+			if (current.length > 0 && exceedsBudget) {
+				batches.push(current)
+				current = []
+				currentBytes = 0
+			}
+			current.push(relativePath)
+			currentBytes += cost
+		}
+		if (current.length > 0) {
+			batches.push(current)
+		}
+		return batches
 	}
 
 	private normalizeGitPath(filePath: string): string {

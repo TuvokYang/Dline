@@ -1,11 +1,9 @@
 import { persistProviderCatalog } from "@core/model-registry/provider-catalog-storage"
+import { discoverProviderModels } from "@core/model-registry/remote/model-refresh"
 import { type ModelInfo, openRouterDefaultModelId } from "@shared/api"
 import { GEMINI_FLASH_MAX_OUTPUT_TOKENS, isGeminiFlashModel } from "@utils/model-utils"
-import axios from "axios"
 import cloneDeep from "clone-deep"
-import { StateManager } from "@/core/storage/StateManager"
 import {
-	ANTHROPIC_MAX_THINKING_BUDGET,
 	CLAUDE_OPUS_1M_TIERS,
 	CLAUDE_SONNET_1M_TIERS,
 	openRouterClaudeOpus461mModelId,
@@ -14,66 +12,8 @@ import {
 	openRouterClaudeSonnet451mModelId,
 	openRouterClaudeSonnet461mModelId,
 } from "@/shared/api"
-import { getAxiosSettings } from "@/shared/net"
 import { Logger } from "@/shared/services/Logger"
 import type { Controller } from ".."
-
-type OpenRouterSupportedParams =
-	| "frequency_penalty"
-	| "include_reasoning"
-	| "logit_bias"
-	| "logprobs"
-	| "max_tokens"
-	| "min_p"
-	| "presence_penalty"
-	| "reasoning"
-	| "repetition_penalty"
-	| "response_format"
-	| "seed"
-	| "stop"
-	| "temperature"
-	| "tool_choice"
-	| "tools"
-	| "top_k"
-	| "top_logprobs"
-	| "top_p"
-
-/**
- * The raw model information returned by the OpenRouter API to list models
- * @link https://openrouter.ai/docs/overview/models
- */
-interface OpenRouterRawModelInfo {
-	id: string
-	name: string
-	description: string | null
-	context_length: number | null
-	top_provider: {
-		max_completion_tokens: number | null
-		context_length: number | null
-		is_moderated: boolean | null
-	} | null
-	architecture: {
-		modality: string[]
-		input_modalities: string[]
-		output_modalities: string[]
-		tokenizer: string
-		instruct_type: string
-	} | null
-	pricing: {
-		prompt: string
-		completion: string
-		request: string
-		image: string
-		audio: string
-		web_search: string
-		internal_reasoning: string
-		input_cache_read: string
-		input_cache_write: string
-	} | null
-	supports_global_endpoint: boolean | null
-	tiers: any[] | null
-	supported_parameters?: OpenRouterSupportedParams[] | null
-}
 
 const OPENROUTER_PROVIDER_ID = "openrouter"
 
@@ -86,12 +26,6 @@ let pendingRefresh: Promise<Record<string, ModelInfo>> | null = null
  * @returns Record of model ID to ModelInfo (application types)
  */
 export async function refreshOpenRouterModels(controller: Controller): Promise<Record<string, ModelInfo>> {
-	// Check in-memory cache first
-	const cache = StateManager.get().getModelsCache("openRouter")
-	if (cache) {
-		return cache
-	}
-
 	// If a fetch is already in progress, return the same promise
 	if (pendingRefresh) {
 		return pendingRefresh
@@ -113,46 +47,14 @@ export async function refreshOpenRouterModels(controller: Controller): Promise<R
 async function fetchAndCacheModels(controller: Controller): Promise<Record<string, ModelInfo>> {
 	let models: Record<string, ModelInfo> = {}
 	try {
-		const response = await axios.get("https://openrouter.ai/api/v1/models", getAxiosSettings())
+		const discovered = await discoverProviderModels(OPENROUTER_PROVIDER_ID)
 
-		if (response.data?.data) {
-			const rawModels = response.data.data
-			const parsePrice = (price: any) => {
-				if (price) {
-					return Number.parseFloat(price) * 1_000_000
-				}
-				return undefined
-			}
-			for (const rawModel of rawModels as OpenRouterRawModelInfo[]) {
-				const supportThinking = rawModel.supported_parameters?.some((p) => p === "include_reasoning" || p === "reasoning")
-				const supportsTools = rawModel.supported_parameters?.includes("tools") ?? false
+		if (Object.keys(discovered).length > 0) {
+			for (const [modelId, listedModel] of Object.entries(discovered)) {
+				// The listing is authoritative; the corrections below only add what it cannot express.
+				const modelInfo = cloneDeep(listedModel)
 
-				const modelInfo: ModelInfo = {
-					id: rawModel.id ?? rawModel.name ?? "",
-					name: rawModel.name,
-					description: rawModel.description ?? "",
-					capabilities: {
-						maxTokens: rawModel.top_provider?.max_completion_tokens ?? 0,
-						contextWindow: rawModel.context_length ?? 0,
-						supportsImages: rawModel.architecture?.modality?.includes("image") ?? false,
-						supportsPromptCache: false,
-						supportsTools,
-						// If thinking is supported, set maxBudget with a default value as a placeholder
-						thinking: supportThinking
-							? { supported: true, mode: "budget" as const, maxBudget: ANTHROPIC_MAX_THINKING_BUDGET }
-							: undefined,
-						supportsGlobalEndpoint: rawModel.supports_global_endpoint ?? undefined,
-					},
-					pricing: {
-						inputPrice: parsePrice(rawModel.pricing?.prompt) ?? 0,
-						outputPrice: parsePrice(rawModel.pricing?.completion) ?? 0,
-						cacheWritesPrice: parsePrice(rawModel.pricing?.input_cache_write),
-						cacheReadsPrice: parsePrice(rawModel.pricing?.input_cache_read),
-						tiers: (rawModel as any).tiers ?? undefined,
-					},
-				}
-
-				switch (rawModel.id) {
+				switch (modelId) {
 					case "anthropic/claude-sonnet-4.6":
 					case "anthropic/claude-4.6-sonnet":
 					case "anthropic/claude-sonnet-4.5":
@@ -256,66 +158,60 @@ async function fetchAndCacheModels(controller: Controller): Promise<Record<strin
 						modelInfo.pricing!.cacheReadsPrice = 0.02
 						break
 					default:
-						if (rawModel.id.startsWith("openai/")) {
-							modelInfo.pricing!.cacheReadsPrice = parsePrice(rawModel.pricing?.input_cache_read)
+						// OpenAI and Google publish their cache prices in the listing, so the
+						// prompt-cache flag follows from whether a cache read price came back.
+						// OpenRouter charges no cache write pricing for OpenAI models.
+						if (modelId.startsWith("openai/") || modelId.startsWith("google/")) {
 							if (modelInfo.pricing?.cacheReadsPrice) {
 								modelInfo.capabilities!.supportsPromptCache = true
-								modelInfo.pricing!.cacheWritesPrice = parsePrice(rawModel.pricing?.input_cache_write)
-								// openrouter charges no cache write pricing for openAI models
-							}
-						} else if (rawModel.id.startsWith("google/")) {
-							modelInfo.pricing!.cacheReadsPrice = parsePrice(rawModel.pricing?.input_cache_read)
-							if (modelInfo.pricing?.cacheReadsPrice) {
-								modelInfo.capabilities!.supportsPromptCache = true
-								modelInfo.pricing!.cacheWritesPrice = parsePrice(rawModel.pricing?.input_cache_write)
 							}
 						}
 						break
 				}
 
-				if (isGeminiFlashModel(rawModel.id)) {
+				if (isGeminiFlashModel(modelId)) {
 					modelInfo.capabilities!.maxTokens = Math.min(
 						modelInfo.capabilities!.maxTokens || GEMINI_FLASH_MAX_OUTPUT_TOKENS,
 						GEMINI_FLASH_MAX_OUTPUT_TOKENS,
 					)
 				}
 
-				models[rawModel.id] = modelInfo
+				models[modelId] = modelInfo
 
 				// add custom :1m model variant for sonnet
 				if (
-					rawModel.id === "anthropic/claude-sonnet-4" ||
-					rawModel.id === "anthropic/claude-sonnet-4.5" ||
-					rawModel.id === "anthropic/claude-4.5-sonnet" ||
-					rawModel.id === "anthropic/claude-sonnet-4.6" ||
-					rawModel.id === "anthropic/claude-4.6-sonnet"
+					modelId === "anthropic/claude-sonnet-4" ||
+					modelId === "anthropic/claude-sonnet-4.5" ||
+					modelId === "anthropic/claude-4.5-sonnet" ||
+					modelId === "anthropic/claude-sonnet-4.6" ||
+					modelId === "anthropic/claude-4.6-sonnet"
 				) {
 					const claudeSonnet1mModelInfo = cloneDeep(modelInfo)
 					claudeSonnet1mModelInfo.capabilities!.contextWindow = 1_000_000 // limiting providers to those that support 1m context window
 					claudeSonnet1mModelInfo.pricing!.tiers = CLAUDE_SONNET_1M_TIERS
 					// sonnet 4
-					if (rawModel.id === "anthropic/claude-sonnet-4") {
+					if (modelId === "anthropic/claude-sonnet-4") {
 						models[openRouterClaudeSonnet41mModelId] = claudeSonnet1mModelInfo
 					}
 					// sonnet 4.5
-					if (rawModel.id === "anthropic/claude-sonnet-4.5" || rawModel.id === "anthropic/claude-4.5-sonnet") {
+					if (modelId === "anthropic/claude-sonnet-4.5" || modelId === "anthropic/claude-4.5-sonnet") {
 						models[openRouterClaudeSonnet451mModelId] = claudeSonnet1mModelInfo
 					}
 					// sonnet 4.6
-					if (rawModel.id === "anthropic/claude-sonnet-4.6" || rawModel.id === "anthropic/claude-4.6-sonnet") {
+					if (modelId === "anthropic/claude-sonnet-4.6" || modelId === "anthropic/claude-4.6-sonnet") {
 						models[openRouterClaudeSonnet461mModelId] = claudeSonnet1mModelInfo
 					}
 				}
 
 				// add custom :1m model variant for opus 4.6 and 4.7
-				if (rawModel.id === "anthropic/claude-opus-4.6" || rawModel.id === "anthropic/claude-opus-4.7") {
+				if (modelId === "anthropic/claude-opus-4.6" || modelId === "anthropic/claude-opus-4.7") {
 					const claudeOpus1mModelInfo = cloneDeep(modelInfo)
 					claudeOpus1mModelInfo.capabilities!.contextWindow = 1_000_000
 					claudeOpus1mModelInfo.pricing!.tiers = CLAUDE_OPUS_1M_TIERS
-					if (rawModel.id === "anthropic/claude-opus-4.6") {
+					if (modelId === "anthropic/claude-opus-4.6") {
 						models[openRouterClaudeOpus461mModelId] = claudeOpus1mModelInfo
 					}
-					if (rawModel.id === "anthropic/claude-opus-4.7") {
+					if (modelId === "anthropic/claude-opus-4.7") {
 						models[openRouterClaudeOpus471mModelId] = claudeOpus1mModelInfo
 					}
 				}
@@ -336,12 +232,7 @@ async function fetchAndCacheModels(controller: Controller): Promise<Record<strin
 	}
 
 	// Append stealth models if any
-	const finalModels = appendClineStealthModels(models)
-
-	// Store in StateManager's in-memory cache
-	StateManager.get().setModelsCache("openRouter", finalModels)
-
-	return finalModels
+	return appendClineStealthModels(models)
 }
 
 /** Persist the dynamic catalog where ModelRegistry and provider editors preload it. */

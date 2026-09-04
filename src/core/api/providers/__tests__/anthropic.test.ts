@@ -214,10 +214,81 @@ describe("AnthropicHandler", () => {
 					description: "Read",
 					input_schema: { type: "object", properties: {} },
 				},
-				{ type: "web_search_20260209", name: "web_search" },
+				{ type: "web_search_20260318", name: "web_search", allowed_callers: ["direct"] },
+			])
+			// `any` admits only client tools, so forcing it would make the hosted declaration unreachable.
+			expect(standardCreate.mock.calls[0]?.[0]?.tool_choice).to.deep.equal({ type: "auto" })
+			expect(handler.supportsServerTool(ServerTool.WEB_SEARCH)).to.equal(true)
+		})
+
+		it("still forces a tool choice when the request carries no hosted server tools", async () => {
+			const handler = new AnthropicHandler({
+				profile: ApiProfile.create({
+					provider: "anthropic",
+					apiKey: "test-api-key",
+					modelId: "claude-sonnet-4-6",
+				}),
+				mode: "act",
+			})
+			const standardCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				messages: { create: standardCreate },
+				beta: { messages: { _client: {}, create: vi.fn().mockResolvedValue(createAsyncIterable()) } },
+			})
+
+			for await (const _chunk of handler.createMessage(
+				"system prompt",
+				[{ role: "user", content: "Read" }],
+				[
+					{
+						name: "read_file",
+						description: "Read",
+						input_schema: { type: "object", properties: {} },
+					},
+				],
+			)) {
+			}
+
+			expect(standardCreate.mock.calls[0]?.[0]?.tools).to.deep.equal([
+				{
+					name: "read_file",
+					description: "Read",
+					input_schema: { type: "object", properties: {} },
+				},
 			])
 			expect(standardCreate.mock.calls[0]?.[0]?.tool_choice).to.deep.equal({ type: "any" })
-			expect(handler.supportsServerTool(ServerTool.WEB_SEARCH)).to.equal(true)
+		})
+
+		it("never forces a tool choice on Fable 5.1, which rejects forced tool use", async () => {
+			const handler = new AnthropicHandler({
+				profile: ApiProfile.create({
+					provider: "anthropic",
+					apiKey: "test-api-key",
+					modelId: "claude-fable-5-1",
+				}),
+				mode: "act",
+			})
+			const standardCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				messages: { create: standardCreate },
+				beta: { messages: { _client: {}, create: vi.fn().mockResolvedValue(createAsyncIterable()) } },
+			})
+
+			for await (const _chunk of handler.createMessage(
+				"system prompt",
+				[{ role: "user", content: "Read" }],
+				[
+					{
+						name: "read_file",
+						description: "Read",
+						input_schema: { type: "object", properties: {} },
+					},
+				],
+			)) {
+			}
+
+			expect(standardCreate.mock.calls[0]?.[0]?.model).to.equal("claude-fable-5-1")
+			expect(standardCreate.mock.calls[0]?.[0]?.tool_choice).to.deep.equal({ type: "auto" })
 		})
 
 		it("does not force hosted Web Search when no local Anthropic functions are present", async () => {
@@ -243,7 +314,9 @@ describe("AnthropicHandler", () => {
 			)) {
 			}
 
-			expect(standardCreate.mock.calls[0]?.[0]?.tools).to.deep.equal([{ type: "web_search_20260209", name: "web_search" }])
+			expect(standardCreate.mock.calls[0]?.[0]?.tools).to.deep.equal([
+				{ type: "web_search_20260318", name: "web_search", allowed_callers: ["direct"] },
+			])
 			should(standardCreate.mock.calls[0]?.[0]?.tool_choice).equal(undefined)
 		})
 
@@ -452,32 +525,32 @@ describe("AnthropicHandler", () => {
 			})
 		})
 
-		it.each(["claude-opus-5", "claude-sonnet-5"])(
-			"should send explicit disabled thinking when %s is configured with none",
-			async (modelId) => {
-				const handler = new AnthropicHandler({
-					profile: ApiProfile.create({
-						provider: "anthropic",
-						apiKey: "test-api-key",
-						modelId,
-						anthropic: { reasoning: { enableThinking: false, effort: "none" } },
-					}),
-					mode: "act",
-				})
-				const standardCreate = vi.fn().mockResolvedValue(createAsyncIterable())
-				vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
-					messages: { create: standardCreate },
-					beta: { messages: { _client: {}, create: vi.fn().mockResolvedValue(createAsyncIterable()) } },
-				})
+		it.each([
+			"claude-opus-5",
+			"claude-sonnet-5",
+		])("should send explicit disabled thinking when %s is configured with none", async (modelId) => {
+			const handler = new AnthropicHandler({
+				profile: ApiProfile.create({
+					provider: "anthropic",
+					apiKey: "test-api-key",
+					modelId,
+					anthropic: { reasoning: { enableThinking: false, effort: "none" } },
+				}),
+				mode: "act",
+			})
+			const standardCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				messages: { create: standardCreate },
+				beta: { messages: { _client: {}, create: vi.fn().mockResolvedValue(createAsyncIterable()) } },
+			})
 
-				for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
-				}
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+			}
 
-				const requestBody = standardCreate.mock.calls[0]?.[0] as Record<string, unknown> | undefined
-				expect(requestBody?.thinking).to.deep.equal({ type: "disabled" })
-				expect(requestBody?.output_config).to.equal(undefined)
-			},
-		)
+			const requestBody = standardCreate.mock.calls[0]?.[0] as Record<string, unknown> | undefined
+			expect(requestBody?.thinking).to.deep.equal({ type: "disabled" })
+			expect(requestBody?.output_config).to.equal(undefined)
+		})
 
 		it("should keep Fable 5 adaptive thinking enabled when a stale profile requests none", async () => {
 			const handler = new AnthropicHandler({
@@ -501,6 +574,106 @@ describe("AnthropicHandler", () => {
 			const requestBody = standardCreate.mock.calls[0]?.[0] as Record<string, unknown> | undefined
 			expect(requestBody?.thinking).to.deep.equal({ type: "adaptive" })
 			expect(requestBody?.output_config).to.equal(undefined)
+		})
+
+		it.each([
+			{ configured: "omitted", expected: "omitted" },
+			{ configured: "summarized", expected: "summarized" },
+		])("should send thinking display $expected when the profile selects it", async ({ configured, expected }) => {
+			const handler = new AnthropicHandler({
+				profile: ApiProfile.create({
+					provider: "anthropic",
+					apiKey: "test-api-key",
+					modelId: "claude-fable-5",
+					anthropic: { reasoning: { display: configured } },
+				}),
+				mode: "act",
+			})
+			const standardCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				messages: { create: standardCreate },
+				beta: { messages: { _client: {}, create: vi.fn().mockResolvedValue(createAsyncIterable()) } },
+			})
+
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+			}
+
+			const requestBody = standardCreate.mock.calls[0]?.[0] as Record<string, unknown> | undefined
+			expect(requestBody?.thinking).to.deep.equal({ type: "adaptive", display: expected })
+		})
+
+		it.each([
+			{ display: undefined },
+			{ display: "" },
+			{ display: "none" },
+		])("should omit thinking display when the profile stores $display", async ({ display }) => {
+			const handler = new AnthropicHandler({
+				profile: ApiProfile.create({
+					provider: "anthropic",
+					apiKey: "test-api-key",
+					modelId: "claude-fable-5",
+					anthropic: { reasoning: { display } },
+				}),
+				mode: "act",
+			})
+			const standardCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				messages: { create: standardCreate },
+				beta: { messages: { _client: {}, create: vi.fn().mockResolvedValue(createAsyncIterable()) } },
+			})
+
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+			}
+
+			const requestBody = standardCreate.mock.calls[0]?.[0] as Record<string, unknown> | undefined
+			expect(requestBody?.thinking).to.deep.equal({ type: "adaptive" })
+		})
+
+		it("should send thinking display alongside a manual thinking budget", async () => {
+			const handler = new AnthropicHandler({
+				profile: ApiProfile.create({
+					provider: "anthropic",
+					apiKey: "test-api-key",
+					modelId: "claude-sonnet-4-5",
+					modelInfo: { id: "claude-sonnet-4-5", capabilities: { supportsReasoning: true } },
+					anthropic: { reasoning: { enableThinking: true, thinkingBudget: 2_048, display: "omitted" } },
+				}),
+				mode: "act",
+			})
+			const standardCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				messages: { create: standardCreate },
+				beta: { messages: { _client: {}, create: vi.fn().mockResolvedValue(createAsyncIterable()) } },
+			})
+
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+			}
+
+			const requestBody = standardCreate.mock.calls[0]?.[0] as Record<string, unknown> | undefined
+			expect(requestBody?.thinking).to.deep.equal({ type: "enabled", budget_tokens: 2_048, display: "omitted" })
+		})
+
+		it("should not attach a display to an explicitly disabled thinking config", async () => {
+			const handler = new AnthropicHandler({
+				profile: ApiProfile.create({
+					provider: "anthropic",
+					apiKey: "test-api-key",
+					modelId: "claude-opus-5",
+					anthropic: { reasoning: { enableThinking: false, effort: "none", display: "omitted" } },
+				}),
+				mode: "act",
+			})
+			const standardCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				messages: { create: standardCreate },
+				beta: { messages: { _client: {}, create: vi.fn().mockResolvedValue(createAsyncIterable()) } },
+			})
+
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+			}
+
+			const requestBody = standardCreate.mock.calls[0]?.[0] as Record<string, unknown> | undefined
+			expect(requestBody?.thinking).to.deep.equal({ type: "disabled" })
 		})
 
 		it("should use adaptive thinking and output_config for Claude Opus adaptive models", async () => {

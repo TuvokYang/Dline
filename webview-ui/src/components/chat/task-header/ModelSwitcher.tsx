@@ -1,3 +1,4 @@
+import type { ApiProfile } from "@shared/proto/dline/profile"
 import { CheckIcon, SettingsIcon } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
@@ -116,8 +117,11 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 		onOpenSettings()
 	}
 
-	const handleSelect = (profileName: string) => {
-		const profile = profiles.find((p) => p.name === profileName || `${p.provider}:${p.modelId}` === profileName)
+	// Selection is keyed by stable identity: display names collide across Profiles
+	// (one Profile's name can equal another's `provider:modelId` fallback label),
+	// so a name-based lookup could rebind the wrong entry.
+	const handleSelect = (profileId: string) => {
+		const profile = profiles.find((p) => p.id === profileId)
 		if (!profile) return
 		setOpen(false)
 
@@ -138,25 +142,38 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 		updateSetting("planActSeparateModelsSetting", !planActSeparateModelsSetting)
 	}
 
-	// Check if a profile is selected in current tab
-	const isSelected = (profileName: string): boolean => {
-		if (planActSeparateModelsSetting) {
-			const target = activeTab === "plan" ? planProfileName : actProfileName
-			if (target) return target === profileName
-			return visibleProfiles[0]?.name === profileName
-		}
-		// Unified mode: handleSelect writes same profile to both plan and act,
-		// so only check planProfileName to avoid double-selection when they differ.
-		if (planProfileName) {
-			return planProfileName === profileName
-		}
-		return visibleProfiles[0]?.name === profileName
+	/**
+	 * Report whether one Profile owns the binding shown for the current tab.
+	 *
+	 * The check mirrors `resolveProfileDisplayState`: stable ID first, current
+	 * name only as the legacy fallback. An earlier "first visible entry" default
+	 * could tick a Profile that the header did not display, so an unresolved
+	 * binding now marks nothing as selected.
+	 */
+	const isSelected = (profile: ApiProfile): boolean => {
+		// Unified mode writes the same Profile to both bindings, so reading the plan
+		// binding alone avoids two ticks while the two bindings still differ.
+		const targetId = planActSeparateModelsSetting && activeTab === "act" ? actProfileId : planProfileId
+		const targetName = planActSeparateModelsSetting && activeTab === "act" ? actProfileName : planProfileName
+		if (targetId) return targetId === profile.id
+		if (targetName) return targetName === profile.name || (profile.legacyNames ?? []).includes(targetName)
+		return false
 	}
 
-	// Filter profiles: in unified mode, show all; in separated mode, show profiles used for active tab
+	/**
+	 * List only the Profiles the current conversational scope can actually use.
+	 *
+	 * `usedFor` is the authoritative usage contract, so a Profile reserved for
+	 * subagents or image generation never belongs in the model selector. An empty
+	 * `usedFor` means no usage is enabled, matching `validate.ts`, `ApiOptions`,
+	 * and `SubagentBuilder`; the previous "empty means every mode" reading was the
+	 * only place in the project that inverted it.
+	 */
 	const visibleProfiles = useMemo(() => {
-		if (!planActSeparateModelsSetting) return profiles
-		return profiles.filter((p) => p.usedFor.includes(activeTab) || p.usedFor.length === 0)
+		const scopedModes: ModeTab[] = planActSeparateModelsSetting ? [activeTab] : ["act", "plan"]
+		return profiles.filter(
+			(profile) => profile.enabled !== false && scopedModes.some((mode) => profile.usedFor.includes(mode)),
+		)
 	}, [profiles, planActSeparateModelsSetting, activeTab])
 
 	return (
@@ -290,7 +307,7 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 							) : (
 								visibleProfiles.map((profile) => {
 									const name = profile.name || `${profile.provider}:${profile.modelId}` || "Unnamed"
-									const selected = isSelected(name)
+									const selected = isSelected(profile)
 									const isHovered = hoveredId === profile.id
 
 									// Build capability tooltip from modelInfo
@@ -317,9 +334,9 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 											aria-selected={selected}
 											className="flex items-center px-3 py-2 cursor-pointer transition-colors"
 											key={profile.id}
-											onClick={() => handleSelect(name)}
+											onClick={() => handleSelect(profile.id)}
 											onKeyDown={(e) => {
-												if (e.key === "Enter" || e.key === " ") handleSelect(name)
+												if (e.key === "Enter" || e.key === " ") handleSelect(profile.id)
 											}}
 											onMouseEnter={() => setHoveredId(profile.id)}
 											onMouseLeave={() => setHoveredId(null)}

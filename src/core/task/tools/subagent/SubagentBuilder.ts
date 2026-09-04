@@ -1,6 +1,8 @@
-import { buildApiHandler } from "@core/api"
+import { buildApiHandler, buildApiHandlerFromProfile } from "@core/api"
 import { applyTaskRuntimeOverrides } from "@core/api/runtime-profile"
 import { readApiProfiles } from "@core/controller/file/getApiProfiles"
+import { resolveProfileReference } from "@core/profiles/profile-binding"
+import type { ApiProfile } from "@shared/proto/dline/profile"
 import { resolveProfileReasoningConfig } from "@shared/task-reasoning"
 import { ClineDefaultTool } from "@shared/tools"
 import type { TaskConfig } from "../types/TaskConfig"
@@ -8,6 +10,15 @@ import type { AgentBaseConfig } from "./AgentConfigLoader"
 import { DEFAULT_SUBAGENT_ALLOWED_TOOLS, isDefaultSubagentName } from "./DefaultSubagentConfig"
 
 export type AgentConfig = Partial<AgentBaseConfig>
+
+type SubagentProfileSource = "configured" | "parent_fallback"
+
+interface SubagentProfileSelection {
+	readonly profile: ApiProfile | undefined
+	readonly profileName: string | undefined
+	readonly profileId: string | undefined
+	readonly source: SubagentProfileSource
+}
 
 export const SUBAGENT_DEFAULT_ALLOWED_TOOLS = DEFAULT_SUBAGENT_ALLOWED_TOOLS
 
@@ -43,22 +54,30 @@ export class SubagentBuilder {
 		this.allowedTools = this.resolveAllowedTools(this.agentConfig.tools, !subagentName || isDefaultSubagentName(subagentName))
 
 		const apiConfiguration = this.baseConfig.services.stateManager.getApiConfigurationForTask(this.baseConfig.taskId)
-		const requiresExplicitImageProfile = this.agentConfig.tools?.includes(ClineDefaultTool.GENERATE_IMAGE) === true
-		this.profileName = this.resolveProfile(
+		const profiles = readApiProfiles()
+		const profileSelection = this.resolveProfile(
+			profiles,
 			this.agentConfig.profile,
+			apiConfiguration.actModeProfileId ?? apiConfiguration.actModeProfile,
 			apiConfiguration.actModeProfile,
-			requiresExplicitImageProfile,
+			this.agentConfig.tools?.includes(ClineDefaultTool.GENERATE_IMAGE) === true,
 		)
+		this.profileName = profileSelection.profileName
+		this.profileId = profileSelection.profileId
 		const effectiveApiConfiguration = {
 			...apiConfiguration,
+			actModeProfileId: profileSelection.profileId,
 			actModeProfile: this.profileName,
+			actModeReasoningOverride:
+				profileSelection.source === "configured" ? undefined : apiConfiguration.actModeReasoningOverride,
 			ulid: this.baseConfig.ulid,
 		}
-		const profile = readApiProfiles().find((candidate) => candidate.name === this.profileName)
-		this.profileId = profile?.id
+		const profile = profileSelection.profile
 		const runtimeProfile = profile ? applyTaskRuntimeOverrides(profile, effectiveApiConfiguration, "act") : undefined
 		this.reasoningConfig = resolveProfileReasoningConfig(runtimeProfile)
-		this.apiHandler = buildApiHandler(effectiveApiConfiguration, "act")
+		this.apiHandler = profile
+			? buildApiHandlerFromProfile(effectiveApiConfiguration, "act", profile)
+			: buildApiHandler(effectiveApiConfiguration, "act")
 	}
 
 	getApiHandler(): ReturnType<typeof buildApiHandler> {
@@ -103,30 +122,55 @@ export class SubagentBuilder {
 	/**
 	 * Resolve the effective act profile for a subagent.
 	 *
+	 * @param profiles Catalog Profiles available to the current process.
 	 * @param configuredProfile Optional profile name from subagent YAML.
-	 * @param defaultProfile Act profile used when no valid subagent profile exists.
-	 * @returns Valid subagent profile name or the default act profile.
+	 * @param parentProfileReference Stable ID or legacy name bound to the parent Act mode.
+	 * @param parentProfileName Parent display name retained for the existing invalid-profile error path.
+	 * @param requireExplicitProfile Whether the subagent exposes generate_image and must bind its own Profile.
+	 * @returns Selected Profile snapshot and whether it is an explicit child binding or parent fallback.
 	 */
 	private resolveProfile(
+		profiles: ReturnType<typeof readApiProfiles>,
 		configuredProfile: string | null | undefined,
-		defaultProfile?: string,
+		parentProfileReference: string | undefined,
+		parentProfileName: string | undefined,
 		requireExplicitProfile = false,
-	): string | undefined {
+	): SubagentProfileSelection {
+		const parentResolution = resolveProfileReference(profiles, parentProfileReference)
+		const parentProfile =
+			parentResolution.status === "resolved" && parentResolution.profile.enabled ? parentResolution.profile : undefined
+		const parentFallback: SubagentProfileSelection = {
+			profile: parentProfile,
+			profileName: parentProfile?.name ?? parentProfileName,
+			profileId: parentProfile?.id,
+			source: "parent_fallback",
+		}
 		const profileName = configuredProfile?.trim()
 		if (!profileName) {
+			// Image generation must never inherit parent credentials: without an explicit
+			// binding the subagent has no authorized image source, so fail closed.
 			if (requireExplicitProfile) {
 				throw new Error("Subagents configured with generate_image require an explicit API Profile.")
 			}
-			return defaultProfile
+			return parentFallback
 		}
-		const profile = readApiProfiles().find((candidate) => candidate.name === profileName)
-		if (!profile?.enabled || !profile.usedFor.includes("subagents")) {
+
+		const resolution = resolveProfileReference(profiles, profileName)
+		if (resolution.status !== "resolved") {
 			if (requireExplicitProfile) {
 				throw new Error(`Subagent image Profile '${profileName}' is unavailable or not enabled for subagents.`)
 			}
-			return defaultProfile
+			return parentFallback
 		}
-		return profile.name
+		const profile = resolution.profile
+		if (!profile.enabled || !profile.usedFor.includes("subagents")) {
+			if (requireExplicitProfile) {
+				throw new Error(`Subagent image Profile '${profileName}' is unavailable or not enabled for subagents.`)
+			}
+			return parentFallback
+		}
+
+		return { profile, profileName: profile.name, profileId: profile.id, source: "configured" }
 	}
 
 	/**

@@ -1,6 +1,7 @@
 import * as path from "node:path"
 import type { ToolUse } from "@core/assistant-message"
 import { getPrompt, renderPrompt } from "@core/prompts/i18n"
+import { resolveWorkspacePath } from "@core/workspace"
 import { getReadablePath } from "@utils/path"
 import { HostProvider } from "@/hosts/host-provider"
 import { ClineDefaultTool } from "@/shared/tools"
@@ -8,6 +9,7 @@ import type { ToolResponse } from "../../index"
 import type { IFullyManagedTool } from "../ToolExecutorCoordinator"
 import type { TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
+import { describeLanguageFailure } from "./language-tool-failure"
 
 export class RenameSymbolHandler implements IFullyManagedTool {
 	readonly name = ClineDefaultTool.RENAME
@@ -39,18 +41,19 @@ export class RenameSymbolHandler implements IFullyManagedTool {
 
 	async execute(config: TaskConfig, block: ToolUse): Promise<ToolResponse> {
 		const p = block.params as Record<string, unknown> | undefined
-		const filePath = String(p?.file_path || "")
+		const rawPath = String(p?.file_path || "")
 		const line = Number(p?.line || 0)
 		const character = Number(p?.character || 0)
 		const newName = String(p?.new_name || "")
 		const dryRun = p?.dry_run === true || p?.dry_run === "true"
+		const displayPath = getReadablePath(config.cwd, rawPath)
 		const errMsg = (msg: string) => {
 			config.callbacks
 				.say(
 					"tool",
 					JSON.stringify({
 						tool: "renameSymbol",
-						path: getReadablePath(config.cwd, filePath),
+						path: displayPath,
 						content: msg,
 						operationIsLocatedInWorkspace: true,
 					}),
@@ -62,12 +65,16 @@ export class RenameSymbolHandler implements IFullyManagedTool {
 				.catch(() => {})
 			return msg
 		}
-		if (!filePath || !line || !character || !newName) return errMsg(getPrompt("rename", "missingParams"))
+		if (!rawPath || !line || !character || !newName) return errMsg(getPrompt("rename", "missingParams"))
+
+		// The LSP requires an absolute path; the model may pass a workspace-relative one.
+		const pathResult = resolveWorkspacePath(config, rawPath, "RenameSymbolHandler.execute")
+		const filePath = typeof pathResult === "string" ? pathResult : pathResult.absolutePath
 
 		try {
 			const r = await HostProvider.language.renameSymbol({ filePath, line, character, newName, dryRun })
-			if (!r.hasLspSupport) return errMsg(getPrompt("rename", "noLspSupport"))
-			if (r.errorMessage) return errMsg(renderPrompt("rename", "errorPrefix", { ERROR: r.errorMessage }))
+			const failure = describeLanguageFailure("rename", r, displayPath)
+			if (failure) return errMsg(failure)
 			if (!r.success) return errMsg(getPrompt("rename", "noEdits"))
 
 			// Track all modified files for per-file checkpointing (non-dry-run only)
@@ -110,7 +117,7 @@ export class RenameSymbolHandler implements IFullyManagedTool {
 					"tool",
 					JSON.stringify({
 						tool: "renameSymbol",
-						path: getReadablePath(config.cwd, filePath),
+						path: displayPath,
 						regex: newName,
 						diff,
 						matches: matchEntries,

@@ -56,6 +56,8 @@ export const toolPromptModules = [
 	defineLegacyModule("killCommand", "tools", killCommand),
 	defineLegacyModule("findReferences", "tools", findReferences, {
 		errorPrefix: createRuntimeContract("ERROR"),
+		invalidPath: createRuntimeContract("PATH"),
+		outsideWorkspace: createRuntimeContract("PATH"),
 	}),
 	defineLegacyModule("generateExplanation", "tools", generateExplanation),
 	defineLegacyModule("generateImage", "tools", generateImage),
@@ -77,6 +79,8 @@ export const toolPromptModules = [
 	}),
 	defineLegacyModule("rename", "tools", rename, {
 		errorPrefix: createRuntimeContract("ERROR"),
+		invalidPath: createRuntimeContract("PATH"),
+		outsideWorkspace: createRuntimeContract("PATH"),
 		dryRunHeader: createRuntimeContract("OLD_NAME", "NEW_NAME", "FILES", "CHANGES"),
 		successOutput: createRuntimeContract("OLD_NAME", "NEW_NAME", "FILES", "CHANGES"),
 		fileEditLine: createRuntimeContract("FILE", "LINE", "CHARACTER", "ORIGINAL", "NEW"),

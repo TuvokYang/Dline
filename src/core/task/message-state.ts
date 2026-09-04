@@ -6,7 +6,7 @@ import { combineApiRequests } from "@/shared/combineApiRequests"
 import { combineCommandSequences } from "@/shared/combineCommandSequences"
 import { ClineMessage } from "@/shared/ExtensionMessage"
 import { getApiMetrics } from "@/shared/getApiMetrics"
-import { HistoryItem } from "@/shared/HistoryItem"
+import { HistoryItem, summarizeHistoryTaskText } from "@/shared/HistoryItem"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { Logger } from "@/shared/services/Logger"
 import { getCwd, getDesktopDir } from "@/utils/path"
@@ -167,7 +167,11 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 			// Read the task header from the in-memory message list instead of
 			// re-reading ui_messages.jsonl on every history-only update: the disk
 			// path bypasses the jsonl cache and does a full read + JSON.parse.
-			const taskText = this.clineMessages.find((m) => m.say === "task")?.text ?? ""
+			// History entries are list labels: the panel title, the history row,
+			// and search all use short text, while the authoritative task text
+			// stays in ui_messages.jsonl. Storing it verbatim here made the one
+			// global taskHistory key grow without bound.
+			const taskText = summarizeHistoryTaskText(this.clineMessages.find((m) => m.say === "task")?.text ?? "")
 			const lastRelevantIndex = findLastIndex(
 				persisted,
 				(message) => !(message.ask === "resume_task" || message.ask === "resume_completed_task"),

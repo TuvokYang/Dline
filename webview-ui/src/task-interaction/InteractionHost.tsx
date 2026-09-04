@@ -41,6 +41,7 @@ export interface InteractionHostProps {
 	draft?: InteractionDraft
 	showTimeline?: boolean
 	onDraftAccepted?: (settlement: AcceptedInteractionSettlement) => void
+	onDraftRejected?: (settlement: AcceptedInteractionSettlement) => void
 	onSuccessorAccepted?: (transfer: PendingSuccessorDraftTransfer) => void
 }
 
@@ -79,6 +80,7 @@ export function InteractionHost({
 	draft = EMPTY_DRAFT,
 	showTimeline = true,
 	onDraftAccepted,
+	onDraftRejected,
 	onSuccessorAccepted,
 }: InteractionHostProps) {
 	const [selection, setSelection] = useState<string[]>([])
@@ -119,6 +121,7 @@ export function InteractionHost({
 					dispatchTaskAction={taskActionDispatcher}
 					draft={draft}
 					onDraftAccepted={onDraftAccepted}
+					onDraftRejected={onDraftRejected}
 					onSuccessorAccepted={onSuccessorAccepted}
 					successorContext={successorContext}
 					view={taskOnlyView}
@@ -133,6 +136,7 @@ export function InteractionHost({
 						dispatchTaskAction={taskActionDispatcher}
 						draft={draft}
 						onDraftAccepted={onDraftAccepted}
+						onDraftRejected={onDraftRejected}
 						onSuccessorAccepted={onSuccessorAccepted}
 						selection={{ values: selection }}
 						successorContext={successorContext}
@@ -145,6 +149,7 @@ export function InteractionHost({
 					dispatchTaskAction={taskActionDispatcher}
 					draft={draft}
 					onDraftAccepted={onDraftAccepted}
+					onDraftRejected={onDraftRejected}
 					onSuccessorAccepted={onSuccessorAccepted}
 					successorContext={successorContext}
 					view={view}

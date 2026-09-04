@@ -117,8 +117,60 @@ describe("resolveServerToolPlan", () => {
 		const projection = projectServerTools(hostedPlan(ApiFormat.ANTHROPIC_CHAT))
 
 		expect(projection).toEqual({
-			declarations: [{ type: "web_search_20260209", name: "web_search" }],
+			declarations: [{ type: "web_search_20260318", name: "web_search", allowed_callers: ["direct"] }],
 		})
+	})
+
+	it("declares the sandbox beside web search, with neither depending on the other", () => {
+		// Both are independent hosted capabilities. Web search carries no
+		// allowed_callers, so a search never spends the sandbox's call budget.
+		const plan = resolveWebSearchRoutingPlan({
+			enabled: true,
+			mode: WebSearchMode.WEB_SEARCH_MODE_AUTO,
+			modelInfo: { capabilities: { tools: [ServerTool.WEB_SEARCH, ServerTool.CODE_EXECUTION] } },
+			selectedApiFormat: ApiFormat.ANTHROPIC_CHAT,
+			localAvailable: true,
+			remoteAdapterAvailable: true,
+		})
+
+		expect(plan.serverTools).toEqual([ServerTool.WEB_SEARCH, ServerTool.CODE_EXECUTION])
+		expect(projectServerTools(plan)).toEqual({
+			declarations: [
+				{ type: "web_search_20260318", name: "web_search", allowed_callers: ["direct"] },
+				{ type: "code_execution_20260120", name: "code_execution", allowed_callers: ["direct"] },
+			],
+		})
+	})
+
+	it("declares the same standalone search version when the model omits the sandbox", () => {
+		const plan = resolveWebSearchRoutingPlan({
+			enabled: true,
+			mode: WebSearchMode.WEB_SEARCH_MODE_AUTO,
+			modelInfo: { capabilities: { tools: [ServerTool.WEB_SEARCH] } },
+			selectedApiFormat: ApiFormat.ANTHROPIC_CHAT,
+			localAvailable: true,
+			remoteAdapterAvailable: true,
+		})
+
+		expect(plan.serverTools).toEqual([ServerTool.WEB_SEARCH])
+		expect(projectServerTools(plan)).toEqual({
+			declarations: [{ type: "web_search_20260318", name: "web_search", allowed_callers: ["direct"] }],
+		})
+	})
+
+	it("never routes the sandbox on its own when search is not hosted", () => {
+		const plan = resolveWebSearchRoutingPlan({
+			enabled: true,
+			mode: WebSearchMode.WEB_SEARCH_MODE_FORCE_LOCAL,
+			modelInfo: { capabilities: { tools: [ServerTool.WEB_SEARCH, ServerTool.CODE_EXECUTION] } },
+			selectedApiFormat: ApiFormat.ANTHROPIC_CHAT,
+			localAvailable: true,
+			remoteAdapterAvailable: true,
+		})
+
+		expect(plan.route).toBe("local")
+		expect(plan.serverTools).toEqual([])
+		expect(projectServerTools(plan)).toEqual({ declarations: [] })
 	})
 
 	it("does not project web search for OpenAI Chat without a protocol contract", () => {

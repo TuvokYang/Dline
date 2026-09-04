@@ -3,8 +3,7 @@ import { OllamaProviderConfig } from "@shared/proto/dline/provider/ollama"
 import { mergeCapabilities } from "@shared/providers/effective-model-info"
 // Mode import removed — no longer needed in profile-driven architecture
 import { VSCodeLink } from "@vscode/webview-ui-toolkit/react"
-import { useCallback, useEffect, useState } from "react"
-import { useInterval } from "react-use"
+import { useCallback, useMemo } from "react"
 import UseCustomPromptCheckbox from "@/components/settings/UseCustomPromptCheckbox"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { ModelsServiceClient } from "@/services/grpc-client"
@@ -16,6 +15,7 @@ import { ProfileNotice } from "../profile-ui"
 import { useApiConfigurationHandlers } from "../utils/useApiConfigurationHandlers"
 import { getModelCompatibilityNotice } from "./modelCompatibilityNotice"
 import type { ApiProfile } from "./ProviderProfile"
+import { useModelProbe } from "./useModelProbe"
 
 interface OllamaProviderProps {
 	showModelOptions: boolean
@@ -30,7 +30,6 @@ export const OllamaProvider = ({ showModelOptions, isPopup: _isPopup, profile, o
 	const { handleFieldChange } = useApiConfigurationHandlers()
 	const pc = profile.ollama ?? OllamaProviderConfig.create()
 
-	const [ollamaModels, setOllamaModels] = useState<string[]>([])
 	const baseUrl = profile.baseUrl || ""
 	const contextWindow = Number.parseInt(pc.ollamaApiOptionsCtxNum || "32768", 10)
 	const compatibilityCapabilities = mergeCapabilities(profile.modelInfo?.capabilities, {
@@ -39,19 +38,23 @@ export const OllamaProvider = ({ showModelOptions, isPopup: _isPopup, profile, o
 	})
 	const compatibilityNotice = getModelCompatibilityNotice({ capabilities: compatibilityCapabilities })
 
-	const requestOllamaModels = useCallback(async () => {
-		try {
-			const response = await ModelsServiceClient.getOllamaModels(StringRequest.create({ value: baseUrl }))
-			if (response?.values) setOllamaModels(response.values)
-		} catch {
-			setOllamaModels([])
-		}
+	const probeOllamaModels = useCallback(async () => {
+		const response = await ModelsServiceClient.getOllamaModels(StringRequest.create({ value: baseUrl }))
+		return response?.values ?? []
 	}, [baseUrl])
 
-	useEffect(() => {
-		requestOllamaModels()
-	}, [requestOllamaModels])
-	useInterval(requestOllamaModels, 2000)
+	const { models: probedModels, refresh: refreshOllamaModels } = useModelProbe({
+		enabled: true,
+		probe: probeOllamaModels,
+		selectedModelId: profile.modelId || undefined,
+	})
+
+	// The picker takes plain ids; the current selection is excluded so its
+	// placeholder still reports when discovery returned nothing.
+	const ollamaModels = useMemo(
+		() => Object.keys(probedModels).filter((modelId) => modelId !== profile.modelId),
+		[probedModels, profile.modelId],
+	)
 
 	return (
 		<div className="flex flex-col gap-2">
@@ -75,6 +78,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup: _isPopup, profile, o
 			</label>
 			<OllamaModelPicker
 				ollamaModels={ollamaModels}
+				onFocus={refreshOllamaModels}
 				onModelChange={(modelId) => onUpdate({ modelId })}
 				placeholder={ollamaModels.length > 0 ? "Search and select a model..." : "e.g. llama3.1"}
 				selectedModelId={profile.modelId || ""}

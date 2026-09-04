@@ -43,10 +43,10 @@ describe("Controller Profile switch integration", () => {
 		expect(postStateToWebview).toHaveBeenCalledWith({ immediate: true })
 		expect(request).not.toHaveBeenCalled()
 	})
-	it("uses the captured draft for target projection and target-Profile compaction", async () => {
+	it("confirms against the occupied context window and adopts the target without compacting", async () => {
 		const targetApi = { getModel: vi.fn() } as unknown as ApiHandler
 		const draft = { message: "keep this draft", images: ["image"], files: ["file"] }
-		const projectProfileSwitchTargetUsage = vi.fn(async () => 128_001)
+		const getOccupiedContextTokens = vi.fn(() => 128_001)
 		const compact = vi.fn(async () => "completed" as const)
 		const release = vi.fn()
 		const commitProfileBindings = vi.fn(async () => undefined)
@@ -54,10 +54,10 @@ describe("Controller Profile switch integration", () => {
 			task: {
 				taskId: "task-1",
 				getMode: () => "act" as const,
-				projectProfileSwitchTargetUsage,
+				getOccupiedContextTokens,
 				commitProfileBindings,
 			},
-			contextTransitionEngine: new ContextTransitionEngine({
+			profileTransitionEngine: new ContextTransitionEngine({
 				lease: new ContextTransitionLease(),
 				compaction: {
 					compact,
@@ -94,27 +94,66 @@ describe("Controller Profile switch integration", () => {
 		})
 
 		expect(request).toEqual({ status: "confirmation_required", operationId: "profile-operation-1" })
-		expect(projectProfileSwitchTargetUsage).toHaveBeenCalledWith(targetApi, "act", draft)
+		expect(getOccupiedContextTokens).toHaveBeenCalledOnce()
 
 		await expect(coordinator.confirm("profile-operation-1")).resolves.toEqual({
 			status: "switched",
 			operationId: "profile-operation-1",
 		})
-		expect(compact).toHaveBeenCalledWith({
-			trigger: "profile_switch",
-			operationId: "profile-operation-1",
-			targetApi: targetApi,
-			targetMode: "act",
-			chatContent: draft,
-			transition: expect.objectContaining({
-				kind: "profile_switch",
-				chatContent: draft,
-				source: { mode: "act", profile: "target-profile" },
-				target: { mode: "act", profile: "target-profile", contextWindow: 128_000 },
-			}),
-		})
+		expect(compact).not.toHaveBeenCalled()
+		expect(release).not.toHaveBeenCalled()
 		expect(commitProfileBindings).toHaveBeenCalledWith({ profileId: "target-id", profileName: "target-profile" }, ["act"])
-		expect(commitProfileBindings.mock.invocationCallOrder[0]).toBeLessThan(compact.mock.invocationCallOrder[0])
-		expect(release).toHaveBeenCalledWith("profile-operation-1")
+	})
+
+	it("switches Profiles while a Mode transition still owns its own transaction", async () => {
+		const commitProfileBindings = vi.fn(async () => undefined)
+		const fakeController = {
+			task: {
+				taskId: "task-1",
+				getMode: () => "act" as const,
+				getOccupiedContextTokens: () => 0,
+				commitProfileBindings,
+				compactForTransition: vi.fn(async () => "completed" as const),
+				completeContextCompaction: vi.fn(async () => undefined),
+				abortContextCompaction: vi.fn(async () => undefined),
+			},
+			resolveTaskProfileName: vi.fn(() => "source-profile"),
+			// An unresolved target degrades to a direct switch, which is exactly the
+			// path that must stay reachable while another transition is in flight.
+			resolveProfileTarget: vi.fn(() => undefined),
+			validateProfileSwitch: vi.fn(() => true),
+			validateModeSwitch: vi.fn(() => true),
+			resolveModeProfile: vi.fn(() => undefined),
+			postStateToWebview: vi.fn(async () => undefined),
+		}
+
+		const createContextTransitionEngine = Reflect.get(Controller.prototype, "createContextTransitionEngine") as (
+			this: typeof fakeController,
+		) => ContextTransitionEngine
+		const createProfileSwitchCoordinator = Reflect.get(Controller.prototype, "createProfileSwitchCoordinator") as (
+			this: typeof fakeController,
+		) => ProfileSwitchCoordinator
+
+		const modeEngine = createContextTransitionEngine.call(fakeController)
+		const profileEngine = createContextTransitionEngine.call(fakeController)
+		Object.assign(fakeController, {
+			contextTransitionEngine: modeEngine,
+			profileTransitionEngine: profileEngine,
+		})
+		const coordinator = createProfileSwitchCoordinator.call(fakeController)
+
+		// Occupy the Mode transaction the way an unanswered confirmation would.
+		const modeDeps = Reflect.get(modeEngine, "deps") as { lease: ContextTransitionLease }
+		expect(modeDeps.lease.acquire({ kind: "mode", operationId: "mode-operation-1", taskId: "task-1" })).toBe(true)
+
+		const result = await coordinator.request({
+			taskId: "task-1",
+			targetProfileId: "target-id",
+			targetProfile: "target-profile",
+			targetModes: ["act"],
+		})
+
+		expect(result.status).toBe("switched")
+		expect(commitProfileBindings).toHaveBeenCalledWith({ profileId: "target-id", profileName: "target-profile" }, ["act"])
 	})
 })

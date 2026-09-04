@@ -3,6 +3,7 @@ import fs from "fs/promises"
 import * as path from "path"
 import { ModelRegistry } from "./ModelRegistry"
 import { getProviderConfigFileName } from "./provider-config-file"
+import { type ProviderModelReconciliationMode, reconcileProviderModels } from "./provider-model-reconciliation"
 
 export interface PersistProviderCatalogOptions {
 	providerId: string
@@ -11,6 +12,12 @@ export interface PersistProviderCatalogOptions {
 	billingMode: string
 	models: Record<string, ModelInfo>
 	preferredDefaultModelId?: string
+	/**
+	 * How the incoming catalog combines with the stored one. Vendor-derived
+	 * catalogs replace it outright; listings that only supplement local metadata
+	 * should overlay instead. Defaults to `replace` to preserve existing callers.
+	 */
+	reconciliationMode?: ProviderModelReconciliationMode
 }
 
 /** Serialize provider catalogs with stable, human-editable formatting. */
@@ -23,12 +30,17 @@ export async function persistProviderCatalog(options: PersistProviderCatalogOpti
 	const registry = ModelRegistry.getInstance()
 	await registry.waitForDeferredProviders()
 	const existing = registry.getProviderModels(options.providerId)
-	const models = Object.fromEntries(
+	const incoming = Object.fromEntries(
 		Object.entries(options.models).map(([modelId, model]) => [
 			modelId,
 			{ ...model, id: modelId, name: model.name || modelId, userDefined: false },
 		]),
 	)
+	const mode = options.reconciliationMode ?? "replace"
+	const models =
+		mode === "replace" || !existing
+			? incoming
+			: reconcileProviderModels({ ...existing, models: incoming }, existing, mode).models
 	const modelIds = Object.keys(models).sort((left, right) => left.localeCompare(right))
 	const defaultModelId =
 		(existing?.defaultModelId && models[existing.defaultModelId] ? existing.defaultModelId : undefined) ??

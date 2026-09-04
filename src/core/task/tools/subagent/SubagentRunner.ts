@@ -36,7 +36,7 @@ import {
 } from "@/core/context/context-management/context-window-utils"
 import { HostRegistryInfo } from "@/registry"
 import { ClineError, ClineErrorType } from "@/services/error"
-import { ApiFormat } from "@/shared/proto/dline/models/metadata"
+import { ApiFormat, ServerTool } from "@/shared/proto/dline/models/metadata"
 import { calculateApiCostAnthropic } from "@/utils/cost"
 import { isNativeToolCallingConfig, isNextGenModelFamily } from "@/utils/model-utils"
 import { TaskState } from "../../TaskState"
@@ -238,6 +238,39 @@ function formatToolCallPreview(toolName: string, params: Partial<Record<string, 
 		.join(", ")
 
 	return `${toolName}(${args})`
+}
+
+/**
+ * Decide whether a Provider chunk already produced output that a retry cannot replay.
+ *
+ * Providers emit scaffolding before any answer: Anthropic adaptive thinking opens a
+ * thinking block and streams `signature_delta` with empty reasoning text, and both
+ * Anthropic and Codex emit standalone separators for subsequent text blocks. None of
+ * that is observable to the caller, and reasoning is never appended to the subagent
+ * conversation, so replaying an attempt that only produced scaffolding is safe.
+ *
+ * Treating every non-usage chunk as observable disabled the whole backoff sequence for
+ * adaptive-thinking models, because the scaffolding always precedes the failure.
+ */
+function producesUnreplayableOutput(chunk: ApiProviderStreamChunk): boolean {
+	switch (chunk.type) {
+		// Attempt-local accounting; already buffered and replayed by the caller.
+		case "usage":
+			return false
+		// Forwarded to progress only and never written back into the conversation.
+		case "reasoning":
+			return false
+		// Whitespace-only text is a block separator, not an answer.
+		case "text":
+			return (chunk.text ?? "").trim().length > 0
+		// A hosted tool lifecycle is observable from its first phase: the started event is
+		// already forwarded to progress and counted in the tool-call stats, so replaying the
+		// attempt would duplicate both the rendered row and the count.
+		case "server_tool":
+			return true
+		default:
+			return true
+	}
 }
 
 function waitForSubagentRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
@@ -735,16 +768,19 @@ export class SubagentRunner {
 						countedHostedServerToolIds.add(update.dlineTid)
 						stats.toolCalls += 1
 					}
+					// Report the tool that actually ran: a hardcoded name would attribute
+					// sandbox work to web search in progress output.
+					const toolName = update.tool === ServerTool.CODE_EXECUTION ? "code_execution" : "web_search"
 					onProgress({
 						stats: { ...stats },
-						latestToolCall: "web_search",
+						latestToolCall: toolName,
 						event:
 							update.status === "completed" || update.status === "failed"
 								? {
 										kind: "tool_result",
 										phase: "final",
 										toolCallId: update.dlineTid,
-										toolName: "web_search",
+										toolName,
 										toolStatus: update.status,
 										error: update.error,
 									}
@@ -752,7 +788,7 @@ export class SubagentRunner {
 										kind: "tool_call",
 										phase: "delta",
 										toolCallId: update.dlineTid,
-										toolName: "web_search",
+										toolName,
 										toolStatus: "started",
 									},
 					})
@@ -1452,7 +1488,7 @@ export class SubagentRunner {
 			const stream = providerRequestRound?.bindAttempt(providerStream, attempt - 1) ?? providerStream
 			const iterator = stream[Symbol.asyncIterator]()
 			const bufferedUsageChunks: Array<Extract<ApiProviderStreamChunk, { type: "usage" }>> = []
-			let didYieldSemanticChunk = false
+			let didYieldUnreplayableOutput = false
 
 			try {
 				while (true) {
@@ -1465,8 +1501,15 @@ export class SubagentRunner {
 						bufferedUsageChunks.push(nextChunk.value)
 						continue
 					}
+					if (!producesUnreplayableOutput(nextChunk.value)) {
+						// Content-free scaffolding: forward it, but keep the attempt replayable.
+						for (const usageChunk of bufferedUsageChunks) yield usageChunk
+						bufferedUsageChunks.length = 0
+						yield nextChunk.value
+						continue
+					}
 
-					didYieldSemanticChunk = true
+					didYieldUnreplayableOutput = true
 					for (const usageChunk of bufferedUsageChunks) yield usageChunk
 					yield nextChunk.value
 					yield* { [Symbol.asyncIterator]: () => iterator }
@@ -1475,9 +1518,9 @@ export class SubagentRunner {
 			} catch (error) {
 				if (this.finishRequested && !this.shouldAbort()) return
 
-				// Usage-only prefixes are attempt-local accounting and remain replayable.
-				// Once semantic output is observable, replay would duplicate content or tool lifecycles.
-				if (didYieldSemanticChunk) {
+				// Usage and content-free scaffolding remain replayable.
+				// Once observable output exists, replay would duplicate content or tool lifecycles.
+				if (didYieldUnreplayableOutput) {
 					throw error
 				}
 

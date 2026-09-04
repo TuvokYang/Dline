@@ -1,10 +1,7 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import type { BetaRawMessageStreamEvent } from "@anthropic-ai/sdk/resources/beta/messages/messages"
-import {
-	Tool as AnthropicTool,
-	type ToolUnion as AnthropicToolUnion,
-	type WebSearchTool20260209,
-} from "@anthropic-ai/sdk/resources/messages/messages"
+import type { CodeExecutionTool20260120, WebSearchTool20260318 } from "@anthropic-ai/sdk/resources/messages/messages"
+import { Tool as AnthropicTool, type ToolUnion as AnthropicToolUnion } from "@anthropic-ai/sdk/resources/messages/messages"
 import type { ChatCompletionTool as OpenAITool } from "openai/resources/chat/completions"
 import { ServerTool } from "@/shared/proto/dline/models/metadata"
 import { OutputLimitExceededError } from "../stream/OutputLimitExceededError"
@@ -12,14 +9,80 @@ import { ApiStream } from "../transform/stream"
 
 type AnthropicMessagesStreamEvent = Anthropic.RawMessageStreamEvent | BetaRawMessageStreamEvent
 
-const ANTHROPIC_WEB_SEARCH_TOOL = {
-	type: "web_search_20260209",
+/**
+ * Callers permitted to invoke the hosted tools below.
+ *
+ * `direct` means the model itself. Stating it explicitly keeps the request
+ * independent of whatever the API defaults to, and rules out the sandbox
+ * invoking web search on the model's behalf, which would charge every search
+ * against the sandbox's per-turn execution budget.
+ */
+const directCallerOnly = (): ["direct"] => ["direct"]
+
+/** Hosted web search, invoked by the model rather than through the sandbox. */
+const anthropicWebSearchTool = (): WebSearchTool20260318 => ({
+	type: "web_search_20260318",
 	name: "web_search",
-} satisfies WebSearchTool20260209
+	allowed_callers: directCallerOnly(),
+})
+
+/** Provider-run sandbox, declared alongside web search rather than under it. */
+const anthropicCodeExecutionTool = (): CodeExecutionTool20260120 => ({
+	type: "code_execution_20260120",
+	name: "code_execution",
+	allowed_callers: directCallerOnly(),
+})
 
 function getServerToolUsage(usage: { server_tool_use?: { web_search_requests?: number } | null }) {
 	const webSearchRequests = usage.server_tool_use?.web_search_requests
 	return typeof webSearchRequests === "number" ? { webSearchRequests } : undefined
+}
+
+/**
+ * Hosted tool names this adapter maps onto a Dline server-tool lifecycle.
+ *
+ * The sandbox reports itself under three names depending on which surface the
+ * model used, and each one closes with its own result block type below. Missing
+ * any of them strands the call until the response ends.
+ */
+const SERVER_TOOL_BY_PROVIDER_NAME: Readonly<Record<string, ServerTool>> = {
+	web_search: ServerTool.WEB_SEARCH,
+	code_execution: ServerTool.CODE_EXECUTION,
+	bash_code_execution: ServerTool.CODE_EXECUTION,
+	text_editor_code_execution: ServerTool.CODE_EXECUTION,
+}
+
+/** Result block types that terminate a hosted sandbox call. */
+const CODE_EXECUTION_RESULT_BLOCK_TYPES = new Set([
+	"code_execution_tool_result",
+	"bash_code_execution_tool_result",
+	"text_editor_code_execution_tool_result",
+])
+
+/** Every sandbox surface reports failure with its own `*_error` content type. */
+function isCodeExecutionError(result: unknown): boolean {
+	return (
+		typeof result === "object" &&
+		result !== null &&
+		typeof (result as { type?: unknown }).type === "string" &&
+		(result as { type: string }).type.endsWith("_tool_result_error")
+	)
+}
+
+/**
+ * A call issued by the sandbox rather than by the model.
+ *
+ * Filtering web search runs nested inside code execution, and its own result block
+ * is withheld when the request excludes raw results. Such a call is therefore
+ * reported through its owning sandbox call instead of as a lifecycle of its own.
+ */
+function isSandboxIssuedCall(caller: unknown): boolean {
+	return (
+		typeof caller === "object" &&
+		caller !== null &&
+		typeof (caller as { type?: unknown }).type === "string" &&
+		(caller as { type: string }).type !== "direct"
+	)
 }
 
 /** Merge resolved hosted declarations with local Anthropic tools without exposing duplicate web search mechanisms. */
@@ -33,7 +96,10 @@ export function mergeAnthropicServerTools(
 		.map((tool) => ({ ...tool }))
 
 	if (hostedWebSearch) {
-		merged.push({ ...ANTHROPIC_WEB_SEARCH_TOOL })
+		merged.push(anthropicWebSearchTool())
+	}
+	if (serverTools?.includes(ServerTool.CODE_EXECUTION) === true) {
+		merged.push(anthropicCodeExecutionTool())
 	}
 
 	return merged.length > 0 ? merged : undefined
@@ -102,25 +168,30 @@ export async function* handleAnthropicMessagesApiStreamResponse(stream: AsyncIte
 							lastStartedToolCall.arguments = ""
 						}
 						break
-					case "server_tool_use":
-						if (chunk.content_block.name === "web_search") {
-							startedServerToolCallIds.add(chunk.content_block.id)
-							lastStartedToolCall.id = ""
-							lastStartedToolCall.name = ""
-							lastStartedToolCall.arguments = ""
-							activeServerToolCall.id = chunk.content_block.id
-							activeServerToolCall.name = chunk.content_block.name
-							activeServerToolCall.arguments = ""
-							activeServerToolCall.input = chunk.content_block.input
-							yield {
-								type: "server_tool",
-								function_id: chunk.content_block.id,
-								tool: ServerTool.WEB_SEARCH,
-								phase: "started",
-								input: chunk.content_block.input,
-							}
+					case "server_tool_use": {
+						const startedTool = SERVER_TOOL_BY_PROVIDER_NAME[chunk.content_block.name]
+						// A nested call has no result block of its own to close it, so opening a
+						// lifecycle here would leave the UI showing work that never finishes.
+						if (startedTool === undefined || isSandboxIssuedCall(chunk.content_block.caller)) {
+							break
+						}
+						startedServerToolCallIds.add(chunk.content_block.id)
+						lastStartedToolCall.id = ""
+						lastStartedToolCall.name = ""
+						lastStartedToolCall.arguments = ""
+						activeServerToolCall.id = chunk.content_block.id
+						activeServerToolCall.name = chunk.content_block.name
+						activeServerToolCall.arguments = ""
+						activeServerToolCall.input = chunk.content_block.input
+						yield {
+							type: "server_tool",
+							function_id: chunk.content_block.id,
+							tool: startedTool,
+							phase: "started",
+							input: chunk.content_block.input,
 						}
 						break
+					}
 					case "web_search_tool_result": {
 						if (!startedServerToolCallIds.delete(chunk.content_block.tool_use_id)) break
 						const result = chunk.content_block.content
@@ -129,6 +200,21 @@ export async function* handleAnthropicMessagesApiStreamResponse(stream: AsyncIte
 							type: "server_tool",
 							function_id: chunk.content_block.tool_use_id,
 							tool: ServerTool.WEB_SEARCH,
+							phase: failed ? "failed" : "completed",
+							...(failed ? { error: result } : { result }),
+						}
+						break
+					}
+					case "code_execution_tool_result":
+					case "bash_code_execution_tool_result":
+					case "text_editor_code_execution_tool_result": {
+						if (!startedServerToolCallIds.delete(chunk.content_block.tool_use_id)) break
+						const result = chunk.content_block.content
+						const failed = isCodeExecutionError(result)
+						yield {
+							type: "server_tool",
+							function_id: chunk.content_block.tool_use_id,
+							tool: ServerTool.CODE_EXECUTION,
 							phase: failed ? "failed" : "completed",
 							...(failed ? { error: result } : { result }),
 						}
@@ -190,7 +276,8 @@ export async function* handleAnthropicMessagesApiStreamResponse(stream: AsyncIte
 				}
 				break
 			case "content_block_stop": {
-				if (activeServerToolCall.id && activeServerToolCall.name === "web_search" && activeServerToolCall.arguments) {
+				const activeTool = SERVER_TOOL_BY_PROVIDER_NAME[activeServerToolCall.name]
+				if (activeServerToolCall.id && activeTool !== undefined && activeServerToolCall.arguments) {
 					try {
 						const streamedInput = JSON.parse(activeServerToolCall.arguments) as unknown
 						const initialInput = activeServerToolCall.input
@@ -206,8 +293,8 @@ export async function* handleAnthropicMessagesApiStreamResponse(stream: AsyncIte
 						yield {
 							type: "server_tool",
 							function_id: activeServerToolCall.id,
-							tool: ServerTool.WEB_SEARCH,
-							phase: "searching",
+							tool: activeTool,
+							phase: activeTool === ServerTool.WEB_SEARCH ? "searching" : "in_progress",
 							input,
 						}
 					} catch {

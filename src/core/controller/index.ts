@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
 import type { Anthropic } from "@anthropic-ai/sdk"
 import { accountUsageCoordinator } from "@core/account-usage/AccountUsageCoordinator"
-import { AccountUsage, buildApiHandler } from "@core/api"
+import { type AccountUsage, type ApiHandler, buildApiHandler } from "@core/api"
 import { getProfileModelInfo } from "@core/api/model-info"
 import { createGlobalConfigurationSnapshot, type GlobalConfigurationSnapshot } from "@core/configuration/GlobalConfiguration"
 import { GlobalConfigurationManager, type GlobalConfigurationResult } from "@core/configuration/GlobalConfigurationManager"
@@ -10,7 +10,7 @@ import { ContextTransitionEngine } from "@core/controller/context-transition/Con
 import { ContextTransitionLease } from "@core/controller/context-transition/ContextTransitionLease"
 import { ModeTransitionPolicy } from "@core/controller/context-transition/policies/ModeTransitionPolicy"
 import { ProfileTransitionPolicy } from "@core/controller/context-transition/policies/ProfileTransitionPolicy"
-import { findEnabledProfileByName, findEnabledProfiles, readApiProfiles } from "@core/controller/file/getApiProfiles"
+import { findEnabledProfiles, readApiProfiles } from "@core/controller/file/getApiProfiles"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import { IgnoreController } from "@core/ignore/IgnoreController"
 import { TaskLockService } from "@core/locks/TaskLockService"
@@ -25,6 +25,7 @@ import { detectWorkspaceRoots } from "@core/workspace/detection"
 import { setupWorkspaceManager } from "@core/workspace/setup"
 import type { WorkspaceRootManager } from "@core/workspace/WorkspaceRootManager"
 import { cleanupLegacyCheckpoints } from "@integrations/checkpoints/CheckpointMigration"
+import { type OpenAiCodexRuntimeMutationEvent, openAiCodexOAuthManager } from "@integrations/openai-codex/oauth"
 import { ClineAccountService } from "@services/account/ClineAccountService"
 import { McpHub } from "@services/mcp/McpHub"
 import type { ModelInfo } from "@shared/api"
@@ -104,7 +105,9 @@ import { getClineOnboardingModels } from "./models/getClineOnboardingModels"
 import { appendClineStealthModels } from "./models/refreshOpenRouterModels"
 import { ProfileSwitchCoordinator } from "./profile-switch/ProfileSwitchCoordinator"
 import type { ProfileSwitchOperation, ResolvedProfileTarget } from "./profile-switch/types"
+import { projectFocusChainHistory } from "./state/focusChainHistoryProjection"
 import { cleanupStateSubscriptions, sendAccountUsageUpdate, sendStateUpdate } from "./state/subscribeToState"
+import { projectTaskHistory } from "./state/taskHistoryProjection"
 import { prepareHistoryTaskForDisplay, projectHistoryPreparingView } from "./task/history-task-readiness"
 import { startTaskLifecycle } from "./task/task-start-lifecycle"
 import { sendChatButtonClickedEvent } from "./ui/subscribeToChatButtonClicked"
@@ -179,6 +182,16 @@ export class Controller {
 	private readonly taskHistoryProjectionMutex = new Mutex()
 
 	private readonly contextTransitionEngine: ContextTransitionEngine
+	/**
+	 * Own the Profile transaction separately from the Mode transaction.
+	 *
+	 * Both engines hold a single-slot `ContextTransitionLease`. Sharing one engine
+	 * meant a Mode compaction, or a Profile notice left unanswered by a reloaded
+	 * webview, pinned that slot and made every later Profile switch report
+	 * `in_progress` forever. A Profile switch never compacts, so it needs no
+	 * mutual exclusion with Mode and must never be blocked by one.
+	 */
+	private readonly profileTransitionEngine: ContextTransitionEngine
 	private readonly modeSwitchCoordinator: ModeSwitchCoordinator
 	private readonly profileSwitchCoordinator: ProfileSwitchCoordinator
 	private nextStateRevision = 0
@@ -315,6 +328,7 @@ export class Controller {
 	private remoteConfigTimer?: NodeJS.Timeout
 	// Timer for periodic account usage polling
 	private accountUsageTimer?: NodeJS.Timeout
+	private accountUsageHandler?: ApiHandler
 	private accountUsagePollGeneration = 0
 	private accountUsagePolling = false
 	private accountUsagePollingEnabled = true
@@ -352,6 +366,7 @@ export class Controller {
 	// state-change notifications so closed windows don't keep receiving them.
 	private stateManagerCallbacksDispose?: () => void
 	private mcpPromptCatalogDispose?: () => void
+	private openAiCodexRuntimeMutationDispose?: () => void
 
 	/** Public getter for account usage data, used by subscribeToState/getLatestState. */
 	getAccountUsage(): AccountUsage | undefined {
@@ -411,6 +426,11 @@ export class Controller {
 			id: "terminal",
 			configure: (snapshot) => this.configureTerminal(snapshot),
 		})
+		this.openAiCodexRuntimeMutationDispose = openAiCodexOAuthManager.subscribeToRuntimeMutations((event) =>
+			this.handleOpenAiCodexRuntimeMutation(event).catch(() =>
+				Logger.error("[CodexRuntime] Failed to invalidate the target Profile runtime."),
+			),
+		)
 		this.stateManagerCallbacksDispose = StateManager.get().registerCallbacks({
 			onPersistenceError: async ({ error }: PersistenceErrorEvent) => {
 				// Just log - don't call reInitialize() (that sets isInitialized=false which
@@ -442,6 +462,7 @@ export class Controller {
 		this.ocaAuthService = OcaAuthService.initialize(this)
 		this.accountService = ClineAccountService.getInstance()
 		this.contextTransitionEngine = this.createContextTransitionEngine()
+		this.profileTransitionEngine = this.createContextTransitionEngine()
 		this.modeSwitchCoordinator = this.createModeSwitchCoordinator()
 		this.profileSwitchCoordinator = this.createProfileSwitchCoordinator()
 
@@ -591,6 +612,8 @@ export class Controller {
 		const taskId = this.task?.taskId ?? "none"
 		this.detachUi()
 		this.disposed = true
+		this.openAiCodexRuntimeMutationDispose?.()
+		this.openAiCodexRuntimeMutationDispose = undefined
 		// Clear the remote config timer
 		if (this.remoteConfigTimer) {
 			clearInterval(this.remoteConfigTimer)
@@ -935,7 +958,7 @@ export class Controller {
 		await this.postStateToWebview()
 	}
 
-	/** Create the sole Profile/Mode transition state owner for this Controller. */
+	/** Create one independently leased transition state owner for this Controller. */
 	private createContextTransitionEngine(): ContextTransitionEngine {
 		return new ContextTransitionEngine({
 			lease: new ContextTransitionLease(),
@@ -979,7 +1002,7 @@ export class Controller {
 		return new ModeSwitchCoordinator({ engine: this.contextTransitionEngine, policy })
 	}
 
-	/** Build the Profile-specific policy without adopting its binding during preflight. */
+	/** Build the Profile policy that rebinds handlers behind at most one advisory notice. */
 	private createProfileSwitchCoordinator(): ProfileSwitchCoordinator {
 		const policy = new ProfileTransitionPolicy({
 			bindings: {
@@ -987,9 +1010,8 @@ export class Controller {
 				getBinding: (mode) => this.resolveTaskProfileName(mode),
 				resolveTarget: (profileId, profileName, mode) => this.resolveProfileTarget(profileId, profileName, mode),
 			},
-			pressure: {
-				read: (targetApi, targetMode, chatContent) =>
-					this.task?.projectProfileSwitchTargetUsage(targetApi, targetMode, chatContent) ?? Promise.resolve(0),
+			occupied: {
+				getOccupiedTokens: () => this.task?.getOccupiedContextTokens() ?? 0,
 			},
 			commit: {
 				validate: (operation) => this.validateProfileSwitch(operation),
@@ -1004,7 +1026,7 @@ export class Controller {
 			},
 			getTaskId: () => this.task?.taskId,
 		})
-		return new ProfileSwitchCoordinator({ engine: this.contextTransitionEngine, policy })
+		return new ProfileSwitchCoordinator({ engine: this.profileTransitionEngine, policy })
 	}
 
 	/** Resolve the stable task-local Profile identity for one mode. */
@@ -1759,10 +1781,16 @@ export class Controller {
 		// firstItemIndex is managed by fetchMessage; default to latest window on init
 		const firstItemIndex = Math.max(0, totalMessageCount - 100)
 		const checkpointManagerErrorMessage = this.task?.taskState.checkpointManagerErrorMessage
-		const processedTaskHistory = (taskHistory || [])
-			.filter((item) => item.ts && item.task)
-			.sort((a, b) => b.ts - a.ts)
-			.slice(0, 100) // for now we're only getting the latest 100 tasks, but a better solution here is to only pass in 3 for recent task history, and then get the full task history on demand when going to the task history view (maybe with pagination?)
+		// The entry cap below bounds how many tasks are sent but not how many
+		// bytes: HistoryItem.task holds the verbatim task text, so a workspace
+		// with long tasks rebroadcasts megabytes on every push. Project the text
+		// down to an identifying prefix; the full text stays on disk.
+		const processedTaskHistory = projectTaskHistory(
+			(taskHistory || [])
+				.filter((item) => item.ts && item.task)
+				.sort((a, b) => b.ts - a.ts)
+				.slice(0, 100), // for now we're only getting the latest 100 tasks, but a better solution here is to only pass in 3 for recent task history, and then get the full task history on demand when going to the task history view (maybe with pagination?)
+		).items
 
 		const latestAnnouncementId = getLatestAnnouncementId()
 		const shouldShowAnnouncement = lastShownAnnouncementId !== latestAnnouncementId
@@ -1771,9 +1799,8 @@ export class Controller {
 		const version = ExtensionRegistryInfo.version
 		const clineConfig = ClineEnv.config()
 		const environment = clineConfig?.environment
-		// Check OpenAI Codex authentication status
-		const { openAiCodexOAuthManager } = await import("@/integrations/openai-codex/oauth")
-		const openAiCodexIsAuthenticated = await openAiCodexOAuthManager.isAuthenticated()
+		// Deprecated compatibility field. Profile-targeted OAuth status is queried on demand by the Codex settings UI.
+		const openAiCodexIsAuthenticated = false
 
 		// Compute apiMetrics from all messages (not window slice).
 		// These are passed through subscribeToState so the frontend
@@ -1816,7 +1843,11 @@ export class Controller {
 			promptCacheHealth: this.task?.getPromptCacheHealth(),
 			promptFreshness: this.task?.getPromptFreshness(),
 			currentFocusChainChecklist: checklistForState,
-			focusChainHistory: this.task?.taskState.focusChainHistory || null,
+			// The history file is append-only and used to be projected whole on
+			// every push, which is what made a long-running task rebroadcast a
+			// multi-megabyte payload several times a second. The full file stays
+			// on disk and is still opened directly from the panel.
+			focusChainHistory: projectFocusChainHistory(this.task?.taskState.focusChainHistory).text,
 			checkpointManagerErrorMessage,
 			autoApprovalSettings,
 			browserSettings,
@@ -1952,6 +1983,21 @@ export class Controller {
 		return result
 	}
 
+	private async handleOpenAiCodexRuntimeMutation(event: OpenAiCodexRuntimeMutationEvent): Promise<void> {
+		if (this.disposed) return
+		const taskId = this.task?.taskId
+		const apiConfig = this.stateManager.getApiConfigurationForTask(taskId)
+		const mode = this.stateManager.getSettingsKeyForTask("mode", taskId) || "act"
+		const selectedProfileReference =
+			(mode === "plan" ? apiConfig.planModeProfileId : apiConfig.actModeProfileId) ??
+			(mode === "plan" ? apiConfig.planModeProfile : apiConfig.actModeProfile)
+		const selectedProfile = resolveProfileReference(readApiProfiles(), selectedProfileReference)
+		if (selectedProfile.status === "invalid" || selectedProfile.profile.id !== event.profileId) return
+		accountUsageCoordinator.deleteByPrefix(`${event.profileId}:`)
+		this.restartAccountUsagePolling()
+		await this.task?.rebuildApiHandler({ abortPrevious: true })
+	}
+
 	/** Poll account usage every 60 seconds and push to webview */
 	private startAccountUsagePolling() {
 		if (this.disposed || !this.accountUsagePollingEnabled || this.accountUsagePolling) {
@@ -1987,12 +2033,17 @@ export class Controller {
 			const apiConfig = this.stateManager.getApiConfigurationForTask(taskId)
 			const mode = this.stateManager.getSettingsKeyForTask("mode", taskId) || "act"
 			const profileName = mode === "plan" ? apiConfig.planModeProfile : apiConfig.actModeProfile
-			const profile = findEnabledProfileByName(profileName)
-			if (!profile) {
-				throw new Error(`Profile "${profileName}" not found`)
+			const profileId = mode === "plan" ? apiConfig.planModeProfileId : apiConfig.actModeProfileId
+			const profileReference = profileId ?? profileName
+			const profileResolution = resolveProfileReference(readApiProfiles(), profileReference)
+			if (profileResolution.status === "invalid") {
+				throw new Error("Selected Profile is unavailable")
 			}
+			const profile = profileResolution.profile
 			const profileSignature = createHash("sha256").update(JSON.stringify(profile)).digest("hex")
-			const profileKey = `${profile.id}:${profileSignature}`
+			const credentialRevision =
+				profile.provider === "openai-codex" ? openAiCodexOAuthManager.getRuntimeRevision(profile.id) : 0
+			const profileKey = `${profile.id}:${profileSignature}:${credentialRevision}`
 			if (this.accountUsageProfileKey !== profileKey) {
 				this._accountUsage = undefined
 				this.accountUsageProfileKey = profileKey
@@ -2004,7 +2055,16 @@ export class Controller {
 				return
 			}
 			const getAccountUsage = handler.getAccountUsage.bind(handler)
-			const usage = await accountUsageCoordinator.get(profileKey, getAccountUsage)
+			this.accountUsageHandler = handler
+			let usage: AccountUsage | undefined
+			try {
+				usage = await accountUsageCoordinator.get(profileKey, getAccountUsage)
+			} finally {
+				if (this.accountUsageHandler === handler) {
+					handler.abort?.()
+					this.accountUsageHandler = undefined
+				}
+			}
 			if (generation !== this.accountUsagePollGeneration || this.accountUsageProfileKey !== profileKey) {
 				return
 			}
@@ -2026,6 +2086,8 @@ export class Controller {
 
 	private stopAccountUsagePolling() {
 		this.accountUsagePolling = false
+		this.accountUsageHandler?.abort?.()
+		this.accountUsageHandler = undefined
 		this.accountUsagePollGeneration++
 		if (this.accountUsageTimer) {
 			clearTimeout(this.accountUsageTimer)
@@ -2250,7 +2312,10 @@ export class Controller {
 			await this.clearPanelStateIfNeeded()
 			logCloseStage("panel_state_clear")
 		}
-		await this.contextTransitionEngine.reset("Task cleared during context transition.")
+		await Promise.all([
+			this.contextTransitionEngine.reset("Task cleared during context transition."),
+			this.profileTransitionEngine.reset("Task cleared during context transition."),
+		])
 		logCloseStage("context_transition_reset")
 		if (this.task) {
 			// Sync task mode to global state so slider works after task closed
@@ -2323,7 +2388,11 @@ export class Controller {
 			writer: this.stateManager.taskHistory,
 			onError: (error) => Logger.error("[WorkspaceHistoryManager] Background persistence failed:", error),
 		})
-		if (workspacePath) this.workspaceHistoryManager = manager
+		// Cache regardless of how the manager was resolved. The metadata and
+		// completion paths call this without an argument, so caching only the
+		// explicit-path case left the field null and made the shutdown flush in
+		// `clearTask` a silent no-op that dropped queued writes.
+		this.workspaceHistoryManager = manager
 		return manager
 	}
 

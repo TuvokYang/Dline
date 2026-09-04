@@ -34,7 +34,10 @@ message ContextWindowTier {
 enum ServerTool {
   SERVER_TOOL_UNSPECIFIED = 0;
   WEB_SEARCH = 1;
-  IMAGE_GENERATION = 2;
+  // Provider-run sandbox. Anthropic's newer web search versions filter results
+  // from inside this sandbox, so declaring it also selects the web search version.
+  CODE_EXECUTION = 2;
+  IMAGE_GENERATION = 3;
 }
 
 /** Model capability flags and limits. */

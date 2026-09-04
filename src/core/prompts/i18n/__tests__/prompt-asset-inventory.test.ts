@@ -147,6 +147,7 @@ describe("prompt asset inventory", () => {
 			"editingFiles.ts",
 			"feedback.ts",
 			"focusChain.ts",
+			"inputQueue.ts",
 			"mcp.ts",
 			"objective.ts",
 			"responses.ts",

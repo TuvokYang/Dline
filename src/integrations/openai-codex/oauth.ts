@@ -1,711 +1,420 @@
-import * as crypto from "crypto"
-import * as http from "http"
-import { URL } from "url"
-import { z } from "zod"
-import { StateManager } from "@/core/storage/StateManager"
-import { clearOpenAiCodexAuth, getOpenAiCodexAuth, saveOpenAiCodexAuth } from "@/core/storage/secrets"
-import { fetch } from "@/shared/net"
-import { Logger } from "@/shared/services/Logger"
+import { randomUUID } from "node:crypto"
+import path from "node:path"
+import { getDlineDataDir } from "@/core/storage/disk"
+import {
+	type OAuthProfileIdentity,
+	OpenAiCodexProfileAuthMigration,
+	type OpenAiCodexProfileAuthMigrationResult,
+	OpenAiCodexProfileAuthRepository,
+	type OpenAiOAuthCredentials,
+	parseOpenAiOAuthCredentials,
+} from "@/core/storage/secrets"
+import {
+	type CompleteOAuthCallbackInput,
+	FileOAuthFlowLease,
+	LocalOAuthFlowCoordinator,
+	type OAuthAuthorizationStrategy,
+	OAuthFlowError,
+	type OAuthFlowLease,
+	type OAuthFlowStarted,
+} from "@/services/oauth"
+import { openExternal } from "@/utils/env"
+import { resolveOpenAiCodexRuntimeConfig } from "./runtime-config"
+import {
+	type OpenAiCodexCredentialContext,
+	type OpenAiCodexProfileAuthStatus,
+	OpenAiCodexProfileSessionRegistry,
+	type OpenAiCodexRefreshStrategy,
+} from "./session"
+import { OpenAiCodexOAuthStrategy } from "./strategy"
+
+export * from "./session"
+export * from "./strategy"
+
+export type OpenAiCodexCredentials = OpenAiOAuthCredentials
+
+type OpenAiCodexManagerStrategy = OAuthAuthorizationStrategy<OpenAiOAuthCredentials> & OpenAiCodexRefreshStrategy
+
+export interface OpenAiCodexAuthorizationFlow {
+	flowId: string
+	profileId: string
+	authorizationUrl: string
+	redirectUri: string
+	expiresAtMs: number
+	browserOpenStatus: "opened" | "failed"
+}
+
+export type OpenAiCodexAuthorizationFlowOutcomeStatus = "completed" | "cancelled" | "timed-out" | "failed"
+
+export interface OpenAiCodexAuthorizationFlowOutcome {
+	flowId: string
+	profileId: string
+	status: OpenAiCodexAuthorizationFlowOutcomeStatus
+	endedAtMs: number
+}
+
+export type OpenAiCodexRuntimeMutationReason = "credential-saved" | "credential-cleared" | "reauthentication-required"
+
+export interface OpenAiCodexRuntimeMutationEvent {
+	profileId: string
+	reason: OpenAiCodexRuntimeMutationReason
+	revision: number
+}
+
+export type OpenAiCodexRuntimeMutationListener = (event: OpenAiCodexRuntimeMutationEvent) => void | Promise<void>
+
+export interface OpenAiCodexOAuthManagerOptions {
+	repository?: OpenAiCodexProfileAuthRepository
+	strategy?: OpenAiCodexManagerStrategy
+	lease?: OAuthFlowLease
+	openExternal?: (authorizationUrl: string) => Promise<void>
+	timeoutMs?: number
+	profileCatalogLoader?: () => Promise<readonly OAuthProfileIdentity[]>
+}
 
 /**
- * OpenAI Codex OAuth Configuration
+ * Profile-targeted OpenAI Codex OAuth application service.
  *
- * Based on the OpenAI Codex OAuth implementation:
- * - ISSUER: https://auth.openai.com
- * - Authorization endpoint: https://auth.openai.com/oauth/authorize
- * - Token endpoint: https://auth.openai.com/oauth/token
- * - Fixed callback port: 1455
- * - Codex-specific params: codex_cli_simplified_flow=true, originator=cline
- */
-export const OPENAI_CODEX_OAUTH_CONFIG = {
-	authorizationEndpoint: "https://auth.openai.com/oauth/authorize",
-	tokenEndpoint: "https://auth.openai.com/oauth/token",
-	clientId: "app_EMoamEEZ73f0CkXaXp7hrann",
-	redirectUri: "http://localhost:1455/auth/callback",
-	scopes: "openid profile email offline_access",
-	callbackPort: 1455,
-} as const
-
-// Token storage key - must match the key in SECRETS_KEYS (state-keys.ts)
-const _OPENAI_CODEX_CREDENTIALS_KEY = "openai-codex-oauth-credentials"
-
-// Credentials schema
-const openAiCodexCredentialsSchema = z.object({
-	type: z.literal("openai-codex"),
-	access_token: z.string().min(1),
-	refresh_token: z.string().min(1),
-	// expires is in milliseconds since epoch
-	expires: z.number(),
-	email: z.string().optional(),
-	// ChatGPT account ID extracted from JWT claims (for ChatGPT-Account-Id header)
-	accountId: z.string().optional(),
-})
-
-export type OpenAiCodexCredentials = z.infer<typeof openAiCodexCredentialsSchema>
-
-// Token response schema from OpenAI
-const tokenResponseSchema = z.object({
-	access_token: z.string(),
-	refresh_token: z.string().min(1).optional(),
-	id_token: z.string().optional(),
-	expires_in: z.number(),
-	email: z.string().optional(),
-	token_type: z.string().optional(),
-})
-
-/**
- * JWT claims structure for extracting ChatGPT account ID
- */
-interface IdTokenClaims {
-	chatgpt_account_id?: string
-	organizations?: Array<{ id: string }>
-	email?: string
-	"https://api.openai.com/auth"?: {
-		chatgpt_account_id?: string
-	}
-}
-
-/**
- * Parse JWT claims from a token
- * Returns undefined if the token is invalid or cannot be parsed
- */
-function parseJwtClaims(token: string): IdTokenClaims | undefined {
-	const parts = token.split(".")
-	if (parts.length !== 3) return undefined
-	try {
-		// Use base64url decoding (Node.js Buffer handles this)
-		const payload = Buffer.from(parts[1], "base64url").toString("utf-8")
-		return JSON.parse(payload) as IdTokenClaims
-	} catch {
-		return undefined
-	}
-}
-
-/**
- * Extract ChatGPT account ID from JWT claims
- * Checks multiple locations:
- * 1. Root-level chatgpt_account_id
- * 2. Nested under https://api.openai.com/auth
- * 3. First organization ID
- */
-function extractAccountIdFromClaims(claims: IdTokenClaims): string | undefined {
-	return claims.chatgpt_account_id || claims["https://api.openai.com/auth"]?.chatgpt_account_id || claims.organizations?.[0]?.id
-}
-
-/**
- * Extract ChatGPT account ID from token response
- * Tries id_token first, then access_token
- */
-function extractAccountId(tokens: { id_token?: string; access_token: string }): string | undefined {
-	// Try id_token first (more reliable source)
-	if (tokens.id_token) {
-		const claims = parseJwtClaims(tokens.id_token)
-		const accountId = claims && extractAccountIdFromClaims(claims)
-		if (accountId) return accountId
-	}
-	// Fall back to access_token
-	if (tokens.access_token) {
-		const claims = parseJwtClaims(tokens.access_token)
-		return claims ? extractAccountIdFromClaims(claims) : undefined
-	}
-	return undefined
-}
-
-class OpenAiCodexOAuthTokenError extends Error {
-	public readonly status?: number
-	public readonly errorCode?: string
-
-	constructor(message: string, opts?: { status?: number; errorCode?: string }) {
-		super(message)
-		this.name = "OpenAiCodexOAuthTokenError"
-		this.status = opts?.status
-		this.errorCode = opts?.errorCode
-	}
-
-	public isLikelyInvalidGrant(): boolean {
-		if (this.errorCode && /invalid_grant/i.test(this.errorCode)) {
-			return true
-		}
-		if (this.status === 400 || this.status === 401 || this.status === 403) {
-			return /invalid_grant|revoked|expired|invalid refresh/i.test(this.message)
-		}
-		return false
-	}
-}
-
-function parseOAuthErrorDetails(errorText: string): { errorCode?: string; errorMessage?: string } {
-	try {
-		const json: unknown = JSON.parse(errorText)
-		if (!json || typeof json !== "object") {
-			return {}
-		}
-
-		const obj = json as Record<string, unknown>
-		const errorField = obj.error
-
-		const errorCode: string | undefined =
-			typeof errorField === "string"
-				? errorField
-				: errorField && typeof errorField === "object" && typeof (errorField as Record<string, unknown>).type === "string"
-					? ((errorField as Record<string, unknown>).type as string)
-					: undefined
-
-		const errorDescription = obj.error_description
-		const errorMessageFromError =
-			errorField && typeof errorField === "object" ? (errorField as Record<string, unknown>).message : undefined
-
-		const errorMessage: string | undefined =
-			typeof errorDescription === "string"
-				? errorDescription
-				: typeof errorMessageFromError === "string"
-					? errorMessageFromError
-					: typeof obj.message === "string"
-						? obj.message
-						: undefined
-
-		return { errorCode, errorMessage }
-	} catch {
-		return {}
-	}
-}
-
-/**
- * Generates a cryptographically random PKCE code verifier
- * Must be 43-128 characters long using unreserved characters
- */
-export function generateCodeVerifier(): string {
-	const buffer = crypto.randomBytes(32)
-	return buffer.toString("base64url")
-}
-
-/**
- * Generates the PKCE code challenge from the verifier using S256 method
- */
-export function generateCodeChallenge(verifier: string): string {
-	const hash = crypto.createHash("sha256").update(verifier).digest()
-	return hash.toString("base64url")
-}
-
-/**
- * Generates a random state parameter for CSRF protection
- */
-export function generateState(): string {
-	return crypto.randomBytes(16).toString("hex")
-}
-
-/**
- * Builds the authorization URL for OpenAI Codex OAuth flow
- * Includes Codex-specific parameters per the implementation guide
- */
-export function buildAuthorizationUrl(codeChallenge: string, state: string): string {
-	const params = new URLSearchParams({
-		client_id: OPENAI_CODEX_OAUTH_CONFIG.clientId,
-		redirect_uri: OPENAI_CODEX_OAUTH_CONFIG.redirectUri,
-		scope: OPENAI_CODEX_OAUTH_CONFIG.scopes,
-		code_challenge: codeChallenge,
-		code_challenge_method: "S256",
-		response_type: "code",
-		state,
-		// Codex-specific parameters
-		codex_cli_simplified_flow: "true",
-		originator: "cline",
-	})
-
-	return `${OPENAI_CODEX_OAUTH_CONFIG.authorizationEndpoint}?${params.toString()}`
-}
-
-/**
- * Exchanges the authorization code for tokens
- * Important: Uses application/x-www-form-urlencoded (not JSON)
- * Important: state must NOT be included in token exchange body
- */
-export async function exchangeCodeForTokens(code: string, codeVerifier: string): Promise<OpenAiCodexCredentials> {
-	// Per the implementation guide: use application/x-www-form-urlencoded
-	// and do NOT include state in the body (OpenAI returns error if included)
-	const body = new URLSearchParams({
-		grant_type: "authorization_code",
-		client_id: OPENAI_CODEX_OAUTH_CONFIG.clientId,
-		code,
-		redirect_uri: OPENAI_CODEX_OAUTH_CONFIG.redirectUri,
-		code_verifier: codeVerifier,
-	})
-
-	const response = await fetch(OPENAI_CODEX_OAUTH_CONFIG.tokenEndpoint, {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/x-www-form-urlencoded",
-		},
-		body: body.toString(),
-		signal: AbortSignal.timeout(30000),
-	})
-
-	if (!response.ok) {
-		const errorText = await response.text()
-		throw new Error(`Token exchange failed: ${response.status} ${response.statusText} - ${errorText}`)
-	}
-
-	const data = await response.json()
-	const tokenResponse = tokenResponseSchema.parse(data)
-
-	if (!tokenResponse.refresh_token) {
-		throw new Error("Token exchange did not return a refresh_token")
-	}
-
-	// Per the implementation guide: expires is in milliseconds since epoch
-	const expiresAt = Date.now() + tokenResponse.expires_in * 1000
-
-	// Extract ChatGPT account ID from JWT claims
-	const accountId = extractAccountId({
-		id_token: tokenResponse.id_token,
-		access_token: tokenResponse.access_token,
-	})
-
-	return {
-		type: "openai-codex",
-		access_token: tokenResponse.access_token,
-		refresh_token: tokenResponse.refresh_token,
-		expires: expiresAt,
-		email: tokenResponse.email,
-		accountId,
-	}
-}
-
-/**
- * Refreshes the access token using the refresh token
- * Uses application/x-www-form-urlencoded (not JSON)
- */
-export async function refreshAccessToken(credentials: OpenAiCodexCredentials): Promise<OpenAiCodexCredentials> {
-	const body = new URLSearchParams({
-		grant_type: "refresh_token",
-		client_id: OPENAI_CODEX_OAUTH_CONFIG.clientId,
-		refresh_token: credentials.refresh_token,
-	})
-
-	const response = await fetch(OPENAI_CODEX_OAUTH_CONFIG.tokenEndpoint, {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/x-www-form-urlencoded",
-		},
-		body: body.toString(),
-		signal: AbortSignal.timeout(30000),
-	})
-
-	if (!response.ok) {
-		const errorText = await response.text()
-		const { errorCode, errorMessage } = parseOAuthErrorDetails(errorText)
-		const details = errorMessage ? errorMessage : errorText
-		throw new OpenAiCodexOAuthTokenError(
-			`Token refresh failed: ${response.status} ${response.statusText}${details ? ` - ${details}` : ""}`,
-			{ status: response.status, errorCode },
-		)
-	}
-
-	const data = await response.json()
-	const tokenResponse = tokenResponseSchema.parse(data)
-
-	// Per the implementation guide: expires is in milliseconds since epoch
-	const expiresAt = Date.now() + tokenResponse.expires_in * 1000
-
-	// Extract new account ID from refreshed tokens, or preserve existing one
-	const newAccountId = extractAccountId({
-		id_token: tokenResponse.id_token,
-		access_token: tokenResponse.access_token,
-	})
-
-	return {
-		type: "openai-codex",
-		access_token: tokenResponse.access_token,
-		refresh_token: tokenResponse.refresh_token ?? credentials.refresh_token,
-		expires: expiresAt,
-		email: tokenResponse.email ?? credentials.email,
-		// Prefer newly extracted accountId, fall back to existing
-		accountId: newAccountId ?? credentials.accountId,
-	}
-}
-
-/**
- * Checks if the credentials are expired (with 5 minute buffer)
- * Per the implementation guide: expires is in milliseconds since epoch
- */
-export function isTokenExpired(credentials: OpenAiCodexCredentials): boolean {
-	const bufferMs = 5 * 60 * 1000 // 5 minutes buffer
-	return Date.now() >= credentials.expires - bufferMs
-}
-
-/**
- * OpenAiCodexOAuthManager - Handles OAuth flow and token management
+ * Credential and refresh operations are delegated to the session registry;
+ * browser and manual callbacks share the provider-neutral local flow coordinator.
  */
 export class OpenAiCodexOAuthManager {
-	private credentials: OpenAiCodexCredentials | null = null
-	private refreshPromise: Promise<OpenAiCodexCredentials> | null = null
-	private pendingAuth: {
-		codeVerifier: string
-		state: string
-		server?: http.Server
-	} | null = null
+	readonly sessions: OpenAiCodexProfileSessionRegistry
+	private readonly coordinator: LocalOAuthFlowCoordinator<OpenAiOAuthCredentials>
+	private readonly migration: OpenAiCodexProfileAuthMigration
+	private readonly profileCatalogLoader: () => Promise<readonly OAuthProfileIdentity[]>
+	private migrationPromise: Promise<OpenAiCodexProfileAuthMigrationResult> | undefined
+	private migrationResult: OpenAiCodexProfileAuthMigrationResult | undefined
+	private readonly generations = new Map<string, number>()
+	private readonly mutationTails = new Map<string, Promise<void>>()
+	private readonly runtimeRevisions = new Map<string, number>()
+	private readonly runtimeMutationListeners = new Set<OpenAiCodexRuntimeMutationListener>()
+	private readonly publishedReauthenticationRequired = new Set<string>()
+	private readonly lastFlowOutcomes = new Map<string, OpenAiCodexAuthorizationFlowOutcome>()
+	private activeFlow:
+		| ({ flowId: string; profileId: string; generation: number } & Partial<
+				Omit<OpenAiCodexAuthorizationFlow, "flowId" | "profileId">
+		  >)
+		| undefined
 
-	/**
-	 * Force a refresh using the stored refresh token even if the access token is not expired.
-	 * Useful when the server invalidates an access token early.
-	 */
-	async forceRefreshAccessToken(): Promise<string | null> {
-		if (!this.credentials) {
-			await this.loadCredentials()
-		}
-
-		if (!this.credentials) {
-			return null
-		}
-
-		try {
-			// De-dupe concurrent refreshes
-			if (!this.refreshPromise) {
-				this.refreshPromise = refreshAccessToken(this.credentials)
-			}
-
-			const newCredentials = await this.refreshPromise
-			this.refreshPromise = null
-			await this.saveCredentials(newCredentials)
-			return newCredentials.access_token
-		} catch (error) {
-			this.refreshPromise = null
-			Logger.error("[openai-codex-oauth] Failed to force refresh token:", error)
-			if (error instanceof OpenAiCodexOAuthTokenError && error.isLikelyInvalidGrant()) {
-				Logger.log("[openai-codex-oauth] Refresh token appears invalid; clearing stored credentials")
-				await this.clearCredentials()
-			}
-			return null
-		}
-	}
-
-	/**
-	 * Load credentials from split secret storage. A legacy secrets.json value is
-	 * migrated once for existing installations.
-	 */
-	async loadCredentials(): Promise<OpenAiCodexCredentials | null> {
-		try {
-			const storedCredentials = getOpenAiCodexAuth()
-			if (storedCredentials) {
-				this.credentials = openAiCodexCredentialsSchema.parse(storedCredentials)
-				return this.credentials
-			}
-
-			const stateManager = StateManager.get()
-			const credentialsJson = stateManager.getSecretKey("openai-codex-oauth-credentials")
-
-			if (!credentialsJson) {
-				return null
-			}
-
-			this.credentials = openAiCodexCredentialsSchema.parse(JSON.parse(credentialsJson))
-			await saveOpenAiCodexAuth(this.credentials)
-			stateManager.setSecret("openai-codex-oauth-credentials", undefined)
-			await stateManager.flushPendingState()
-			return this.credentials
-		} catch (error) {
-			Logger.error("[openai-codex-oauth] Failed to load credentials:", error)
-			return null
-		}
-	}
-
-	/**
-	 * Save credentials to split secret storage.
-	 */
-	async saveCredentials(credentials: OpenAiCodexCredentials): Promise<void> {
-		await saveOpenAiCodexAuth(credentials)
-		this.credentials = credentials
-	}
-
-	/**
-	 * Clear credentials from storage
-	 */
-	async clearCredentials(): Promise<void> {
-		await clearOpenAiCodexAuth()
-		try {
-			const stateManager = StateManager.get()
-			if (stateManager.getSecretKey("openai-codex-oauth-credentials")) {
-				stateManager.setSecret("openai-codex-oauth-credentials", undefined)
-				await stateManager.flushPendingState()
-			}
-		} catch {
-			// Split storage can be cleared before StateManager initialization.
-		}
-		this.credentials = null
-	}
-
-	/**
-	 * Get a valid access token, refreshing if necessary
-	 */
-	async getAccessToken(): Promise<string | null> {
-		// Try to load credentials if not already loaded
-		if (!this.credentials) {
-			await this.loadCredentials()
-		}
-
-		if (!this.credentials) {
-			return null
-		}
-
-		// Check if token is expired and refresh if needed
-		if (isTokenExpired(this.credentials)) {
-			try {
-				// De-dupe concurrent refreshes
-				if (!this.refreshPromise) {
-					this.refreshPromise = refreshAccessToken(this.credentials)
-				}
-
-				const newCredentials = await this.refreshPromise
-				this.refreshPromise = null
-				await this.saveCredentials(newCredentials)
-			} catch (error) {
-				this.refreshPromise = null
-				Logger.error("[openai-codex-oauth] Failed to refresh token:", error)
-
-				// Only clear secrets when the refresh token is clearly invalid/revoked.
-				if (error instanceof OpenAiCodexOAuthTokenError && error.isLikelyInvalidGrant()) {
-					Logger.log("[openai-codex-oauth] Refresh token appears invalid; clearing stored credentials")
-					await this.clearCredentials()
-				}
-				return null
-			}
-		}
-
-		return this.credentials.access_token
-	}
-
-	/**
-	 * Get the user's email from credentials
-	 */
-	async getEmail(): Promise<string | null> {
-		if (!this.credentials) {
-			await this.loadCredentials()
-		}
-		return this.credentials?.email || null
-	}
-
-	/**
-	 * Get the ChatGPT account ID from credentials
-	 * Used for the ChatGPT-Account-Id header required by the Codex API
-	 */
-	async getAccountId(): Promise<string | null> {
-		if (!this.credentials) {
-			await this.loadCredentials()
-		}
-		return this.credentials?.accountId || null
-	}
-
-	/**
-	 * Check if the user has stored credentials (i.e. has completed auth).
-	 * This intentionally does NOT attempt a token refresh so that transient
-	 * network failures or expired-but-refreshable tokens don't cause the
-	 * CLI to bounce the user back to the onboarding flow.
-	 */
-	async isAuthenticated(): Promise<boolean> {
-		if (!this.credentials) {
-			await this.loadCredentials()
-		}
-		return this.credentials !== null
-	}
-
-	/**
-	 * Start the OAuth authorization flow
-	 * Returns the authorization URL to open in browser
-	 */
-	startAuthorizationFlow(): string {
-		// Cancel any existing authorization flow before starting a new one
-		this.cancelAuthorizationFlow()
-
-		const codeVerifier = generateCodeVerifier()
-		const codeChallenge = generateCodeChallenge(codeVerifier)
-		const state = generateState()
-
-		this.pendingAuth = {
-			codeVerifier,
-			state,
-		}
-
-		return buildAuthorizationUrl(codeChallenge, state)
-	}
-
-	/**
-	 * Start a local server to receive the OAuth callback
-	 * Returns a promise that resolves when authentication is complete
-	 */
-	async waitForCallback(): Promise<OpenAiCodexCredentials> {
-		if (!this.pendingAuth) {
-			throw new Error("No pending authorization flow")
-		}
-
-		// Close any existing server before starting a new one
-		if (this.pendingAuth.server) {
-			try {
-				this.pendingAuth.server.close()
-			} catch {
-				// Ignore errors when closing
-			}
-			this.pendingAuth.server = undefined
-		}
-
-		return new Promise((resolve, reject) => {
-			const server = http.createServer(async (req, res) => {
-				try {
-					const url = new URL(req.url || "", `http://localhost:${OPENAI_CODEX_OAUTH_CONFIG.callbackPort}`)
-
-					if (url.pathname !== "/auth/callback") {
-						res.writeHead(404)
-						res.end("Not Found")
-						return
-					}
-
-					const code = url.searchParams.get("code")
-					const state = url.searchParams.get("state")
-					const error = url.searchParams.get("error")
-
-					if (error) {
-						res.writeHead(400)
-						res.end(`Authentication failed: ${error}`)
-						reject(new Error(`OAuth error: ${error}`))
-						server.close()
-						return
-					}
-
-					if (!code || !state) {
-						res.writeHead(400)
-						res.end("Missing code or state parameter")
-						reject(new Error("Missing code or state parameter"))
-						server.close()
-						return
-					}
-
-					if (state !== this.pendingAuth?.state) {
-						res.writeHead(400)
-						res.end("State mismatch - possible CSRF attack")
-						reject(new Error("State mismatch"))
-						server.close()
-						return
-					}
-
-					try {
-						// Note: state is validated above but not passed to exchangeCodeForTokens
-						// per the implementation guide (OpenAI rejects it)
-						const credentials = await exchangeCodeForTokens(code, this.pendingAuth.codeVerifier)
-
-						await this.saveCredentials(credentials)
-
-						res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" })
-						res.end(`<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Authentication Successful</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-    min-height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-    color: #fff;
-  }
-  .container { text-align: center; padding: 48px; max-width: 420px; }
-  .icon {
-    width: 72px; height: 72px; margin: 0 auto 24px;
-    background: linear-gradient(135deg, #10a37f 0%, #1a7f64 100%);
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-  }
-  .icon svg { width: 36px; height: 36px; stroke: #fff; stroke-width: 3; fill: none; }
-  h1 { font-size: 24px; font-weight: 600; margin-bottom: 12px; }
-  p { font-size: 15px; color: rgba(255,255,255,0.7); line-height: 1.5; }
-  .closing { margin-top: 32px; font-size: 13px; color: rgba(255,255,255,0.5); }
-</style>
-</head>
-<body>
-<div class="container">
-  <div class="icon">
-    <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>
-  </div>
-  <h1>Authentication Successful</h1>
-  <p>You're now signed in to OpenAI Codex. You can close this window and return to your IDE.</p>
-  <p class="closing">This window will close automatically...</p>
-</div>
-<script>setTimeout(() => window.close(), 3000);</script>
-</body>
-</html>`)
-
-						this.pendingAuth = null
-						server.close()
-						resolve(credentials)
-					} catch (exchangeError) {
-						res.writeHead(500)
-						res.end(`Token exchange failed: ${exchangeError}`)
-						reject(exchangeError)
-						server.close()
-					}
-				} catch (err) {
-					res.writeHead(500)
-					res.end("Internal server error")
-					reject(err)
-					server.close()
-				}
+	constructor(options: OpenAiCodexOAuthManagerOptions = {}) {
+		const strategy = options.strategy ?? new OpenAiCodexOAuthStrategy()
+		const repository = options.repository ?? new OpenAiCodexProfileAuthRepository()
+		this.sessions = new OpenAiCodexProfileSessionRegistry({ repository, strategy })
+		this.migration = new OpenAiCodexProfileAuthMigration({ secretsDir: repository.secretsDir, repository })
+		this.profileCatalogLoader =
+			options.profileCatalogLoader ??
+			(async () => {
+				const { readApiProfilesFresh } = await import("@/core/controller/file/getApiProfiles")
+				return readApiProfilesFresh()
 			})
-
-			server.on("error", (err: NodeJS.ErrnoException) => {
-				this.pendingAuth = null
-				if (err.code === "EADDRINUSE") {
-					reject(
-						new Error(
-							`Port ${OPENAI_CODEX_OAUTH_CONFIG.callbackPort} is already in use. ` +
-								`Please close any other applications using this port and try again.`,
-						),
-					)
-				} else {
-					reject(err)
-				}
-			})
-
-			// Set a timeout for the callback
-			const timeout = setTimeout(
-				() => {
-					server.close()
-					reject(new Error("Authentication timed out"))
-				},
-				5 * 60 * 1000,
-			) // 5 minutes
-
-			server.listen(OPENAI_CODEX_OAUTH_CONFIG.callbackPort, () => {
-				if (this.pendingAuth) {
-					this.pendingAuth.server = server
-				}
-			})
-
-			// Clear timeout when server closes
-			server.on("close", () => {
-				clearTimeout(timeout)
-			})
+		this.coordinator = new LocalOAuthFlowCoordinator(strategy, {
+			lease: options.lease ?? new FileOAuthFlowLease(path.join(getDlineDataDir(), "oauth", "local-oauth-flow.json")),
+			openExternal: options.openExternal ?? openExternal,
+			onCredential: ({ flowId, profileId, credential }) => this.persistFlowCredential(flowId, profileId, credential),
+			timeoutMs: options.timeoutMs,
 		})
 	}
 
-	/**
-	 * Cancel any pending authorization flow
-	 */
-	cancelAuthorizationFlow(): void {
-		if (this.pendingAuth?.server) {
-			this.pendingAuth.server.close()
-		}
-		this.pendingAuth = null
+	async getCredentialContext(profileId: string): Promise<OpenAiCodexCredentialContext | null> {
+		await this.ensureLegacyMigration()
+		if (this.isLegacyShared(profileId)) return null
+		const context = await this.sessions.getCredentialContext(profileId)
+		await this.publishReauthenticationRequiredIfNeeded(profileId, context)
+		return context
 	}
 
-	/**
-	 * Get the current credentials (for display purposes)
-	 */
-	getCredentials(): OpenAiCodexCredentials | null {
-		return this.credentials
+	async forceRefreshCredentialContext(profileId: string): Promise<OpenAiCodexCredentialContext | null> {
+		await this.ensureLegacyMigration()
+		if (this.isLegacyShared(profileId)) return null
+		const context = await this.sessions.forceRefreshCredentialContext(profileId)
+		await this.publishReauthenticationRequiredIfNeeded(profileId, context)
+		return context
+	}
+
+	async getAuthStatus(profileId: string): Promise<OpenAiCodexProfileAuthStatus> {
+		const migration = await this.ensureLegacyMigration()
+		const sessionStatus = await this.sessions.getAuthStatus(profileId)
+		if (sessionStatus === "authenticated" || sessionStatus === "refreshable-expired") return sessionStatus
+		if (sessionStatus === "malformed") return sessionStatus
+		if (migration.status === "legacy-shared" && migration.profileIds.includes(profileId)) return "legacy-shared"
+		if (
+			migration.status === "malformed-legacy" ||
+			migration.status === "malformed-marker" ||
+			(migration.status === "destination-malformed" && migration.profileId === profileId)
+		) {
+			return "malformed"
+		}
+		return sessionStatus
+	}
+
+	async isAuthenticated(profileId: string): Promise<boolean> {
+		const status = await this.getAuthStatus(profileId)
+		return status === "authenticated" || status === "refreshable-expired"
+	}
+
+	getActiveAuthorizationFlow(profileId: string): OpenAiCodexAuthorizationFlow | undefined {
+		const flow = this.activeFlow
+		if (
+			flow?.profileId !== profileId ||
+			!flow.authorizationUrl ||
+			!flow.redirectUri ||
+			flow.expiresAtMs === undefined ||
+			!flow.browserOpenStatus
+		) {
+			return undefined
+		}
+		return {
+			profileId: flow.profileId,
+			flowId: flow.flowId,
+			authorizationUrl: flow.authorizationUrl,
+			redirectUri: flow.redirectUri,
+			expiresAtMs: flow.expiresAtMs,
+			browserOpenStatus: flow.browserOpenStatus,
+		}
+	}
+
+	getLastAuthorizationFlowOutcome(profileId: string): OpenAiCodexAuthorizationFlowOutcome | undefined {
+		return this.lastFlowOutcomes.get(profileId)
+	}
+
+	subscribeToRuntimeMutations(listener: OpenAiCodexRuntimeMutationListener): () => void {
+		this.runtimeMutationListeners.add(listener)
+		return () => this.runtimeMutationListeners.delete(listener)
+	}
+
+	getRuntimeRevision(profileId: string): number {
+		return this.runtimeRevisions.get(profileId) ?? 0
+	}
+
+	async saveCredentials(profileId: string, credentials: OpenAiCodexCredentials): Promise<void> {
+		this.advanceGeneration(profileId)
+		await this.withProfileMutation(profileId, async () => {
+			await this.sessions.saveCredential(profileId, credentials)
+		})
+		this.publishedReauthenticationRequired.delete(profileId)
+		await this.ensureLegacyMigration(true)
+		await this.publishRuntimeMutation(profileId, "credential-saved")
+	}
+
+	async importCredentials(profileId: string, value: unknown): Promise<OpenAiCodexCredentials> {
+		parseOpenAiOAuthCredentials(value)
+		this.advanceGeneration(profileId)
+		const activeFlow = this.activeFlow?.profileId === profileId ? this.activeFlow : undefined
+		if (activeFlow) await this.cancelCoordinatorFlow(activeFlow.profileId, activeFlow.flowId)
+		const credential = await this.withProfileMutation(profileId, () => this.sessions.importCredential(profileId, value))
+		this.publishedReauthenticationRequired.delete(profileId)
+		await this.ensureLegacyMigration(true)
+		await this.publishRuntimeMutation(profileId, "credential-saved")
+		return credential
+	}
+
+	async clearCredentials(profileId: string): Promise<void> {
+		await this.ensureLegacyMigration()
+		this.advanceGeneration(profileId)
+		const activeFlow = this.activeFlow?.profileId === profileId ? this.activeFlow : undefined
+		if (activeFlow) await this.cancelCoordinatorFlow(activeFlow.profileId, activeFlow.flowId)
+		await this.withProfileMutation(profileId, async () => {
+			await this.sessions.clearCredential(profileId)
+		})
+		this.publishedReauthenticationRequired.delete(profileId)
+		await this.publishRuntimeMutation(profileId, "credential-cleared")
+	}
+
+	async startAuthorizationFlow(profileId: string): Promise<OAuthFlowStarted<OpenAiCodexCredentials>> {
+		await this.ensureLegacyMigration()
+		if (this.activeFlow) {
+			throw new OAuthFlowError("FLOW_ALREADY_IN_PROGRESS", "An OAuth authorization flow is already active.")
+		}
+		const flowId = randomUUID()
+		const generation = this.advanceGeneration(profileId)
+		this.lastFlowOutcomes.delete(profileId)
+		this.activeFlow = { flowId, profileId, generation }
+		try {
+			const started = await this.coordinator.startFlow({ profileId, flowId })
+			if (this.activeFlow?.flowId === flowId) {
+				this.activeFlow = {
+					flowId,
+					profileId,
+					generation,
+					authorizationUrl: started.authorizationUrl,
+					redirectUri: started.redirectUri,
+					expiresAtMs: started.expiresAtMs,
+					browserOpenStatus: started.browserOpenStatus,
+				}
+			}
+			void started.result
+				.then(
+					() => this.recordFlowOutcome(profileId, flowId, "completed"),
+					(error: unknown) =>
+						this.recordFlowOutcome(
+							profileId,
+							flowId,
+							error instanceof OAuthFlowError && error.code === "FLOW_TIMED_OUT"
+								? "timed-out"
+								: error instanceof OAuthFlowError && error.code === "FLOW_CANCELLED"
+									? "cancelled"
+									: "failed",
+						),
+				)
+				.finally(() => {
+					if (this.activeFlow?.flowId === started.flowId) this.activeFlow = undefined
+				})
+			return started
+		} catch (error) {
+			if (this.activeFlow?.flowId === flowId) this.activeFlow = undefined
+			throw error
+		}
+	}
+
+	completeFromCallbackUri(input: CompleteOAuthCallbackInput): Promise<OpenAiCodexCredentials> {
+		return this.coordinator.completeFromCallbackUri(input)
+	}
+
+	async cancelAuthorizationFlow(profileId: string, flowId?: string): Promise<void> {
+		const targetFlow = flowId ? { flowId, profileId } : this.activeFlow?.profileId === profileId ? this.activeFlow : undefined
+		if (!targetFlow) return
+		this.advanceGeneration(profileId)
+		await this.cancelCoordinatorFlow(targetFlow.profileId, targetFlow.flowId)
+	}
+
+	async migrateLegacyCredentials(profiles: readonly OAuthProfileIdentity[]): Promise<OpenAiCodexProfileAuthMigrationResult> {
+		const result = await this.migration.migrate(profiles)
+		this.migrationResult = result
+		this.migrationPromise = Promise.resolve(result)
+		return result
+	}
+
+	async dispose(): Promise<void> {
+		if (this.activeFlow) this.advanceGeneration(this.activeFlow.profileId)
+		this.activeFlow = undefined
+		this.lastFlowOutcomes.clear()
+		this.runtimeMutationListeners.clear()
+		await this.coordinator.dispose()
+	}
+
+	private recordFlowOutcome(profileId: string, flowId: string, status: OpenAiCodexAuthorizationFlowOutcomeStatus): void {
+		this.lastFlowOutcomes.set(profileId, { profileId, flowId, status, endedAtMs: Date.now() })
+	}
+
+	private async persistFlowCredential(flowId: string, profileId: string, credential: OpenAiCodexCredentials): Promise<void> {
+		await this.withProfileMutation(profileId, async () => {
+			const activeFlow = this.activeFlow
+			if (
+				!activeFlow ||
+				activeFlow.flowId !== flowId ||
+				activeFlow.profileId !== profileId ||
+				this.currentGeneration(profileId) !== activeFlow.generation
+			) {
+				throw new Error("The OAuth authorization flow is no longer current.")
+			}
+			await this.sessions.saveCredential(profileId, credential)
+			this.publishedReauthenticationRequired.delete(profileId)
+			await this.ensureLegacyMigration(true)
+		})
+		await this.publishRuntimeMutation(profileId, "credential-saved")
+	}
+
+	private async ensureLegacyMigration(force = false): Promise<OpenAiCodexProfileAuthMigrationResult> {
+		if (!force && this.migrationPromise) return this.migrationPromise
+		const previous = this.migrationPromise
+		const operation = (previous ? previous.catch(() => undefined) : Promise.resolve()).then(async () => {
+			const result = await this.migration.migrate(await this.profileCatalogLoader())
+			this.migrationResult = result
+			return result
+		})
+		this.migrationPromise = operation
+		try {
+			return await operation
+		} catch (error) {
+			if (this.migrationPromise === operation) this.migrationPromise = undefined
+			throw error
+		}
+	}
+
+	private async publishReauthenticationRequiredIfNeeded(
+		profileId: string,
+		context: OpenAiCodexCredentialContext | null,
+	): Promise<void> {
+		if (context) {
+			this.publishedReauthenticationRequired.delete(profileId)
+			return
+		}
+		if ((await this.sessions.getAuthStatus(profileId)) !== "reauthentication-required") return
+		if (this.publishedReauthenticationRequired.has(profileId)) return
+		this.publishedReauthenticationRequired.add(profileId)
+		await this.publishRuntimeMutation(profileId, "reauthentication-required")
+	}
+
+	private async publishRuntimeMutation(profileId: string, reason: OpenAiCodexRuntimeMutationReason): Promise<void> {
+		const revision = this.getRuntimeRevision(profileId) + 1
+		this.runtimeRevisions.set(profileId, revision)
+		await Promise.allSettled([...this.runtimeMutationListeners].map((listener) => listener({ profileId, reason, revision })))
+	}
+
+	private isLegacyShared(profileId: string): boolean {
+		return this.migrationResult?.status === "legacy-shared" && this.migrationResult.profileIds.includes(profileId)
+	}
+
+	private advanceGeneration(profileId: string): number {
+		const generation = this.currentGeneration(profileId) + 1
+		this.generations.set(profileId, generation)
+		return generation
+	}
+
+	private currentGeneration(profileId: string): number {
+		return this.generations.get(profileId) ?? 0
+	}
+
+	private async withProfileMutation<T>(profileId: string, operation: () => Promise<T>): Promise<T> {
+		const previous = this.mutationTails.get(profileId) ?? Promise.resolve()
+		let release!: () => void
+		const gate = new Promise<void>((resolve) => {
+			release = resolve
+		})
+		const tail = previous.catch(() => undefined).then(() => gate)
+		this.mutationTails.set(profileId, tail)
+		await previous.catch(() => undefined)
+		try {
+			return await operation()
+		} finally {
+			release()
+			if (this.mutationTails.get(profileId) === tail) this.mutationTails.delete(profileId)
+		}
+	}
+
+	private async cancelCoordinatorFlow(profileId: string, flowId: string): Promise<void> {
+		try {
+			await this.coordinator.cancelFlow({ profileId, flowId })
+		} catch (error) {
+			if (!(error instanceof OAuthFlowError) || (error.code !== "FLOW_NOT_FOUND" && error.code !== "FLOW_TIMED_OUT"))
+				throw error
+		} finally {
+			if (this.activeFlow?.flowId === flowId) this.activeFlow = undefined
+		}
 	}
 }
 
-// Singleton instance
-export const openAiCodexOAuthManager = new OpenAiCodexOAuthManager()
+async function rejectUnconfiguredE2EOAuth(): Promise<void> {
+	throw new OAuthFlowError("BROWSER_OPEN_FAILED", "OpenAI Codex OAuth E2E requires an explicit loopback authorization server.")
+}
+
+function createDefaultOpenAiCodexOAuthManager(): OpenAiCodexOAuthManager {
+	const runtimeConfig = resolveOpenAiCodexRuntimeConfig()
+	if (!runtimeConfig.e2eOAuth) {
+		return new OpenAiCodexOAuthManager({
+			...(process.env.E2E_TEST === "true" ? { openExternal: rejectUnconfiguredE2EOAuth } : {}),
+		})
+	}
+
+	const { authorizationEndpoint, tokenEndpoint, callbackPorts, timeoutMs } = runtimeConfig.e2eOAuth
+	return new OpenAiCodexOAuthManager({
+		strategy: new OpenAiCodexOAuthStrategy({
+			configuration: { authorizationEndpoint, tokenEndpoint, ...(callbackPorts ? { callbackPorts } : {}) },
+		}),
+		openExternal,
+		timeoutMs,
+	})
+}
+
+export const openAiCodexOAuthManager = createDefaultOpenAiCodexOAuthManager()

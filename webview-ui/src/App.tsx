@@ -2,6 +2,7 @@ import type { Boolean, EmptyRequest } from "@shared/proto/dline/common"
 import { useCallback, useEffect } from "react"
 import AccountView from "./components/account/AccountView"
 import ChatView from "./components/chat/ChatView"
+import { HydrationFailed, HydrationPending } from "./components/common/HydrationGate"
 import HistoryView from "./components/history/HistoryView"
 import McpView from "./components/mcp/configuration/McpConfigurationView"
 import OnboardingView from "./components/onboarding/OnboardingView"
@@ -15,6 +16,8 @@ import { UiServiceClient } from "./services/grpc-client"
 export const AppContent = () => {
 	const {
 		didHydrateState,
+		hydration,
+		retryHydration,
 		showWelcome,
 		shouldShowAnnouncement,
 		showMcp,
@@ -58,7 +61,12 @@ export const AppContent = () => {
 	}, [didHydrateState, showWelcome, shouldShowAnnouncement, showAnnouncement, showUpdateAnnouncementModal])
 
 	if (!didHydrateState) {
-		return null
+		// Rendering nothing here was the blank panel: a failed subscription and
+		// a slow one produced the same empty view, and neither said so.
+		if (hydration?.status === "failed") {
+			return <HydrationFailed onRetry={retryHydration} reason={hydration.reason} />
+		}
+		return <HydrationPending />
 	}
 
 	if (showWelcome) {

@@ -16,15 +16,30 @@ function awaitingState(): ContextTransitionDialogState {
 }
 
 describe("ContextTransitionDialog", () => {
-	it("states that the target Profile is activated before compaction and shows the strict fitting exit", () => {
+	it("presents the Profile window notice as advice that never promises compaction", () => {
 		render(<ContextTransitionDialog onCancel={vi.fn()} onConfirm={vi.fn()} onRetry={vi.fn()} state={awaitingState()} />)
 
-		expect(screen.getByText(/small-profile will be activated first/i)).toBeInTheDocument()
-		expect(screen.getByText("80,000 tokens")).toBeInTheDocument()
+		expect(screen.getByText(/nothing is compacted now/i)).toBeInTheDocument()
+		expect(screen.getByText("Context in use")).toBeInTheDocument()
+		expect(screen.getByText("Switch")).toBeInTheDocument()
+		expect(screen.queryByText("Compact & Switch")).not.toBeInTheDocument()
+	})
+
+	it("keeps a Mode transition describing the compaction it still performs", () => {
+		render(
+			<ContextTransitionDialog
+				onCancel={vi.fn()}
+				onConfirm={vi.fn()}
+				onRetry={vi.fn()}
+				state={{ ...awaitingState(), kind: "mode" }}
+			/>,
+		)
+
+		expect(screen.getByText(/Compaction will run with/i)).toBeInTheDocument()
 		expect(screen.getByText("Compact & Switch")).toBeInTheDocument()
 	})
 
-	it("reports a Profile compaction failure while keeping the adopted target active", () => {
+	it("reports a failed Profile switch while keeping the adopted target active", () => {
 		const onRetry = vi.fn()
 		render(
 			<ContextTransitionDialog
@@ -35,14 +50,14 @@ describe("ContextTransitionDialog", () => {
 					...awaitingState(),
 					phase: "failed",
 					targetAdopted: true,
-					error: "Compaction failed.",
+					error: "Profile switch state changed before commit.",
 				}}
 			/>,
 		)
 
-		expect(screen.getByText("Context compaction not completed")).toBeInTheDocument()
+		expect(screen.getByText("Switch not completed")).toBeInTheDocument()
 		expect(screen.getByText(/small-profile remains active/i)).toBeInTheDocument()
-		expect(screen.getByText("Compaction failed.")).toBeInTheDocument()
+		expect(screen.getByText("Profile switch state changed before commit.")).toBeInTheDocument()
 		fireEvent.click(screen.getByText("Retry"))
 		expect(onRetry).toHaveBeenCalledWith("operation-1")
 		fireEvent.click(screen.getByText("Dismiss"))
