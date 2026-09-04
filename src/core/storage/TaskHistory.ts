@@ -1,8 +1,10 @@
 import chokidar, { FSWatcher } from "chokidar"
-import Mutex from "p-mutex"
 import { HistoryItem } from "@/shared/HistoryItem"
 import { Logger } from "@/shared/services/Logger"
-import type { BufferedUnifyStore } from "./backend/api/UnifyStore"
+import type { UnifyStore, UnifyStoreDatabase } from "./backend/api/UnifyStore"
+import { desc, eq } from "./backend/api/UnifyStoreQuery"
+import { SqliteUnifyStoreBackend } from "./backend/sqlite/SqliteUnifyStore"
+import { type TaskCompletionProjection, TaskHistoryRow } from "./entities/TaskHistoryRow"
 
 export interface TaskCompletionStateUpdate {
 	taskId: string
@@ -10,118 +12,57 @@ export interface TaskCompletionStateUpdate {
 	revision: number
 }
 
-/** Canonical completion projection of one Task. */
-interface CompletionProjection {
-	isCompleted: boolean
-	revision: number
-}
-
-/** Read the canonical completion projection carried by a persisted row. */
-function readCompletionProjection(item: HistoryItem | undefined): CompletionProjection | undefined {
-	if (!item || item.completionStateRevision === undefined) return undefined
-	return { isCompleted: item.isCompleted === true, revision: item.completionStateRevision }
-}
-
-/** Select the projection produced by the newer revision. */
-function newerProjection(
-	left: CompletionProjection | undefined,
-	right: CompletionProjection | undefined,
-): CompletionProjection | undefined {
-	if (!left) return right
-	if (!right) return left
-	return right.revision > left.revision ? right : left
-}
-
-/** Result of applying one completion update against an in-memory row list. */
-interface AppliedCompletionUpdate {
-	/** The rewritten row, when the update was accepted. */
-	updated?: HistoryItem
-	/** The projection that stays canonical, when the update was rejected as stale. */
-	kept?: CompletionProjection
-}
-
-/** Apply one completion update in place; shared by single and batch patch paths. */
-function applyCompletionUpdate(
-	items: HistoryItem[],
-	update: TaskCompletionStateUpdate,
-	knownProjection: CompletionProjection | undefined,
-): AppliedCompletionUpdate {
-	const existingIndex = items.findIndex((item) => item.id === update.taskId)
-	if (existingIndex < 0) return {}
-
-	const existing = items[existingIndex]
-	if (!existing) return {}
-	const current = newerProjection(readCompletionProjection(existing), knownProjection)
-	if (current && (current.revision >= update.revision || current.isCompleted === update.isCompleted)) {
-		return { kept: current }
-	}
-
-	const updated: HistoryItem = {
-		...existing,
-		isCompleted: update.isCompleted,
-		completionStateRevision: update.revision,
-	}
-	items[existingIndex] = updated
-	return { updated }
-}
-
-/** Preserve the canonical completion projection while merging ordinary metadata. */
-function mergeCompletionProjection(projection: CompletionProjection | undefined, incoming: HistoryItem): HistoryItem {
-	const merged = { ...incoming }
-	delete merged.isCompleted
-	delete merged.completionStateRevision
-	if (projection) {
-		merged.isCompleted = projection.isCompleted
-		merged.completionStateRevision = projection.revision
-	}
-	return merged
-}
-
 /**
- * Task history store backed by taskHistory.jsonl.
+ * Decide whether a completion update supersedes the projection already stored.
  *
- * Manages the global task history list (one entry per task session).
- * Uses the backend-neutral buffered layer over the raw JSONL backend.
- *
- * There is only one taskHistory.jsonl per user.  The instance is created
- * and owned by StateManager, which passes it to consumers as needed.
+ * A lower or equal revision is stale, and a repeated verdict carries no new
+ * information; rejecting both keeps the durable value monotonic and avoids
+ * rewriting a row that would not change.
  */
+function supersedes(current: TaskCompletionProjection | undefined, update: TaskCompletionStateUpdate): boolean {
+	if (!current) return true
+	return update.revision > current.revision && update.isCompleted !== current.isCompleted
+}
+
 /**
- * Quiet period before a disk change is pulled into the in-memory index.
+ * Quiet period before a disk change is pulled into the current process.
  *
- * A reload takes the cross-process file lock and re-reads the whole history, so
- * one reload per change event made every window fight for the same lock while a
- * writer already held it. Coalescing turns a burst into a single reload.
+ * Every window watches the same database, so a burst of writes would otherwise
+ * make each window re-read and re-publish the whole history repeatedly.
  */
 const RELOAD_COALESCE_DELAY_MS = 250
 
+/**
+ * Task history store backed by `taskHistory.db`.
+ *
+ * The task id is the store's primary key, so a task has exactly one row by
+ * construction and reads never have to reconcile superseded revisions. There is
+ * one database per user; the instance is created and owned by StateManager,
+ * which passes it to consumers as needed.
+ */
 export class TaskHistory {
-	private store: BufferedUnifyStore<HistoryItem>
-	private readonly completionWriteMutex = new Mutex()
-	/**
-	 * Last completion projection this process observed per Task.
-	 *
-	 * The buffered store serves metadata updates from an in-memory list that can
-	 * lag behind a durable completion write performed by this or another window.
-	 * Without this watermark a stale row would silently drop the checkmark on the
-	 * next ordinary metadata flush.
-	 */
-	private readonly knownProjections = new Map<string, CompletionProjection>()
 	private _watcher: FSWatcher | null = null
 	private _onChangeCallbacks: Array<() => void | Promise<void>> = []
 	private _reloadTimer: NodeJS.Timeout | null = null
 	private _reloadInFlight: Promise<void> | null = null
 	private _reloadRequestedWhileInFlight = false
-	/** Tail of staged metadata writes still settling in the background. */
-	private _pendingStage: Promise<void> = Promise.resolve()
+	/**
+	 * Tail of writes still settling in the background.
+	 *
+	 * Metadata updates sit on the UI hot path, so `upsertTaskHistory` returns as
+	 * soon as the write is queued and `flush` joins the tail when a caller needs
+	 * durability.
+	 */
+	private _pendingWrite: Promise<void> = Promise.resolve()
 
-	constructor(store: BufferedUnifyStore<HistoryItem>) {
-		this.store = store
-	}
+	constructor(
+		private readonly store: UnifyStore<TaskHistoryRow>,
+		private readonly database?: UnifyStoreDatabase,
+	) {}
 
 	/**
-	 * Register a callback invoked when the taskHistory file changes
-	 * on disk (e.g. from another VSCode window).  Returns a disposal function.
+	 * Register a callback invoked when the history changes on disk, for example
+	 * from another window. Returns a disposal function.
 	 */
 	onChange(cb: () => void | Promise<void>): () => void {
 		this._onChangeCallbacks.push(cb)
@@ -133,215 +74,194 @@ export class TaskHistory {
 
 	// ── Read ──
 
-	/** Total number of task history entries (including soft-deleted). */
-	get count(): number {
-		return this.store.count
-	}
-
-	/**
-	 * Return all entries (loads full data from disk on first call).
-	 * Excludes soft-deleted entries.
-	 */
+	/** Return every entry, newest first. */
 	async getAll(): Promise<HistoryItem[]> {
-		await this.store.reload()
-		const all = this.store.getAll() as ReadonlyArray<HistoryItem & { _deleted?: boolean }>
-		return [...all].filter((item) => !(item as any)._deleted).sort((a, b) => b.ts - a.ts)
+		const { records } = await this.store.query({ orderBy: [desc(TaskHistoryRow.storage.fields.ts)] })
+		return records.map((row) => row.toHistoryItem())
 	}
 
 	/**
-	 * Return deduplicated entries (by id, keeping the last occurrence).
-	 * Excludes soft-deleted entries.
+	 * Return every entry, newest first.
+	 *
+	 * The task id is the primary key, so the result is deduplicated by
+	 * construction. The name is kept because callers depend on it.
 	 */
 	async getDeduplicated(): Promise<HistoryItem[]> {
-		const all = await this.getAll()
-		const byId = new Map<string, HistoryItem>()
-		for (const item of all) {
-			byId.set(item.id, item)
-		}
-		return [...byId.values()].sort((a, b) => b.ts - a.ts)
+		return await this.getAll()
 	}
 
-	/**
-	 * Return the most recent N entries (without loading full history).
-	 */
+	/** Return the most recent N entries. */
 	async getRecent(limit: number): Promise<HistoryItem[]> {
 		if (limit <= 0) return []
-		const entries = await this.store.getRecent(limit)
-		return entries.filter((e) => !(e as any)._deleted)
+		const { records } = await this.store.query({
+			orderBy: [desc(TaskHistoryRow.storage.fields.ts)],
+			limit,
+		})
+		return records.map((row) => row.toHistoryItem())
 	}
 
-	/**
-	 * Look up a single entry by task id.
-	 * Loads all data on first call (needed because we index by ts, not id).
-	 */
+	/** Look up a single entry by task id. */
 	async getById(id: string): Promise<HistoryItem | undefined> {
-		const all = await this.getAll()
-		return all.find((item) => item.id === id && !(item as any)._deleted)
+		return (await this.findRow(id))?.toHistoryItem()
 	}
 
 	// ── Write ──
 
 	/**
-	 * Insert or update a task history entry with one durable mutation.
+	 * Insert or update one entry with a single durable transaction.
 	 *
-	 * @param item The history item to upsert
+	 * The completion projection is owned by `setCompletionState`, so an incoming
+	 * item cannot establish or retract one: a metadata update may be built from a
+	 * snapshot older than a completion already recorded by this or another window.
 	 */
-	async upsert(item: HistoryItem): Promise<void> {
-		await this.completionWriteMutex.withLock(async () => {
-			await this.store.mutate((items) => {
-				const existingIdx = items.findIndex((d) => (d as HistoryItem).id === item.id)
-				if (existingIdx >= 0) {
-					const projection = newerProjection(
-						readCompletionProjection(items[existingIdx]),
-						this.knownProjections.get(item.id),
-					)
-					this.rememberProjection(item.id, projection)
-					items[existingIdx] = mergeCompletionProjection(projection, item) as unknown as (typeof items)[0]
-				} else {
-					const projection = this.knownProjections.get(item.id)
-					items.push(mergeCompletionProjection(projection, item) as unknown as (typeof items)[0])
-				}
-				return items
-			})
+	async upsert(item: HistoryItem): Promise<HistoryItem> {
+		return await this.store.transaction(async (transaction) => {
+			const rows = await transaction.query({ where: eq(TaskHistoryRow.storage.fields.id, item.id) })
+			const row = TaskHistoryRow.fromHistoryItem(item, rows[0]?.completionProjection())
+			await transaction.replaceAll([...(await transaction.query()).filter((candidate) => candidate.id !== item.id), row])
+			return row.toHistoryItem()
 		})
 	}
 
 	/**
 	 * Toggle the favorite status of a task.
 	 *
-	 * @param id Task id
-	 * @returns The new favorite status, or undefined if task not found
+	 * @returns The new favorite status, or undefined when the task is unknown.
 	 */
 	async toggleFavorite(id: string): Promise<boolean | undefined> {
-		const all = await this.getAll()
-		const item = all.find((i) => i.id === id)
-		if (!item) return undefined
-
-		const updated = { ...item, isFavorited: !item.isFavorited }
+		const current = await this.getById(id)
+		if (!current) return undefined
+		const updated = { ...current, isFavorited: !current.isFavorited }
 		await this.upsert(updated)
 		return updated.isFavorited
 	}
 
-	/**
-	 * Delete a task by id with one durable mutation.
-	 */
+	/** Delete one task by id. */
 	async softDelete(id: string): Promise<void> {
-		await this.store.mutate((items) => {
-			const filtered = items.filter((i) => (i as HistoryItem).id !== id)
-			return filtered
+		await this.store.transaction(async (transaction) => {
+			const remaining = (await transaction.query()).filter((row) => row.id !== id)
+			await transaction.replaceAll(remaining)
 		})
 	}
 
 	/**
-	 * Delete all tasks except those marked as favorite.
+	 * Delete every task except those marked as favorite.
 	 *
-	 * @returns Number of tasks deleted
+	 * @returns Number of deleted tasks.
 	 */
 	async deleteAllExceptFavorites(): Promise<number> {
-		let deleted = 0
-		await this.store.mutate((items) => {
-			const before = items.length
-			const favorited = items.filter((i) => (i as HistoryItem).isFavorited === true)
-			deleted = before - favorited.length
-			return favorited
+		return await this.store.transaction(async (transaction) => {
+			const all = await transaction.query()
+			const favorited = all.filter((row) => row.isFavorited)
+			await transaction.replaceAll(favorited)
+			return all.length - favorited.length
 		})
-		return deleted
 	}
 
 	/** Clear all task history. */
 	async clearAll(): Promise<void> {
-		await this.store.clear()
+		await this.store.replaceAll([])
 	}
 
 	/**
-	 * Update metadata for a specific task (called from MessageStateHandler).
+	 * Replace the whole index with the supplied entries.
 	 *
-	 * @param item Full history item with updated metadata
+	 * The history is a derived index over `tasks/<id>/`, so rebuilding it is a
+	 * wholesale replacement rather than a merge: entries missing from `items` are
+	 * meant to disappear. Duplicate ids would violate the primary key, so the
+	 * last occurrence wins, matching the append-order semantics of the sources
+	 * this rebuild reads from.
 	 */
+	async replaceAllItems(items: readonly HistoryItem[]): Promise<HistoryItem[]> {
+		const rowsById = new Map<string, TaskHistoryRow>()
+		for (const item of items) {
+			rowsById.set(item.id, TaskHistoryRow.fromHistoryItem(item))
+		}
+		const rows = [...rowsById.values()]
+		await this.store.replaceAll(rows)
+		return rows.map((row) => row.toHistoryItem())
+	}
+
+	/** Update metadata for one task. */
 	async updateMetadata(item: HistoryItem): Promise<void> {
 		await this.upsert(item)
 	}
 
-	/** Durably patch one Task completion projection without replacing unrelated metadata. */
+	/**
+	 * Durably patch one completion projection without touching unrelated metadata.
+	 *
+	 * The read-compare-write runs inside one transaction so a concurrent window
+	 * cannot interleave between the staleness check and the write.
+	 *
+	 * @returns The rewritten entry, or undefined when the update was rejected.
+	 */
 	async setCompletionState(update: TaskCompletionStateUpdate): Promise<HistoryItem | undefined> {
-		return await this.completionWriteMutex.withLock(async () => {
-			// Fast no-op path: a provably stale or unchanged update must not pay a
-			// flush plus a full-file rewrite while holding the cross-process lock.
-			// The in-memory view is at least as new as anything this process
-			// persisted, so a rejection here agrees with the transactional check
-			// below; only updates that would actually change a row go durable.
-			const staged = (this.store.getAll() as HistoryItem[]).find((item) => item.id === update.taskId)
-			const known = newerProjection(readCompletionProjection(staged), this.knownProjections.get(update.taskId))
-			if (known && (known.revision >= update.revision || known.isCompleted === update.isCompleted)) {
-				this.rememberProjection(update.taskId, known)
-				return undefined
-			}
-
-			let updated: HistoryItem | undefined
-			await this.store.mutate((items) => {
-				const applied = applyCompletionUpdate(items, update, this.knownProjections.get(update.taskId))
-				if (applied.kept) this.rememberProjection(update.taskId, applied.kept)
-				updated = applied.updated
-				return items
-			})
-			if (updated) {
-				this.rememberProjection(update.taskId, {
-					isCompleted: update.isCompleted,
-					revision: update.revision,
-				})
-			}
-			return updated
-		})
+		const [applied] = await this.setCompletionStates([update])
+		return applied
 	}
 
 	/**
-	 * Durably patch many completion projections with one full-file transaction.
+	 * Durably patch many completion projections in one transaction.
 	 *
-	 * Committing each repaired row through its own transaction turned a large
-	 * history into hundreds of full rewrites under the cross-process lock.
-	 * Batching keeps the same per-row staleness rules but pays for at most one
-	 * rewrite, no matter how many rows the backfill repairs.
+	 * Committing each repaired row separately turned a large history into one
+	 * full transaction per row, which is why the backfill batches them.
 	 *
 	 * @param updates Projection patches to apply; stale entries are skipped.
-	 * @returns The rows that were actually rewritten.
+	 * @returns The entries that were actually rewritten.
 	 */
 	async setCompletionStates(updates: readonly TaskCompletionStateUpdate[]): Promise<HistoryItem[]> {
 		if (updates.length === 0) return []
-		return await this.completionWriteMutex.withLock(async () => {
+		return await this.store.transaction(async (transaction) => {
+			const rowsById = new Map((await transaction.query()).map((row) => [row.id, row]))
 			const applied: HistoryItem[] = []
-			await this.store.mutate((items) => {
-				for (const update of updates) {
-					const result = applyCompletionUpdate(items, update, this.knownProjections.get(update.taskId))
-					if (result.kept) this.rememberProjection(update.taskId, result.kept)
-					if (result.updated) applied.push(result.updated)
-				}
-				return items
-			})
-			for (const row of applied) {
-				if (row.completionStateRevision === undefined) continue
-				this.rememberProjection(row.id, {
-					isCompleted: row.isCompleted === true,
-					revision: row.completionStateRevision,
-				})
+			for (const update of updates) {
+				const current = rowsById.get(update.taskId)
+				if (!current || !supersedes(current.completionProjection(), update)) continue
+				const updated = current.withCompletion({ isCompleted: update.isCompleted, revision: update.revision })
+				rowsById.set(update.taskId, updated)
+				applied.push(updated.toHistoryItem())
 			}
+			if (applied.length > 0) await transaction.replaceAll([...rowsById.values()])
 			return applied
 		})
 	}
 
-	/** Record the newest completion projection observed for one Task. */
-	private rememberProjection(taskId: string, projection: CompletionProjection | undefined): void {
-		if (!projection) return
-		const merged = newerProjection(this.knownProjections.get(taskId), projection)
-		if (merged) this.knownProjections.set(taskId, merged)
+	/**
+	 * Queue an upsert and return the entry that will be persisted.
+	 *
+	 * Callers on the UI hot path must not wait for the durable write, so the
+	 * transaction settles in the background and `flush` joins it.
+	 */
+	async upsertTaskHistory(item: HistoryItem): Promise<HistoryItem> {
+		const existing = await this.findRow(item.id)
+		const staged = TaskHistoryRow.fromHistoryItem(item, existing?.completionProjection()).toHistoryItem()
+		this.trackWrite(this.upsert(item))
+		return staged
 	}
 
-	/**
-	 * Reload the L1 index from disk (called by chokidar watcher).
-	 */
+	/** Let a queued write settle in the background without blocking the caller. */
+	private trackWrite(write: Promise<unknown>): void {
+		const settled = write.then(
+			() => undefined,
+			(error) => {
+				Logger.error("[TaskHistory] Failed to persist a metadata update:", error)
+			},
+		)
+		this._pendingWrite = this._pendingWrite.then(() => settled)
+	}
+
+	/** Wait for all queued writes. Used by durability and shutdown barriers. */
+	async flush(): Promise<void> {
+		await this._pendingWrite
+	}
+
+	private async findRow(id: string): Promise<TaskHistoryRow | undefined> {
+		const { records } = await this.store.query({ where: eq(TaskHistoryRow.storage.fields.id, id) })
+		return records[0]
+	}
+
+	/** Re-read the history and notify listeners; called by the file watcher. */
 	async reloadIndex(): Promise<void> {
-		// Force reload from disk to pick up cross-process writes (chokidar sync)
-		await this.store.reload(true)
-		// Notify listeners
 		for (const cb of this._onChangeCallbacks) {
 			try {
 				await cb()
@@ -352,109 +272,9 @@ export class TaskHistory {
 	}
 
 	/**
-	 * Upsert a task history entry by id.
-	 * Staged in memory; the buffered store flushes through the JSONL backend.
+	 * Watch the database for cross-process changes.
 	 *
-	 * @param item The history item to upsert
-	 * @returns The staged row, carrying the canonical completion projection.
-	 */
-	async upsertTaskHistory(item: HistoryItem): Promise<HistoryItem> {
-		return await this.completionWriteMutex.withLock(() => {
-			// No reload here: `reload()` without `force` is a no-op, and a forced one
-			// would take the cross-process lock to re-read the whole file on a UI hot
-			// path. Cross-process writes arrive through the watcher instead.
-			const all = this.store.getAll() as HistoryItem[]
-			const existingIndex = all.findIndex((m) => m.id === item.id)
-
-			if (existingIndex >= 0) {
-				// Replace in-place (memory-level + markDirty) without overwriting the canonical completion projection.
-				// The buffered row can be older than a completion already written by
-				// this or another window, so the remembered projection wins on revision.
-				const projection = newerProjection(
-					readCompletionProjection(all[existingIndex]),
-					this.knownProjections.get(item.id),
-				)
-				this.rememberProjection(item.id, projection)
-				const staged = mergeCompletionProjection(projection, item)
-				this.trackStage(this.store.stageUpdateAt(existingIndex, staged))
-				return staged
-			}
-
-			// Find insertion position by ts (ascending order)
-			let insertIndex = all.length
-			for (let i = 0; i < all.length; i++) {
-				if (all[i].ts > item.ts) {
-					insertIndex = i
-					break
-				}
-			}
-			// Insert at correct position (memory-level + markDirty)
-			const staged = mergeCompletionProjection(this.knownProjections.get(item.id), item)
-			this.trackStage(this.store.stageInsertAt(insertIndex, staged))
-			return staged
-		})
-	}
-
-	/**
-	 * Let a staged write settle in the background.
-	 *
-	 * Metadata updates sit on the UI hot path and only mutate the buffered
-	 * in-memory list; the durable write happens later through the flush timer.
-	 * Awaiting the stage made every task update wait behind whatever the store
-	 * was doing, so callers now return immediately while `flush` still joins the
-	 * staged tail before reporting durability.
-	 */
-	private trackStage(stage: Promise<void>): void {
-		this._pendingStage = this._pendingStage.then(
-			() => stage,
-			() => stage,
-		)
-		void this._pendingStage.catch((error) => Logger.error("[TaskHistory] Failed to stage a metadata update:", error))
-	}
-
-	/** Persist all staged metadata updates. Used by durability and shutdown barriers. */
-	async flush(): Promise<void> {
-		await this._pendingStage.catch(() => undefined)
-		await this.store.flush()
-	}
-
-	/**
-	 * Collapse superseded revisions of each task into a single latest entry.
-	 *
-	 * The file is append-structured: every metadata update of a task rewrites the
-	 * whole record, so a long-lived history accumulates dozens of dead revisions
-	 * per task. Every write then has to rewrite that entire file while holding
-	 * the cross-process lock, which is what starves other windows.
-	 *
-	 * Compaction is only worth its own full rewrite when there is a real
-	 * surplus, so it is a no-op below `minRedundantEntries` extra rows.
-	 *
-	 * @param minRedundantEntries Superseded rows required before rewriting.
-	 * @returns Number of removed rows, or 0 when nothing was rewritten.
-	 */
-	async compact(minRedundantEntries = 1_000): Promise<number> {
-		return await this.completionWriteMutex.withLock(async () => {
-			const all = this.store.getAll() as ReadonlyArray<HistoryItem & { _deleted?: boolean }>
-			const latestById = new Map<string, HistoryItem>()
-			for (const item of all) {
-				// Later entries supersede earlier ones for the same task.
-				latestById.set(item.id, item)
-			}
-			const removed = all.length - latestById.size
-			if (removed < minRedundantEntries) return 0
-			const compacted = [...latestById.values()].sort((left, right) => left.ts - right.ts)
-			await this.store.replaceAll(compacted)
-			await this.store.flush()
-			Logger.info(`[TaskHistory] Compacted history: ${all.length} -> ${compacted.length} entries`)
-			return removed
-		})
-	}
-
-	/**
-	 * Start the chokidar file watcher for cross-process sync.
-	 * Called once after construction by the owner (StateManager).
-	 *
-	 * @param filePath Absolute path to taskHistory.jsonl
+	 * @param filePath Absolute path to `taskHistory.db`
 	 */
 	async startWatcher(filePath: string): Promise<void> {
 		try {
@@ -463,26 +283,19 @@ export class TaskHistory {
 				this._watcher = null
 			}
 
-			this._watcher = chokidar.watch(filePath, {
+			// Committed data reaches the WAL before the main file, so both are
+			// watched: waiting only on the database file would delay every
+			// cross-window refresh until a checkpoint happened to run.
+			this._watcher = chokidar.watch([filePath, `${filePath}-wal`], {
 				persistent: true,
 				ignoreInitial: true,
-				atomic: true,
 				awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
 			})
 
 			this._watcher
 				.on("add", () => this.scheduleReload())
 				.on("change", () => this.scheduleReload())
-				.on("unlink", async () => {
-					await this.store.replaceAll([])
-					for (const cb of this._onChangeCallbacks) {
-						try {
-							await cb()
-						} catch {
-							/* ignore */
-						}
-					}
-				})
+				.on("unlink", () => this.scheduleReload())
 				.on("error", (error) => Logger.error("[TaskHistory] Watcher error:", error))
 		} catch (err) {
 			Logger.error("[TaskHistory] Failed to start file watcher:", err)
@@ -492,11 +305,8 @@ export class TaskHistory {
 	/**
 	 * Coalesce disk-change notifications into a single reload.
 	 *
-	 * Every window watches the same file, and a reload takes the cross-process
-	 * lock to re-read the whole history. Reloading once per event made the
-	 * windows queue up behind a writer that already held the lock, exhausting its
-	 * bounded retry budget. Only one reload runs at a time; changes observed
-	 * while it runs trigger exactly one follow-up.
+	 * Only one reload runs at a time; changes observed while it runs trigger
+	 * exactly one follow-up.
 	 */
 	private scheduleReload(): void {
 		if (this._reloadInFlight) {
@@ -521,14 +331,13 @@ export class TaskHistory {
 		try {
 			await this.reloadIndex()
 		} catch (err) {
-			// Losing a reload only costs freshness: the next change reschedules one,
-			// and the in-memory index still serves the last known state. Contention
-			// on a busy history file is expected, so it must not surface as an error.
+			// Losing a reload only costs freshness: the next change reschedules one
+			// and the store still answers from disk, so it must not surface as an error.
 			Logger.debug(`[TaskHistory] Deferred reload after file change: ${err instanceof Error ? err.message : err}`)
 		}
 	}
 
-	/** Stop watchers and flush/close the underlying JSONL store. */
+	/** Stop the watcher, drain queued writes and close the store. */
 	async dispose(): Promise<void> {
 		const watcher = this._watcher
 		this._watcher = null
@@ -543,6 +352,24 @@ export class TaskHistory {
 		}
 		// Let an in-flight reload settle so it cannot touch a closed store.
 		await this._reloadInFlight?.catch(() => undefined)
+		await this.flush()
 		await this.store.close()
+		await this.database?.close()
+	}
+}
+
+/**
+ * Open the task history database at `location`, creating it when absent.
+ *
+ * @param location Absolute path to `taskHistory.db`
+ */
+export async function openTaskHistory(location: string): Promise<TaskHistory> {
+	const database = await new SqliteUnifyStoreBackend().open(location)
+	try {
+		const store = await database.openStore(TaskHistoryRow)
+		return new TaskHistory(store, database)
+	} catch (error) {
+		await database.close().catch(() => undefined)
+		throw error
 	}
 }

@@ -1,10 +1,11 @@
+import { randomUUID } from "node:crypto"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import * as path from "node:path"
 import { expect } from "@playwright/test"
 import type { HistoryItem } from "@shared/HistoryItem"
-import { randomUUID } from "node:crypto"
 import { E2ETestHelper, e2e } from "./utils/helpers"
 import { MultiInstanceLauncher, type MultiInstanceSurface } from "./utils/multi-instance"
+import { countStoredRowsForTask } from "./utils/task-history-store"
 
 interface ControlResponse {
 	success: boolean
@@ -24,47 +25,34 @@ async function updateAndFlush(surface: MultiInstanceSurface, item: HistoryItem):
 	}, 30_000)
 }
 
-async function physicalRowsForTask(dlineDocsDir: string, taskId: string): Promise<HistoryItem[]> {
-	const filePath = path.join(dlineDocsDir, "tasks", "taskHistory.jsonl")
-	const content = await readFile(filePath, "utf8").catch(() => "")
-	return content
-		.split(/\r?\n/u)
-		.filter(Boolean)
-		.map((line) => JSON.parse(line) as HistoryItem)
-		.filter((item) => item.id === taskId)
-}
+e2e(
+	"Task history same-id updates remain one physical record across VS Code instances",
+	async ({ dlineDir, dlineDocsDir, extensionsDir, server, workspaceDir }, testInfo) => {
+		e2e.setTimeout(240_000)
+		const launcher = new MultiInstanceLauncher({ dlineDir, dlineDocsDir, extensionsDir, server, testInfo, workspaceDir })
+		try {
+			const instanceA = await launcher.launch("task-history-a")
+			const instanceB = await launcher.launch("task-history-b")
+			const taskId = `e2e-task-history-${Date.now()}`
+			const base: HistoryItem = {
+				id: taskId,
+				ts: Date.now(),
+				task: "Task history cross-instance RED",
+				tokensIn: 1,
+				tokensOut: 1,
+				totalCost: 0,
+			}
 
-e2e("Task history same-id updates remain one physical record across VS Code instances", async ({
-	dlineDir,
-	dlineDocsDir,
-	extensionsDir,
-	server,
-	workspaceDir,
-}, testInfo) => {
-	e2e.setTimeout(240_000)
-	const launcher = new MultiInstanceLauncher({ dlineDir, dlineDocsDir, extensionsDir, server, testInfo, workspaceDir })
-	try {
-		const instanceA = await launcher.launch("task-history-a")
-		const instanceB = await launcher.launch("task-history-b")
-		const taskId = `e2e-task-history-${Date.now()}`
-		const base: HistoryItem = {
-			id: taskId,
-			ts: Date.now(),
-			task: "Task history cross-instance RED",
-			tokensIn: 1,
-			tokensOut: 1,
-			totalCost: 0,
+			const [responseA, responseB] = await Promise.all([
+				updateAndFlush(instanceA, { ...base, ts: base.ts + 1, tokensIn: 11 }),
+				updateAndFlush(instanceB, { ...base, ts: base.ts + 2, tokensOut: 22 }),
+			])
+			expect(responseA).toMatchObject({ success: true })
+			expect(responseB).toMatchObject({ success: true })
+
+			await expect.poll(() => countStoredRowsForTask(dlineDocsDir, taskId), { timeout: 30_000 }).toBe(1)
+		} finally {
+			await launcher.dispose()
 		}
-
-		const [responseA, responseB] = await Promise.all([
-			updateAndFlush(instanceA, { ...base, ts: base.ts + 1, tokensIn: 11 }),
-			updateAndFlush(instanceB, { ...base, ts: base.ts + 2, tokensOut: 22 }),
-		])
-		expect(responseA).toMatchObject({ success: true })
-		expect(responseB).toMatchObject({ success: true })
-
-		await expect.poll(() => physicalRowsForTask(dlineDocsDir, taskId), { timeout: 30_000 }).toHaveLength(1)
-	} finally {
-		await launcher.dispose()
-	}
-})
+	},
+)

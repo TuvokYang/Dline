@@ -60,8 +60,11 @@ export interface StorageContext {
 	/** Stable, non-sensitive identity derived from the resolved workspace storage boundary. */
 	readonly workspaceId: string
 
-	/** The task history JSONL path owned by this storage boundary. */
+	/** The legacy task history JSONL path, kept only for the one-time import. */
 	readonly taskHistoryPath: string
+
+	/** The task history database owned by this storage boundary. */
+	readonly taskHistoryDatabasePath: string
 }
 
 export interface StorageContextOptions {
@@ -88,7 +91,8 @@ export interface StorageContextOptions {
 }
 
 const SETTINGS_SUBFOLDER = "data"
-const TASK_HISTORY_FILENAME = "taskHistory.jsonl"
+const LEGACY_TASK_HISTORY_FILENAME = "taskHistory.jsonl"
+const TASK_HISTORY_DATABASE_FILENAME = "taskHistory.db"
 
 /**
  * Create a short deterministic hash of a string for use in directory names.
@@ -156,7 +160,8 @@ export function createStorageContext(opts: StorageContextOptions = {}): StorageC
 
 	const globalState = new ClineFileStorage(path.join(dataDir, "globalState.json"), "GlobalState")
 	const taskRoot = opts.clineDir ?? getDlineDocumentsPathSync()
-	const taskHistoryPath = path.join(taskRoot, "tasks", TASK_HISTORY_FILENAME)
+	const taskHistoryPath = path.join(taskRoot, "tasks", LEGACY_TASK_HISTORY_FILENAME)
+	const taskHistoryDatabasePath = path.join(taskRoot, "tasks", TASK_HISTORY_DATABASE_FILENAME)
 
 	return {
 		globalState,
@@ -173,5 +178,6 @@ export function createStorageContext(opts: StorageContextOptions = {}): StorageC
 		workspaceStoragePath: workspaceDir,
 		workspaceId: createWorkspaceId(workspaceDir),
 		taskHistoryPath,
+		taskHistoryDatabasePath,
 	}
 }

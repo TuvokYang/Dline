@@ -2346,7 +2346,11 @@ export class Controller {
 			writer: this.stateManager.taskHistory,
 			onError: (error) => Logger.error("[WorkspaceHistoryManager] Background persistence failed:", error),
 		})
-		if (workspacePath) this.workspaceHistoryManager = manager
+		// Cache regardless of how the manager was resolved. The metadata and
+		// completion paths call this without an argument, so caching only the
+		// explicit-path case left the field null and made the shutdown flush in
+		// `clearTask` a silent no-op that dropped queued writes.
+		this.workspaceHistoryManager = manager
 		return manager
 	}
 

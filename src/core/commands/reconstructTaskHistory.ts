@@ -1,10 +1,5 @@
-import {
-	getDlineDocumentsPath,
-	getSavedClineMessages,
-	getTaskMetadata,
-	readTaskHistoryJsonl,
-	writeTaskHistoryToState,
-} from "@core/storage/disk"
+import { getDlineDocumentsPath, getSavedClineMessages, getTaskMetadata } from "@core/storage/disk"
+import { StateManager } from "@core/storage/StateManager"
 import { HostProvider } from "@hosts/host-provider"
 import { ClineMessage } from "@shared/ExtensionMessage"
 import { HistoryItem } from "@shared/HistoryItem"
@@ -12,7 +7,6 @@ import { ShowMessageType } from "@shared/proto/dline/host/window"
 import { fileExistsAtPath } from "@utils/fs"
 import * as path from "path"
 import { ulid } from "ulid"
-import { Logger } from "@/shared/services/Logger"
 
 interface TaskReconstructionResult {
 	totalTasks: number
@@ -31,7 +25,7 @@ export async function reconstructTaskHistory(): Promise<TaskReconstructionResult
 		const proceed = await HostProvider.window.showMessage({
 			type: ShowMessageType.WARNING,
 			message:
-				"This will rebuild your task history from existing task data. This operation will backup your current task history and attempt to reconstruct it from task folders. Continue?",
+				"This will rebuild your task history index from the task folders on disk. The current index will be replaced. Continue?",
 			options: {
 				items: ["Yes, Reconstruct", "Cancel"],
 			},
@@ -82,9 +76,6 @@ async function performTaskHistoryReconstruction(): Promise<TaskReconstructionRes
 		errors: [],
 	}
 
-	// Backup existing task history
-	await backupExistingTaskHistory()
-
 	// Get tasks directory
 	const tasksDir = path.join(await getDlineDocumentsPath(), "tasks")
 
@@ -123,27 +114,13 @@ async function performTaskHistoryReconstruction(): Promise<TaskReconstructionRes
 	// Sort by timestamp (newest first)
 	reconstructedItems.sort((a, b) => b.ts - a.ts)
 
-	// Write reconstructed history
-	await writeTaskHistoryToState(reconstructedItems)
+	// The rebuilt set is authoritative: replace the stored index, then refresh the
+	// in-memory cache so open views do not keep serving the discarded entries.
+	const stateManager = StateManager.get()
+	const persisted = await stateManager.taskHistory.replaceAllItems(reconstructedItems)
+	stateManager.setGlobalStateBatch({ taskHistory: persisted })
 
 	return result
-}
-
-async function backupExistingTaskHistory(): Promise<void> {
-	try {
-		const existingHistory = await readTaskHistoryJsonl()
-		if (existingHistory.length > 0) {
-			const backupPath = path.join(await getDlineDocumentsPath(), "tasks", `taskHistory.backup.${Date.now()}.json`)
-
-			// Ensure state directory exists
-			const fs = await import("fs/promises")
-			await fs.mkdir(path.dirname(backupPath), { recursive: true })
-			await fs.writeFile(backupPath, JSON.stringify(existingHistory, null, 2))
-		}
-	} catch (error) {
-		// Non-fatal error, just log it
-		Logger.warn("Failed to backup existing task history:", error)
-	}
 }
 
 async function scanTaskDirectories(tasksDir: string): Promise<string[]> {

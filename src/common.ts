@@ -5,6 +5,7 @@ import { HostProvider } from "@/hosts/host-provider"
 import { Logger } from "@/shared/services/Logger"
 import type { StorageContext } from "@/shared/storage/storage-context"
 import { FileContextTracker } from "./core/context/context-tracking/FileContextTracker"
+import { flushAllWorkspaceHistoryManagers } from "./core/controller/history/WorkspaceHistoryManager"
 import { clearOnboardingModelsCache } from "./core/controller/models/getClineOnboardingModels"
 import { HookDiscoveryCache } from "./core/hooks/HookDiscoveryCache"
 import { HookProcessRegistry } from "./core/hooks/HookProcessRegistry"
@@ -212,6 +213,16 @@ export async function tearDown(): Promise<void> {
 
 	// Dispose all webview instances
 	await WebviewProvider.disposeAllInstances()
+
+	// Task history writes are queued per workspace and settle off the UI hot
+	// path, so they must be drained here: controllers are gone but the store is
+	// still open, and StateManager.shutdown() closes it.
+	try {
+		await flushAllWorkspaceHistoryManagers()
+	} catch (error) {
+		Logger.error("[Dline] Task history shutdown flush failed:", error)
+	}
+
 	await StateManager.shutdown()
 	syncWorker().dispose()
 	clearOnboardingModelsCache()

@@ -1,11 +1,9 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import type { HistoryItem } from "@shared/HistoryItem"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import type { BufferedUnifyStore } from "../backend/api/UnifyStore"
-import { openBufferedJsonlStore } from "../backend/jsonl/JsonlUnifyStore"
-import { TaskHistory } from "../TaskHistory"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { openTaskHistory, type TaskHistory } from "../TaskHistory"
 
 function item(overrides: Partial<HistoryItem> = {}): HistoryItem {
 	return {
@@ -23,18 +21,13 @@ function item(overrides: Partial<HistoryItem> = {}): HistoryItem {
 
 describe("TaskHistory completion state", () => {
 	let tempDir: string
-	let filePath: string
-	let store: BufferedUnifyStore<HistoryItem>
+	let databasePath: string
 	let history: TaskHistory
 
 	beforeEach(async () => {
 		tempDir = await mkdtemp(path.join(os.tmpdir(), "dline-task-history-completion-"))
-		filePath = path.join(tempDir, "taskHistory.jsonl")
-		store = await openBufferedJsonlStore<HistoryItem>(filePath, {
-			schemaId: "task-history-completion-test",
-			flushIntervalMs: 60_000,
-		})
-		history = new TaskHistory(store)
+		databasePath = path.join(tempDir, "taskHistory.db")
+		history = await openTaskHistory(databasePath)
 		await history.upsert(item())
 	})
 
@@ -56,21 +49,9 @@ describe("TaskHistory completion state", () => {
 			tokensIn: 11,
 			tokensOut: 12,
 		})
-		const persistedRows = (await readFile(filePath, "utf8"))
-			.trim()
-			.split("\n")
-			.filter(Boolean)
-			.map((line) => JSON.parse(line) as HistoryItem)
-		expect(persistedRows).toEqual([expect.objectContaining({ isCompleted: true, completionStateRevision: 7 })])
-	})
-
-	it("establishes a revisioned projection when a legacy boolean already has the same value", async () => {
-		await store.mutate((items) => items.map((existing) => ({ ...existing, isCompleted: true })))
-
-		await expect(history.setCompletionState({ taskId: "task-1", isCompleted: true, revision: 7 })).resolves.toMatchObject({
-			isCompleted: true,
-			completionStateRevision: 7,
-		})
+		await expect(history.getDeduplicated()).resolves.toEqual([
+			expect.objectContaining({ isCompleted: true, completionStateRevision: 7 }),
+		])
 	})
 
 	it("rejects stale or conflicting equal revisions without rewriting the current projection", async () => {
@@ -97,10 +78,11 @@ describe("TaskHistory completion state", () => {
 		})
 	})
 
-	it("preserves a newer completion projection during buffered metadata updates", async () => {
+	it("preserves a newer completion projection during metadata updates", async () => {
 		await history.setCompletionState({ taskId: "task-1", isCompleted: true, revision: 7 })
 
 		await history.upsertTaskHistory(item({ isCompleted: false, completionStateRevision: 99, tokensIn: 99, totalCost: 4.5 }))
+		await history.flush()
 
 		await expect(history.getById("task-1")).resolves.toMatchObject({
 			isCompleted: true,
@@ -117,42 +99,27 @@ describe("TaskHistory completion state", () => {
 		await expect(history.getById("task-1")).resolves.not.toHaveProperty("completionStateRevision")
 	})
 
-	it("serializes buffered metadata reads with durable completion mutations", async () => {
-		let markStageStarted!: () => void
-		let releaseStage!: () => void
-		const stageStarted = new Promise<void>((resolve) => {
-			markStageStarted = resolve
-		})
-		const stageRelease = new Promise<void>((resolve) => {
-			releaseStage = resolve
-		})
-		const originalStageUpdateAt = store.stageUpdateAt.bind(store)
-		vi.spyOn(store, "stageUpdateAt").mockImplementation(async (index, updatedItem) => {
-			markStageStarted()
-			await stageRelease
-			await originalStageUpdateAt(index, updatedItem)
-		})
-		const mutate = vi.spyOn(store, "mutate")
+	it("does not rewrite an unchanged completion value", async () => {
+		await history.setCompletionState({ taskId: "task-1", isCompleted: true, revision: 7 })
 
-		const metadataUpdate = history.upsertTaskHistory(item({ tokensIn: 99 }))
-		await stageStarted
-		const completionUpdate = history.setCompletionState({ taskId: "task-1", isCompleted: true, revision: 7 })
-
-		expect(mutate).not.toHaveBeenCalled()
-		releaseStage()
-		await Promise.all([metadataUpdate, completionUpdate])
+		await expect(history.setCompletionState({ taskId: "task-1", isCompleted: true, revision: 8 })).resolves.toBeUndefined()
 		await expect(history.getById("task-1")).resolves.toMatchObject({
 			isCompleted: true,
 			completionStateRevision: 7,
-			tokensIn: 99,
 		})
 	})
 
-	it("does not rewrite an unchanged completion value", async () => {
-		await history.setCompletionState({ taskId: "task-1", isCompleted: true, revision: 7 })
-		const before = await readFile(filePath, "utf8")
+	it("applies many projections in one batch and skips the stale ones", async () => {
+		await history.upsert(item({ id: "task-2", ts: 200 }))
+		await history.setCompletionState({ taskId: "task-2", isCompleted: true, revision: 4 })
 
-		await expect(history.setCompletionState({ taskId: "task-1", isCompleted: true, revision: 8 })).resolves.toBeUndefined()
-		expect(await readFile(filePath, "utf8")).toBe(before)
+		const applied = await history.setCompletionStates([
+			{ taskId: "task-1", isCompleted: true, revision: 1 },
+			{ taskId: "task-2", isCompleted: true, revision: 9 },
+			{ taskId: "missing", isCompleted: true, revision: 1 },
+		])
+
+		expect(applied).toEqual([expect.objectContaining({ id: "task-1", isCompleted: true, completionStateRevision: 1 })])
+		await expect(history.getById("task-2")).resolves.toMatchObject({ isCompleted: true, completionStateRevision: 4 })
 	})
 })

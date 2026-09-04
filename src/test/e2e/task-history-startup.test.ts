@@ -1,14 +1,14 @@
-import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { expect } from "@playwright/test"
 import { E2ETestHelper, e2e } from "./utils/helpers"
+import { seedLegacyTaskHistory } from "./utils/task-history-store"
 
 e2e("Startup does not prompt to reconstruct an empty task history", async ({ page, sidebar }) => {
 	await expect(sidebar.locator("body")).toBeVisible()
 	await page.waitForTimeout(1_000)
 
 	await expect(page.getByRole("button", { name: "Yes, Reconstruct", exact: true })).toHaveCount(0)
-	await expect(page.getByText("This will rebuild your task history from existing task data.", { exact: false })).toHaveCount(0)
+	await expect(page.getByText("This will rebuild your task history index", { exact: false })).toHaveCount(0)
 })
 
 e2e.describe("Initial state hydration", () => {
@@ -31,8 +31,6 @@ e2e(
 	"Welcome history - first launch loads the default Workspace filter without toggling through All",
 	async ({ dlineDocsDir, helper, openVSCode, userDataDir, workspaceDir }) => {
 		const taskText = "E2E_WELCOME_WORKSPACE_INITIAL_LOAD"
-		const tasksDir = path.join(dlineDocsDir, "tasks")
-		await mkdir(tasksDir, { recursive: true })
 		const baseTimestamp = Date.now() - 10_000
 		const taskHistory = [
 			{
@@ -48,11 +46,7 @@ e2e(
 				cwdOnTaskInitialization: path.join(workspaceDir, "other-workspace"),
 			})),
 		]
-		await writeFile(
-			path.join(tasksDir, "taskHistory.jsonl"),
-			`${taskHistory.map((item) => JSON.stringify(item)).join("\n")}\n`,
-			"utf8",
-		)
+		await seedLegacyTaskHistory(dlineDocsDir, taskHistory)
 		const app = await openVSCode(workspaceDir)
 
 		try {

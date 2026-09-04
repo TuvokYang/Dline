@@ -1,7 +1,6 @@
 import { PROVIDER_API_KEY_MAP, readApiProfiles } from "@core/controller/file/getApiProfiles"
 import { type AutoApprovalSettings, DEFAULT_AUTO_APPROVAL_SETTINGS } from "@shared/AutoApprovalSettings"
 import type { ApiConfiguration } from "@shared/api"
-import type { HistoryItem } from "@shared/HistoryItem"
 import {
 	type GlobalState,
 	type GlobalStateAndSettings,
@@ -26,8 +25,7 @@ import { initializeDistinctId } from "@/services/logging/distinctId"
 import { Logger } from "@/shared/services/Logger"
 import { fileExistsAtPath } from "@/utils/fs"
 import { AgentConfigLoader } from "../task/tools/subagent/AgentConfigLoader"
-import { openBufferedJsonlStore } from "./backend/jsonl/JsonlUnifyStore"
-import { readTaskSettingsFromStorage, writeTaskHistoryToState, writeTaskSettingsToStorage } from "./disk"
+import { readTaskSettingsFromStorage, writeTaskSettingsToStorage } from "./disk"
 import { STATE_MANAGER_NOT_INITIALIZED } from "./error-messages"
 import { cleanupLegacyGlobalState } from "./globalstatecleanup"
 import { filterAllowedRemoteConfigFields } from "./remote-config/utils"
@@ -51,7 +49,8 @@ import type { CapabilityScope } from "./settings/capability-toggle-scopes"
 import { capabilityToggleSettingsKey } from "./settings/capability-toggle-store"
 import { SettingsRepository } from "./settings/SettingsRepository"
 import type { SettingsCommit, SettingsSnapshot } from "./settings/settings-types"
-import { TaskHistory } from "./TaskHistory"
+import { openTaskHistory, TaskHistory } from "./TaskHistory"
+import { importLegacyTaskHistory } from "./task-history-import"
 import { readGlobalStateFromStorage, readSecretsFromStorage, readWorkspaceStateFromStorage } from "./utils/state-helpers"
 export interface PersistenceErrorEvent {
 	error: Error
@@ -207,33 +206,15 @@ export class StateManager {
 			}
 
 			// Create TaskHistory inside the injected storage boundary.
-			const filePath = storage.taskHistoryPath
-			const fs = await import("fs/promises")
-
-			// Migrate from legacy JSON if needed
-			const legacyPath = filePath.replace(/\.jsonl$/, ".json")
-			if (!(await fileExistsAtPath(filePath)) && (await fileExistsAtPath(legacyPath))) {
-				try {
-					const raw = await fs.readFile(legacyPath, "utf8")
-					if (raw.trim()) {
-						const items = JSON.parse(raw)
-						if (Array.isArray(items) && items.length > 0) {
-							await writeTaskHistoryToState(items, filePath)
-							await fs.rename(legacyPath, `${legacyPath}.bak`).catch(() => {})
-						}
-					}
-				} catch {
-					// Migration failed — proceed with empty store
-				}
+			const databasePath = storage.taskHistoryDatabasePath
+			// The database is the migration marker: importing only when it is absent
+			// keeps the one-time collapse from running again on every launch.
+			const needsLegacyImport = !(await fileExistsAtPath(databasePath))
+			taskHistory = await openTaskHistory(databasePath)
+			if (needsLegacyImport) {
+				await importLegacyTaskHistory(taskHistory, storage.taskHistoryPath)
 			}
-
-			const store = await openBufferedJsonlStore<HistoryItem>(filePath, {
-				schemaId: "task-history",
-				flushIntervalMs: 10_000,
-				acceptInitialItem: (item) => item.ts > 0,
-			})
-			taskHistory = new TaskHistory(store)
-			await taskHistory.startWatcher(filePath)
+			await taskHistory.startWatcher(databasePath)
 			taskHistory.onChange(async () => {
 				// Notify controllers of external task history changes
 				const callbacks = candidate.onSyncExternalChangeCallbacks
@@ -253,17 +234,6 @@ export class StateManager {
 			candidate.globalStateCache.taskHistory = initialHistory
 			candidate.isInitialized = true
 			StateManager.instance = candidate
-
-			// Collapse superseded history revisions off the startup path. Each
-			// metadata update appends a whole record, so a long-lived history grows
-			// to many times its useful size and every later write has to rewrite all
-			// of it under the cross-process lock. Failure only leaves the file large.
-			const historyForCompaction = taskHistory
-			setTimeout(() => {
-				void historyForCompaction
-					.compact()
-					.catch((error) => Logger.debug(`[StateManager] Task history compaction skipped: ${error}`))
-			}, 5_000).unref?.()
 
 			// Start agent config loading in background — does NOT block initialization
 			AgentConfigLoader.getInstance()

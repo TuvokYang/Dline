@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto"
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
 import * as path from "node:path"
 import { expect } from "@playwright/test"
 import type { HistoryItem } from "@shared/HistoryItem"
 import { E2ETestHelper, e2e } from "./utils/helpers"
 import { MultiInstanceLauncher, type MultiInstanceSurface } from "./utils/multi-instance"
+import { countStoredTaskHistory, seedLegacyTaskHistory } from "./utils/task-history-store"
 
 interface ControlResponse {
 	success: boolean
@@ -25,34 +26,27 @@ const UPDATE_BUDGET_MS = 750
 const SEEDED_TASK_COUNT = 400
 const SEEDED_REVISIONS_PER_TASK = 25
 
-function historyPath(dlineDocsDir: string): string {
-	return path.join(dlineDocsDir, "tasks", "taskHistory.jsonl")
-}
-
 /**
- * Seed a history that already carries many superseded revisions per task,
- * reproducing the shape a long-lived installation reaches.
+ * Seed a legacy history that already carries many superseded revisions per
+ * task, reproducing the shape a long-lived installation reaches.
  */
 async function seedLargeHistory(dlineDocsDir: string): Promise<void> {
-	const filePath = historyPath(dlineDocsDir)
-	await mkdir(path.dirname(filePath), { recursive: true })
-	const lines: string[] = []
+	const items: HistoryItem[] = []
 	let ts = 1
 	for (let revision = 0; revision < SEEDED_REVISIONS_PER_TASK; revision++) {
 		for (let task = 0; task < SEEDED_TASK_COUNT; task++) {
-			const item: HistoryItem = {
+			items.push({
 				id: `seeded-task-${task}`,
 				ts: ts++,
-				// Pad the record so the file resembles real history volume.
+				// Pad the record so the history resembles real volume.
 				task: `seeded revision ${revision} ${"x".repeat(512)}`,
 				tokensIn: revision,
 				tokensOut: revision,
 				totalCost: 0,
-			}
-			lines.push(JSON.stringify(item))
+			})
 		}
 	}
-	await writeFile(filePath, `${lines.join("\n")}\n`, "utf8")
+	await seedLegacyTaskHistory(dlineDocsDir, items)
 }
 
 async function updateAndFlush(surface: MultiInstanceSurface, item: HistoryItem): Promise<ControlResponse> {
@@ -67,32 +61,22 @@ async function updateAndFlush(surface: MultiInstanceSurface, item: HistoryItem):
 	}, 60_000)
 }
 
-async function countHistoryRows(dlineDocsDir: string): Promise<number> {
-	const content = await readFile(historyPath(dlineDocsDir), "utf8").catch(() => "")
-	return content.split(/\r?\n/u).filter(Boolean).length
-}
-
 e2e(
-	"Task history stays responsive and self-compacts on a large history",
-	async ({ dlineDir, dlineDocsDir, server, workspaceDir }, testInfo) => {
+	"Task history stays responsive and keeps one row per task on a large history",
+	async ({ dlineDir, dlineDocsDir, extensionsDir, server, workspaceDir }, testInfo) => {
 		e2e.setTimeout(300_000)
 		await seedLargeHistory(dlineDocsDir)
-		const seededRows = SEEDED_TASK_COUNT * SEEDED_REVISIONS_PER_TASK
-		expect(await countHistoryRows(dlineDocsDir)).toBe(seededRows)
-		const seededSize = (await stat(historyPath(dlineDocsDir))).size
 
 		const launcher = new MultiInstanceLauncher({ dlineDir, dlineDocsDir, extensionsDir, server, testInfo, workspaceDir })
 		try {
 			const instance = await launcher.launch("task-history-latency")
 
-			// Startup compaction runs off the critical path; it must collapse the
-			// superseded revisions rather than leave the file at its seeded size.
-			await expect
-				.poll(() => countHistoryRows(dlineDocsDir), { timeout: 120_000 })
-				.toBeLessThanOrEqual(SEEDED_TASK_COUNT + 1)
-			expect((await stat(historyPath(dlineDocsDir))).size).toBeLessThan(seededSize)
+			// The import collapses the superseded revisions on first launch, and the
+			// task id is the store's primary key, so exactly one row per task
+			// survives no matter how many revisions the legacy file carried.
+			await expect.poll(() => countStoredTaskHistory(dlineDocsDir), { timeout: 120_000 }).toBe(SEEDED_TASK_COUNT)
 
-			// A metadata update must not wait on whole-file work.
+			// A metadata update must not wait on whole-history work.
 			const response = await updateAndFlush(instance, {
 				id: `latency-probe-${Date.now()}`,
 				ts: Date.now(),
