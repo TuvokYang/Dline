@@ -2,6 +2,8 @@ import pWaitFor from "p-wait-for"
 import * as vscode from "vscode"
 import { consumeShellEnvironmentDiagnostics } from "@/integrations/terminal/shell-environment"
 import type { TerminalLaunchConfiguration } from "@/integrations/terminal/types"
+import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import { Logger } from "@/shared/services/Logger"
 import { arePathsEqual } from "@/utils/path"
 import type { VscodeTerminalPoolPreparation, VscodeTerminalPoolRuntime } from "./VscodeTerminalPool"
@@ -99,13 +101,28 @@ export class DefaultVscodeTerminalPoolRuntime implements VscodeTerminalPoolRunti
 	private async waitForShellIntegration(terminal: TerminalInfo, timeoutMs: number, phase: "warm" | "cwd"): Promise<void> {
 		const startedAt = performance.now()
 		await terminal.terminal.processId
-		Logger.debug(
-			`[TerminalPerf] phase=${phase}_process_started terminalId=${terminal.id} durationMs=${Math.round(performance.now() - startedAt)} timeoutMs=${timeoutMs}`,
-		)
+		// The telemetry phase stays fixed while `phase` becomes a dimension: the two
+		// preparation kinds measure the same operation and must aggregate together.
+		recordPerfPhase(PerfDomain.TerminalPool, "warm_process_started", performance.now() - startedAt, {
+			terminalId: terminal.id,
+			preparation: phase,
+			timeoutMs,
+		})
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[TerminalPerf] phase=${phase}_process_started terminalId=${terminal.id} durationMs=${Math.round(performance.now() - startedAt)} timeoutMs=${timeoutMs}`,
+			)
+		}
 		await pWaitFor(() => terminal.terminal.shellIntegration?.executeCommand !== undefined, { timeout: timeoutMs })
-		Logger.debug(
-			`[TerminalPerf] phase=${phase}_shell_integration_ready terminalId=${terminal.id} durationMs=${Math.round(performance.now() - startedAt)}`,
-		)
+		recordPerfPhase(PerfDomain.TerminalPool, "warm_shell_integration_ready", performance.now() - startedAt, {
+			terminalId: terminal.id,
+			preparation: phase,
+		})
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[TerminalPerf] phase=${phase}_shell_integration_ready terminalId=${terminal.id} durationMs=${Math.round(performance.now() - startedAt)}`,
+			)
+		}
 	}
 
 	private async executeInternal(terminal: TerminalInfo, command: string): Promise<void> {

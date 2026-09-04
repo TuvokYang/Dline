@@ -11,6 +11,8 @@ import {
 	TerminalManagerConfiguration,
 	TerminalManagerConfigurationResult,
 } from "@/integrations/terminal/types"
+import { markPerfPhase, recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import { Logger } from "@/shared/services/Logger"
 import { type VscodeTerminalLease, VscodeTerminalPool, type VscodeTerminalPoolPreparation } from "./VscodeTerminalPool"
 import { mergePromise, VscodeTerminalProcess } from "./VscodeTerminalProcess"
@@ -198,9 +200,15 @@ export class VscodeTerminalManager implements ITerminalManager {
 		const startProcess = (capability: "shell_integration" | "cold_fallback" | "shell_wait") => {
 			processCapability = capability
 			processStartedAt = performance.now()
-			Logger.debug(
-				`[TerminalPerf] phase=process_start terminalId=${vscodeTerminalInfo.id} capability=${capability} waitMs=${Math.round(processStartedAt - requestedAt)}`,
-			)
+			recordPerfPhase(PerfDomain.Terminal, "process_start", processStartedAt - requestedAt, {
+				terminalId: vscodeTerminalInfo.id,
+				capability,
+			})
+			if (Logger.isDebugEnabled()) {
+				Logger.debug(
+					`[TerminalPerf] phase=process_start terminalId=${vscodeTerminalInfo.id} capability=${capability} waitMs=${Math.round(processStartedAt - requestedAt)}`,
+				)
+			}
 			process.run(vscodeTerminalInfo.terminal, command)
 		}
 
@@ -211,9 +219,17 @@ export class VscodeTerminalManager implements ITerminalManager {
 		this.pool?.registerProcess(vscodeTerminalInfo, process)
 
 		process.once("completed", () => {
-			Logger.debug(
-				`[TerminalPerf] phase=process_complete terminalId=${vscodeTerminalInfo.id} capability=${processCapability} durationMs=${Math.round(performance.now() - requestedAt)} executionMs=${processStartedAt === undefined ? 0 : Math.round(performance.now() - processStartedAt)}`,
-			)
+			const executionMs = processStartedAt === undefined ? 0 : Math.round(performance.now() - processStartedAt)
+			recordPerfPhase(PerfDomain.Terminal, "process_complete", performance.now() - requestedAt, {
+				terminalId: vscodeTerminalInfo.id,
+				capability: processCapability,
+				executionMs,
+			})
+			if (Logger.isDebugEnabled()) {
+				Logger.debug(
+					`[TerminalPerf] phase=process_complete terminalId=${vscodeTerminalInfo.id} capability=${processCapability} durationMs=${Math.round(performance.now() - requestedAt)} executionMs=${executionMs}`,
+				)
+			}
 			vscodeTerminalInfo.busy = false
 			this.pool?.unregisterProcess(vscodeTerminalInfo, process)
 			void this.releaseLease(
@@ -226,6 +242,10 @@ export class VscodeTerminalManager implements ITerminalManager {
 
 		// if shell integration is not available, remove terminal so it does not get reused as it may be running a long-running process
 		process.once("no_shell_integration", () => {
+			recordPerfPhase(PerfDomain.Terminal, "capability_failure", performance.now() - requestedAt, {
+				terminalId: vscodeTerminalInfo.id,
+				capability: "no_shell_integration",
+			})
 			Logger.warn(
 				`[TerminalPerf] phase=capability_failure terminalId=${vscodeTerminalInfo.id} capability=no_shell_integration durationMs=${Math.round(performance.now() - requestedAt)}`,
 			)
@@ -257,18 +277,34 @@ export class VscodeTerminalManager implements ITerminalManager {
 			startProcess(skipShellIntegrationWait ? "cold_fallback" : "shell_integration")
 		} else {
 			// A legacy non-pool terminal may still acquire shell integration shortly after creation.
-			Logger.debug(
-				`[TerminalPerf] phase=shell_wait_start terminalId=${vscodeTerminalInfo.id} timeoutMs=${this.shellIntegrationTimeout}`,
-			)
+			markPerfPhase(PerfDomain.Terminal, "shell_wait_start", {
+				terminalId: vscodeTerminalInfo.id,
+				timeoutMs: this.shellIntegrationTimeout,
+			})
+			if (Logger.isDebugEnabled()) {
+				Logger.debug(
+					`[TerminalPerf] phase=shell_wait_start terminalId=${vscodeTerminalInfo.id} timeoutMs=${this.shellIntegrationTimeout}`,
+				)
+			}
 			pWaitFor(() => vscodeTerminalInfo.terminal.shellIntegration !== undefined, {
 				timeout: this.shellIntegrationTimeout,
 			})
 				.then(() => {
-					Logger.debug(
-						`[TerminalPerf] phase=shell_wait_complete terminalId=${vscodeTerminalInfo.id} durationMs=${Math.round(performance.now() - requestedAt)} outcome=available`,
-					)
+					recordPerfPhase(PerfDomain.Terminal, "shell_wait_complete", performance.now() - requestedAt, {
+						terminalId: vscodeTerminalInfo.id,
+						outcome: "available",
+					})
+					if (Logger.isDebugEnabled()) {
+						Logger.debug(
+							`[TerminalPerf] phase=shell_wait_complete terminalId=${vscodeTerminalInfo.id} durationMs=${Math.round(performance.now() - requestedAt)} outcome=available`,
+						)
+					}
 				})
 				.catch(() => {
+					recordPerfPhase(PerfDomain.Terminal, "shell_wait_complete", performance.now() - requestedAt, {
+						terminalId: vscodeTerminalInfo.id,
+						outcome: "timeout",
+					})
 					Logger.warn(
 						`[TerminalPerf] phase=shell_wait_complete terminalId=${vscodeTerminalInfo.id} durationMs=${Math.round(performance.now() - requestedAt)} outcome=timeout`,
 					)

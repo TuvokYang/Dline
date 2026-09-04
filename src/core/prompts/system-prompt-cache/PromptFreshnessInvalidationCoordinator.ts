@@ -1,4 +1,6 @@
 import { Logger } from "@shared/services/Logger"
+import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 
 export type PromptFreshnessInvalidationSource =
 	| "prompt_input_file"
@@ -97,9 +99,24 @@ export class PromptFreshnessInvalidationCoordinator {
 			const publishStartedAt = performance.now()
 			await this.publishState()
 			const publishMs = Math.round(performance.now() - publishStartedAt)
-			Logger.debug(
-				`[PromptFreshnessPerf] phase=drain_complete taskId=${this.taskId} invalidations=${invalidationCount} sources=${sources.join(",") || "none"} reevaluateMs=${reevaluateMs} publishMs=${publishMs} totalMs=${Math.round(performance.now() - startedAt)} pendingAgain=${this.pending}`,
+			recordPerfPhase(
+				PerfDomain.PromptFreshness,
+				"drain_complete",
+				performance.now() - startedAt,
+				{
+					invalidations: invalidationCount,
+					sources: sources.join(",") || "none",
+					reevaluateMs,
+					publishMs,
+					pendingAgain: this.pending,
+				},
+				{ taskId: this.taskId },
 			)
+			if (Logger.isDebugEnabled()) {
+				Logger.debug(
+					`[PromptFreshnessPerf] phase=drain_complete taskId=${this.taskId} invalidations=${invalidationCount} sources=${sources.join(",") || "none"} reevaluateMs=${reevaluateMs} publishMs=${publishMs} totalMs=${Math.round(performance.now() - startedAt)} pendingAgain=${this.pending}`,
+				)
+			}
 		}
 	}
 }

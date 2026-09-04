@@ -17,6 +17,8 @@ import { randomUUID } from "node:crypto"
 import { DlineRuntimeFileManager } from "@services/runtime-files"
 import { findLastIndex } from "@shared/array"
 import { DEFAULT_TERMINAL_COMMAND_HANDOFF_SECONDS } from "@shared/terminal-settings"
+import { markPerfPhase, recordPerfPhase, startPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import { Logger } from "@/shared/services/Logger"
 import { orchestrateCommandExecution } from "./CommandOrchestrator"
 import { isCommandCompletionSuccessful } from "./command-completion"
@@ -190,9 +192,13 @@ export class CommandExecutor {
 						? "background"
 						: "foreground"
 		const manager = useStandalone ? this.standaloneManager : this.terminalManager
-		Logger.debug(
-			`[TerminalPerf] phase=execute_start taskId=${this.taskId} activityId=${activityId} terminalMode=${useStandalone ? "standalone" : "vscode"}`,
-		)
+		const terminalMode = useStandalone ? "standalone" : "vscode"
+		markPerfPhase(PerfDomain.Terminal, "execute_start", { activityId, terminalMode }, { taskId: this.taskId })
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[TerminalPerf] phase=execute_start taskId=${this.taskId} activityId=${activityId} terminalMode=${terminalMode}`,
+			)
+		}
 		this.callbacks.markWorkspaceScanRequired?.()
 
 		// Get terminal and run command
@@ -242,11 +248,15 @@ export class CommandExecutor {
 			: shellEnvironmentLoadFailed
 				? undefined
 				: this.createVscodeLaunchConfiguration(workdirectory, shellEnvironment)
+		const acquirePhase = startPerfPhase(PerfDomain.Terminal, "terminal_acquired", { activityId }, { taskId: this.taskId })
 		const terminalAcquireStartedAt = performance.now()
 		const terminalInfo = await manager.getOrCreateTerminal(workdirectory, launchConfiguration)
-		Logger.debug(
-			`[TerminalPerf] phase=terminal_acquired taskId=${this.taskId} activityId=${activityId} terminalId=${terminalInfo.id} durationMs=${Math.round(performance.now() - terminalAcquireStartedAt)} elapsedMs=${Math.round(performance.now() - executeStartedAt)}`,
-		)
+		acquirePhase.stop({ terminalId: terminalInfo.id, elapsedMs: Math.round(performance.now() - executeStartedAt) })
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[TerminalPerf] phase=terminal_acquired taskId=${this.taskId} activityId=${activityId} terminalId=${terminalInfo.id} durationMs=${Math.round(performance.now() - terminalAcquireStartedAt)} elapsedMs=${Math.round(performance.now() - executeStartedAt)}`,
+			)
+		}
 		if (options?.startInBackground) {
 			terminalInfo.terminal.hide()
 		} else {
@@ -328,9 +338,19 @@ export class CommandExecutor {
 		process.once("completed", (details) => {
 			const cancelled = this.cancelledActivityIds.has(activityId)
 			const failed = !isCommandCompletionSuccessful(details)
-			Logger.debug(
-				`[TerminalPerf] phase=execute_complete taskId=${this.taskId} activityId=${activityId} terminalId=${terminalInfo.id} durationMs=${Math.round(performance.now() - executeStartedAt)} outcome=${cancelled ? "cancelled" : timedOut ? "timeout" : failed ? "failed_or_unverified" : "completed"}`,
+			const outcome = cancelled ? "cancelled" : timedOut ? "timeout" : failed ? "failed_or_unverified" : "completed"
+			recordPerfPhase(
+				PerfDomain.Terminal,
+				"execute_complete",
+				performance.now() - executeStartedAt,
+				{ activityId, terminalId: terminalInfo.id, outcome },
+				{ taskId: this.taskId },
 			)
+			if (Logger.isDebugEnabled()) {
+				Logger.debug(
+					`[TerminalPerf] phase=execute_complete taskId=${this.taskId} activityId=${activityId} terminalId=${terminalInfo.id} durationMs=${Math.round(performance.now() - executeStartedAt)} outcome=${outcome}`,
+				)
+			}
 			this.callbacks.updateCommandActivity?.(activityId, {
 				status: cancelled ? "cancelled" : timedOut ? "timeout" : failed ? "failed" : "completed",
 				latestEvent: cancelled
@@ -353,9 +373,19 @@ export class CommandExecutor {
 		})
 		process.once("error", (error: Error) => {
 			const cancelled = this.cancelledActivityIds.has(activityId)
-			Logger.debug(
-				`[TerminalPerf] phase=execute_error taskId=${this.taskId} activityId=${activityId} terminalId=${terminalInfo.id} durationMs=${Math.round(performance.now() - executeStartedAt)} outcome=${cancelled ? "cancelled" : timedOut ? "timeout" : "error"}`,
+			const outcome = cancelled ? "cancelled" : timedOut ? "timeout" : "error"
+			recordPerfPhase(
+				PerfDomain.Terminal,
+				"execute_error",
+				performance.now() - executeStartedAt,
+				{ activityId, terminalId: terminalInfo.id, outcome },
+				{ taskId: this.taskId },
 			)
+			if (Logger.isDebugEnabled()) {
+				Logger.debug(
+					`[TerminalPerf] phase=execute_error taskId=${this.taskId} activityId=${activityId} terminalId=${terminalInfo.id} durationMs=${Math.round(performance.now() - executeStartedAt)} outcome=${outcome}`,
+				)
+			}
 			this.callbacks.updateCommandActivity?.(activityId, {
 				status: cancelled ? "cancelled" : timedOut ? "timeout" : "failed",
 				latestEvent: cancelled ? "Cancelled by user" : timedOut ? "Command timed out" : "Command failed",

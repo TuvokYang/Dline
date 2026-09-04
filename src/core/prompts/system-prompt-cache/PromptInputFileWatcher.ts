@@ -1,6 +1,8 @@
 import path from "node:path"
 import { Logger } from "@shared/services/Logger"
 import chokidar, { type ChokidarOptions, type FSWatcher } from "chokidar"
+import { markPerfPhase, recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 
 export interface PromptInputFileWatcherDeps {
 	readonly taskId?: string
@@ -90,6 +92,18 @@ export class PromptInputFileWatcher {
 	async start(): Promise<void> {
 		if (this.disposed || this.watcher) return
 		const startedAt = performance.now()
+		markPerfPhase(
+			PerfDomain.PromptInputWatcher,
+			"start",
+			{
+				roots: this.watchRoots.length,
+				protectedRoots: this.protectedDirectories.length,
+				includesWorkspaceRoot: this.watchRoots.includes(this.cwd),
+			},
+			{ taskId: this.taskId },
+		)
+		// The human-readable mirror is retained because E2E asserts on this exact line
+		// to count how many underlying watchers a multi-task window creates.
 		Logger.debug(
 			`[PromptInputWatcherPerf] phase=start taskId=${this.taskId} roots=${this.watchRoots.length} protectedRoots=${this.protectedDirectories.length} includesWorkspaceRoot=${this.watchRoots.includes(this.cwd)}`,
 		)
@@ -113,9 +127,18 @@ export class PromptInputFileWatcher {
 			.on("change", (candidate) => handle("change", candidate))
 			.on("unlink", (candidate) => handle("unlink", candidate))
 			.on("ready", () => {
-				Logger.debug(
-					`[PromptInputWatcherPerf] phase=ready taskId=${this.taskId} durationMs=${Math.round(performance.now() - startedAt)} roots=${this.watchRoots.length}`,
+				recordPerfPhase(
+					PerfDomain.PromptInputWatcher,
+					"ready",
+					performance.now() - startedAt,
+					{ roots: this.watchRoots.length },
+					{ taskId: this.taskId },
 				)
+				if (Logger.isDebugEnabled()) {
+					Logger.debug(
+						`[PromptInputWatcherPerf] phase=ready taskId=${this.taskId} durationMs=${Math.round(performance.now() - startedAt)} roots=${this.watchRoots.length}`,
+					)
+				}
 			})
 			.on("error", (error) => {
 				Logger.error("[PromptInputFileWatcher] Failed to watch prompt-visible inputs:", error)
@@ -134,9 +157,18 @@ export class PromptInputFileWatcher {
 		const watcher = this.watcher
 		this.watcher = undefined
 		if (watcher) await watcher.close()
-		Logger.debug(
-			`[PromptInputWatcherPerf] phase=dispose taskId=${this.taskId} durationMs=${Math.round(performance.now() - startedAt)} totalEvents=${this.totalRelevantEvents}`,
+		recordPerfPhase(
+			PerfDomain.PromptInputWatcher,
+			"dispose",
+			performance.now() - startedAt,
+			{ totalEvents: this.totalRelevantEvents },
+			{ taskId: this.taskId },
 		)
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[PromptInputWatcherPerf] phase=dispose taskId=${this.taskId} durationMs=${Math.round(performance.now() - startedAt)} totalEvents=${this.totalRelevantEvents}`,
+			)
+		}
 	}
 
 	private recordEvent(event: PromptInputEvent, kind: PromptInputKind): void {
@@ -154,9 +186,27 @@ export class PromptInputFileWatcher {
 	private logPendingEvents(): void {
 		const batchEvents = Object.values(this.pendingEventTypes).reduce((total, count) => total + count, 0)
 		if (batchEvents === 0) return
-		Logger.debug(
-			`[PromptInputWatcherPerf] phase=event_batch taskId=${this.taskId} events=${batchEvents} totalEvents=${this.totalRelevantEvents} add=${this.pendingEventTypes.add} change=${this.pendingEventTypes.change} unlink=${this.pendingEventTypes.unlink} rules=${this.pendingEventCounts.rule} workflows=${this.pendingEventCounts.workflow} skills=${this.pendingEventCounts.skill} subagents=${this.pendingEventCounts.subagent}`,
+		markPerfPhase(
+			PerfDomain.PromptInputWatcher,
+			"event_batch",
+			{
+				events: batchEvents,
+				totalEvents: this.totalRelevantEvents,
+				add: this.pendingEventTypes.add,
+				change: this.pendingEventTypes.change,
+				unlink: this.pendingEventTypes.unlink,
+				rules: this.pendingEventCounts.rule,
+				workflows: this.pendingEventCounts.workflow,
+				skills: this.pendingEventCounts.skill,
+				subagents: this.pendingEventCounts.subagent,
+			},
+			{ taskId: this.taskId },
 		)
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[PromptInputWatcherPerf] phase=event_batch taskId=${this.taskId} events=${batchEvents} totalEvents=${this.totalRelevantEvents} add=${this.pendingEventTypes.add} change=${this.pendingEventTypes.change} unlink=${this.pendingEventTypes.unlink} rules=${this.pendingEventCounts.rule} workflows=${this.pendingEventCounts.workflow} skills=${this.pendingEventCounts.skill} subagents=${this.pendingEventCounts.subagent}`,
+			)
+		}
 		this.pendingEventCounts = { rule: 0, workflow: 0, skill: 0, subagent: 0 }
 		this.pendingEventTypes = { add: 0, change: 0, unlink: 0 }
 	}

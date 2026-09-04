@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto"
 import * as path from "node:path"
 import fs from "fs/promises"
+import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import { Logger } from "@/shared/services/Logger"
 
 /**
@@ -145,7 +147,16 @@ export class FileLock {
 				// acquire on the first attempt means the filesystem call itself was
 				// slow rather than the lock being held elsewhere.
 				const durationMs = Math.round(performance.now() - startedAt)
-				if (durationMs >= 250) {
+				// Telemetry receives every sample so the distribution stays intact; the
+				// 250 ms gate only decides whether a human-readable line is worth writing.
+				recordPerfPhase(PerfDomain.FileLock, "acquire", durationMs, {
+					lockFile: path.basename(lockPath),
+					attempts: attempt,
+					openMs: Math.round(openedAt - openStartedAt),
+					writeMs: Math.round(writtenAt - openedAt),
+					closeMs: Math.round(closedAt - writtenAt),
+				})
+				if (durationMs >= 250 && Logger.isDebugEnabled()) {
 					Logger.debug(
 						`[FileLockPerf] phase=acquire path=${path.basename(lockPath)} attempts=${attempt} openMs=${Math.round(openedAt - openStartedAt)} writeMs=${Math.round(writtenAt - openedAt)} closeMs=${Math.round(closedAt - writtenAt)} durationMs=${durationMs}`,
 					)
