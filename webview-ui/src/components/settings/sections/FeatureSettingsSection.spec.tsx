@@ -15,6 +15,7 @@ vi.mock("@/context/ExtensionStateContext", () => ({
 		yoloModeToggled: false,
 		useAutoCondense: false,
 		subagentsEnabled: false,
+		imageGenerationEnabled: false,
 		clineWebToolsEnabled: { user: false, featureFlag: false },
 		localWebSearchEngine: "duckduckgo",
 		searxngSearchUrl: undefined,
@@ -100,6 +101,19 @@ describe("FeatureSettingsSection", () => {
 		fireEvent.click(activeTasksSwitch as Element)
 
 		expect(mockUpdateSetting).toHaveBeenCalledWith("showActiveTasksInEnvDetails", true)
+	})
+
+	it("renders Image Generation in the Agent section and persists its independent feature gate", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const imageGenerationSwitch = container.querySelector('[id="Enable Image Generation"]')
+		const agentSection = container.querySelector("#agent-features")
+		expect(imageGenerationSwitch).toBeTruthy()
+		expect(agentSection?.querySelector('[id="Enable Image Generation"]')).toBeTruthy()
+
+		fireEvent.click(imageGenerationSwitch as Element)
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("imageGenerationEnabled", true)
 	})
 
 	it("always renders Web Tools in the Agent section and saves changes even when its feature flag is disabled", () => {

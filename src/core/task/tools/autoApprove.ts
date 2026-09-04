@@ -114,6 +114,8 @@ export class AutoApprove {
 			case ClineDefaultTool.MCP_ACCESS:
 			case ClineDefaultTool.MCP_USE:
 				return autoApprovalSettings.actions.useMcp
+			case ClineDefaultTool.GENERATE_IMAGE:
+				return autoApprovalSettings.actions.generateImages ?? false
 		}
 
 		// Handler-managed interactions must pass the outer approval gate so the

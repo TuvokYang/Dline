@@ -74,6 +74,11 @@ function hasSubagents(context: SystemPromptContext): boolean {
 	return context.subagentsEnabled === true && context.isSubagentRun !== true
 }
 
+/** Reports whether at least one valid image generation profile is available. */
+function hasImageGeneration(context: SystemPromptContext): boolean {
+	return context.imageGenerationAvailable === true
+}
+
 /** Creates the canonical Standard descriptor for one built-in tool. */
 function spec(
 	id: ClineDefaultTool,
@@ -314,6 +319,26 @@ export const STANDARD_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = 
 		],
 		undefined,
 		[fragment(getPrompt("statusUpdate", "focusOmissionDescriptionSentence"), whenFocusTrackingDisabled)],
+	),
+	spec(
+		ClineDefaultTool.GENERATE_IMAGE,
+		getPrompt("generateImage", "standardDescription"),
+		[
+			param("prompt", true, getPrompt("generateImage", "promptInstruction")),
+			param("profile", false, getPrompt("generateImage", "profileInstruction")),
+			param("count", false, getPrompt("generateImage", "countInstruction"), "integer"),
+			param("width", false, getPrompt("generateImage", "widthInstruction"), "integer"),
+			param("height", false, getPrompt("generateImage", "heightInstruction"), "integer"),
+			param("aspect_ratio", false, getPrompt("generateImage", "aspectRatioInstruction")),
+			param("quality", false, getPrompt("generateImage", "qualityInstruction")),
+			param("background", false, getPrompt("generateImage", "backgroundInstruction")),
+			param("output_format", false, getPrompt("generateImage", "outputFormatInstruction")),
+			param("output_compression", false, getPrompt("generateImage", "outputCompressionInstruction"), "integer"),
+			param("reference_artifact_ids", false, getPrompt("generateImage", "referenceArtifactIdsInstruction")),
+			param("mask_artifact_id", false, getPrompt("generateImage", "maskArtifactIdInstruction")),
+			taskProgress,
+		],
+		hasImageGeneration,
 	),
 	spec(
 		ClineDefaultTool.GENERATE_EXPLANATION,

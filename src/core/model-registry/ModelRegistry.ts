@@ -7,7 +7,7 @@
 import { getDlineHomePath } from "@core/storage/disk"
 import { ServerTool, serverToolFromJSON } from "@shared/proto/dline/models/metadata"
 import { getProviderSeedConfig } from "@shared/providers/model-infos"
-import type { ModelInfo, ProviderModelsConfig } from "@shared/providers/types"
+import type { ImageModelInfo, ModelInfo, ProviderModelsConfig } from "@shared/providers/types"
 import { Logger } from "@shared/services/Logger"
 import chokidar, { type FSWatcher } from "chokidar"
 import fs from "fs/promises"
@@ -24,6 +24,18 @@ function enrichMissingSeedMetadata(providerId: string, config: ProviderModelsCon
 		return config
 	}
 	return reconcileProviderModels(seedConfig, config, "fill-missing")
+}
+
+function withRequiredServerTool(model: ModelInfo, tool: ServerTool): ModelInfo {
+	const tools = model.capabilities?.tools ?? []
+	if (tools.includes(tool)) return model
+	return {
+		...model,
+		capabilities: {
+			...model.capabilities,
+			tools: [...tools, tool],
+		},
+	}
 }
 
 function parseProviderModelsConfig(providerId: string, raw: string): ProviderModelsConfig {
@@ -249,17 +261,28 @@ export class ModelRegistry {
 		}
 
 		const seed = getProviderSeedConfig("openai")
+		const models = {
+			...(seed?.models ?? {}),
+			...(configured?.models ?? {}),
+		}
 		return {
 			...(seed ?? configured),
 			...configured,
 			provider: "openai",
 			providerName: "OpenAI",
 			billingMode: configured?.billingMode ?? seed?.billingMode ?? "token",
-			models: {
-				...(seed?.models ?? {}),
-				...(configured?.models ?? {}),
-			},
+			models: Object.fromEntries(
+				Object.entries(models).map(([modelId, model]) => [
+					modelId,
+					withRequiredServerTool(model, ServerTool.IMAGE_GENERATION),
+				]),
+			),
 			defaultModelId: configured?.defaultModelId ?? seed?.defaultModelId,
+			imageModels: {
+				...(seed?.imageModels ?? {}),
+				...(configured?.imageModels ?? {}),
+			},
+			defaultImageModelId: configured?.defaultImageModelId ?? seed?.defaultImageModelId,
 		}
 	}
 
@@ -283,12 +306,16 @@ export class ModelRegistry {
 		providerName: string
 		models: ModelInfo[]
 		defaultModelId?: string
+		imageModels: ImageModelInfo[]
+		defaultImageModelId?: string
 	}> {
 		const result: Array<{
 			provider: string
 			providerName: string
 			models: ModelInfo[]
 			defaultModelId?: string
+			imageModels: ImageModelInfo[]
+			defaultImageModelId?: string
 		}> = []
 
 		for (const config of this.getAllProviders()) {
@@ -297,6 +324,8 @@ export class ModelRegistry {
 				providerName: config.providerName,
 				models: Object.values(config.models),
 				defaultModelId: config.defaultModelId,
+				imageModels: Object.values(config.imageModels ?? {}),
+				defaultImageModelId: config.defaultImageModelId,
 			})
 		}
 

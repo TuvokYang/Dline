@@ -43,7 +43,7 @@ export interface ApiStreamUsageChunk {
 	provider_metadata?: ClineProviderMetadata
 }
 
-export type ApiServerToolPhase = "started" | "in_progress" | "searching" | "completed" | "failed"
+export type ApiServerToolPhase = "started" | "in_progress" | "preview" | "searching" | "completed" | "failed"
 
 interface ApiServerToolChunkBase {
 	type: "server_tool"

@@ -1,10 +1,12 @@
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
+import { ImageGenerationSource } from "@shared/proto/dline/profile"
 import { WebSearchMode } from "@shared/proto/dline/provider/common"
 import { describe, expect, it } from "vitest"
 import {
 	disableWebSearchRoutingPlan,
 	hasActiveServerTool,
 	projectServerTools,
+	resolveHostedImageGenerationPlan,
 	resolveServerToolPlan,
 	resolveWebSearchRoutingPlan,
 } from "../ServerToolPlan"
@@ -199,6 +201,28 @@ describe("resolveServerToolPlan", () => {
 		)
 
 		expect(projection).toEqual({ declarations: [] })
+	})
+})
+
+describe("resolveHostedImageGenerationPlan", () => {
+	const base = {
+		enabled: true,
+		source: ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED,
+		modelInfo: { capabilities: { tools: [ServerTool.IMAGE_GENERATION] } },
+		selectedApiFormat: ApiFormat.OPENAI_RESPONSES,
+		remoteAdapterAvailable: true,
+	}
+
+	it("never projects image generation into the main conversation request", () => {
+		for (const input of [
+			base,
+			{ ...base, source: ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT },
+			{ ...base, modelInfo: { capabilities: { tools: [] } } },
+			{ ...base, selectedApiFormat: ApiFormat.OPENAI_CHAT },
+			{ ...base, remoteAdapterAvailable: false },
+		]) {
+			expect(resolveHostedImageGenerationPlan(input)).toMatchObject({ route: "disabled", serverTools: [] })
+		}
 	})
 })
 

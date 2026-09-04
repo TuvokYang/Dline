@@ -1,4 +1,5 @@
 import type { ApiProfile } from "@shared/proto/dline/profile"
+import { Logger } from "@shared/services/Logger"
 import type { Controller } from "@/core/controller"
 
 interface ProfileChange {
@@ -32,44 +33,55 @@ export class ProfileChangeCoordinator {
 		}
 		this.#revision += 1
 
-		await Promise.all(
-			this.getControllers().map(async (controller) => {
-				const task = controller.task
-				if (task) {
-					this.adoptTaskBinding(
-						task.taskSm.planModeProfileId,
-						task.taskSm.planModeProfile,
-						"plan",
-						changes,
-						task.taskSm,
-					)
-					this.adoptTaskBinding(task.taskSm.actModeProfileId, task.taskSm.actModeProfile, "act", changes, task.taskSm)
-				}
+		await Promise.all(this.getControllers().map((controller) => this.publishToController(controller, changes)))
+	}
 
-				this.adoptGlobalBinding(
-					controller,
-					controller.stateManager.getGlobalSettingsKey("planModeProfileId"),
-					controller.stateManager.getGlobalSettingsKey("planModeProfile"),
+	private async publishToController(controller: Controller, changes: Map<string, ProfileChange>): Promise<void> {
+		const task = controller.task
+		try {
+			if (task) {
+				this.adoptTaskBinding(
+					task.taskSm.planModeProfileId,
+					task.taskSm.planModeProfile,
 					"plan",
 					changes,
+					task.taskSm,
 				)
-				this.adoptGlobalBinding(
-					controller,
-					controller.stateManager.getGlobalSettingsKey("actModeProfileId"),
-					controller.stateManager.getGlobalSettingsKey("actModeProfile"),
-					"act",
-					changes,
-				)
+				this.adoptTaskBinding(task.taskSm.actModeProfileId, task.taskSm.actModeProfile, "act", changes, task.taskSm)
+			}
 
-				// Rename adoption updates compatibility names only. Persist those
-				// bindings before publishing the committed Catalog revision.
-				await controller.stateManager.flushPendingState()
+			this.adoptGlobalBinding(
+				controller,
+				controller.stateManager.getCanonicalSettingsKey("planModeProfileId"),
+				controller.stateManager.getCanonicalSettingsKey("planModeProfile"),
+				"plan",
+				changes,
+			)
+			this.adoptGlobalBinding(
+				controller,
+				controller.stateManager.getCanonicalSettingsKey("actModeProfileId"),
+				controller.stateManager.getCanonicalSettingsKey("actModeProfile"),
+				"act",
+				changes,
+			)
 
-				// Catalog edits are a list/display concern. They must not replace a
-				// running handler; explicit Task Profile selection owns that boundary.
+			// Rename adoption updates compatibility names only. Persist those
+			// bindings before publishing the committed Catalog revision.
+			await controller.stateManager.flushPendingState()
+
+			// Catalog edits must not replace a running handler. They can still
+			// change prompt-visible image tool availability for the bound Profile.
+			if (task) {
+				await task.flushPromptFreshnessInvalidation("profile_catalog")
+			} else {
 				await controller.postStateToWebview()
-			}),
-		)
+			}
+		} catch (error) {
+			Logger.warn(
+				`[ProfileChangeCoordinator] Post-commit notification failed for task ${task?.taskId ?? "none"}`,
+				error,
+			)
+		}
 	}
 
 	private adoptTaskBinding(

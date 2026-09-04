@@ -1,5 +1,5 @@
 import { EmptyRequest } from "@shared/proto/dline/common"
-import type { AvailableModelsResponse, ModelInfo, ProviderModelGroup } from "@shared/proto/dline/models"
+import type { AvailableModelsResponse, ImageModelInfo, ModelInfo, ProviderModelGroup } from "@shared/proto/dline/models"
 import { useContext, useEffect, useState } from "react"
 import { ExtensionStateContext } from "@/context/ExtensionStateContext"
 import { ModelsServiceClient } from "@/services/grpc-client"
@@ -8,6 +8,8 @@ export interface ProviderModelsResult {
 	models: Record<string, ModelInfo>
 	defaultModelId: string
 	modelInfoSaneDefaults: ModelInfo
+	imageModels: Record<string, ImageModelInfo>
+	defaultImageModelId: string
 	loading: boolean
 	error?: Error
 }
@@ -54,6 +56,11 @@ export function getCachedProviderDefaultModelId(providerId: string): string {
 	return group?.defaultModelId || group?.models[0]?.id || ""
 }
 
+export function getCachedProviderDefaultImageModelId(providerId: string): string {
+	const group = sharedCatalog.find((item) => item.provider === providerId)
+	return group?.defaultImageModelId || group?.imageModels[0]?.id || ""
+}
+
 /** All consumers share one registry catalog RPC instead of loading all models per card/editor. */
 export function useProviderModels(providerId: string): ProviderModelsResult {
 	const [, forceRender] = useState(0)
@@ -77,11 +84,16 @@ export function useProviderModels(providerId: string): ProviderModelsResult {
 	}
 	const defaultModelId = getCachedProviderDefaultModelId(providerId) || Object.keys(models)[0] || ""
 	const modelInfoSaneDefaults = models[defaultModelId] || Object.values(models)[0] || ({} as ModelInfo)
+	const imageModels: Record<string, ImageModelInfo> = {}
+	for (const model of group?.imageModels || []) imageModels[model.id] = model
+	const defaultImageModelId = getCachedProviderDefaultImageModelId(providerId) || Object.keys(imageModels)[0] || ""
 
 	return {
 		models,
 		defaultModelId,
 		modelInfoSaneDefaults,
+		imageModels,
+		defaultImageModelId,
 		loading: !sharedCatalogLoaded && !sharedCatalogError,
 		error: sharedCatalogError,
 	}

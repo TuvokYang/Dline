@@ -219,6 +219,33 @@ describe("ModelRegistry", () => {
 			expect(allModels[0].models).to.have.lengthOf(2)
 		})
 
+		it("returns image models and their default separately from chat models", async () => {
+			const config = {
+				provider: "image-provider",
+				providerName: "Image Provider",
+				billingMode: "token",
+				defaultModelId: "chat-model",
+				models: {
+					"chat-model": { id: "chat-model", name: "Chat Model" },
+				},
+				defaultImageModelId: "image-model",
+				imageModels: {
+					"image-model": { id: "image-model", name: "Image Model" },
+				},
+			}
+			await fsPromises.writeFile(path.join(tempDir, "image-provider.json"), JSON.stringify(config))
+			await registry.initialize()
+
+			const group = registry.getAllModels()[0] as unknown as {
+				defaultImageModelId?: string
+				imageModels?: Array<{ id: string }>
+				models: Array<{ id: string }>
+			}
+			expect(group.models.map((model) => model.id)).to.deep.equal(["chat-model"])
+			expect(group.defaultImageModelId).to.equal("image-model")
+			expect(group.imageModels?.map((model) => model.id)).to.deep.equal(["image-model"])
+		})
+
 		it("should have undefined defaultModelId when not set", async () => {
 			const config = {
 				provider: "simple",
@@ -278,6 +305,30 @@ describe("ModelRegistry", () => {
 	})
 
 	describe("getProviderModels", () => {
+		it("marks every OpenAI conversation model as capable of the image generation server tool", async () => {
+			await fsPromises.writeFile(
+				path.join(tempDir, "openai.json"),
+				JSON.stringify({
+					provider: "openai",
+					providerName: "OpenAI",
+					billingMode: "token",
+					models: {
+						"custom-responses-model": {
+							id: "custom-responses-model",
+							userDefined: true,
+							apiFormats: [ApiFormat.OPENAI_RESPONSES],
+							capabilities: { supportsTools: true, tools: [ServerTool.WEB_SEARCH] },
+						},
+					},
+				}),
+			)
+
+			await registry.initialize()
+
+			const model = registry.getProviderModels("openai")?.models["custom-responses-model"]
+			expect(model?.capabilities?.tools).to.deep.equal([ServerTool.WEB_SEARCH, ServerTool.IMAGE_GENERATION])
+		})
+
 		it("fills only missing native-tool capability from built-in seed metadata in memory", async () => {
 			const filePath = path.join(tempDir, "anthropic.json")
 			const config = {

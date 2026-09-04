@@ -6,7 +6,7 @@
  */
 
 import { ModelRegistry } from "@core/model-registry/ModelRegistry"
-import { AvailableModelsResponse, ModelInfo, ProviderModelGroup } from "@shared/proto/dline/models"
+import { AvailableModelsResponse, ImageModelInfo, ModelInfo, ProviderModelGroup } from "@shared/proto/dline/models"
 import type { Controller } from ".."
 
 /**
@@ -29,6 +29,8 @@ export async function getAvailableModels(_controller: Controller): Promise<Avail
 			providerName: group.providerName,
 			defaultModelId: group.defaultModelId,
 			models: group.models.map((model) => ModelInfo.create(model)),
+			defaultImageModelId: group.defaultImageModelId,
+			imageModels: (group.imageModels ?? []).map((model) => ImageModelInfo.create(model)),
 		}),
 	)
 

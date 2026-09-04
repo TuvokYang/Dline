@@ -45,6 +45,7 @@ export enum ClineDefaultTool {
 	RENAME = "rename",
 	REPLACE_TEXT = "replace_text",
 	STATUS_UPDATE = "status_update",
+	GENERATE_IMAGE = "generate_image",
 }
 
 // Array of all tool names for compatibility

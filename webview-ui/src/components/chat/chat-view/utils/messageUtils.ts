@@ -5,6 +5,7 @@
 import { combineApiRequests } from "@shared/combineApiRequests"
 import { combineCommandSequences } from "@shared/combineCommandSequences"
 import type { ClineMessage, ClineSayBrowserAction, ClineSayTool, TaskViewState } from "@shared/ExtensionMessage"
+import { parseImageGenerationToolText } from "@shared/image-generation"
 import { FileIcon, FolderOpenDotIcon, FolderOpenIcon, SearchIcon, ShapesIcon, WrenchIcon } from "lucide-react"
 import React from "react"
 
@@ -33,6 +34,26 @@ export function isLowStakesTool(message: ClineMessage): boolean {
 	} catch {
 		return false
 	}
+}
+
+export function isImageGenerationMessage(message: ClineMessage | undefined): boolean {
+	return Boolean(message && (message.imageGeneration ?? parseImageGenerationToolText(message.text)))
+}
+
+export function resolveMessageRowExpanded(
+	message: ClineMessage | undefined,
+	expandedRows: Readonly<Record<number, boolean>>,
+): boolean {
+	if (!message) return false
+	return expandedRows[message.ts] ?? isImageGenerationMessage(message)
+}
+
+export function toggleMessageRowExpansion(
+	message: ClineMessage | undefined,
+	expandedRows: Readonly<Record<number, boolean>>,
+): Record<number, boolean> {
+	if (!message) return { ...expandedRows }
+	return { ...expandedRows, [message.ts]: !resolveMessageRowExpanded(message, expandedRows) }
 }
 
 /**

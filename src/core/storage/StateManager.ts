@@ -1722,6 +1722,8 @@ export class StateManager {
 			planModeProfile: profileBindings.plan?.profileName,
 			actModeProfileId: profileBindings.act?.profileId,
 			actModeProfile: profileBindings.act?.profileName,
+			imageProfileId: this.getSettingWithOverrideForTask("imageProfileId", taskId),
+			imageProfile: this.getSettingWithOverrideForTask("imageProfile", taskId),
 			...(planModeReasoningOverride && { planModeReasoningOverride }),
 			...(actModeReasoningOverride && { actModeReasoningOverride }),
 			...(planModeServiceTierOverride && { planModeServiceTierOverride }),

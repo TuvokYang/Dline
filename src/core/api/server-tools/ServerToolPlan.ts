@@ -1,19 +1,25 @@
 import type { ModelInfo } from "@shared/proto/dline/models"
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
+import { ImageGenerationSource } from "@shared/proto/dline/profile"
 import { WebSearchMode } from "@shared/proto/dline/provider/common"
 
-const KNOWN_SERVER_TOOLS = new Set<ServerTool>([ServerTool.WEB_SEARCH, ServerTool.CODE_EXECUTION])
+const KNOWN_SERVER_TOOLS = new Set<ServerTool>([
+	ServerTool.WEB_SEARCH,
+	ServerTool.CODE_EXECUTION,
+	ServerTool.IMAGE_GENERATION,
+])
 
 const SUPPORTED_TOOLS_BY_API_FORMAT: Readonly<Partial<Record<ApiFormat, ReadonlySet<ServerTool>>>> = {
 	[ApiFormat.ANTHROPIC_CHAT]: new Set([ServerTool.WEB_SEARCH, ServerTool.CODE_EXECUTION]),
-	[ApiFormat.OPENAI_RESPONSES]: new Set([ServerTool.WEB_SEARCH]),
-	[ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE]: new Set([ServerTool.WEB_SEARCH]),
+	[ApiFormat.OPENAI_RESPONSES]: new Set([ServerTool.WEB_SEARCH, ServerTool.IMAGE_GENERATION]),
+	[ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE]: new Set([ServerTool.WEB_SEARCH, ServerTool.IMAGE_GENERATION]),
 }
 
 export type ServerToolDeclaration =
 	| Readonly<{ type: "web_search" }>
 	| Readonly<{ type: "web_search_20260318"; name: "web_search"; allowed_callers: readonly ["direct"] }>
 	| Readonly<{ type: "code_execution_20260120"; name: "code_execution"; allowed_callers: readonly ["direct"] }>
+	| Readonly<{ type: "image_generation" }>
 
 export interface ServerToolProjection {
 	readonly declarations: readonly ServerToolDeclaration[]
@@ -51,6 +57,28 @@ export interface WebSearchRoutingInput {
 	readonly modelInfo: Pick<ModelInfo, "capabilities"> | undefined
 	readonly selectedApiFormat: ApiFormat | undefined
 	readonly localAvailable: boolean
+	readonly remoteAdapterAvailable: boolean
+}
+
+export type HostedImageGenerationRoute = "disabled" | "hosted" | "unavailable"
+
+export type HostedImageGenerationUnavailableReason =
+	| "server_tool_not_declared"
+	| "server_tool_transport_unsupported"
+	| "server_tool_adapter_unavailable"
+
+export interface HostedImageGenerationPlan {
+	readonly route: HostedImageGenerationRoute
+	readonly serverToolPlan: ServerToolPlan
+	readonly serverTools: readonly ServerTool[]
+	readonly unavailableReason?: HostedImageGenerationUnavailableReason
+}
+
+export interface HostedImageGenerationInput {
+	readonly enabled: boolean
+	readonly source?: ImageGenerationSource
+	readonly modelInfo: Pick<ModelInfo, "capabilities"> | undefined
+	readonly selectedApiFormat: ApiFormat | undefined
 	readonly remoteAdapterAvailable: boolean
 }
 
@@ -180,6 +208,18 @@ export function resolveWebSearchRoutingPlan(input: WebSearchRoutingInput): WebSe
 						? "server_tool_transport_unsupported"
 						: "server_tool_adapter_unavailable",
 			)
+}
+
+/**
+ * Hosted image generation is coordinated by the ordinary generate_image tool.
+ * Main conversation requests never project the image server tool directly.
+ */
+export function resolveHostedImageGenerationPlan(input: HostedImageGenerationInput): HostedImageGenerationPlan {
+	return Object.freeze({
+		route: "disabled",
+		serverToolPlan: resolveServerToolPlan(input.modelInfo, input.selectedApiFormat),
+		serverTools: Object.freeze([]),
+	})
 }
 
 /** Project active hosted capabilities into their protocol-native request shape. */

@@ -19,6 +19,7 @@ const BASE_CONTEXT = {
 	focusChainSettings: { enabled: false, remindClineInterval: 6 },
 	subagentsEnabled: true,
 	clineWebToolsEnabled: false,
+	imageGenerationAvailable: true,
 	enableNativeToolCalls: true,
 	enableParallelToolCalling: false,
 	terminalExecutionMode: "vscodeTerminal",
@@ -40,6 +41,27 @@ describe("PromptFreshnessProjection", () => {
 		expect(comparePromptFreshness(baseline, baseline, { checkedAt: 20, frozenAt: 10 })).toEqual({
 			status: "fresh",
 			changes: [],
+			checkedAt: 20,
+			frozenAt: 10,
+		})
+	})
+
+	it.each([
+		[true, false],
+		[false, true],
+	] as const)("reports image tool availability changes from %s to %s", (frozenAvailable, currentAvailable) => {
+		const frozen = buildPromptFreshnessBaseline(
+			{ ...BASE_CONTEXT, imageGenerationAvailable: frozenAvailable },
+			CAPABILITIES,
+		)
+		const current = buildPromptFreshnessBaseline(
+			{ ...BASE_CONTEXT, imageGenerationAvailable: currentAvailable },
+			CAPABILITIES,
+		)
+
+		expect(comparePromptFreshness(frozen, current, { checkedAt: 20, frozenAt: 10 })).toEqual({
+			status: "stale",
+			changes: [{ kind: "tool_set", summary: "Image generation tools changed" }],
 			checkedAt: 20,
 			frozenAt: 10,
 		})
@@ -175,7 +197,7 @@ describe("PromptFreshnessProjection", () => {
 
 	it("returns unknown for a legacy frozen cache without a compatible baseline", () => {
 		const current = buildPromptFreshnessBaseline(BASE_CONTEXT, CAPABILITIES)
-		const legacy = { ...current, schemaVersion: 1 } as unknown as Parameters<typeof comparePromptFreshness>[0]
+		const legacy = { ...current, schemaVersion: 2 } as unknown as Parameters<typeof comparePromptFreshness>[0]
 
 		for (const frozen of [undefined, legacy]) {
 			expect(comparePromptFreshness(frozen, current, { checkedAt: 20, frozenAt: 10 })).toEqual({
@@ -189,6 +211,7 @@ describe("PromptFreshnessProjection", () => {
 
 	it("classifies only committed Settings keys represented by the freshness projection", () => {
 		expect(settingsAffectPromptFreshness(["subagentsEnabled"])).toBe(true)
+		expect(settingsAffectPromptFreshness(["imageGenerationEnabled"])).toBe(true)
 		expect(settingsAffectPromptFreshness(["browserSettings", "chatInputSendShortcut"])).toBe(true)
 		expect(settingsAffectPromptFreshness(["lazyTeammateModeEnabled"])).toBe(true)
 		expect(settingsAffectPromptFreshness(["chatInputSendShortcut", "terminalOutputLineLimit"])).toBe(false)

@@ -6,7 +6,7 @@ import ChatRow from "@/components/chat/ChatRow"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { cn } from "@/lib/utils"
 import type { MessageHandlers } from "../../types/chatTypes"
-import { findReasoningForApiReq, isTextMessagePendingToolCall, isToolGroup } from "../../utils/messageUtils"
+import { findReasoningForApiReq, isTextMessagePendingToolCall, isToolGroup, resolveMessageRowExpanded } from "../../utils/messageUtils"
 import { ToolGroupRenderer } from "./ToolGroupRenderer"
 
 interface MessageRendererProps {
@@ -17,6 +17,7 @@ interface MessageRendererProps {
 	expandedRows: Record<number, boolean>
 	onToggleExpand: (ts: number) => void
 	onHeightChange: (isTaller: boolean) => void
+	onAddToInput: (text: string) => void
 	onSetQuote: (quote: string | null) => void
 	onFollowupOptionSelect: (message: ClineMessage, option: string) => Promise<void>
 	messageHandlers: MessageHandlers
@@ -35,6 +36,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = ({
 	expandedRows,
 	onToggleExpand,
 	onHeightChange,
+	onAddToInput,
 	onSetQuote,
 	onFollowupOptionSelect,
 	messageHandlers,
@@ -105,13 +107,14 @@ export const MessageRenderer: React.FC<MessageRendererProps> = ({
 			})}
 			data-message-ts={messageOrGroup.ts}>
 			<ChatRow
-				isExpanded={expandedRows[messageOrGroup.ts] || false}
+				isExpanded={resolveMessageRowExpanded(messageOrGroup, expandedRows)}
 				isLast={isLastMessage}
 				isRequestInProgress={isRequestInProgress}
 				key={messageOrGroup.ts}
 				lastModifiedMessage={modifiedMessages.at(-1)}
 				message={messageOrGroup}
 				mode={mode}
+				onAddToInput={onAddToInput}
 				onFollowupOptionSelect={onFollowupOptionSelect}
 				onHeightChange={onHeightChange}
 				onSetQuote={onSetQuote}
@@ -134,6 +137,7 @@ export const createMessageRenderer = (
 	expandedRows: Record<number, boolean>,
 	onToggleExpand: (ts: number) => void,
 	onHeightChange: (isTaller: boolean) => void,
+	onAddToInput: (text: string) => void,
 	onSetQuote: (quote: string | null) => void,
 	onFollowupOptionSelect: (message: ClineMessage, option: string) => Promise<void>,
 	messageHandlers: MessageHandlers,
@@ -148,6 +152,7 @@ export const createMessageRenderer = (
 			messageHandlers={messageHandlers}
 			messageOrGroup={messageOrGroup}
 			modifiedMessages={modifiedMessages}
+			onAddToInput={onAddToInput}
 			onFollowupOptionSelect={onFollowupOptionSelect}
 			onHeightChange={onHeightChange}
 			onSetQuote={onSetQuote}

@@ -28,6 +28,7 @@ vi.mock("@/config", () => ({
 
 import * as coreApi from "@core/api"
 import * as skills from "@core/context/instructions/user-instructions/skills"
+import * as profileStore from "@core/controller/file/getApiProfiles"
 import { PromptProfile } from "@core/prompts/profiles/types"
 import * as systemPromptFacade from "@core/prompts/system-prompt"
 import type { SystemPromptContext } from "@core/prompts/system-prompt/context"
@@ -140,6 +141,10 @@ function createTaskConfig(nativeToolCallEnabled: boolean, options: any = {}): Ta
 					assert.equal(taskId, "task-1")
 					return apiConfiguration
 				},
+			},
+			imageGenerationService: {
+				hasAvailableProfile: vi.fn(() => false),
+				withProfileResolver: vi.fn(() => ({ hasAvailableProfile: vi.fn(() => false) })),
 			},
 		},
 		browserSettings: {},
@@ -257,6 +262,74 @@ describe("SubagentRunner", () => {
 	afterEach(() => {
 		HostProvider.reset()
 		vi.restoreAllMocks()
+	})
+
+	it("binds image prompt and tool execution to the subagent Profile while reusing the parent service boundary", async () => {
+		vi.spyOn(profileStore, "readApiProfiles").mockReturnValue([
+			{
+				id: "subagent-profile-id",
+				name: "subagent-images",
+				provider: "openai",
+				modelId: "custom-responses-model",
+				imageModelId: "gpt-image-2",
+				usedFor: ["subagents"],
+				enabled: true,
+			},
+		] as ReturnType<typeof profileStore.readApiProfiles>)
+		let requestRound = 0
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			requestRound += 1
+			yield {
+				type: "tool_calls",
+				function_id: requestRound === 1 ? "generate-image" : "complete",
+				tool_call: {
+					function: {
+						name: requestRound === 1 ? ClineDefaultTool.GENERATE_IMAGE : ClineDefaultTool.ATTEMPT,
+						arguments: JSON.stringify(requestRound === 1 ? { prompt: "Draw a fox" } : { result: "done" }),
+					},
+				},
+			}
+		})
+		let promptContext: SystemPromptContext | undefined
+		stubSystemPrompt(false, (context) => {
+			promptContext ??= context
+		})
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		// The explicit subagent Profile resolves, so the builder takes the
+		// Profile-bound handler path; without this double the mock Profile has no
+		// credentials and the run fails while constructing a real provider client.
+		vi.spyOn(coreApi, "buildApiHandlerFromProfile").mockImplementation(() => coreApi.buildApiHandler({} as never, "act"))
+		initializeHostProvider()
+		const config = createTaskConfig(false)
+		const derivedImageService = { hasAvailableProfile: vi.fn(() => true) }
+		const withProfileResolver = vi.fn(() => derivedImageService)
+		config.services.imageGenerationService.withProfileResolver = withProfileResolver as never
+		const executeGenerateImage = vi.fn(async (toolConfig: TaskConfig) => {
+			expect(toolConfig.services.imageGenerationService).toBe(derivedImageService)
+			return "generated"
+		})
+		config.coordinator.getHandler = vi.fn((toolName) =>
+			toolName === ClineDefaultTool.GENERATE_IMAGE
+				? ({ execute: executeGenerateImage, getDescription: () => "generate_image" } as never)
+				: undefined,
+		)
+		const runner = new SubagentRunner(config, "image-agent", {
+			name: "image-agent",
+			description: "image subagent",
+			profile: "subagent-images",
+			tools: [ClineDefaultTool.GENERATE_IMAGE],
+			systemPrompt: "",
+		})
+
+		const result = await runner.run("Create an image", () => {})
+
+		expect(result.status).toBe("completed")
+		expect(withProfileResolver).toHaveBeenCalledOnce()
+		expect(promptContext?.imageGenerationAvailable).toBe(true)
+		expect(promptContext?.disableTools).not.toContain(ClineDefaultTool.GENERATE_IMAGE)
+		expect(executeGenerateImage).toHaveBeenCalledOnce()
 	})
 
 	it.each([

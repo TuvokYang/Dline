@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto"
 import type { ApiHandler, ApiProviderInfo } from "@core/api"
-import { resolveWebSearchRoutingPlan, type WebSearchRoutingPlan } from "@core/api/server-tools"
+import {
+	resolveHostedImageGenerationPlan,
+	resolveWebSearchRoutingPlan,
+	type HostedImageGenerationPlan,
+	type WebSearchRoutingPlan,
+} from "@core/api/server-tools"
 import { PromptProfile } from "@core/prompts/profiles/types"
 import { ExplicitInstructionRegistry } from "@core/task/explicit-instructions/ExplicitInstructionRegistry"
 import { ExplicitInstructionRequestScope } from "@core/task/explicit-instructions/ExplicitInstructionRequestScope"
@@ -12,6 +17,7 @@ export interface RequestApiScope {
 	readonly providerInfo: Readonly<ApiProviderInfo>
 	readonly webToolsEnabled: boolean
 	readonly webSearchRoutingPlan: WebSearchRoutingPlan
+	readonly hostedImageGenerationPlan: HostedImageGenerationPlan
 	readonly explicitInstructions: ExplicitInstructionRequestScope
 }
 
@@ -32,6 +38,18 @@ export function resolveRequestWebSearchRoutingPlan(api: ApiHandler, enabled: boo
 	})
 }
 
+/** Resolve Hosted image generation once from the handler/profile captured for a request. */
+export function resolveRequestHostedImageGenerationPlan(api: ApiHandler, enabled: boolean): HostedImageGenerationPlan {
+	const model = api.getModel()
+	return resolveHostedImageGenerationPlan({
+		enabled,
+		source: api.getImageGenerationSource?.(),
+		modelInfo: model.info,
+		selectedApiFormat: model.info.apiFormats?.[0],
+		remoteAdapterAvailable: api.supportsServerTool?.(ServerTool.IMAGE_GENERATION) === true,
+	})
+}
+
 /** Capture one immutable handler/model/provider view for an API request. */
 export function createRequestApiScope(
 	api: ApiHandler,
@@ -39,6 +57,7 @@ export function createRequestApiScope(
 	customPrompt?: string,
 	webToolsEnabled = false,
 	explicitInstructionRegistry = new ExplicitInstructionRegistry(),
+	imageGenerationEnabled = false,
 ): RequestApiScope {
 	const providerId = api.getProviderId?.()
 	if (!providerId) {
@@ -55,6 +74,7 @@ export function createRequestApiScope(
 		}),
 		webToolsEnabled: frozenWebToolsEnabled,
 		webSearchRoutingPlan: resolveRequestWebSearchRoutingPlan(api, frozenWebToolsEnabled),
+		hostedImageGenerationPlan: resolveRequestHostedImageGenerationPlan(api, imageGenerationEnabled === true),
 		providerInfo: Object.freeze({
 			providerId,
 			model,

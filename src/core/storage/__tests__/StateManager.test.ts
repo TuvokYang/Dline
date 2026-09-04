@@ -172,6 +172,18 @@ describe("StateManager — Per-Task Settings Isolation", () => {
 			sm.clearTaskSetting("task-A", "planModeProfile")
 			sm.getApiConfiguration().planModeProfile?.should.equal("openrouter")
 		})
+
+		it("returns the global image profile independently from plan and act profiles", () => {
+			sm.setGlobalState("planModeProfile", "anthropic-plan")
+			sm.setGlobalState("actModeProfile", "openai-act")
+			sm.setGlobalState("imageProfile", "openai-images")
+
+			expect(sm.getApiConfiguration()).toMatchObject({
+				planModeProfile: "anthropic-plan",
+				actModeProfile: "openai-act",
+				imageProfile: "openai-images",
+			})
+		})
 	})
 
 	describe("settings repository synchronization", () => {

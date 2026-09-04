@@ -2,7 +2,7 @@ import { findEnabledProfileByName } from "@core/controller/file/getApiProfiles"
 import { ApiConfiguration, ModelInfo } from "@shared/api"
 import type { AccountUsageData, AccountUsageQuotaData } from "@shared/ExtensionMessage"
 import type { ServerTool } from "@shared/proto/dline/models/metadata"
-import type { ApiProfile } from "@shared/proto/dline/profile"
+import type { ApiProfile, ImageGenerationSource } from "@shared/proto/dline/profile"
 import type { WebSearchMode } from "@shared/proto/dline/provider/common"
 import { Mode } from "@shared/storage/types"
 import { ClineError } from "@/services/error"
@@ -90,6 +90,18 @@ export interface ApiGenerationOptions {
 /** Owner responsible for retrying one logical Provider request. */
 export type ApiRetryOwner = "task" | "subagent" | "compaction"
 
+export interface ApiImageArtifactReference {
+	readonly artifactId: string
+	readonly mimeType: string
+	readonly base64: string
+}
+
+export interface ApiImageGenerationOptions {
+	readonly references: readonly ApiImageArtifactReference[]
+	readonly size?: { readonly width: number; readonly height: number }
+	readonly partialImages?: number
+}
+
 /** Immutable request-level capabilities resolved before entering a provider adapter. */
 export interface ApiRequestOptions {
 	/** Provider-hosted tools selected for this request. Local tools remain in `tools`. */
@@ -100,6 +112,8 @@ export interface ApiRequestOptions {
 	readonly retryOwner?: ApiRetryOwner
 	/** Optional generation policy for internal requests; ordinary requests omit this field. */
 	readonly generation?: ApiGenerationOptions
+	/** Ephemeral task-owned image inputs for provider-hosted generation/editing. */
+	readonly imageGeneration?: ApiImageGenerationOptions
 }
 
 export interface ApiHandler {
@@ -122,6 +136,8 @@ export interface ApiHandler {
 	getProviderId?(): string
 	/** Return the web-search mode captured by this handler's profile. */
 	getWebSearchMode?(): WebSearchMode | undefined
+	/** Return the image source captured by this handler's profile when Image use is enabled. */
+	getImageGenerationSource?(): ImageGenerationSource | undefined
 }
 
 export interface ApiHandlerModel {

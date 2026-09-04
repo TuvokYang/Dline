@@ -22,6 +22,7 @@ const TOOL_DESCRIPTIONS: Record<string, { description: string; isReadOnly: boole
 	[ClineDefaultTool.MAKE_PLAN]: { description: "Present an implementation plan", isReadOnly: true },
 	[ClineDefaultTool.GENERATE_EXPLANATION]: { description: "Generate diff explanation", isReadOnly: true },
 	[ClineDefaultTool.FIND_REFERENCES]: { description: "Find symbol references", isReadOnly: true },
+	[ClineDefaultTool.GENERATE_IMAGE]: { description: "Generate or edit task image artifacts", isReadOnly: false },
 	[ClineDefaultTool.FILE_NEW]: { description: "Write a new file", isReadOnly: false },
 	[ClineDefaultTool.FILE_EDIT]: { description: "Edit an existing file", isReadOnly: false },
 	[ClineDefaultTool.BASH]: { description: "Execute CLI commands", isReadOnly: false },

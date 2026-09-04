@@ -42,6 +42,7 @@ export interface SystemPromptContext {
 	readonly subagentsEnabled?: boolean
 	readonly clineWebToolsEnabled?: boolean
 	readonly webSearchRoutingPlan?: WebSearchRoutingPlan
+	readonly imageGenerationAvailable?: boolean
 	readonly isMultiRootEnabled?: boolean
 	readonly workspaceRoots?: Array<{ path: string; name: string; vcs?: string }>
 	readonly isSubagentsEnabledAndCliInstalled?: boolean

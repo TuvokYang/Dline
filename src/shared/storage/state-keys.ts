@@ -114,6 +114,8 @@ const API_HANDLER_SETTINGS_FIELDS = {
 	planModeProfile: { default: undefined as string | undefined },
 	actModeProfileId: { default: undefined as string | undefined },
 	actModeProfile: { default: undefined as string | undefined },
+	imageProfileId: { default: undefined as string | undefined },
+	imageProfile: { default: undefined as string | undefined },
 	requestTimeoutMs: { default: undefined as number | undefined },
 	enableParallelToolCalling: { default: true as boolean },
 } satisfies FieldDefinitions
@@ -202,6 +204,7 @@ const USER_SETTINGS_FIELDS = {
 	},
 	subagentsEnabled: { default: true as boolean },
 	mcpEnabled: { default: true as boolean },
+	imageGenerationEnabled: { default: false as boolean },
 	clineWebToolsEnabled: { default: true as boolean },
 	localWebSearchEngine: { default: DEFAULT_LOCAL_SEARCH_ENGINE as LocalSearchEngineId },
 	searxngSearchUrl: { default: undefined as string | undefined },

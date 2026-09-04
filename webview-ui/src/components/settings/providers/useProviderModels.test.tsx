@@ -15,7 +15,7 @@ vi.mock("@/services/grpc-client", () => ({
 	},
 }))
 
-function catalog(modelId: string) {
+function catalog(modelId: string, imageModelId = `${modelId}-image`) {
 	return {
 		providers: [
 			{
@@ -23,6 +23,8 @@ function catalog(modelId: string) {
 				providerName: "DeepSeek",
 				defaultModelId: modelId,
 				models: [{ id: modelId, name: modelId }],
+				defaultImageModelId: imageModelId,
+				imageModels: [{ id: imageModelId, name: imageModelId }],
 			},
 		],
 	}
@@ -55,6 +57,28 @@ describe("useProviderModels", () => {
 		await waitFor(() => expect(result.current.models).toHaveProperty("deepseek-after"))
 		expect(result.current.models).not.toHaveProperty("deepseek-before")
 		expect(mocks.getAvailableModels).toHaveBeenCalledTimes(2)
+	})
+
+	it("returns image models separately from chat models", async () => {
+		mocks.providersVersion = 4
+		mocks.getAvailableModels.mockReset()
+		mocks.getAvailableModels.mockResolvedValueOnce(catalog("deepseek-chat", "deepseek-image"))
+		const wrapper = ({ children }: PropsWithChildren) => (
+			<ExtensionStateContext.Provider value={{ providersVersion: mocks.providersVersion } as ExtensionStateContextType}>
+				{children}
+			</ExtensionStateContext.Provider>
+		)
+
+		const { result } = renderHook(() => useProviderModels("deepseek"), { wrapper })
+
+		await waitFor(() => expect(result.current.models).toHaveProperty("deepseek-chat"))
+		const imageCatalog = result.current as unknown as {
+			defaultImageModelId: string
+			imageModels: Record<string, { id: string }>
+		}
+		expect(imageCatalog.defaultImageModelId).toBe("deepseek-image")
+		expect(imageCatalog.imageModels).toHaveProperty("deepseek-image")
+		expect(result.current.models).not.toHaveProperty("deepseek-image")
 	})
 
 	it("exposes refreshed Vercel models before the registry watcher reloads", async () => {

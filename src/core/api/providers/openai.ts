@@ -1,26 +1,25 @@
 import { setTimeout as setTimeoutPromise } from "node:timers/promises"
-import { DefaultAzureCredential, getBearerTokenProvider } from "@azure/identity"
-import { azureOpenAiDefaultApiVersion, ModelInfo, openAiModelInfoSaneDefaults, openAiModels } from "@shared/api"
+import { ModelInfo, openAiModelInfoSaneDefaults, openAiModels } from "@shared/api"
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
+import { ImageGenerationSource } from "@shared/proto/dline/profile"
 import { OpenAiPromptCacheMode } from "@shared/proto/dline/provider/openai"
 import { openAiEndpointToApiFormat, prioritizeApiFormat, resolveApiFormat } from "@shared/providers/api-format"
 import { buildEffectiveModelInfo } from "@shared/providers/effective-model-info"
 import { normalizeOpenAIResponsesStreamIdleTimeoutSeconds } from "@shared/providers/openai-stream"
 import { normalizeOpenAiServiceTier, normalizeOpenaiReasoningEffort } from "@shared/storage/types"
 import { calculateApiCostOpenAI } from "@utils/cost"
-import OpenAI, { AzureOpenAI } from "openai"
+import OpenAI from "openai"
 import type {
 	ChatCompletionChunk,
 	ChatCompletionFunctionTool,
 	ChatCompletionReasoningEffort,
 	ChatCompletionTool,
 } from "openai/resources/chat/completions"
-import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { ClineStorageMessage } from "@/shared/messages/content"
-import { createOpenAIClient, providerFetch } from "@/shared/net"
 import { isO1Model } from "@/shared/resolve-prompt-profile"
 import { Logger } from "@/shared/services/Logger"
 import { ApiHandler, ApiHandlerContext, type ApiRequestOptions } from "../index"
+import { createOpenAIClientForProfile } from "./openai-client-factory"
 import { withRetry } from "../retry"
 import { getOpenAIChatOutputLimitError } from "../stream/OutputLimitExceededError"
 import { OpenAIResponsesStreamMonitor } from "../stream/openai-responses-stream-monitor"
@@ -153,6 +152,10 @@ export class OpenAiHandler implements ApiHandler {
 	 *
 	 * @returns Effective model metadata for requests and cost calculation.
 	 */
+	getImageGenerationSource(): ImageGenerationSource | undefined {
+		return this.ctx.profile.imageSource
+	}
+
 	private buildModelInfo(): ModelInfo {
 		return buildEffectiveModelInfo(
 			this.modelId,
@@ -166,62 +169,12 @@ export class OpenAiHandler implements ApiHandler {
 		)
 	}
 
-	private getAzureAudienceScope(baseUrl?: string): string {
-		const url = baseUrl?.toLowerCase() ?? ""
-		if (url.includes("azure.us")) return "https://cognitiveservices.azure.us/.default"
-		if (url.includes("azure.com")) return "https://cognitiveservices.azure.com/.default"
-		return "https://cognitiveservices.azure.com/.default"
-	}
-
 	private ensureClient(): OpenAI {
 		if (!this.client) {
-			if (!this.apiKey && !this.azureIdentity) {
-				throw new Error("OpenAI API key or Azure Identity Authentication is required")
-			}
 			try {
-				const baseUrl = (this.baseUrl ?? "").toLowerCase()
-				const isAzureDomain = baseUrl.includes("azure.com") || baseUrl.includes("azure.us")
-				const externalHeaders = buildExternalBasicHeaders()
-				// Azure API shape slightly differs from the core API shape...
-				if (this.azureApiVersion || (isAzureDomain && !this.modelId?.toLowerCase().includes("deepseek"))) {
-					if (this.azureIdentity) {
-						this.client = new AzureOpenAI({
-							baseURL: this.baseUrl,
-							azureADTokenProvider: getBearerTokenProvider(
-								new DefaultAzureCredential(),
-								this.getAzureAudienceScope(this.baseUrl),
-							),
-							apiVersion: this.azureApiVersion || azureOpenAiDefaultApiVersion,
-							maxRetries: 0,
-							defaultHeaders: {
-								...externalHeaders,
-								...this.openAiHeaders,
-							},
-							fetch: providerFetch,
-						})
-					} else {
-						this.client = new AzureOpenAI({
-							baseURL: this.baseUrl,
-							apiKey: this.apiKey,
-							apiVersion: this.azureApiVersion || azureOpenAiDefaultApiVersion,
-							maxRetries: 0,
-							defaultHeaders: {
-								...externalHeaders,
-								...this.openAiHeaders,
-							},
-							fetch: providerFetch,
-						})
-					}
-				} else {
-					this.client = createOpenAIClient({
-						baseURL: this.baseUrl,
-						apiKey: this.apiKey,
-						defaultHeaders: this.openAiHeaders,
-					})
-				}
-				// biome-ignore lint/suspicious/noExplicitAny: catch clause
-			} catch (error: any) {
-				throw new Error(`Error creating OpenAI client: ${error.message}`)
+				this.client = createOpenAIClientForProfile(this.ctx.profile)
+			} catch (error) {
+				throw new Error(`Error creating OpenAI client: ${error instanceof Error ? error.message : String(error)}`)
 			}
 		}
 		return this.client
@@ -468,8 +421,9 @@ export class OpenAiHandler implements ApiHandler {
 	): ApiStream {
 		const client = this.ensureClient()
 		const model = this.getModel()
-		const { input } = convertToOpenAIResponsesInput(messages, { usePreviousResponseId: false })
+		const converted = convertToOpenAIResponsesInput(messages, { usePreviousResponseId: false })
 		const hostedWebSearch = options?.serverTools?.includes(ServerTool.WEB_SEARCH) === true
+		const input = converted.input
 		const responseTools: OpenAI.Responses.Tool[] = (tools ?? [])
 			.filter((tool): tool is ChatCompletionFunctionTool => tool.type === "function")
 			.filter((tool) => !hostedWebSearch || tool.function.name !== "web_search")

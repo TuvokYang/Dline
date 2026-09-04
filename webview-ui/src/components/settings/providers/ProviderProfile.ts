@@ -2,7 +2,7 @@
 // Do NOT create a separate UI type — the proto type is the source of truth.
 export type { ApiProfile } from "@shared/proto/dline/profile"
 
-import type { ApiProfile } from "@shared/proto/dline/profile"
+import { ImageGenerationSource, type ApiProfile } from "@shared/proto/dline/profile"
 import { WebSearchMode } from "@shared/proto/dline/provider/common"
 
 /**
@@ -31,6 +31,10 @@ export function createEmptyApiProfile(): ApiProfile {
 		apiKey: "",
 		baseUrl: undefined,
 		modelId: "",
+		imageModelId: undefined,
+		imageGeneration: undefined,
+		imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED,
+		imageProfileId: undefined,
 		modelInfo: undefined,
 		legacyNames: [],
 		webSearchMode: WebSearchMode.WEB_SEARCH_MODE_AUTO,

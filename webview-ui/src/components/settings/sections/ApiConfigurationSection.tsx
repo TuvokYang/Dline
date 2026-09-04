@@ -1,8 +1,10 @@
 import { Mode } from "@shared/storage/types"
 import { useState } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
+import { ImageGenerationProfileList } from "../providers/ImageGenerationProfileList"
 import ProviderProfileList from "../providers/ProviderProfileList"
 import { useApiProfiles } from "../providers/useApiProfiles"
+import { useImageGenerationProfiles } from "../providers/useImageGenerationProfiles"
 import Section from "../Section"
 
 interface ApiConfigurationSectionProps {
@@ -15,7 +17,7 @@ interface ApiConfigurationSectionProps {
  * with a unified ProviderProfileList that reuses existing Provider components.
  */
 const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiConfigurationSectionProps) => {
-	const { mode } = useExtensionState()
+	const { mode, imageGenerationEnabled } = useExtensionState()
 	const [currentTab] = useState<Mode>(mode)
 	const {
 		profiles,
@@ -32,6 +34,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		error,
 		reloadProfiles,
 	} = useApiProfiles()
+	const imageProfiles = useImageGenerationProfiles()
 
 	return (
 		<div>
@@ -48,6 +51,8 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 				)}
 				{loaded && !error && (
 					<ProviderProfileList
+						imageProfiles={imageProfiles.profiles}
+						imageGenerationEnabled={imageGenerationEnabled === true}
 						currentMode={currentTab}
 						editMode={editMode}
 						expandedId={expandedId}
@@ -62,6 +67,23 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 					/>
 				)}
 			</Section>
+			{imageGenerationEnabled ? <Section>
+				{!imageProfiles.loaded && !imageProfiles.error ? <div className="py-3 text-sm text-description">Loading image profiles…</div> : null}
+				{imageProfiles.error ? (
+					<div className="py-3 text-sm text-errorForeground">
+						<div>Failed to load image profiles.</div>
+						<button className="mt-2" onClick={() => void imageProfiles.reload()} type="button">Retry</button>
+					</div>
+				) : null}
+				{imageProfiles.loaded && !imageProfiles.error ? (
+					<ImageGenerationProfileList
+						onAdd={imageProfiles.addProfile}
+						onRemove={imageProfiles.removeProfile}
+						onUpdate={imageProfiles.updateProfile}
+						profiles={imageProfiles.profiles}
+					/>
+				) : null}
+			</Section> : null}
 		</div>
 	)
 }

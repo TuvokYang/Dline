@@ -13,6 +13,7 @@ import type { CodeExecutionPresentationV1 } from "./code-execution-tools"
 import type { ContextWindowIndicatorSnapshot } from "./context-window-indicator"
 import { FocusChainSettings } from "./FocusChainSettings"
 import { HistoryItem } from "./HistoryItem"
+import type { ImageGenerationPresentationV1 } from "./image-generation"
 import type { QueuedInputEntry } from "./InputQueue"
 import type { LoadCapabilityPayload } from "./load-capabilities"
 import { McpDisplayMode } from "./McpDisplayMode"
@@ -131,6 +132,7 @@ export interface ExtensionState {
 	autoCondenseMaxContextTokens?: number
 	subagentsEnabled?: boolean
 	mcpEnabled?: boolean
+	imageGenerationEnabled?: boolean
 	clineWebToolsEnabled?: ClineFeatureSetting
 	localWebSearchEngine?: LocalSearchEngineId
 	searxngSearchUrl?: string
@@ -262,6 +264,7 @@ export interface ClineMessage {
 	/** Canonical pre-compaction range stored only on a durable completed compaction card. */
 	compactionConversationRange?: CompactionConversationRange
 	modelInfo?: ClineMessageModelInfo
+	imageGeneration?: ImageGenerationPresentationV1
 }
 
 export type CommandExecutionMode = "foreground" | "background"
@@ -504,6 +507,7 @@ export interface ClineSayTool {
 		| "statusUpdate"
 		| "actModeRespond"
 		| "killCommand"
+		| "generateImage"
 	path?: string
 	/** Activity target associated with a command result presentation. */
 	activityId?: string
@@ -543,6 +547,7 @@ export interface ClineSayTool {
 	compactionBranchId?: string
 	webSearch?: WebSearchPresentationV1
 	webFetch?: WebFetchPresentationV1
+	imageGeneration?: ImageGenerationPresentationV1
 	/** Provider-hosted sandbox run: the code sent, what it printed, and how it ended. */
 	codeExecution?: CodeExecutionPresentationV1
 	regex?: string

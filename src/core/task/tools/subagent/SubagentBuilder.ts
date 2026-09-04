@@ -41,6 +41,7 @@ export class SubagentBuilder {
 	private readonly agentConfig: AgentConfig = {}
 	private readonly allowedTools: ClineDefaultTool[]
 	private readonly apiHandler: ReturnType<typeof buildApiHandler>
+	private readonly profileId: string | undefined
 	private readonly profileName: string | undefined
 	private readonly reasoningConfig: ReturnType<typeof resolveProfileReasoningConfig>
 
@@ -59,8 +60,10 @@ export class SubagentBuilder {
 			this.agentConfig.profile,
 			apiConfiguration.actModeProfileId ?? apiConfiguration.actModeProfile,
 			apiConfiguration.actModeProfile,
+			this.agentConfig.tools?.includes(ClineDefaultTool.GENERATE_IMAGE) === true,
 		)
 		this.profileName = profileSelection.profileName
+		this.profileId = profileSelection.profileId
 		const effectiveApiConfiguration = {
 			...apiConfiguration,
 			actModeProfileId: profileSelection.profileId,
@@ -93,6 +96,10 @@ export class SubagentBuilder {
 		return this.agentConfig.maxOutputTokens
 	}
 
+	getProfileId(): string | undefined {
+		return this.profileId
+	}
+
 	getProfileName(): string | undefined {
 		return this.profileName
 	}
@@ -119,6 +126,7 @@ export class SubagentBuilder {
 	 * @param configuredProfile Optional profile name from subagent YAML.
 	 * @param parentProfileReference Stable ID or legacy name bound to the parent Act mode.
 	 * @param parentProfileName Parent display name retained for the existing invalid-profile error path.
+	 * @param requireExplicitProfile Whether the subagent exposes generate_image and must bind its own Profile.
 	 * @returns Selected Profile snapshot and whether it is an explicit child binding or parent fallback.
 	 */
 	private resolveProfile(
@@ -126,6 +134,7 @@ export class SubagentBuilder {
 		configuredProfile: string | null | undefined,
 		parentProfileReference: string | undefined,
 		parentProfileName: string | undefined,
+		requireExplicitProfile = false,
 	): SubagentProfileSelection {
 		const parentResolution = resolveProfileReference(profiles, parentProfileReference)
 		const parentProfile =
@@ -137,12 +146,29 @@ export class SubagentBuilder {
 			source: "parent_fallback",
 		}
 		const profileName = configuredProfile?.trim()
-		if (!profileName) return parentFallback
+		if (!profileName) {
+			// Image generation must never inherit parent credentials: without an explicit
+			// binding the subagent has no authorized image source, so fail closed.
+			if (requireExplicitProfile) {
+				throw new Error("Subagents configured with generate_image require an explicit API Profile.")
+			}
+			return parentFallback
+		}
 
 		const resolution = resolveProfileReference(profiles, profileName)
-		if (resolution.status !== "resolved") return parentFallback
+		if (resolution.status !== "resolved") {
+			if (requireExplicitProfile) {
+				throw new Error(`Subagent image Profile '${profileName}' is unavailable or not enabled for subagents.`)
+			}
+			return parentFallback
+		}
 		const profile = resolution.profile
-		if (!profile.enabled || !profile.usedFor.includes("subagents")) return parentFallback
+		if (!profile.enabled || !profile.usedFor.includes("subagents")) {
+			if (requireExplicitProfile) {
+				throw new Error(`Subagent image Profile '${profileName}' is unavailable or not enabled for subagents.`)
+			}
+			return parentFallback
+		}
 
 		return { profile, profileName: profile.name, profileId: profile.id, source: "configured" }
 	}

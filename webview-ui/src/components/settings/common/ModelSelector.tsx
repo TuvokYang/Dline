@@ -1,4 +1,3 @@
-import type { ModelInfo } from "@shared/proto/dline/models"
 import { VSCodeDropdown, VSCodeOption } from "@vscode/webview-ui-toolkit/react"
 import { type FormEventHandler, useId } from "react"
 import styled from "styled-components"
@@ -27,7 +26,7 @@ export const DropdownContainer = styled.div.attrs<{ zIndex?: number }>(({ zIndex
  * Props for the ModelSelector component
  */
 interface ModelSelectorProps {
-	models: Record<string, ModelInfo>
+	models: Record<string, { id: string }>
 	selectedModelId: string | undefined
 	onChange: ((e: Event) => unknown) & FormEventHandler<HTMLElement>
 	zIndex?: number

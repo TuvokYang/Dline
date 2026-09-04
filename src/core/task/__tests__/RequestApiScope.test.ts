@@ -1,5 +1,6 @@
 import type { ApiHandler } from "@core/api"
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
+import { ImageGenerationSource } from "@shared/proto/dline/profile"
 import { WebSearchMode } from "@shared/proto/dline/provider/common"
 import { describe, expect, it, vi } from "vitest"
 import { createRequestApiScope } from "../RequestApiScope"
@@ -177,6 +178,29 @@ describe("createRequestApiScope", () => {
 			serverTools: [],
 			unavailableReason: "server_tool_transport_unsupported",
 		})
+	})
+
+	it("freezes hosted image generation independently from Web Search", () => {
+		const handler = createHandler("openai", "hosted-image-model")
+		handler.getModel = () => ({
+			id: "hosted-image-model",
+			info: {
+				id: "hosted-image-model",
+				apiFormats: [ApiFormat.OPENAI_RESPONSES],
+				capabilities: { tools: [ServerTool.IMAGE_GENERATION] },
+			},
+		})
+		handler.getImageGenerationSource = () => ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED
+		handler.supportsServerTool = (tool) => tool === ServerTool.IMAGE_GENERATION
+
+		const enabled = createRequestApiScope(handler, "act", undefined, false, undefined, true)
+		const disabled = createRequestApiScope(handler, "act", undefined, false, undefined, false)
+
+		expect(enabled.hostedImageGenerationPlan).toMatchObject({
+			route: "hosted",
+			serverTools: [ServerTool.IMAGE_GENERATION],
+		})
+		expect(disabled.hostedImageGenerationPlan).toMatchObject({ route: "disabled", serverTools: [] })
 	})
 
 	it("lets the global Web Tools switch disable every route", () => {

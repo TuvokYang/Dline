@@ -59,6 +59,35 @@ describe("getAvailableModels handler", () => {
 		expect(response.providers?.[0].models?.[0].capabilities?.contextWindow).to.equal(256000)
 	})
 
+	it("projects the image model catalog without mixing it into chat models", async () => {
+		const mockRegistry = {
+			isInitialized: true,
+			waitForDeferredProviders: vi.fn().mockResolvedValue(undefined),
+			getAllModels: vi.fn().mockReturnValue([
+				{
+					provider: "openai",
+					providerName: "OpenAI",
+					defaultModelId: "gpt-chat",
+					models: [{ id: "gpt-chat", name: "GPT Chat" }],
+					defaultImageModelId: "gpt-image-2",
+					imageModels: [{ id: "gpt-image-2", name: "GPT Image 2" }],
+				},
+			]),
+		}
+		vi.spyOn(ModelRegistry, "getInstance").mockReturnValue(mockRegistry as any)
+
+		const response = await getAvailableModels({} as any)
+		const provider = response.providers[0] as unknown as {
+			defaultImageModelId?: string
+			imageModels?: Array<{ id: string }>
+			models: Array<{ id: string }>
+		}
+
+		expect(provider.models.map((model) => model.id)).to.deep.equal(["gpt-chat"])
+		expect(provider.defaultImageModelId).to.equal("gpt-image-2")
+		expect(provider.imageModels?.map((model) => model.id)).to.deep.equal(["gpt-image-2"])
+	})
+
 	it("should pass thinking config when model declares thinking metadata", async () => {
 		const mockRegistry = {
 			isInitialized: true,

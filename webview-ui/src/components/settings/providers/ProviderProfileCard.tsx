@@ -1,4 +1,9 @@
-import type { ThinkingConfig } from "@shared/proto/dline/models/metadata"
+import { GPT_IMAGE_2_SUBSCRIPTION_MODEL_ID } from "@shared/image-generation"
+import { ApiFormat, type ThinkingConfig } from "@shared/proto/dline/models/metadata"
+import {
+	ImageGenerationSource,
+	type ImageGenerationProfile,
+} from "@shared/proto/dline/profile"
 import { AnthropicProviderConfig } from "@shared/proto/dline/provider/anthropic"
 import type { ReasoningConfig } from "@shared/proto/dline/provider/common"
 import { PROFILE_PROVIDER_KEYS } from "@shared/providers/profile-model-info"
@@ -11,7 +16,11 @@ import { ProfileCapabilityIcons } from "./ProfileCapabilityIcons"
 import { ProfileUsageBadges } from "./ProfileUsageBadges"
 import type { ApiProfile } from "./ProviderProfile"
 import ApiProfileEditor from "./ProviderProfileEditor"
-import { getCachedProviderDefaultModelId, useProviderModels } from "./useProviderModels"
+import {
+	getCachedProviderDefaultImageModelId,
+	getCachedProviderDefaultModelId,
+	useProviderModels,
+} from "./useProviderModels"
 import { WebSearchModeControl } from "./WebSearchModeControl"
 
 function formatThinkingSummary(reasoning: ReasoningConfig | undefined, thinking: ThinkingConfig | undefined) {
@@ -38,6 +47,8 @@ interface ApiProfileCardProps {
 	editMode: boolean
 	currentMode: Mode
 	providerOptions: { value: string; label: string }[]
+	imageProfiles: ImageGenerationProfile[]
+	imageGenerationEnabled: boolean
 	onToggleExpand: () => void
 	onDelete: () => void
 	onUpdate: (updates: Partial<ApiProfile>) => void
@@ -54,6 +65,8 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 	isExpanded,
 	editMode,
 	providerOptions,
+	imageProfiles = [],
+	imageGenerationEnabled,
 	onToggleExpand,
 	onUpdate,
 	selected,
@@ -65,10 +78,53 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 	const modelLabel = profile.modelId || (hasProvider ? "Select model..." : "")
 	const profileName =
 		profile.name || (hasProvider && profile.modelId ? `${profile.provider}:${profile.modelId}` : "Unnamed profile")
-	const { models } = useProviderModels(profile.provider || "")
+	const currentCatalog = useProviderModels(profile.provider || "")
+	const source =
+		profile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT ||
+		profile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT ||
+		profile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED
+			? profile.imageSource
+			: ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED
+	const selectedImageProfile = imageProfiles.find((candidate) => candidate.id === profile.imageProfileId && candidate.enabled)
+	const imageProvider =
+		source === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT
+			? selectedImageProfile?.provider || ""
+			: profile.provider || ""
+	const selectedCatalog = useProviderModels(imageProvider)
+	const hasIndependent = imageProfiles.some((candidate) => candidate.enabled)
+	const imageModels =
+		source === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT && imageProvider === "openai"
+			? Object.fromEntries(
+					Object.entries(selectedCatalog.imageModels).filter(([modelId]) => modelId !== GPT_IMAGE_2_SUBSCRIPTION_MODEL_ID),
+				)
+			: selectedCatalog.imageModels
+	const defaultImageModelId = selectedCatalog.defaultImageModelId
+	const effectiveImageModelId =
+		profile.imageModelId && imageModels[profile.imageModelId] ? profile.imageModelId : defaultImageModelId
+	const models = currentCatalog.models
+	const catalogModelInfo = models[profile.modelId]
+	const selectedModelInfo = profile.modelInfo || catalogModelInfo
+	const selectedApiFormat = profile.openai?.apiFormat ?? profile.modelInfo?.apiFormats?.[0] ?? catalogModelInfo?.apiFormats?.[0]
+	const supportsResponses =
+		selectedApiFormat === ApiFormat.OPENAI_RESPONSES ||
+		selectedApiFormat === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE
+	const supportsCurrent =
+		profile.provider === "openai" &&
+		supportsResponses &&
+		Object.keys(currentCatalog.imageModels).length > 0 &&
+		Boolean(currentCatalog.defaultImageModelId)
+	const supportsHosted = profile.provider === "openai" && supportsResponses
+
+	const toggleUse = (mode: "act" | "plan" | "subagents"): void => {
+		onUpdate({
+			usedFor: profile.usedFor.includes(mode)
+				? profile.usedFor.filter((item) => item !== mode)
+				: [...profile.usedFor, mode],
+		})
+	}
 
 	// Build detailed tooltip from modelInfo
-	const info = profile.modelInfo || models[profile.modelId]
+	const info = selectedModelInfo
 	const reasoning = resolveProfileReasoningConfig(profile)
 	const thinking = resolveTaskThinkingConfig(profile.provider, info?.capabilities, reasoning, info?.id || profile.modelId)
 	const thinkingSummary = formatThinkingSummary(reasoning, thinking)
@@ -149,11 +205,32 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 							className="min-h-7 w-full rounded-xs border border-input-border bg-input-background px-2 text-sm"
 							id={`profile-provider-${profile.id}`}
 							onChange={(e) => {
+								const provider = e.target.value
+								const keepsIndependentSource =
+									profile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT
+								const keepsOpenAISource =
+									provider === "openai" &&
+									(profile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT ||
+										profile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED)
+								const imageSource =
+									keepsIndependentSource || keepsOpenAISource
+										? profile.imageSource
+										: ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED
+								const imageModelId =
+									imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT
+										? profile.imageModelId
+										: imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT
+											? getCachedProviderDefaultImageModelId(provider)
+											: undefined
 								const updates = {
-									provider: e.target.value,
+									provider,
 									apiKey: "",
 									baseUrl: undefined,
-									modelId: getCachedProviderDefaultModelId(e.target.value),
+									modelId: getCachedProviderDefaultModelId(provider),
+									imageSource,
+									imageProfileId: keepsIndependentSource ? profile.imageProfileId : undefined,
+									imageModelId: imageModelId || undefined,
+									usedFor: profile.usedFor,
 									modelInfo: undefined,
 									name: "",
 								} as Partial<ApiProfile> & Record<string, unknown>
@@ -189,12 +266,7 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 									<input
 										checked={profile.usedFor.includes(mode)}
 										className="w-3 h-3"
-										onChange={() => {
-											const next = profile.usedFor.includes(mode)
-												? profile.usedFor.filter((m) => m !== mode)
-												: [...profile.usedFor, mode]
-											onUpdate({ usedFor: next })
-										}}
+										onChange={() => toggleUse(mode)}
 										type="checkbox"
 									/>
 									<span>{mode === "act" ? "Act" : mode === "plan" ? "Plan" : "Subagents"}</span>
@@ -202,6 +274,77 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 							))}
 						</div>
 					</ProfileSection>
+
+					{imageGenerationEnabled ? (
+						<ProfileSection aria-label="Image source">
+							<ProfileField label="Image source">
+								<select
+									aria-label="Image source"
+									className="min-h-7 w-full rounded-xs border border-input-border bg-input-background px-2 text-sm"
+									onChange={(event) => {
+										const nextSource = Number(event.target.value) as ImageGenerationSource
+										const independent = imageProfiles.find((candidate) => candidate.enabled)
+										const provider =
+											nextSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT
+												? profile.provider
+												: nextSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT
+													? independent?.provider
+													: undefined
+										onUpdate({
+											imageSource: nextSource,
+											imageProfileId:
+												nextSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT ? independent?.id : undefined,
+											imageModelId:
+												nextSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT ||
+												nextSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT
+													? getCachedProviderDefaultImageModelId(provider || "") || undefined
+													: undefined,
+										})
+									}}
+									value={source}>
+									<option value={ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED}>None</option>
+									{supportsCurrent ? <option value={ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT}>Current</option> : null}
+									{hasIndependent ? <option value={ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT}>Independent</option> : null}
+									{supportsHosted ? <option value={ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED}>Hosted</option> : null}
+								</select>
+							</ProfileField>
+							{source === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT ? (
+								<ProfileField label="Image profile">
+									<select
+										aria-label="Image profile"
+										className="min-h-7 w-full rounded-xs border border-input-border bg-input-background px-2 text-sm"
+										onChange={(event) => {
+											const selected = imageProfiles.find((candidate) => candidate.id === event.target.value)
+											onUpdate({ imageProfileId: selected?.id, imageModelId: getCachedProviderDefaultImageModelId(selected?.provider || "") || undefined })
+										}}
+										value={selectedImageProfile?.id || ""}>
+										<option value="">Select image profile...</option>
+										{imageProfiles.filter((candidate) => candidate.enabled).map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
+									</select>
+								</ProfileField>
+							) : null}
+							{source === ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED ? (
+								<p className="m-0 text-xs text-description">
+									Uses OpenAI Responses hosted image generation and separate API Platform billing. ChatGPT/GPT subscriptions are not used.
+								</p>
+							) : source === ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT ||
+							  source === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT ? (
+								<ProfileField label="Image model">
+									<select
+										aria-label="Image model"
+										className="min-h-7 w-full rounded-xs border border-input-border bg-input-background px-2 text-sm"
+										onChange={(event) => onUpdate({ imageModelId: event.target.value })}
+										value={effectiveImageModelId || ""}>
+										{Object.entries(imageModels).map(([modelId, model]) => (
+											<option key={modelId} value={modelId}>
+												{model.name || modelId}
+											</option>
+										))}
+									</select>
+								</ProfileField>
+							) : null}
+						</ProfileSection>
+					) : null}
 
 					{hasProvider ? (
 						<ProfileSection className="gap-3 [&>div]:flex [&>div]:min-w-0 [&>div]:flex-col [&>div]:!gap-3">

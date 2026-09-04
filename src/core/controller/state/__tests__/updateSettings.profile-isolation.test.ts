@@ -70,6 +70,38 @@ describe("updateSettings profile isolation", () => {
 			[{ profileId: "act-profile-id", profileName: "act-profile" }, ["plan", "act"]],
 		])
 	})
+
+	it("stores the image profile without synchronizing plan or act profiles", async () => {
+		const { controller } = createController()
+		const setGlobalState = controller.stateManager.setGlobalState as ReturnType<typeof vi.fn>
+
+		await updateSettings(
+			controller,
+			UpdateSettingsRequest.create({ imageProfileId: "openai-images-id", imageProfile: "openai-images" }),
+		)
+
+		expect(
+			setGlobalState.mock.calls.some(([key, value]) => key === "imageProfileId" && value === "openai-images-id"),
+		).to.equal(true)
+		expect(setGlobalState.mock.calls.some(([key, value]) => key === "imageProfile" && value === "openai-images")).to.equal(
+			true,
+		)
+		expect(setGlobalState.mock.calls.some(([key, value]) => key === "planModeProfile" && value === "openai-images")).to.equal(
+			false,
+		)
+		expect(setGlobalState.mock.calls.some(([key, value]) => key === "actModeProfile" && value === "openai-images")).to.equal(
+			false,
+		)
+	})
+
+	it("stores the independent image generation feature gate", async () => {
+		const { controller } = createController()
+		const setGlobalState = controller.stateManager.setGlobalState as ReturnType<typeof vi.fn>
+
+		await updateSettings(controller, UpdateSettingsRequest.create({ imageGenerationEnabled: true }))
+
+		expect(setGlobalState.mock.calls).to.deep.include(["imageGenerationEnabled", true])
+	})
 })
 
 describe("updateTaskSettings account usage", () => {

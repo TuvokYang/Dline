@@ -32,6 +32,7 @@ export const STANDARD_TOOL_IDS = [
 	ClineDefaultTool.USE_SUBAGENT,
 	ClineDefaultTool.USE_SUBAGENTS,
 	ClineDefaultTool.STATUS_UPDATE,
+	ClineDefaultTool.GENERATE_IMAGE,
 	ClineDefaultTool.GENERATE_REPORT,
 ] as const
 
@@ -50,5 +51,6 @@ export const LITE_TOOL_IDS = [
 	ClineDefaultTool.BASH,
 	ClineDefaultTool.KILL_COMMAND,
 	ClineDefaultTool.STATUS_UPDATE,
+	ClineDefaultTool.GENERATE_IMAGE,
 	ClineDefaultTool.GENERATE_REPORT,
 ] as const

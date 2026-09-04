@@ -19,12 +19,13 @@ import {
 	setProviderSecretsBatch,
 } from "@core/storage/secrets"
 import { EmptyRequest } from "@shared/proto/dline/common"
-import { ApiProfile, ApiProfilesResponse } from "@shared/proto/dline/profile"
+import { ApiProfile, ApiProfilesResponse, ImageGenerationSource } from "@shared/proto/dline/profile"
 import { AnthropicProviderConfig } from "@shared/proto/dline/provider/anthropic"
 import { BedrockProviderConfig } from "@shared/proto/dline/provider/bedrock"
 import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
 import { SapAiCoreProviderConfig } from "@shared/proto/dline/provider/sapaicore"
 import { openAiEndpointToApiFormat } from "@shared/providers/api-format"
+import { normalizeApiProfileUses } from "@shared/providers/api-profile-use"
 import { updateSelectedContextWindow } from "@shared/providers/effective-model-info"
 import {
 	canStoreRegistryModelInfoOverrides,
@@ -191,11 +192,26 @@ function readProfilesFromJson(data: unknown): Omit<ParsedApiProfiles, "recovered
 	return { profiles, migrated }
 }
 
+function clearImageBindings(profile: ApiProfile): boolean {
+	if (
+		profile.imageSource !== ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED &&
+		profile.imageSource !== ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED
+	) {
+		return false
+	}
+	if (profile.imageProfileId === undefined && profile.imageModelId === undefined) return false
+	profile.imageProfileId = undefined
+	profile.imageModelId = undefined
+	return true
+}
+
 function normalizeApiProfileWithMigration(profile: unknown): { profile: ApiProfile; migrated: boolean } {
 	const normalized = ApiProfile.fromJSON(profile ?? {})
 	let migrated = false
+	let hasExplicitImageSource = false
 	if (profile && typeof profile === "object") {
 		const rawProfile = profile as Record<string, unknown>
+		hasExplicitImageSource = Object.hasOwn(rawProfile, "imageSource") || Object.hasOwn(rawProfile, "image_source")
 		if (!Object.hasOwn(rawProfile, "enabled")) {
 			normalized.enabled = true
 			migrated = true
@@ -262,6 +278,18 @@ function normalizeApiProfileWithMigration(profile: unknown): { profile: ApiProfi
 		}
 	}
 
+	const normalizedUses = normalizeApiProfileUses(normalized.usedFor)
+	if (JSON.stringify(normalizedUses) !== JSON.stringify(normalized.usedFor)) {
+		normalized.usedFor = normalizedUses
+		migrated = true
+	}
+	if (!hasExplicitImageSource) {
+		normalized.imageSource = normalized.imageModelId
+			? ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT
+			: ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED
+		migrated = true
+	}
+	if (clearImageBindings(normalized)) migrated = true
 	const openai = normalized.openai
 	if (openai && openai.apiFormat === undefined) {
 		const legacyApiFormat = openAiEndpointToApiFormat(openai.apiEndpoint)
@@ -333,24 +361,36 @@ function applyRegistryModelInfo(profiles: ApiProfile[]): boolean {
 	return changed
 }
 
-/** Fill an omitted profile modelId from the provider registry default. */
+/** Fill omitted chat and image model IDs from independent provider registry defaults. */
 export function applyRegistryModelDefaults(profiles: ApiProfile[]): boolean {
 	const registry = ModelRegistry.getInstance()
 	let changed = false
 	const usedNames = new Set(profiles.map((profile) => profile.name).filter(Boolean))
 	for (const profile of profiles) {
-		if (!profile.provider || profile.modelId) continue
-		const defaultModelId = registry.getProviderModels(profile.provider)?.defaultModelId
-		if (!defaultModelId) continue
-		profile.modelId = defaultModelId
-		changed = true
-		if (!profile.name || profile.name === "New Model") {
-			const baseName = `${profile.provider}:${defaultModelId}`
-			let name = baseName
-			let suffix = 2
-			while (usedNames.has(name)) name = `${baseName} (${suffix++})`
-			profile.name = name
-			usedNames.add(name)
+		if (clearImageBindings(profile)) changed = true
+		if (!profile.provider) continue
+		const providerModels = registry.getProviderModels(profile.provider)
+
+		if (!profile.modelId && providerModels?.defaultModelId) {
+			profile.modelId = providerModels.defaultModelId
+			changed = true
+			if (!profile.name || profile.name === "New Model") {
+				const baseName = `${profile.provider}:${providerModels.defaultModelId}`
+				let name = baseName
+				let suffix = 2
+				while (usedNames.has(name)) name = `${baseName} (${suffix++})`
+				profile.name = name
+				usedNames.add(name)
+			}
+		}
+
+		if (
+			profile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT &&
+			!profile.imageModelId &&
+			providerModels?.defaultImageModelId
+		) {
+			profile.imageModelId = providerModels.defaultImageModelId
+			changed = true
 		}
 	}
 	return changed
@@ -589,7 +629,7 @@ export async function getApiProfiles(controller: Controller, _request: EmptyRequ
 }
 
 /**
- * Initialize an absent global Profile binding or migrate one unique legacy name.
+ * Initialize absent global Profile bindings or migrate one unique legacy name.
  * Explicit missing IDs, missing names, and ambiguous legacy names remain unchanged
  * so Task admission can fail closed instead of silently selecting a fallback.
  */

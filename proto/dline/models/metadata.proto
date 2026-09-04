@@ -37,6 +37,7 @@ enum ServerTool {
   // Provider-run sandbox. Anthropic's newer web search versions filter results
   // from inside this sandbox, so declaring it also selects the web search version.
   CODE_EXECUTION = 2;
+  IMAGE_GENERATION = 3;
 }
 
 /** Model capability flags and limits. */
@@ -83,4 +84,20 @@ message ModelPricing {
   repeated PricingTier tiers = 6;
   optional double thinking_output_price = 7;
   repeated ThinkingOutputPriceTier thinking_output_price_tiers = 8;
+}
+
+/** Capabilities for a dedicated image generation model. */
+message ImageGenerationCapabilities {
+  optional bool supports_generation = 1;
+  optional bool supports_editing = 2;
+  optional bool supports_mask = 3;
+  optional bool supports_reference_images = 4;
+  optional bool supports_transparent_background = 5;
+  optional uint32 max_images = 6;
+}
+
+/** Per-image pricing metadata for dedicated image generation models. */
+message ImagePricing {
+  optional double price_per_image = 1;
+  optional string currency = 2;
 }

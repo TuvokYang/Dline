@@ -7,6 +7,8 @@ import { FileContextTracker } from "@core/context/context-tracking/FileContextTr
 import { getHookModelContext } from "@core/hooks/hook-model-context"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import { IgnoreController } from "@core/ignore/IgnoreController"
+import type { ImageGenerationService } from "@core/image-generation/ImageGenerationService"
+import { createImageGenerationRuntime } from "@core/image-generation/runtime"
 import { CommandPermissionController } from "@core/permissions"
 import type { ResolvedPromptRuntime } from "@core/prompts/system-prompt-cache/FrozenPromptRuntime"
 import { TaskFileTracker } from "@integrations/checkpoints/TaskFileTracker"
@@ -59,6 +61,10 @@ import { TaskController } from "./TaskController"
 import { TaskState } from "./TaskState"
 import { canonicalizeAttemptCompletionParams } from "./tools/attempt-completion-params"
 import { AutoApprove } from "./tools/autoApprove"
+import {
+	type HostedImageGenerationContext,
+	HostedImageGenerationLifecycle,
+} from "./tools/HostedImageGenerationLifecycle"
 import { isInternalNativeToolName, normalizeNativeToolName } from "./tools/NativeToolAdmission"
 import { type HostedServerToolUpdate, ServerToolLifecycle } from "./tools/ServerToolLifecycle"
 import { SubagentJobManager } from "./tools/subagent/SubagentJobManager"
@@ -239,7 +245,9 @@ export class ToolExecutor {
 	private promptRuntime: ResolvedPromptRuntime | undefined
 	private explicitInstructions: ExplicitInstructionConsumePort | undefined
 	private hostedServerToolLifecycle: ServerToolLifecycle | undefined
+	private hostedImageGenerationLifecycle: HostedImageGenerationLifecycle | undefined
 	private readonly postCommitDirectives = new Map<string, ToolPostCommitDirective>()
+	private readonly imageGenerationService: ImageGenerationService
 
 	/** Public accessor for auto-approve logic used by TaskController.buildTurn(). */
 	public isAutoApproved(toolName: ClineDefaultTool, params?: ToolUse["params"]): boolean {
@@ -336,14 +344,37 @@ export class ToolExecutor {
 	}
 
 	private hostedServerToolMessageTs = new Map<string, number>()
+	private hostedImageGenerationMessageTs = new Map<string, number>()
+
+	/** Freeze the provider-hosted image route for the current Provider input. */
+	public setHostedImageGenerationContext(context: HostedImageGenerationContext): void {
+		this.hostedImageGenerationLifecycle = new HostedImageGenerationLifecycle({
+			taskId: this.taskId,
+			context,
+			onUpdate: async (update) => {
+				const messageTs = await this.say(
+					"tool",
+					JSON.stringify(update.message),
+					undefined,
+					undefined,
+					update.partial,
+					this.hostedImageGenerationMessageTs.get(update.dlineTid),
+				)
+				if (messageTs !== undefined) this.hostedImageGenerationMessageTs.set(update.dlineTid, messageTs)
+			},
+		})
+		this.hostedImageGenerationMessageTs.clear()
+	}
 
 	/** Route one normalized provider-hosted event through the task's tool executor. */
 	public async consumeServerToolChunk(chunk: ApiStreamServerToolChunk): Promise<boolean> {
+		if (await this.hostedImageGenerationLifecycle?.consume(chunk)) return true
 		return (await this.hostedServerToolLifecycle?.consume(chunk)) ?? false
 	}
 
 	/** Close open hosted calls when the provider stream ends, fails, or is cancelled. */
 	public async finalizeServerToolCalls(reason: string): Promise<void> {
+		await this.hostedImageGenerationLifecycle?.finalizeOpen()
 		await this.hostedServerToolLifecycle?.finalizeOpen(reason)
 	}
 
@@ -533,6 +564,11 @@ export class ToolExecutor {
 		) => Promise<void>,
 	) {
 		this.autoApprover = new AutoApprove(this.stateManager)
+		this.imageGenerationService = createImageGenerationRuntime({
+			taskId: this.taskId,
+			stateManager: this.stateManager,
+			getCurrentMode: this.getMode,
+		}).service
 
 		// Initialize the coordinator and register all tool handlers
 		this.coordinator = new ToolExecutorCoordinator()
@@ -591,6 +627,7 @@ export class ToolExecutor {
 				commandPermissionController: this.commandPermissionController,
 				contextManager: this.contextManager,
 				stateManager: this.stateManager,
+				imageGenerationService: this.imageGenerationService,
 			},
 			callbacks: {
 				focusChainForceUpdate: this.focusChainForceUpdate.bind(this),

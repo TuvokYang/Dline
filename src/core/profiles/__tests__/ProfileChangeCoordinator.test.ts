@@ -13,6 +13,7 @@ interface ProfileBindingFixture {
 
 /** Build a controller fixture bound to the supplied plan and act profiles. */
 function createController(planProfile: string, actProfile: string, profileId?: string): Controller {
+	const postStateToWebview = vi.fn().mockResolvedValue(undefined)
 	return {
 		task: {
 			taskSm: {
@@ -43,9 +44,16 @@ function createController(planProfile: string, actProfile: string, profileId?: s
 				}),
 			},
 			rebuildApiHandler: vi.fn(),
+			flushPromptFreshnessInvalidation: vi.fn(async () => postStateToWebview()),
 		},
 		stateManager: {
 			getGlobalSettingsKey: vi.fn((key: string) => {
+				if (key === "planModeProfile") return planProfile
+				if (key === "actModeProfile") return actProfile
+				if (key === "planModeProfileId" || key === "actModeProfileId") return profileId
+				return undefined
+			}),
+			getCanonicalSettingsKey: vi.fn((key: string) => {
 				if (key === "planModeProfile") return planProfile
 				if (key === "actModeProfile") return actProfile
 				if (key === "planModeProfileId" || key === "actModeProfileId") return profileId
@@ -55,7 +63,7 @@ function createController(planProfile: string, actProfile: string, profileId?: s
 			flushPendingState: vi.fn().mockResolvedValue(undefined),
 		},
 		restartAccountUsagePolling: vi.fn(),
-		postStateToWebview: vi.fn().mockResolvedValue(undefined),
+		postStateToWebview,
 	} as unknown as Controller
 }
 
@@ -73,6 +81,9 @@ describe("ProfileChangeCoordinator", () => {
 
 		for (const controller of [first, second, third]) {
 			expect((controller.task?.rebuildApiHandler as ReturnType<typeof vi.fn>).mock.calls).to.have.length(0)
+			expect((controller.task?.flushPromptFreshnessInvalidation as ReturnType<typeof vi.fn>).mock.calls).to.deep.equal([
+				["profile_catalog"],
+			])
 			expect((controller.restartAccountUsagePolling as ReturnType<typeof vi.fn>).mock.calls).to.have.length(0)
 			expect((controller.postStateToWebview as ReturnType<typeof vi.fn>).mock.calls).to.have.length(1)
 		}
@@ -102,6 +113,39 @@ describe("ProfileChangeCoordinator", () => {
 
 		expect(controller.task?.taskSm.planModeProfile).to.equal("renamed-profile")
 		expect(controller.task?.taskSm.actModeProfile).to.equal("renamed-profile")
+		expect((controller.task?.rebuildApiHandler as ReturnType<typeof vi.fn>).mock.calls).to.have.length(0)
+	})
+
+	it("reads canonical global bindings instead of promoting an active Task override", async () => {
+		const controller = createController("task-profile", "task-profile", "task-profile-id")
+		;(controller.stateManager.getCanonicalSettingsKey as ReturnType<typeof vi.fn>).mockImplementation((key: string) => {
+			if (key === "planModeProfile" || key === "actModeProfile") return "global-profile"
+			if (key === "planModeProfileId" || key === "actModeProfileId") return "global-profile-id"
+			return undefined
+		})
+		const coordinator = new ProfileChangeCoordinator(() => [controller])
+		const oldProfiles = [{ id: "task-profile-id", name: "task-profile", provider: "openai" }] as ApiProfile[]
+		const nextProfiles = [{ id: "task-profile-id", name: "renamed-task-profile", provider: "openai" }] as ApiProfile[]
+
+		await coordinator.publish(oldProfiles, nextProfiles)
+
+		expect(controller.task?.taskSm.planModeProfile).to.equal("renamed-task-profile")
+		expect(controller.task?.taskSm.actModeProfile).to.equal("renamed-task-profile")
+		expect((controller.stateManager.setGlobalState as ReturnType<typeof vi.fn>).mock.calls).to.have.length(0)
+	})
+
+	it("treats post-commit Task freshness publication as best-effort", async () => {
+		const controller = createController("profile", "profile", "profile-id")
+		;(controller.task?.flushPromptFreshnessInvalidation as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+			new Error("publish failed"),
+		)
+		const coordinator = new ProfileChangeCoordinator(() => [controller])
+		const oldProfiles = [{ id: "profile-id", name: "profile", modelId: "old-model" }] as ApiProfile[]
+		const nextProfiles = [{ id: "profile-id", name: "profile", modelId: "new-model" }] as ApiProfile[]
+
+		await coordinator.publish(oldProfiles, nextProfiles)
+
+		expect(coordinator.revision).to.equal(1)
 		expect((controller.task?.rebuildApiHandler as ReturnType<typeof vi.fn>).mock.calls).to.have.length(0)
 	})
 

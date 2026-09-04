@@ -1,3 +1,4 @@
+import type { ClineMessage } from "@shared/ExtensionMessage"
 import { ClineAsk } from "@shared/proto/dline/ui"
 import { describe, expect, it } from "vitest"
 import { convertClineMessageToProto, convertProtoToClineMessage } from "./cline-message"
@@ -85,5 +86,69 @@ describe("ClineMessage command identity conversion", () => {
 		expect(protoMessage.userInputKind).toBe("queued")
 		expect(protoMessage.queuedInputMode).toBe("steering")
 		expect(roundTripMessage).toMatchObject(applicationMessage)
+	})
+})
+
+describe("ClineMessage image generation conversion", () => {
+	it("preserves a structured image presentation across the proto boundary without embedding image bytes", () => {
+		const artifactId = `image:sha256:${"a".repeat(64)}`
+		const previewId = `image-preview:sha256:${"b".repeat(64)}`
+		const previews = [2, 0, 1].map((sequence) => ({
+			id: previewId,
+			mimeType: "image/png" as const,
+			width: 512,
+			height: 288,
+			sequence,
+		}))
+		const applicationMessage = {
+			ts: 200,
+			type: "say",
+			say: "tool",
+			text: JSON.stringify({
+				tool: "generateImage",
+				imageGeneration: {
+					schemaVersion: 1,
+					status: "completed",
+					requestId: "request-1",
+					prompt: "A blue owl",
+					profileId: "profile-1",
+					providerId: "openai",
+					modelId: "gpt-image-2",
+					count: 1,
+					previews,
+					artifacts: [
+						{
+							id: artifactId,
+							mimeType: "image/png",
+							format: "png",
+							byteLength: 64,
+							width: 1024,
+							height: 1024,
+						},
+					],
+				},
+			}),
+		} satisfies ClineMessage
+
+		const protoMessage = convertClineMessageToProto(applicationMessage)
+		const roundTripMessage = convertProtoToClineMessage(protoMessage)
+		const protoPresentation = (protoMessage as unknown as { imageGeneration?: unknown }).imageGeneration
+		const restoredPresentation = (roundTripMessage as ClineMessage & { imageGeneration?: unknown }).imageGeneration
+
+		expect(protoPresentation).toMatchObject({
+			schemaVersion: 1,
+			status: expect.anything(),
+			requestId: "request-1",
+			previews,
+			artifacts: [{ id: artifactId, mimeType: "image/png" }],
+		})
+		expect(restoredPresentation).toMatchObject({
+			schemaVersion: 1,
+			status: "completed",
+			requestId: "request-1",
+			previews,
+			artifacts: [{ id: artifactId, mimeType: "image/png" }],
+		})
+		expect(JSON.stringify(protoMessage)).not.toContain("base64")
 	})
 })

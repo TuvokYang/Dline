@@ -13,6 +13,7 @@ export interface ProfileSnapshotCase {
 		| "no-focus"
 		| "no-subagents"
 		| "no-parallel"
+		| "no-image"
 		| "yolo"
 		| "no-web"
 	readonly overrides: Partial<SystemPromptContext>
@@ -35,6 +36,7 @@ export const PROFILE_SNAPSHOT_CASES: readonly ProfileSnapshotCase[] = [
 	{ id: "no-focus", overrides: { focusChainSettings: { enabled: false, remindClineInterval: 0 } } },
 	{ id: "no-subagents", overrides: { subagentsEnabled: false } },
 	{ id: "no-parallel", overrides: { enableParallelToolCalling: false } },
+	{ id: "no-image", overrides: { imageGenerationAvailable: false } },
 	{ id: "yolo", overrides: { yoloModeToggled: true } },
 	{
 		id: "no-web",

@@ -11,6 +11,7 @@ import { ExecuteCommandToolHandler } from "./handlers/ExecuteCommandToolHandler"
 import { FindReferencesHandler } from "./handlers/FindReferencesHandler"
 import { FocusChainHandler } from "./handlers/FocusChainHandler"
 import { GenerateExplanationToolHandler } from "./handlers/GenerateExplanationToolHandler"
+import { GenerateImageToolHandler } from "./handlers/GenerateImageToolHandler"
 import { GenerateReportHandler } from "./handlers/GenerateReportHandler"
 import { ListCodeDefinitionNamesToolHandler } from "./handlers/ListCodeDefinitionNamesToolHandler"
 import { ListFilesToolHandler } from "./handlers/ListFilesToolHandler"
@@ -119,6 +120,7 @@ export class ToolExecutorCoordinator {
 			new SharedToolHandler(ClineDefaultTool.NEW_RULE, new WriteToFileToolHandler(v)),
 		[ClineDefaultTool.APPLY_PATCH]: (_v: ToolValidator) => new ApplyPatchHandler(_v),
 		[ClineDefaultTool.GENERATE_EXPLANATION]: (_v: ToolValidator) => new GenerateExplanationToolHandler(),
+		[ClineDefaultTool.GENERATE_IMAGE]: (_v: ToolValidator) => new GenerateImageToolHandler(),
 		[ClineDefaultTool.USE_SUBAGENT]: (_v: ToolValidator) => new UseSubagentToolHandler(),
 		[ClineDefaultTool.USE_SUBAGENTS]: (_v: ToolValidator) => new UseSubagentsToolHandler(),
 		[ClineDefaultTool.SPAWN_TASK]: (_v: ToolValidator) => new SpawnTaskHandler(),
