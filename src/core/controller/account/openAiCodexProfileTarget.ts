@@ -1,7 +1,17 @@
-import { OpenAiCodexAuthStatus } from "@shared/proto/dline/account"
+import {
+	OpenAiCodexAuthFlow,
+	OpenAiCodexAuthStatus,
+	OpenAiCodexBrowserOpenStatus,
+	OpenAiCodexFlowOutcome,
+	OpenAiCodexFlowStatus,
+} from "@shared/proto/dline/account"
 import type { ApiProfile } from "@shared/proto/dline/profile"
 import { readApiProfilesFresh } from "@/core/controller/file/getApiProfiles"
-import type { OpenAiCodexProfileAuthStatus } from "@/integrations/openai-codex/oauth"
+import type {
+	OpenAiCodexAuthorizationFlow,
+	OpenAiCodexAuthorizationFlowOutcome,
+	OpenAiCodexProfileAuthStatus,
+} from "@/integrations/openai-codex/oauth"
 import { OAuthFlowError } from "@/services/oauth"
 import { Logger } from "@/shared/services/Logger"
 
@@ -38,6 +48,35 @@ export function toOpenAiCodexAuthStatus(status: OpenAiCodexProfileAuthStatus): O
 		case "reauthentication-required":
 			return OpenAiCodexAuthStatus.OPEN_AI_CODEX_AUTH_STATUS_REAUTHENTICATION_REQUIRED
 	}
+}
+
+export function toOpenAiCodexAuthFlow(flow: OpenAiCodexAuthorizationFlow): OpenAiCodexAuthFlow {
+	return OpenAiCodexAuthFlow.create({
+		profileId: flow.profileId,
+		flowId: flow.flowId,
+		authorizationUrl: flow.authorizationUrl,
+		redirectUri: flow.redirectUri,
+		expiresAtMs: flow.expiresAtMs,
+		browserOpenStatus:
+			flow.browserOpenStatus === "opened"
+				? OpenAiCodexBrowserOpenStatus.OPEN_AI_CODEX_BROWSER_OPEN_STATUS_OPENED
+				: OpenAiCodexBrowserOpenStatus.OPEN_AI_CODEX_BROWSER_OPEN_STATUS_FAILED,
+	})
+}
+
+export function toOpenAiCodexFlowOutcome(outcome: OpenAiCodexAuthorizationFlowOutcome): OpenAiCodexFlowOutcome {
+	const status = {
+		completed: OpenAiCodexFlowStatus.OPEN_AI_CODEX_FLOW_STATUS_COMPLETED,
+		cancelled: OpenAiCodexFlowStatus.OPEN_AI_CODEX_FLOW_STATUS_CANCELLED,
+		"timed-out": OpenAiCodexFlowStatus.OPEN_AI_CODEX_FLOW_STATUS_TIMED_OUT,
+		failed: OpenAiCodexFlowStatus.OPEN_AI_CODEX_FLOW_STATUS_FAILED,
+	}[outcome.status]
+	return OpenAiCodexFlowOutcome.create({
+		profileId: outcome.profileId,
+		flowId: outcome.flowId,
+		status,
+		endedAtMs: outcome.endedAtMs,
+	})
 }
 
 export function logOpenAiCodexOAuthFailure(action: string, error: unknown): void {

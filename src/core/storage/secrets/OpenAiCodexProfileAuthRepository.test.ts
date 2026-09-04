@@ -69,12 +69,56 @@ describe("OpenAiCodexProfileAuthRepository", () => {
 		expect(stat.mode & 0o777).toBe(0o600)
 	})
 
-	it("accepts a missing or non-Codex type while validating required token and expiry fields", () => {
+	it("accepts an optional refresh token and a missing or non-Codex type", () => {
 		expect(parseOpenAiOAuthCredentials({ ...credentials, type: undefined })).toMatchObject({ access_token: "access-a" })
 		expect(parseOpenAiOAuthCredentials({ ...credentials, type: "cloud-code" })).toMatchObject({ type: "cloud-code" })
+		expect(parseOpenAiOAuthCredentials({ ...credentials, refresh_token: undefined })).not.toHaveProperty("refresh_token")
 		expect(() => parseOpenAiOAuthCredentials({ ...credentials, access_token: "" })).toThrow(/access_token/)
+		expect(() => parseOpenAiOAuthCredentials({ ...credentials, refresh_token: "" })).toThrow(/refresh_token/)
 		expect(() => parseOpenAiOAuthCredentials({ ...credentials, refresh_token: 42 })).toThrow(/refresh_token/)
 		expect(() => parseOpenAiOAuthCredentials({ ...credentials, expires: 123 })).toThrow(/expires/)
+	})
+
+	it("persists a credential without synthesizing a refresh token", async () => {
+		const withoutRefreshToken: OpenAiOAuthCredentials = {
+			type: "openai-codex",
+			access_token: "access-only",
+			expires: 1_900_000_000_000,
+		}
+
+		await repository.save("profile-a", withoutRefreshToken)
+
+		await expect(repository.read("profile-a")).resolves.toEqual({
+			status: "valid",
+			credential: withoutRefreshToken,
+		})
+		expect(JSON.parse(await fs.readFile(repository.filePath("profile-a"), "utf8"))).not.toHaveProperty("refresh_token")
+	})
+
+	it("atomically imports a credential without refresh token and preserves only its unknown secret fields", async () => {
+		await repository.save("profile-a", credentials)
+		await fs.writeFile(
+			repository.filePath("profile-a"),
+			JSON.stringify({ ...credentials, stale_private_claim: "stale-value" }),
+			"utf8",
+		)
+
+		const imported = await repository.importCredential("profile-a", {
+			type: "gpt-team",
+			access_token: "manual-access",
+			expires: 1_900_000_000_000,
+			provider_private_claim: "private-value",
+		})
+
+		expect(imported).toEqual({ type: "gpt-team", access_token: "manual-access", expires: 1_900_000_000_000 })
+		const stored = JSON.parse(await fs.readFile(repository.filePath("profile-a"), "utf8"))
+		expect(stored).toMatchObject({
+			type: "gpt-team",
+			access_token: "manual-access",
+			provider_private_claim: "private-value",
+		})
+		expect(stored).not.toHaveProperty("refresh_token")
+		expect(stored).not.toHaveProperty("stale_private_claim")
 	})
 
 	it("keeps unknown fields only in the secret file and never exposes them from reads", async () => {

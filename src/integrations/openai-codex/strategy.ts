@@ -14,6 +14,7 @@ export const OPENAI_CODEX_OAUTH_CONFIG = {
 export type OpenAiCodexOAuthTokenErrorCode =
 	| "TOKEN_EXCHANGE_FAILED"
 	| "TOKEN_REFRESH_FAILED"
+	| "REFRESH_TOKEN_UNAVAILABLE"
 	| "INVALID_GRANT"
 	| "INVALID_TOKEN_RESPONSE"
 
@@ -38,6 +39,7 @@ export interface OpenAiCodexOAuthConfiguration {
 	clientId: string
 	scopes: string
 	callbackPort: number
+	callbackPorts?: readonly number[]
 	callbackPath: string
 }
 
@@ -128,6 +130,7 @@ function extractAccountId(tokens: Pick<TokenResponse, "accessToken" | "idToken">
 export class OpenAiCodexOAuthStrategy implements OAuthAuthorizationStrategy<OpenAiOAuthCredentials> {
 	readonly strategyId = "openai-codex"
 	readonly callbackPort: number
+	readonly callbackPorts: readonly number[]
 	readonly callbackPath: string
 	private readonly configuration: OpenAiCodexOAuthConfiguration
 	private readonly fetchImpl: typeof proxyFetch
@@ -136,6 +139,7 @@ export class OpenAiCodexOAuthStrategy implements OAuthAuthorizationStrategy<Open
 	constructor(options: OpenAiCodexOAuthStrategyOptions = {}) {
 		this.configuration = { ...OPENAI_CODEX_OAUTH_CONFIG, ...options.configuration }
 		this.callbackPort = this.configuration.callbackPort
+		this.callbackPorts = this.configuration.callbackPorts ?? [this.configuration.callbackPort]
 		this.callbackPath = this.configuration.callbackPath
 		this.fetchImpl = options.fetchImpl ?? proxyFetch
 		this.now = options.now ?? Date.now
@@ -168,13 +172,10 @@ export class OpenAiCodexOAuthStrategy implements OAuthAuthorizationStrategy<Open
 			}),
 			"exchange",
 		)
-		if (!tokens.refreshToken) {
-			throw new OpenAiCodexOAuthTokenError("INVALID_TOKEN_RESPONSE", "The OAuth token response was invalid.")
-		}
 		return parseOpenAiOAuthCredentials({
 			type: "openai-codex",
 			access_token: tokens.accessToken,
-			refresh_token: tokens.refreshToken,
+			...(tokens.refreshToken !== undefined ? { refresh_token: tokens.refreshToken } : {}),
 			expires: this.expiryFrom(tokens.expiresInSeconds),
 			email: tokens.email,
 			accountId: extractAccountId(tokens),
@@ -183,6 +184,12 @@ export class OpenAiCodexOAuthStrategy implements OAuthAuthorizationStrategy<Open
 
 	async refreshCredential(credential: OpenAiOAuthCredentials): Promise<OpenAiOAuthCredentials> {
 		const current = parseOpenAiOAuthCredentials(credential)
+		if (!current.refresh_token) {
+			throw new OpenAiCodexOAuthTokenError(
+				"REFRESH_TOKEN_UNAVAILABLE",
+				"The OAuth credential cannot be refreshed because it has no refresh token.",
+			)
+		}
 		const tokens = await this.requestTokens(
 			new URLSearchParams({
 				grant_type: "refresh_token",

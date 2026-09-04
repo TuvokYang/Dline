@@ -257,7 +257,7 @@ async function signInProfile(sidebar: Frame, name: string, server: CodexOAuthE2E
 	const callbackCount = server.allCallbacks().length
 	const tokenRequestCount = server.tokenRequestCount
 	const card = await expandProfile(sidebar, name)
-	await card.getByRole("button", { name: "Sign in with ChatGPT" }).click()
+	await card.getByRole("button", { name: "开始 OAUTH 认证" }).click()
 	await expect.poll(() => server.authorizationRequests.length, { timeout: 30_000 }).toBeGreaterThan(authorizationCount)
 	await expect.poll(() => server.allCallbacks().length, { timeout: 30_000 }).toBeGreaterThan(callbackCount)
 	await expect
@@ -266,7 +266,8 @@ async function signInProfile(sidebar: Frame, name: string, server: CodexOAuthE2E
 			message: "OAuth browser redirect did not reach token exchange",
 		})
 		.toBeGreaterThan(tokenRequestCount)
-	await expect(card.getByText("Signed in", { exact: true })).toBeVisible({ timeout: 30_000 })
+	await expect(sidebar.getByRole("dialog", { name: "OpenAI Codex OAUTH 认证" })).not.toBeVisible({ timeout: 30_000 })
+	await expect(card.getByText("已认证", { exact: true })).toBeVisible({ timeout: 30_000 })
 }
 
 async function selectProfile(sidebar: Frame, name: string): Promise<void> {
@@ -320,12 +321,23 @@ async function openReadySidebar(
 	}
 }
 
-function codexEnvironment(server: CodexOAuthE2EServer, mode: "automatic" | "manual"): Readonly<Record<string, string>> {
+interface CodexEnvironmentOptions {
+	callbackPorts?: readonly number[]
+	timeoutMs?: number
+}
+
+function codexEnvironment(
+	server: CodexOAuthE2EServer,
+	mode: "automatic" | "manual",
+	options: CodexEnvironmentOptions = {},
+): Readonly<Record<string, string>> {
 	return {
 		DLINE_E2E_OPENAI_CODEX_OAUTH_BASE_URL: `${server.baseUrl}/oauth`,
 		DLINE_E2E_OPENAI_CODEX_API_BASE_URL: `${server.baseUrl}/codex`,
 		DLINE_E2E_OPENAI_CODEX_USAGE_URL: `${server.baseUrl}/usage`,
 		DLINE_E2E_OPENAI_CODEX_OAUTH_MODE: mode,
+		...(options.callbackPorts ? { DLINE_E2E_OPENAI_CODEX_CALLBACK_PORTS: options.callbackPorts.join(",") } : {}),
+		...(options.timeoutMs ? { DLINE_E2E_OPENAI_CODEX_OAUTH_TIMEOUT_MS: String(options.timeoutMs) } : {}),
 	}
 }
 
@@ -395,22 +407,33 @@ e2e(
 			await openSettings(reopenedPage, sidebar)
 			for (const profile of [profileA, profileB]) {
 				await expandProfile(sidebar, profile.name)
-				await expect(profileCard(sidebar, profile.name).getByText("Signed in", { exact: true })).toBeVisible()
+				await expect(profileCard(sidebar, profile.name).getByText("已认证", { exact: true })).toBeVisible()
 			}
 			await sidebar.getByRole("button", { name: "Done", exact: true }).click()
 
 			await selectProfile(sidebar, profileA.name)
 			await send(sidebar, "Run Codex Profile A", authA.responseText)
 			await sidebar.getByRole("button", { name: "Close Task", exact: true }).click()
+			const profileBRequestStart = server.codexRequests.length
+			const profileARequests = server.codexRequests.slice(0, profileBRequestStart)
+			expect(profileARequests.length).toBeGreaterThan(0)
+			expect(
+				profileARequests.every(
+					(request) => request.authorization === `Bearer ${authA.accessToken}` && request.accountId === authA.accountId,
+				),
+			).toBe(true)
+
 			await selectProfile(sidebar, profileB.name)
 			await send(sidebar, "Run Codex Profile B", authB.responseText)
-			await expect.poll(() => server.codexRequests.length).toBe(2)
-			expect(server.codexRequests).toEqual([
-				{ authorization: `Bearer ${authA.accessToken}`, accountId: authA.accountId },
-				{ authorization: `Bearer ${authB.accessToken}`, accountId: authB.accountId },
-			])
-
 			await sidebar.getByRole("button", { name: "Close Task", exact: true }).click()
+			const profileBRequests = server.codexRequests.slice(profileBRequestStart)
+			expect(profileBRequests.length).toBeGreaterThan(0)
+			expect(
+				profileBRequests.every(
+					(request) => request.authorization === `Bearer ${authB.accessToken}` && request.accountId === authB.accountId,
+				),
+			).toBe(true)
+
 			await openSettings(reopenedPage, sidebar)
 			await expandProfile(sidebar, profileA.name)
 			const renamedA = "Codex Profile A Renamed"
@@ -420,7 +443,7 @@ e2e(
 			await expect(profileCard(sidebar, renamedA)).toHaveCount(1)
 			expect(await pathExists(authPathA)).toBe(true)
 
-			await profileCard(sidebar, renamedA).getByRole("button", { name: "Sign out" }).click()
+			await profileCard(sidebar, renamedA).getByRole("button", { name: "退出认证" }).click()
 			await expect.poll(() => pathExists(authPathA)).toBe(false)
 			expect(await pathExists(authPathB)).toBe(true)
 			await signInProfile(sidebar, renamedA, server)
@@ -482,23 +505,24 @@ e2e(
 			await Promise.all([openSettings(owner.page, owner.sidebar), openSettings(contender.page, contender.sidebar)])
 
 			const ownerCard = await expandProfile(owner.sidebar, ownerProfile.name)
-			await ownerCard.getByRole("button", { name: "Sign in with ChatGPT" }).click()
-			await expect(ownerCard.getByText("Browser sign-in in progress", { exact: true })).toBeVisible()
+			await ownerCard.getByRole("button", { name: "开始 OAUTH 认证" }).click()
+			const ownerDialog = owner.sidebar.getByRole("dialog", { name: "OpenAI Codex OAUTH 认证" })
+			await expect(ownerDialog).toBeVisible()
 			const callback = await E2ETestHelper.waitForValue(() => oauthServer.latestCallback(), 30_000)
 			const leasePath = path.join(dlineDir, "data", "oauth", "local-oauth-flow.json")
 			await expect.poll(() => pathExists(leasePath)).toBe(true)
 
 			const contenderCard = await expandProfile(contender.sidebar, contenderProfile.name)
-			await contenderCard.getByRole("button", { name: "Sign in with ChatGPT" }).click()
-			await expect(contenderCard.getByText("Could not start OpenAI Codex sign-in. Please try again.")).toBeVisible()
-			await expect(ownerCard.getByText("Browser sign-in in progress", { exact: true })).toBeVisible()
+			await contenderCard.getByRole("button", { name: "开始 OAUTH 认证" }).click()
+			await expect(contender.sidebar.getByText("无法启动 OpenAI Codex OAUTH 认证，请重试。")).toBeVisible()
+			await expect(ownerDialog).toBeVisible()
 			expect(oauthServer.authorizationRequests).toHaveLength(1)
 			expect(await pathExists(leasePath)).toBe(true)
 
-			await ownerCard.getByRole("button", { name: "Use callback URI fallback" }).click()
-			await ownerCard.getByRole("textbox", { name: "Authorization callback URI" }).fill(callback)
-			await ownerCard.getByRole("button", { name: "Complete sign-in" }).click()
-			await expect(ownerCard.getByText("Signed in", { exact: true })).toBeVisible({ timeout: 30_000 })
+			await ownerDialog.getByRole("textbox", { name: "完整回调 URI" }).fill(callback)
+			await ownerDialog.getByRole("button", { name: "完成认证" }).click()
+			await expect(ownerDialog).not.toBeVisible({ timeout: 30_000 })
+			await expect(ownerCard.getByText("已认证", { exact: true })).toBeVisible({ timeout: 30_000 })
 			await expect.poll(() => pathExists(leasePath)).toBe(false)
 
 			const secretsDir = path.join(dlineDir, "data", "secrets")
@@ -531,7 +555,13 @@ e2e(
 		const auth = scenario("manual")
 		server.enqueue(auth)
 		await addCodexProfiles(dlineDir, [profile])
-		const environment = codexEnvironment(server, "manual")
+		const occupiedCallbackServer = createServer()
+		await new Promise<void>((resolve, reject) => {
+			occupiedCallbackServer.once("error", reject)
+			occupiedCallbackServer.listen(0, "127.0.0.1", resolve)
+		})
+		const occupiedAddress = occupiedCallbackServer.address() as AddressInfo
+		const environment = codexEnvironment(server, "manual", { callbackPorts: [occupiedAddress.port, 0] })
 		let app: ElectronApplication | undefined
 
 		try {
@@ -543,38 +573,42 @@ e2e(
 			await helper.signin(sidebar)
 			await openSettings(page, sidebar)
 			const card = await expandProfile(sidebar, profile.name)
-			await page.screenshot({
-				path: testInfo.outputPath("codex-provider-not-signed-in-480px.png"),
-			})
-			await card.getByRole("button", { name: "Sign in with ChatGPT" }).click()
-			await expect(card.getByText("Browser sign-in in progress", { exact: true })).toBeVisible()
+			await card.getByRole("button", { name: "开始 OAUTH 认证" }).click()
+			const dialog = sidebar.getByRole("dialog", { name: "OpenAI Codex OAUTH 认证" })
+			await expect(dialog).toBeVisible()
 			const callback = await E2ETestHelper.waitForValue(() => server.latestCallback(), 30_000)
-			await card.getByRole("button", { name: "Use callback URI fallback" }).click()
-			const inProgressLayout = await sidebar.evaluate(() => ({
-				clientWidth: document.documentElement.clientWidth,
-				scrollWidth: document.documentElement.scrollWidth,
-			}))
-			expect(inProgressLayout.scrollWidth).toBeLessThanOrEqual(inProgressLayout.clientWidth + 1)
-			await page.screenshot({
-				path: testInfo.outputPath("codex-provider-browser-sign-in-progress-480px.png"),
-			})
-			const input = card.getByRole("textbox", { name: "Authorization callback URI" })
+			const authorizationUri = await dialog.getByRole("textbox", { name: "OpenAI Codex 认证 URI" }).inputValue()
+			const redirectUri = new URL(authorizationUri).searchParams.get("redirect_uri")
+			if (!redirectUri) throw new Error("expected authorization URI to contain redirect_uri")
+			expect(Number(new URL(redirectUri).port)).not.toBe(occupiedAddress.port)
+			expect(dialog.getByText(/callback listener/i)).toHaveCount(0)
+
+			for (const width of [320, 480, 700] as const) {
+				await resizePrimarySidebar(page, width)
+				await expect(dialog).toBeVisible()
+				const layout = await sidebar.evaluate(() => ({
+					clientWidth: document.documentElement.clientWidth,
+					scrollWidth: document.documentElement.scrollWidth,
+				}))
+				expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1)
+				await page.screenshot({ path: testInfo.outputPath(`codex-oauth-modal-active-${width}px.png`) })
+			}
+
+			await resizePrimarySidebar(page, 480)
+			await dialog.getByRole("button", { name: /高级：导入 OAuth credential JSON/ }).click()
+			await expect(dialog.getByRole("textbox", { name: "OpenAI Codex OAuth JSON" })).toBeVisible()
+			await page.screenshot({ path: testInfo.outputPath("codex-oauth-modal-json-expanded-480px.png") })
+			await dialog.getByRole("button", { name: /高级：导入 OAuth credential JSON/ }).click()
+
+			const input = dialog.getByRole("textbox", { name: "完整回调 URI" })
 			await input.fill("http://localhost:1455/auth/callback?code=wrong&state=wrong")
-			await card.getByRole("button", { name: "Complete sign-in" }).click()
-			await expect(
-				card.getByText("Could not complete OpenAI Codex sign-in. Check the callback URI and try again."),
-			).toBeVisible()
+			await dialog.getByRole("button", { name: "完成认证" }).click()
+			await expect(dialog.getByText("无法完成 OAUTH 认证，请检查完整回调 URI 后重试。")).toBeVisible()
+			await expect(input).toHaveValue("")
 			await input.fill(callback)
-			await card.getByRole("button", { name: "Complete sign-in" }).click()
-			await expect(card.getByText("Signed in", { exact: true })).toBeVisible({ timeout: 30_000 })
-			const signedInLayout = await sidebar.evaluate(() => ({
-				clientWidth: document.documentElement.clientWidth,
-				scrollWidth: document.documentElement.scrollWidth,
-			}))
-			expect(signedInLayout.scrollWidth).toBeLessThanOrEqual(signedInLayout.clientWidth + 1)
-			await page.screenshot({
-				path: testInfo.outputPath("codex-provider-signed-in-480px.png"),
-			})
+			await dialog.getByRole("button", { name: "完成认证" }).click()
+			await expect(dialog).not.toBeVisible({ timeout: 30_000 })
+			await expect(card.getByText("已认证", { exact: true })).toBeVisible({ timeout: 30_000 })
 
 			const authPath = path.join(dlineDir, "data", "secrets", getOpenAiCodexProfileAuthFileName(profile.id))
 			await expect.poll(() => pathExists(authPath)).toBe(true)
@@ -583,6 +617,123 @@ e2e(
 			app = undefined
 			const output = E2ETestHelper.readDlineOutputIfPresent(userDataDir) ?? ""
 			assertNoRuntimeSecrets(`${profileCatalog}\n${output}`, [auth], [callback])
+		} finally {
+			await app?.close().catch(() => undefined)
+			await new Promise<void>((resolve) => occupiedCallbackServer.close(() => resolve()))
+			await server.stop()
+		}
+	},
+)
+
+e2e(
+	"OpenAI Codex OAuth manual JSON imports a non-refreshable Profile credential without leaking secrets",
+	async ({ dlineDir, helper, openVSCode, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(150_000)
+		const server = new CodexOAuthE2EServer()
+		await server.start()
+		const profile = codexProfile("codex-profile-manual-json", "Codex Profile Manual JSON")
+		const accessToken = randomUUID()
+		const accountId = "account-manual-json"
+		const privateClaim = randomUUID()
+		const malformedSecret = randomUUID()
+		await addCodexProfiles(dlineDir, [profile])
+		const environment = codexEnvironment(server, "manual")
+		const authPath = path.join(dlineDir, "data", "secrets", getOpenAiCodexProfileAuthFileName(profile.id))
+		let app: ElectronApplication | undefined
+
+		try {
+			const ready = await openReadySidebar(openVSCode, workspaceDir, helper, environment)
+			app = ready.app
+			const page = ready.page
+			const sidebar = ready.sidebar
+			await resizePrimarySidebar(page, 480)
+			await helper.signin(sidebar)
+			await openSettings(page, sidebar)
+			const card = await expandProfile(sidebar, profile.name)
+			await card.getByRole("button", { name: "开始 OAUTH 认证" }).click()
+			const dialog = sidebar.getByRole("dialog", { name: "OpenAI Codex OAUTH 认证" })
+			await expect(dialog).toBeVisible()
+			await dialog.getByRole("button", { name: /高级：导入 OAuth credential JSON/ }).click()
+			const input = dialog.getByRole("textbox", { name: "OpenAI Codex OAuth JSON" })
+
+			await input.fill(`{"access_token":"${malformedSecret}"`)
+			await dialog.getByRole("button", { name: "导入凭据" }).click()
+			await expect(dialog.getByText("无法导入 OpenAI Codex OAuth credential，请检查 JSON 后重试。")).toBeVisible()
+			await expect(input).toHaveValue("")
+			expect(await pathExists(authPath)).toBe(false)
+			await expect(sidebar.locator("body")).not.toContainText(malformedSecret)
+
+			const oauthJson = JSON.stringify({
+				type: "gpt-team",
+				access_token: accessToken,
+				expires: Date.now() + 3_600_000,
+				accountId,
+				provider_private_claim: privateClaim,
+			})
+			await input.fill(oauthJson)
+			await dialog.getByRole("button", { name: "导入凭据" }).click()
+			await expect(dialog).not.toBeVisible()
+			await expect(card.getByText("已认证", { exact: true })).toBeVisible({ timeout: 30_000 })
+			await expect.poll(() => pathExists(authPath)).toBe(true)
+
+			const stored = JSON.parse(await readFile(authPath, "utf8")) as Record<string, unknown>
+			expect(stored).toMatchObject({ access_token: accessToken, accountId, provider_private_claim: privateClaim })
+			expect(stored).not.toHaveProperty("refresh_token")
+			expect(server.tokenRequestCount).toBe(0)
+
+			await sidebar.getByRole("button", { name: "Done", exact: true }).click()
+			await selectProfile(sidebar, profile.name)
+			await send(sidebar, "Run manually imported Codex Profile", `CODEX_E2E_${accountId}`)
+			await expect.poll(() => server.codexRequests.length).toBe(1)
+			expect(server.codexRequests[0]).toEqual({ authorization: `Bearer ${accessToken}`, accountId })
+
+			await app.close()
+			app = undefined
+			const profileCatalog = await readFile(path.join(dlineDir, "data", "settings", "api_profiles.json"), "utf8")
+			const output = E2ETestHelper.readDlineOutputIfPresent(userDataDir) ?? ""
+			for (const secret of [accessToken, privateClaim, malformedSecret, oauthJson]) {
+				expect(`${profileCatalog}\n${output}`).not.toContain(secret)
+			}
+		} finally {
+			await app?.close().catch(() => undefined)
+			await server.stop()
+		}
+	},
+)
+
+e2e(
+	"OpenAI Codex OAUTH dialog expires the active flow and rejects stale manual completion",
+	async ({ dlineDir, helper, openVSCode, workspaceDir }, testInfo) => {
+		e2e.setTimeout(150_000)
+		const server = new CodexOAuthE2EServer()
+		await server.start()
+		const profile = codexProfile("codex-profile-timeout", "Codex Profile Timeout")
+		server.enqueue(scenario("timeout"))
+		await addCodexProfiles(dlineDir, [profile])
+		const environment = codexEnvironment(server, "manual", { timeoutMs: 1_200 })
+		let app: ElectronApplication | undefined
+
+		try {
+			const ready = await openReadySidebar(openVSCode, workspaceDir, helper, environment)
+			app = ready.app
+			const page = ready.page
+			const sidebar = ready.sidebar
+			await resizePrimarySidebar(page, 480)
+			await helper.signin(sidebar)
+			await openSettings(page, sidebar)
+			const card = await expandProfile(sidebar, profile.name)
+			await card.getByRole("button", { name: "开始 OAUTH 认证" }).click()
+			const dialog = sidebar.getByRole("dialog", { name: "OpenAI Codex OAUTH 认证" })
+			await expect(dialog).toBeVisible()
+			await expect(dialog.getByText("本次认证已超时，请重新开始。")).toBeVisible({ timeout: 10_000 })
+			await expect(dialog.getByRole("textbox", { name: "完整回调 URI" })).toBeDisabled()
+			await expect(dialog.getByRole("button", { name: "重新认证" })).toBeVisible()
+			const layout = await sidebar.evaluate(() => ({
+				clientWidth: document.documentElement.clientWidth,
+				scrollWidth: document.documentElement.scrollWidth,
+			}))
+			expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1)
+			await page.screenshot({ path: testInfo.outputPath("codex-oauth-modal-timed-out-480px.png") })
 		} finally {
 			await app?.close().catch(() => undefined)
 			await server.stop()

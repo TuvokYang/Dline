@@ -1,5 +1,6 @@
 import { OpenAiCodexAuthStatusResponse, type OpenAiCodexCallbackUriRequest } from "@shared/proto/dline/account"
 import { openAiCodexOAuthManager } from "@/integrations/openai-codex/oauth"
+import { OAuthFlowError } from "@/services/oauth"
 import type { Controller } from ".."
 import {
 	logOpenAiCodexOAuthFailure,
@@ -24,6 +25,9 @@ export async function completeOpenAiCodexCallbackUri(
 		return OpenAiCodexAuthStatusResponse.create({ profileId: profile.id, status: toOpenAiCodexAuthStatus(status) })
 	} catch (error) {
 		logOpenAiCodexOAuthFailure("complete callback", error)
+		if (error instanceof OAuthFlowError && error.code === "FLOW_TIMED_OUT") {
+			throw new Error("OpenAI Codex OAUTH authentication timed out. Start a new authentication flow.")
+		}
 		throw new Error("OpenAI Codex sign-in could not be completed.")
 	}
 }

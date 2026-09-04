@@ -10,7 +10,7 @@ import {
 import type { OAuthAuthorizationStrategy, OAuthCodeExchangeInput, OAuthFlowLease } from "@/services/oauth"
 import { OpenAiCodexOAuthManager } from "./oauth"
 import type { OpenAiCodexRefreshStrategy } from "./session"
-import { OpenAiCodexOAuthStrategy, OpenAiCodexOAuthTokenError } from "./strategy"
+import { OpenAiCodexOAuthStrategy } from "./strategy"
 
 const NOW = 1_900_000_000_000
 
@@ -133,6 +133,102 @@ describe("OpenAI Codex OAuth flow integration", () => {
 		await manager.dispose()
 	})
 
+	it("exposes transient flow presentation and retains only a timeout outcome after expiry", async () => {
+		const strategy: OAuthAuthorizationStrategy<OpenAiOAuthCredentials> & OpenAiCodexRefreshStrategy = {
+			strategyId: "openai-codex-test",
+			callbackPort: 0,
+			callbackPath: "/auth/callback",
+			buildAuthorizationUrl: ({ redirectUri, state }) => {
+				const url = new URL("https://auth.example.test/authorize")
+				url.searchParams.set("redirect_uri", redirectUri)
+				url.searchParams.set("state", state)
+				return url
+			},
+			exchangeAuthorizationCode: async () => credential("exchange"),
+			refreshCredential: async (current) => current,
+		}
+		const manager = new OpenAiCodexOAuthManager({
+			repository,
+			strategy,
+			lease,
+			profileCatalogLoader: async () => [{ id: "profile-a", provider: "openai-codex" }],
+			openExternal: async () => {
+				throw new Error("browser unavailable")
+			},
+			timeoutMs: 20,
+		})
+
+		const started = await manager.startAuthorizationFlow("profile-a")
+		expect(manager.getActiveAuthorizationFlow("profile-a")).toMatchObject({
+			profileId: "profile-a",
+			flowId: started.flowId,
+			authorizationUrl: started.authorizationUrl,
+			redirectUri: started.redirectUri,
+			browserOpenStatus: "failed",
+		})
+		await expect(started.result).rejects.toMatchObject({ code: "FLOW_TIMED_OUT" })
+		await vi.waitFor(() => expect(manager.getActiveAuthorizationFlow("profile-a")).toBeUndefined())
+		expect(manager.getLastAuthorizationFlowOutcome("profile-a")).toMatchObject({
+			profileId: "profile-a",
+			flowId: started.flowId,
+			status: "timed-out",
+		})
+		expect(manager.getLastAuthorizationFlowOutcome("profile-a")).not.toHaveProperty("authorizationUrl")
+		await manager.dispose()
+	})
+
+	it("imports a manual credential for only the target Profile and publishes one committed mutation", async () => {
+		await repository.save("profile-b", credential("b"))
+		const manager = new OpenAiCodexOAuthManager({
+			repository,
+			strategy: {
+				strategyId: "openai-codex-test",
+				callbackPort: 0,
+				callbackPath: "/auth/callback",
+				buildAuthorizationUrl: () => new URL("https://auth.example.test"),
+				exchangeAuthorizationCode: async () => credential("exchange"),
+				refreshCredential: async (current) => current,
+			},
+			lease,
+			profileCatalogLoader: async () => [
+				{ id: "profile-a", provider: "openai-codex" },
+				{ id: "profile-b", provider: "openai-codex" },
+			],
+			openExternal: async () => undefined,
+		})
+		const events: Array<{ profileId: string; reason: string; revision: number }> = []
+		manager.subscribeToRuntimeMutations((event) => {
+			events.push(event)
+		})
+		const started = await manager.startAuthorizationFlow("profile-a")
+		const cancelledFlow = expect(started.result).rejects.toMatchObject({ code: "FLOW_CANCELLED" })
+		await expect(manager.importCredentials("profile-a", { access_token: "invalid-without-expiry" })).rejects.toThrow()
+		expect(manager.getActiveAuthorizationFlow("profile-a")).toMatchObject({ flowId: started.flowId })
+
+		await expect(
+			manager.importCredentials("profile-a", {
+				type: "gpt-team",
+				access_token: "manual-access",
+				expires: NOW + 3_600_000,
+				provider_private_claim: "private-value",
+			}),
+		).resolves.toEqual({ type: "gpt-team", access_token: "manual-access", expires: NOW + 3_600_000 })
+
+		const storedA = JSON.parse(await fs.readFile(repository.filePath("profile-a"), "utf8"))
+		expect(storedA).toMatchObject({ access_token: "manual-access", provider_private_claim: "private-value" })
+		expect(storedA).not.toHaveProperty("refresh_token")
+		await expect(repository.read("profile-b")).resolves.toMatchObject({
+			status: "valid",
+			credential: { access_token: "b-access" },
+		})
+		await cancelledFlow
+		expect(manager.getActiveAuthorizationFlow("profile-a")).toBeUndefined()
+		expect(releases).toHaveLength(1)
+		expect(releases[0]).toHaveBeenCalledOnce()
+		expect(events).toEqual([{ profileId: "profile-a", reason: "credential-saved", revision: 1 }])
+		await manager.dispose()
+	})
+
 	it("prevents an in-flight browser exchange from recreating a signed-out credential", async () => {
 		const openedUrls: string[] = []
 		const exchange = deferred<OpenAiOAuthCredentials>()
@@ -176,7 +272,8 @@ describe("OpenAI Codex OAuth flow integration", () => {
 		await manager.dispose()
 	})
 
-	it("publishes committed runtime mutations with Profile-local revisions and deduplicates reauthentication", async () => {
+	it("publishes committed runtime mutations with Profile-local revisions and deduplicates access-only reauthentication", async () => {
+		const refreshCredential = vi.fn(async (current: OpenAiOAuthCredentials) => current)
 		const strategy: OAuthAuthorizationStrategy<OpenAiOAuthCredentials> & OpenAiCodexRefreshStrategy = {
 			strategyId: "openai-codex-test",
 			callbackPort: 0,
@@ -188,9 +285,7 @@ describe("OpenAI Codex OAuth flow integration", () => {
 				return url
 			},
 			exchangeAuthorizationCode: async () => credential("exchange"),
-			refreshCredential: async () => {
-				throw new OpenAiCodexOAuthTokenError("INVALID_GRANT", "sensitive provider payload", 400)
-			},
+			refreshCredential,
 		}
 		const manager = new OpenAiCodexOAuthManager({
 			repository,
@@ -207,10 +302,16 @@ describe("OpenAI Codex OAuth flow integration", () => {
 			events.push(event)
 		})
 
-		await manager.saveCredentials("profile-a", credential("a"))
+		await manager.saveCredentials("profile-a", {
+			type: "gpt-team",
+			access_token: "a-access",
+			expires: NOW + 3_600_000,
+			accountId: "a-account",
+		})
 		await manager.saveCredentials("profile-b", credential("b"))
 		await expect(manager.forceRefreshCredentialContext("profile-a")).resolves.toBeNull()
 		await expect(manager.forceRefreshCredentialContext("profile-a")).resolves.toBeNull()
+		expect(refreshCredential).not.toHaveBeenCalled()
 		await manager.clearCredentials("profile-b")
 
 		expect(events).toEqual([

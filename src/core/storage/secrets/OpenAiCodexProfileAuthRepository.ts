@@ -13,7 +13,7 @@ const KNOWN_CREDENTIAL_KEYS = new Set(["type", "access_token", "refresh_token", 
 export interface OpenAiOAuthCredentials {
 	type?: string
 	access_token: string
-	refresh_token: string
+	refresh_token?: string
 	expires: number
 	email?: string
 	accountId?: string
@@ -36,10 +36,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-function requireNonEmptyString(record: Record<string, unknown>, key: "access_token" | "refresh_token"): string {
+function requireNonEmptyString(record: Record<string, unknown>, key: "access_token"): string {
 	const value = record[key]
 	if (typeof value !== "string" || value.length === 0) {
 		throw new Error(`OpenAI OAuth credential ${key} must be a non-empty string.`)
+	}
+	return value
+}
+
+function optionalNonEmptyString(record: Record<string, unknown>, key: "refresh_token"): string | undefined {
+	const value = record[key]
+	if (value === undefined) return undefined
+	if (typeof value !== "string" || value.length === 0) {
+		throw new Error(`OpenAI OAuth credential ${key} must be a non-empty string when provided.`)
 	}
 	return value
 }
@@ -50,10 +59,11 @@ export function parseOpenAiOAuthCredentials(value: unknown): OpenAiOAuthCredenti
 	if (!Number.isSafeInteger(expires) || (expires as number) < MINIMUM_VALID_EXPIRY_MS) {
 		throw new Error("OpenAI OAuth credential expires must be a valid millisecond timestamp.")
 	}
+	const refreshToken = optionalNonEmptyString(value, "refresh_token")
 
 	return {
 		access_token: requireNonEmptyString(value, "access_token"),
-		refresh_token: requireNonEmptyString(value, "refresh_token"),
+		...(refreshToken !== undefined ? { refresh_token: refreshToken } : {}),
 		expires: expires as number,
 		...(typeof value.type === "string" ? { type: value.type } : {}),
 		...(typeof value.email === "string" ? { email: value.email } : {}),
@@ -76,7 +86,7 @@ function serializeCredential(credential: OpenAiOAuthCredentials): Record<string,
 	return {
 		...(credential.type !== undefined ? { type: credential.type } : {}),
 		access_token: credential.access_token,
-		refresh_token: credential.refresh_token,
+		...(credential.refresh_token !== undefined ? { refresh_token: credential.refresh_token } : {}),
 		expires: credential.expires,
 		...(credential.email !== undefined ? { email: credential.email } : {}),
 		...(credential.accountId !== undefined ? { accountId: credential.accountId } : {}),
@@ -137,6 +147,16 @@ export class OpenAiCodexProfileAuthRepository {
 			const existing = await this.readRawObject(filePath)
 			await atomicWriteCredential(filePath, { ...preserveUnknownFields(existing), ...serializeCredential(validated) })
 		})
+	}
+
+	async importCredential(profileId: string, value: unknown): Promise<OpenAiOAuthCredentials> {
+		const credential = parseOpenAiOAuthCredentials(value)
+		const filePath = this.filePath(profileId)
+		await fs.mkdir(this.secretsDir, { recursive: true })
+		await this.lock.withLock(filePath, async () => {
+			await atomicWriteCredential(filePath, { ...preserveUnknownFields(value), ...serializeCredential(credential) })
+		})
+		return credential
 	}
 
 	async saveIfMissing(

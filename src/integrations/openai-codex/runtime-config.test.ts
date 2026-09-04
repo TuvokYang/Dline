@@ -19,6 +19,8 @@ describe("resolveOpenAiCodexRuntimeConfig", () => {
 				DLINE_E2E_OPENAI_CODEX_API_BASE_URL: "http://localhost:43200/mock-codex/",
 				DLINE_E2E_OPENAI_CODEX_USAGE_URL: "http://[::1]:43300/mock-usage",
 				DLINE_E2E_OPENAI_CODEX_OAUTH_MODE: "manual",
+				DLINE_E2E_OPENAI_CODEX_CALLBACK_PORTS: "43101, 0",
+				DLINE_E2E_OPENAI_CODEX_OAUTH_TIMEOUT_MS: "1250",
 			} as NodeJS.ProcessEnv),
 		).toMatchObject({
 			apiBaseUrl: "http://localhost:43200/mock-codex",
@@ -27,6 +29,8 @@ describe("resolveOpenAiCodexRuntimeConfig", () => {
 				authorizationEndpoint: "http://127.0.0.1:43100/mock-oauth/authorize/manual",
 				tokenEndpoint: "http://127.0.0.1:43100/mock-oauth/token",
 				mode: "manual",
+				callbackPorts: [43101, 0],
+				timeoutMs: 1250,
 			},
 		})
 	})
@@ -42,6 +46,21 @@ describe("resolveOpenAiCodexRuntimeConfig", () => {
 				[name]: value,
 			} as NodeJS.ProcessEnv),
 		).toThrow(/loopback HTTP URL/)
+	})
+
+	it.each([
+		["DLINE_E2E_OPENAI_CODEX_CALLBACK_PORTS", "1455,invalid"],
+		["DLINE_E2E_OPENAI_CODEX_CALLBACK_PORTS", "70000"],
+		["DLINE_E2E_OPENAI_CODEX_OAUTH_TIMEOUT_MS", "0"],
+		["DLINE_E2E_OPENAI_CODEX_OAUTH_TIMEOUT_MS", "1.5"],
+	])("rejects invalid %s values", (name, value) => {
+		expect(() =>
+			resolveOpenAiCodexRuntimeConfig({
+				E2E_TEST: "true",
+				DLINE_E2E_OPENAI_CODEX_OAUTH_BASE_URL: "http://127.0.0.1:43100",
+				[name]: value,
+			} as NodeJS.ProcessEnv),
+		).toThrow(name)
 	})
 
 	it("rejects unknown E2E OAuth modes", () => {

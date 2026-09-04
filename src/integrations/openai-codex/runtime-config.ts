@@ -14,6 +14,8 @@ export interface OpenAiCodexRuntimeConfig {
 		authorizationEndpoint: string
 		tokenEndpoint: string
 		mode: OpenAiCodexE2EOAuthMode
+		callbackPorts?: readonly number[]
+		timeoutMs?: number
 	}
 }
 
@@ -50,6 +52,29 @@ function oauthMode(value: string | undefined): OpenAiCodexE2EOAuthMode {
 	throw new Error("DLINE_E2E_OPENAI_CODEX_OAUTH_MODE must be automatic or manual.")
 }
 
+function positiveInteger(name: string, value: string | undefined): number | undefined {
+	if (value === undefined) return undefined
+	if (!/^\d+$/.test(value)) throw new Error(`${name} must be a positive integer.`)
+	const parsed = Number(value)
+	if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer.`)
+	return parsed
+}
+
+function callbackPorts(value: string | undefined): readonly number[] | undefined {
+	if (value === undefined) return undefined
+	const ports = value.split(",").map((port) => {
+		const trimmed = port.trim()
+		if (!/^\d+$/.test(trimmed)) throw new Error("DLINE_E2E_OPENAI_CODEX_CALLBACK_PORTS must contain TCP ports.")
+		const parsed = Number(trimmed)
+		if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 65_535) {
+			throw new Error("DLINE_E2E_OPENAI_CODEX_CALLBACK_PORTS must contain TCP ports.")
+		}
+		return parsed
+	})
+	if (ports.length === 0) throw new Error("DLINE_E2E_OPENAI_CODEX_CALLBACK_PORTS must contain TCP ports.")
+	return ports
+}
+
 export function resolveOpenAiCodexRuntimeConfig(env: NodeJS.ProcessEnv = process.env): OpenAiCodexRuntimeConfig {
 	if (env.E2E_TEST !== "true") return OPENAI_CODEX_PRODUCTION_RUNTIME_CONFIG
 
@@ -74,6 +99,11 @@ export function resolveOpenAiCodexRuntimeConfig(env: NodeJS.ProcessEnv = process
 						),
 						tokenEndpoint: appendPath(loopbackHttpUrl("DLINE_E2E_OPENAI_CODEX_OAUTH_BASE_URL", oauthBase), "token"),
 						mode: oauthMode(env.DLINE_E2E_OPENAI_CODEX_OAUTH_MODE),
+						callbackPorts: callbackPorts(env.DLINE_E2E_OPENAI_CODEX_CALLBACK_PORTS),
+						timeoutMs: positiveInteger(
+							"DLINE_E2E_OPENAI_CODEX_OAUTH_TIMEOUT_MS",
+							env.DLINE_E2E_OPENAI_CODEX_OAUTH_TIMEOUT_MS,
+						),
 					},
 				}
 			: {}),

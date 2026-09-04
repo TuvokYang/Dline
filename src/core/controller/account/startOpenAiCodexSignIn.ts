@@ -4,7 +4,7 @@ import { HostProvider } from "@/hosts/host-provider"
 import { openAiCodexOAuthManager } from "@/integrations/openai-codex/oauth"
 import { OAuthFlowError } from "@/services/oauth"
 import type { Controller } from ".."
-import { logOpenAiCodexOAuthFailure, requireOpenAiCodexProfile } from "./openAiCodexProfileTarget"
+import { logOpenAiCodexOAuthFailure, requireOpenAiCodexProfile, toOpenAiCodexAuthFlow } from "./openAiCodexProfileTarget"
 
 /** Starts a browser OAuth flow owned by one explicit OpenAI Codex Profile. */
 export async function startOpenAiCodexSignIn(
@@ -32,7 +32,7 @@ export async function startOpenAiCodexSignIn(
 					})
 				}
 			})
-		return OpenAiCodexAuthFlow.create({ profileId: profile.id, flowId: started.flowId })
+		return toOpenAiCodexAuthFlow(started)
 	} catch (error) {
 		logOpenAiCodexOAuthFailure("start flow", error)
 		throw new Error("OpenAI Codex sign-in could not be started.")

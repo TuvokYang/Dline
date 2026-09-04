@@ -7,6 +7,7 @@ import {
 	type OpenAiCodexProfileAuthMigrationResult,
 	OpenAiCodexProfileAuthRepository,
 	type OpenAiOAuthCredentials,
+	parseOpenAiOAuthCredentials,
 } from "@/core/storage/secrets"
 import {
 	type CompleteOAuthCallbackInput,
@@ -33,6 +34,24 @@ export * from "./strategy"
 export type OpenAiCodexCredentials = OpenAiOAuthCredentials
 
 type OpenAiCodexManagerStrategy = OAuthAuthorizationStrategy<OpenAiOAuthCredentials> & OpenAiCodexRefreshStrategy
+
+export interface OpenAiCodexAuthorizationFlow {
+	flowId: string
+	profileId: string
+	authorizationUrl: string
+	redirectUri: string
+	expiresAtMs: number
+	browserOpenStatus: "opened" | "failed"
+}
+
+export type OpenAiCodexAuthorizationFlowOutcomeStatus = "completed" | "cancelled" | "timed-out" | "failed"
+
+export interface OpenAiCodexAuthorizationFlowOutcome {
+	flowId: string
+	profileId: string
+	status: OpenAiCodexAuthorizationFlowOutcomeStatus
+	endedAtMs: number
+}
 
 export type OpenAiCodexRuntimeMutationReason = "credential-saved" | "credential-cleared" | "reauthentication-required"
 
@@ -71,7 +90,12 @@ export class OpenAiCodexOAuthManager {
 	private readonly runtimeRevisions = new Map<string, number>()
 	private readonly runtimeMutationListeners = new Set<OpenAiCodexRuntimeMutationListener>()
 	private readonly publishedReauthenticationRequired = new Set<string>()
-	private activeFlow: { flowId: string; profileId: string; generation: number } | undefined
+	private readonly lastFlowOutcomes = new Map<string, OpenAiCodexAuthorizationFlowOutcome>()
+	private activeFlow:
+		| ({ flowId: string; profileId: string; generation: number } & Partial<
+				Omit<OpenAiCodexAuthorizationFlow, "flowId" | "profileId">
+		  >)
+		| undefined
 
 	constructor(options: OpenAiCodexOAuthManagerOptions = {}) {
 		const strategy = options.strategy ?? new OpenAiCodexOAuthStrategy()
@@ -129,9 +153,29 @@ export class OpenAiCodexOAuthManager {
 		return status === "authenticated" || status === "refreshable-expired"
 	}
 
-	getActiveAuthorizationFlow(profileId: string): { profileId: string; flowId: string } | undefined {
+	getActiveAuthorizationFlow(profileId: string): OpenAiCodexAuthorizationFlow | undefined {
 		const flow = this.activeFlow
-		return flow?.profileId === profileId ? { profileId: flow.profileId, flowId: flow.flowId } : undefined
+		if (
+			flow?.profileId !== profileId ||
+			!flow.authorizationUrl ||
+			!flow.redirectUri ||
+			flow.expiresAtMs === undefined ||
+			!flow.browserOpenStatus
+		) {
+			return undefined
+		}
+		return {
+			profileId: flow.profileId,
+			flowId: flow.flowId,
+			authorizationUrl: flow.authorizationUrl,
+			redirectUri: flow.redirectUri,
+			expiresAtMs: flow.expiresAtMs,
+			browserOpenStatus: flow.browserOpenStatus,
+		}
+	}
+
+	getLastAuthorizationFlowOutcome(profileId: string): OpenAiCodexAuthorizationFlowOutcome | undefined {
+		return this.lastFlowOutcomes.get(profileId)
 	}
 
 	subscribeToRuntimeMutations(listener: OpenAiCodexRuntimeMutationListener): () => void {
@@ -153,6 +197,18 @@ export class OpenAiCodexOAuthManager {
 		await this.publishRuntimeMutation(profileId, "credential-saved")
 	}
 
+	async importCredentials(profileId: string, value: unknown): Promise<OpenAiCodexCredentials> {
+		parseOpenAiOAuthCredentials(value)
+		this.advanceGeneration(profileId)
+		const activeFlow = this.activeFlow?.profileId === profileId ? this.activeFlow : undefined
+		if (activeFlow) await this.cancelCoordinatorFlow(activeFlow.profileId, activeFlow.flowId)
+		const credential = await this.withProfileMutation(profileId, () => this.sessions.importCredential(profileId, value))
+		this.publishedReauthenticationRequired.delete(profileId)
+		await this.ensureLegacyMigration(true)
+		await this.publishRuntimeMutation(profileId, "credential-saved")
+		return credential
+	}
+
 	async clearCredentials(profileId: string): Promise<void> {
 		await this.ensureLegacyMigration()
 		this.advanceGeneration(profileId)
@@ -172,14 +228,38 @@ export class OpenAiCodexOAuthManager {
 		}
 		const flowId = randomUUID()
 		const generation = this.advanceGeneration(profileId)
+		this.lastFlowOutcomes.delete(profileId)
 		this.activeFlow = { flowId, profileId, generation }
 		try {
 			const started = await this.coordinator.startFlow({ profileId, flowId })
+			if (this.activeFlow?.flowId === flowId) {
+				this.activeFlow = {
+					flowId,
+					profileId,
+					generation,
+					authorizationUrl: started.authorizationUrl,
+					redirectUri: started.redirectUri,
+					expiresAtMs: started.expiresAtMs,
+					browserOpenStatus: started.browserOpenStatus,
+				}
+			}
 			void started.result
+				.then(
+					() => this.recordFlowOutcome(profileId, flowId, "completed"),
+					(error: unknown) =>
+						this.recordFlowOutcome(
+							profileId,
+							flowId,
+							error instanceof OAuthFlowError && error.code === "FLOW_TIMED_OUT"
+								? "timed-out"
+								: error instanceof OAuthFlowError && error.code === "FLOW_CANCELLED"
+									? "cancelled"
+									: "failed",
+						),
+				)
 				.finally(() => {
 					if (this.activeFlow?.flowId === started.flowId) this.activeFlow = undefined
 				})
-				.catch(() => undefined)
 			return started
 		} catch (error) {
 			if (this.activeFlow?.flowId === flowId) this.activeFlow = undefined
@@ -208,8 +288,13 @@ export class OpenAiCodexOAuthManager {
 	async dispose(): Promise<void> {
 		if (this.activeFlow) this.advanceGeneration(this.activeFlow.profileId)
 		this.activeFlow = undefined
+		this.lastFlowOutcomes.clear()
 		this.runtimeMutationListeners.clear()
 		await this.coordinator.dispose()
+	}
+
+	private recordFlowOutcome(profileId: string, flowId: string, status: OpenAiCodexAuthorizationFlowOutcomeStatus): void {
+		this.lastFlowOutcomes.set(profileId, { profileId, flowId, status, endedAtMs: Date.now() })
 	}
 
 	private async persistFlowCredential(flowId: string, profileId: string, credential: OpenAiCodexCredentials): Promise<void> {
@@ -302,7 +387,8 @@ export class OpenAiCodexOAuthManager {
 		try {
 			await this.coordinator.cancelFlow({ profileId, flowId })
 		} catch (error) {
-			if (!(error instanceof OAuthFlowError) || error.code !== "FLOW_NOT_FOUND") throw error
+			if (!(error instanceof OAuthFlowError) || (error.code !== "FLOW_NOT_FOUND" && error.code !== "FLOW_TIMED_OUT"))
+				throw error
 		} finally {
 			if (this.activeFlow?.flowId === flowId) this.activeFlow = undefined
 		}
@@ -321,10 +407,13 @@ function createDefaultOpenAiCodexOAuthManager(): OpenAiCodexOAuthManager {
 		})
 	}
 
-	const { authorizationEndpoint, tokenEndpoint } = runtimeConfig.e2eOAuth
+	const { authorizationEndpoint, tokenEndpoint, callbackPorts, timeoutMs } = runtimeConfig.e2eOAuth
 	return new OpenAiCodexOAuthManager({
-		strategy: new OpenAiCodexOAuthStrategy({ configuration: { authorizationEndpoint, tokenEndpoint } }),
+		strategy: new OpenAiCodexOAuthStrategy({
+			configuration: { authorizationEndpoint, tokenEndpoint, ...(callbackPorts ? { callbackPorts } : {}) },
+		}),
 		openExternal,
+		timeoutMs,
 	})
 }
 

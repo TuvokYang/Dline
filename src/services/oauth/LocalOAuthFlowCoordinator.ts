@@ -43,6 +43,7 @@ interface PendingFlow<TCredential> {
 
 export class LocalOAuthFlowCoordinator<TCredential> {
 	private pending: PendingFlow<TCredential> | undefined
+	private lastTimedOutFlow: { flowId: string; profileId: string } | undefined
 	private readonly timeoutMs: number
 
 	constructor(
@@ -64,11 +65,7 @@ export class LocalOAuthFlowCoordinator<TCredential> {
 		const state = createOAuthState()
 		let server: LocalOAuthCallbackServer
 		try {
-			server = await LocalOAuthCallbackServer.listen({
-				port: this.strategy.callbackPort,
-				callbackPath: this.strategy.callbackPath,
-				onCallback: (callbackUri) => this.complete(flowId, input.profileId, callbackUri, false).then(() => undefined),
-			})
+			server = await this.listenForCallback(flowId, input.profileId)
 		} catch (error) {
 			await lease.release()
 			throw error
@@ -81,6 +78,7 @@ export class LocalOAuthFlowCoordinator<TCredential> {
 			reject = rej
 		})
 		void result.catch(() => undefined)
+		const expiresAtMs = Date.now() + this.timeoutMs
 		const timeout = setTimeout(() => {
 			void this.fail(flowId, new OAuthFlowError("FLOW_TIMED_OUT", "The OAuth authorization flow timed out.", true))
 		}, this.timeoutMs)
@@ -101,23 +99,24 @@ export class LocalOAuthFlowCoordinator<TCredential> {
 		const authorizationUrl = this.strategy
 			.buildAuthorizationUrl({ redirectUri: server.redirectUri, codeChallenge: createPkceChallenge(codeVerifier), state })
 			.toString()
+		let browserOpenStatus: "opened" | "failed" = "opened"
 		try {
 			await this.options.openExternal(authorizationUrl)
-		} catch (error) {
-			await this.fail(
-				flowId,
-				new OAuthFlowError("BROWSER_OPEN_FAILED", "The OAuth authorization URL could not be opened.", true, {
-					cause: error,
-				}),
-			)
-			throw new OAuthFlowError("BROWSER_OPEN_FAILED", "The OAuth authorization URL could not be opened.", true, {
-				cause: error,
-			})
+		} catch {
+			browserOpenStatus = "failed"
 		}
-		return { flowId, profileId: input.profileId, result }
+		return {
+			flowId,
+			profileId: input.profileId,
+			authorizationUrl,
+			redirectUri: server.redirectUri,
+			expiresAtMs,
+			browserOpenStatus,
+			result,
+		}
 	}
 
-	completeFromCallbackUri(input: CompleteOAuthCallbackInput): Promise<TCredential> {
+	async completeFromCallbackUri(input: CompleteOAuthCallbackInput): Promise<TCredential> {
 		return this.complete(input.flowId, input.profileId, input.callbackUri, true)
 	}
 
@@ -186,8 +185,15 @@ export class LocalOAuthFlowCoordinator<TCredential> {
 
 	private requirePending(flowId: string, profileId: string): PendingFlow<TCredential> {
 		const pending = this.pending
-		if (!pending || pending.flowId !== flowId)
+		if (!pending || pending.flowId !== flowId) {
+			if (this.lastTimedOutFlow?.flowId === flowId) {
+				if (this.lastTimedOutFlow.profileId !== profileId) {
+					throw new OAuthFlowError("FLOW_OWNER_MISMATCH", "The OAuth authorization flow belongs to another profile.")
+				}
+				throw new OAuthFlowError("FLOW_TIMED_OUT", "The OAuth authorization flow timed out.", true)
+			}
 			throw new OAuthFlowError("FLOW_NOT_FOUND", "The OAuth authorization flow is no longer active.")
+		}
 		if (pending.profileId !== profileId)
 			throw new OAuthFlowError("FLOW_OWNER_MISMATCH", "The OAuth authorization flow belongs to another profile.")
 		return pending
@@ -195,7 +201,29 @@ export class LocalOAuthFlowCoordinator<TCredential> {
 
 	private async fail(flowId: string, error: OAuthFlowError): Promise<void> {
 		if (!this.pending || this.pending.flowId !== flowId) return
+		if (error.code === "FLOW_TIMED_OUT") {
+			this.lastTimedOutFlow = { flowId: this.pending.flowId, profileId: this.pending.profileId }
+		}
 		await this.settleFailure(this.pending, error, true)
+	}
+
+	private async listenForCallback(flowId: string, profileId: string): Promise<LocalOAuthCallbackServer> {
+		const configuredPorts = this.strategy.callbackPorts?.length ? this.strategy.callbackPorts : [this.strategy.callbackPort]
+		const ports = [...new Set(configuredPorts)]
+		let lastPortError: OAuthFlowError | undefined
+		for (const port of ports) {
+			try {
+				return await LocalOAuthCallbackServer.listen({
+					port,
+					callbackPath: this.strategy.callbackPath,
+					onCallback: (callbackUri) => this.complete(flowId, profileId, callbackUri, false).then(() => undefined),
+				})
+			} catch (error) {
+				if (!(error instanceof OAuthFlowError) || error.code !== "CALLBACK_PORT_IN_USE") throw error
+				lastPortError = error
+			}
+		}
+		throw lastPortError ?? new OAuthFlowError("CALLBACK_SERVER_FAILED", "No OAuth callback port was configured.")
 	}
 
 	private async settleSuccess(

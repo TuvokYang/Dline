@@ -23,12 +23,15 @@ describe("generic OAuth architecture", () => {
 		expect(combined).not.toMatch(/Logger\.|console\.|Telemetry|StateManager|ExtensionState/)
 	})
 
-	it("does not expose the authorization URL or redirect URI from the started-flow contract", async () => {
+	it("exposes only transient flow presentation without credential or PKCE secrets", async () => {
 		const types = await fs.readFile(path.join(oauthDirectory, "types.ts"), "utf8")
 		const startedFlow = types.match(/export interface OAuthFlowStarted[\s\S]*?\n}/)?.[0]
 
 		expect(startedFlow).toBeTruthy()
-		expect(startedFlow).not.toContain("authorizationUrl")
-		expect(startedFlow).not.toContain("redirectUri")
+		expect(startedFlow).toContain("authorizationUrl")
+		expect(startedFlow).toContain("redirectUri")
+		expect(startedFlow).toContain("expiresAtMs")
+		expect(startedFlow).toContain("browserOpenStatus")
+		expect(startedFlow).not.toMatch(/accessToken|refreshToken|credential:|codeVerifier|\n\s*state:/)
 	})
 })

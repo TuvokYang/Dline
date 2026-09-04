@@ -42,6 +42,7 @@ export interface OAuthCodeExchangeInput {
 export interface OAuthAuthorizationStrategy<TCredential> {
 	readonly strategyId: string
 	readonly callbackPort: number
+	readonly callbackPorts?: readonly number[]
 	readonly callbackPath: string
 	buildAuthorizationUrl(input: OAuthAuthorizationInput): URL
 	exchangeAuthorizationCode(input: OAuthCodeExchangeInput): Promise<TCredential>
@@ -62,9 +63,15 @@ export interface OAuthFlowLease {
 	acquire(owner: OAuthFlowLeaseOwner): Promise<OAuthFlowLeaseHandle>
 }
 
+export type OAuthBrowserOpenStatus = "opened" | "failed"
+
 export interface OAuthFlowStarted<TCredential> {
 	flowId: string
 	profileId: string
+	authorizationUrl: string
+	redirectUri: string
+	expiresAtMs: number
+	browserOpenStatus: OAuthBrowserOpenStatus
 	result: Promise<TCredential>
 }
 

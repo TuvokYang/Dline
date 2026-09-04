@@ -22,6 +22,16 @@ function credential(owner: string, expires = NOW + 3_600_000): OpenAiOAuthCreden
 	}
 }
 
+function credentialWithoutRefresh(owner: string, expires = NOW + 3_600_000): OpenAiOAuthCredentials {
+	return {
+		type: "openai-codex",
+		access_token: `${owner}-access`,
+		expires,
+		email: `${owner}@example.test`,
+		accountId: `${owner}-account`,
+	}
+}
+
 function deferred<T>() {
 	let resolve!: (value: T) => void
 	let reject!: (reason?: unknown) => void
@@ -68,6 +78,35 @@ describe("OpenAI Codex Profile OAuth session registry", () => {
 			accessToken: "b-access",
 			expires: NOW + 3_600_000,
 			accountId: "b-account",
+		})
+	})
+
+	it("uses an unexpired credential without a refresh token", async () => {
+		await repository.save("profile-a", credentialWithoutRefresh("a"))
+		const refreshCredential = vi.fn()
+		const sessions = registry(refreshCredential)
+
+		await expect(sessions.getCredentialContext("profile-a")).resolves.toEqual({
+			accessToken: "a-access",
+			expires: NOW + 3_600_000,
+			accountId: "a-account",
+		})
+		await expect(sessions.getAuthStatus("profile-a")).resolves.toBe("authenticated")
+		expect(refreshCredential).not.toHaveBeenCalled()
+	})
+
+	it("does not refresh an expired credential without a refresh token", async () => {
+		await repository.save("profile-a", credentialWithoutRefresh("a", NOW - 1))
+		const refreshCredential = vi.fn()
+		const sessions = registry(refreshCredential)
+
+		await expect(sessions.getAuthStatus("profile-a")).resolves.toBe("reauthentication-required")
+		await expect(sessions.getCredentialContext("profile-a")).resolves.toBeNull()
+		await expect(sessions.forceRefreshCredentialContext("profile-a")).resolves.toBeNull()
+		expect(refreshCredential).not.toHaveBeenCalled()
+		await expect(repository.read("profile-a")).resolves.toMatchObject({
+			status: "valid",
+			credential: { access_token: "a-access" },
 		})
 	})
 

@@ -433,6 +433,7 @@ const ApiOptions = ({
 			{currentProfile && selectedProvider === "openai-codex" && (
 				<OpenAiCodexProvider
 					isPopup={isPopup}
+					key={currentProfile.id}
 					onUpdate={handleProfileUpdate}
 					profile={currentProfile}
 					showModelOptions={showModelOptions}

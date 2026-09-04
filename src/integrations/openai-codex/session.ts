@@ -67,7 +67,8 @@ export class OpenAiCodexProfileSessionRegistry {
 		if (this.reauthenticationRequired.has(profileId)) return "reauthentication-required"
 		const current = await this.repository.read(profileId)
 		if (current.status !== "valid") return current.status
-		return isOpenAiCodexCredentialExpired(current.credential, this.now()) ? "refreshable-expired" : "authenticated"
+		if (!isOpenAiCodexCredentialExpired(current.credential, this.now())) return "authenticated"
+		return current.credential.refresh_token ? "refreshable-expired" : "reauthentication-required"
 	}
 
 	async isAuthenticated(profileId: string): Promise<boolean> {
@@ -79,16 +80,25 @@ export class OpenAiCodexProfileSessionRegistry {
 		this.requireProfileId(profileId)
 		const current = await this.repository.read(profileId)
 		if (current.status !== "valid") return null
+		if (isOpenAiCodexCredentialExpired(current.credential, this.now())) {
+			if (!current.credential.refresh_token) {
+				this.reauthenticationRequired.add(profileId)
+				return null
+			}
+			return this.refresh(profileId, current.credential)
+		}
 		this.reauthenticationRequired.delete(profileId)
-		return isOpenAiCodexCredentialExpired(current.credential, this.now())
-			? this.refresh(profileId, current.credential)
-			: toContext(current.credential)
+		return toContext(current.credential)
 	}
 
 	async forceRefreshCredentialContext(profileId: string): Promise<OpenAiCodexCredentialContext | null> {
 		this.requireProfileId(profileId)
 		const current = await this.repository.read(profileId)
 		if (current.status !== "valid") return null
+		if (!current.credential.refresh_token) {
+			this.reauthenticationRequired.add(profileId)
+			return null
+		}
 		this.reauthenticationRequired.delete(profileId)
 		return this.refresh(profileId, current.credential)
 	}
@@ -99,6 +109,13 @@ export class OpenAiCodexProfileSessionRegistry {
 		this.reauthenticationRequired.delete(profileId)
 	}
 
+	async importCredential(profileId: string, value: unknown): Promise<OpenAiOAuthCredentials> {
+		this.requireProfileId(profileId)
+		const credential = await this.repository.importCredential(profileId, value)
+		this.reauthenticationRequired.delete(profileId)
+		return credential
+	}
+
 	async clearCredential(profileId: string): Promise<void> {
 		this.requireProfileId(profileId)
 		await this.repository.delete(profileId)
@@ -106,6 +123,10 @@ export class OpenAiCodexProfileSessionRegistry {
 	}
 
 	private refresh(profileId: string, sourceCredential: OpenAiOAuthCredentials): Promise<OpenAiCodexCredentialContext | null> {
+		if (!sourceCredential.refresh_token) {
+			this.reauthenticationRequired.add(profileId)
+			return Promise.resolve(null)
+		}
 		const pending = this.refreshes.get(profileId)
 		if (pending) return pending
 		const refresh = this.performRefresh(profileId, sourceCredential).finally(() => {

@@ -16,13 +16,19 @@ class TestStrategy implements OAuthAuthorizationStrategy<TestCredential> {
 	readonly strategyId = "test-oauth"
 	readonly callbackPath = "/oauth/callback"
 
+	readonly callbackPort: number
+	readonly callbackPorts: readonly number[]
+
 	constructor(
-		readonly callbackPort = 0,
+		callbackPorts: number | readonly number[] = 0,
 		private readonly exchange: (code: string, verifier: string) => Promise<TestCredential> = async (code, verifier) => ({
 			code,
 			verifier,
 		}),
-	) {}
+	) {
+		this.callbackPorts = typeof callbackPorts === "number" ? [callbackPorts] : callbackPorts
+		this.callbackPort = this.callbackPorts[0] ?? 0
+	}
 
 	buildAuthorizationUrl(input: { redirectUri: string; codeChallenge: string; state: string }): URL {
 		const url = new URL("https://auth.example.test/authorize")
@@ -117,6 +123,10 @@ describe("LocalOAuthFlowCoordinator", () => {
 			callbackUri: `${listenedRedirectUri}?code=manual-code&state=${state}`,
 		})
 
+		expect(flow.authorizationUrl).toBe(openedAuthorizationUrl)
+		expect(flow.redirectUri).toBe(listenedRedirectUri)
+		expect(flow.expiresAtMs).toBeGreaterThan(Date.now())
+		expect(flow.browserOpenStatus).toBe("opened")
 		expect(credential).toMatchObject({ code: "manual-code" })
 		await expect(flow.result).resolves.toEqual(credential)
 		expect(openExternal).toHaveBeenCalledOnce()
@@ -210,6 +220,42 @@ describe("LocalOAuthFlowCoordinator", () => {
 		await expect(active.result).rejects.toMatchObject({ code: "FLOW_CANCELLED" })
 	})
 
+	it("keeps the flow active when the browser cannot be opened", async () => {
+		const coordinator = await createCoordinator({
+			openExternal: async () => {
+				throw new Error("browser unavailable")
+			},
+		})
+		const flow = await coordinator.startFlow({ profileId: "profile-a" })
+		const authorization = new URL(flow.authorizationUrl)
+
+		expect(flow.browserOpenStatus).toBe("failed")
+		await expect(
+			coordinator.completeFromCallbackUri({
+				flowId: flow.flowId,
+				profileId: "profile-a",
+				callbackUri: `${flow.redirectUri}?code=manual-code&state=${authorization.searchParams.get("state")}`,
+			}),
+		).resolves.toMatchObject({ code: "manual-code" })
+	})
+
+	it("uses the next approved callback port when the first one is occupied", async () => {
+		const occupied = http.createServer()
+		await new Promise<void>((resolve) => occupied.listen(0, "127.0.0.1", resolve))
+		const address = occupied.address()
+		if (!address || typeof address === "string") throw new Error("expected TCP address")
+		try {
+			const coordinator = await createCoordinator({ strategy: new TestStrategy([address.port, 0]) })
+			const flow = await coordinator.startFlow({ profileId: "profile-a" })
+			const redirectUri = new URL(flow.redirectUri)
+			expect(Number(redirectUri.port)).not.toBe(address.port)
+			expect(new URL(flow.authorizationUrl).searchParams.get("redirect_uri")).toBe(flow.redirectUri)
+			await coordinator.cancelFlow({ flowId: flow.flowId, profileId: "profile-a" })
+		} finally {
+			await new Promise<void>((resolve) => occupied.close(() => resolve()))
+		}
+	})
+
 	it("distinguishes an occupied callback port from another Dline flow", async () => {
 		const occupied = http.createServer()
 		await new Promise<void>((resolve) => occupied.listen(0, "127.0.0.1", resolve))
@@ -225,10 +271,18 @@ describe("LocalOAuthFlowCoordinator", () => {
 		}
 	})
 
-	it("times out and releases the flow lease", async () => {
+	it("times out, reports stale callbacks as timed out, and releases the flow lease", async () => {
 		const coordinator = await createCoordinator({ timeoutMs: 20 })
 		const flow = await coordinator.startFlow({ profileId: "profile-a" })
+		const state = new URL(flow.authorizationUrl).searchParams.get("state")
 		await expect(flow.result).rejects.toMatchObject({ code: "FLOW_TIMED_OUT" })
+		await expect(
+			coordinator.completeFromCallbackUri({
+				flowId: flow.flowId,
+				profileId: "profile-a",
+				callbackUri: `${flow.redirectUri}?code=late&state=${state}`,
+			}),
+		).rejects.toMatchObject({ code: "FLOW_TIMED_OUT" })
 		const replacement = await coordinator.startFlow({ profileId: "profile-a" })
 		await coordinator.cancelFlow({ flowId: replacement.flowId, profileId: "profile-a" })
 		await expect(replacement.result).rejects.toMatchObject({ code: "FLOW_CANCELLED" })

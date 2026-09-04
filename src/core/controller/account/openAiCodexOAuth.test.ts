@@ -1,6 +1,9 @@
 import {
 	OpenAiCodexAuthStatus,
+	OpenAiCodexBrowserOpenStatus,
 	type OpenAiCodexCallbackUriRequest,
+	OpenAiCodexFlowStatus,
+	type OpenAiCodexOAuthJsonRequest,
 	type OpenAiCodexProfileRequest,
 } from "@shared/proto/dline/account"
 import { ApiProfile } from "@shared/proto/dline/profile"
@@ -8,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { cancelOpenAiCodexSignIn } from "./cancelOpenAiCodexSignIn"
 import { completeOpenAiCodexCallbackUri } from "./completeOpenAiCodexCallbackUri"
 import { getOpenAiCodexAuthStatus } from "./getOpenAiCodexAuthStatus"
+import { importOpenAiCodexOAuthJson } from "./importOpenAiCodexOAuthJson"
 import { openAiCodexSignIn as deprecatedOpenAiCodexSignIn } from "./openAiCodexSignIn"
 import { openAiCodexSignOut as deprecatedOpenAiCodexSignOut } from "./openAiCodexSignOut"
 import { signOutOpenAiCodexProfile } from "./signOutOpenAiCodexProfile"
@@ -18,7 +22,9 @@ const mocks = vi.hoisted(() => ({
 	startAuthorizationFlow: vi.fn(),
 	getAuthStatus: vi.fn(),
 	getActiveAuthorizationFlow: vi.fn(),
+	getLastAuthorizationFlowOutcome: vi.fn(),
 	completeFromCallbackUri: vi.fn(),
+	importCredentials: vi.fn(),
 	cancelAuthorizationFlow: vi.fn(),
 	clearCredentials: vi.fn(),
 	showMessage: vi.fn(),
@@ -31,7 +37,9 @@ vi.mock("@/integrations/openai-codex/oauth", () => ({
 		startAuthorizationFlow: mocks.startAuthorizationFlow,
 		getAuthStatus: mocks.getAuthStatus,
 		getActiveAuthorizationFlow: mocks.getActiveAuthorizationFlow,
+		getLastAuthorizationFlowOutcome: mocks.getLastAuthorizationFlowOutcome,
 		completeFromCallbackUri: mocks.completeFromCallbackUri,
+		importCredentials: mocks.importCredentials,
 		cancelAuthorizationFlow: mocks.cancelAuthorizationFlow,
 		clearCredentials: mocks.clearCredentials,
 	},
@@ -59,19 +67,29 @@ describe("OpenAI Codex Profile OAuth handlers", () => {
 		mocks.startAuthorizationFlow.mockResolvedValue({
 			profileId: profileA.id,
 			flowId: "flow-a",
+			authorizationUrl: "https://auth.example.test/authorize?state=transient-state",
+			redirectUri: "http://127.0.0.1:1455/auth/callback",
+			expiresAtMs: 1_900_000_000_000,
+			browserOpenStatus: "opened",
 			result: new Promise(() => undefined),
 		})
 		mocks.getAuthStatus.mockResolvedValue("missing")
 		mocks.getActiveAuthorizationFlow.mockReturnValue(undefined)
+		mocks.getLastAuthorizationFlowOutcome.mockReturnValue(undefined)
 		mocks.completeFromCallbackUri.mockResolvedValue(credentials)
+		mocks.importCredentials.mockResolvedValue(credentials)
 		mocks.cancelAuthorizationFlow.mockResolvedValue(undefined)
 		mocks.clearCredentials.mockResolvedValue(undefined)
 	})
 
-	it("starts a browser flow for the explicit Profile and returns only owner identifiers", async () => {
+	it("starts an OAUTH flow for the explicit Profile and returns its transient presentation", async () => {
 		await expect(startOpenAiCodexSignIn(controller, profileRequest())).resolves.toEqual({
 			profileId: "profile-a",
 			flowId: "flow-a",
+			authorizationUrl: "https://auth.example.test/authorize?state=transient-state",
+			redirectUri: "http://127.0.0.1:1455/auth/callback",
+			expiresAtMs: 1_900_000_000_000,
+			browserOpenStatus: OpenAiCodexBrowserOpenStatus.OPEN_AI_CODEX_BROWSER_OPEN_STATUS_OPENED,
 		})
 		expect(mocks.startAuthorizationFlow).toHaveBeenCalledWith("profile-a")
 	})
@@ -91,11 +109,38 @@ describe("OpenAI Codex Profile OAuth handlers", () => {
 
 	it("maps the Profile session status to a secret-free protobuf enum", async () => {
 		mocks.getAuthStatus.mockResolvedValue("legacy-shared")
-		mocks.getActiveAuthorizationFlow.mockReturnValue({ profileId: "profile-a", flowId: "flow-a" })
+		mocks.getActiveAuthorizationFlow.mockReturnValue({
+			profileId: "profile-a",
+			flowId: "flow-a",
+			authorizationUrl: "https://auth.example.test/authorize?state=transient-state",
+			redirectUri: "http://127.0.0.1:1455/auth/callback",
+			expiresAtMs: 1_900_000_000_000,
+			browserOpenStatus: "failed",
+		})
+		mocks.getLastAuthorizationFlowOutcome.mockReturnValue({
+			profileId: "profile-a",
+			flowId: "previous-flow",
+			status: "timed-out",
+			endedAtMs: 1_800_000_000_000,
+		})
 		await expect(getOpenAiCodexAuthStatus(controller, profileRequest())).resolves.toEqual({
 			profileId: "profile-a",
 			status: OpenAiCodexAuthStatus.OPEN_AI_CODEX_AUTH_STATUS_LEGACY_SHARED,
 			flowId: "flow-a",
+			activeFlow: {
+				profileId: "profile-a",
+				flowId: "flow-a",
+				authorizationUrl: "https://auth.example.test/authorize?state=transient-state",
+				redirectUri: "http://127.0.0.1:1455/auth/callback",
+				expiresAtMs: 1_900_000_000_000,
+				browserOpenStatus: OpenAiCodexBrowserOpenStatus.OPEN_AI_CODEX_BROWSER_OPEN_STATUS_FAILED,
+			},
+			lastFlowOutcome: {
+				profileId: "profile-a",
+				flowId: "previous-flow",
+				status: OpenAiCodexFlowStatus.OPEN_AI_CODEX_FLOW_STATUS_TIMED_OUT,
+				endedAtMs: 1_800_000_000_000,
+			},
 		})
 	})
 
@@ -118,9 +163,62 @@ describe("OpenAI Codex Profile OAuth handlers", () => {
 		expect(mocks.cancelAuthorizationFlow).toHaveBeenCalledWith("profile-a", "flow-a")
 	})
 
+	it("imports OAuth JSON only for the explicit Profile and returns secret-free status", async () => {
+		const request: OpenAiCodexOAuthJsonRequest = {
+			profileId: "profile-a",
+			oauthJson: JSON.stringify({
+				type: "gpt-team",
+				access_token: "manual-access",
+				expires: 1_900_000_000_000,
+				provider_private_claim: "private-value",
+			}),
+		}
+		mocks.getAuthStatus.mockResolvedValue("authenticated")
+
+		await expect(importOpenAiCodexOAuthJson(controller, request)).resolves.toEqual({
+			profileId: "profile-a",
+			status: OpenAiCodexAuthStatus.OPEN_AI_CODEX_AUTH_STATUS_AUTHENTICATED,
+			flowId: "",
+		})
+		expect(mocks.importCredentials).toHaveBeenCalledWith("profile-a", JSON.parse(request.oauthJson))
+	})
+
+	it("does not expose OAuth JSON or provider payload through import errors or logs", async () => {
+		const secret = "manual-secret-token"
+		mocks.importCredentials.mockRejectedValue(new Error(secret))
+
+		const error = await importOpenAiCodexOAuthJson(controller, {
+			profileId: "profile-a",
+			oauthJson: JSON.stringify({ access_token: secret, expires: 1_900_000_000_000 }),
+		}).catch((caught: unknown) => caught)
+
+		expect(String(error)).not.toContain(secret)
+		expect(JSON.stringify(mocks.loggerError.mock.calls)).not.toContain(secret)
+	})
+
+	it("rejects malformed OAuth JSON before mutating the Profile credential", async () => {
+		await expect(importOpenAiCodexOAuthJson(controller, { profileId: "profile-a", oauthJson: "{malformed" })).rejects.toThrow(
+			"could not be imported",
+		)
+		expect(mocks.importCredentials).not.toHaveBeenCalled()
+	})
+
 	it("signs out only the explicit Codex Profile", async () => {
 		await signOutOpenAiCodexProfile(controller, profileRequest())
 		expect(mocks.clearCredentials).toHaveBeenCalledWith("profile-a")
+	})
+
+	it("reports a timed-out callback with an explicit secret-free message", async () => {
+		const { OAuthFlowError } = await import("@/services/oauth")
+		mocks.completeFromCallbackUri.mockRejectedValue(new OAuthFlowError("FLOW_TIMED_OUT", "provider-secret-detail", true))
+
+		await expect(
+			completeOpenAiCodexCallbackUri(controller, {
+				profileId: "profile-a",
+				flowId: "flow-a",
+				callbackUri: "http://localhost:1455/auth/callback?code=secret-code&state=secret-state",
+			}),
+		).rejects.toThrow("OAUTH authentication timed out")
 	})
 
 	it("does not expose callback URI or provider payload through RPC errors or logs", async () => {
