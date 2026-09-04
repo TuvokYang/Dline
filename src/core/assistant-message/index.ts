@@ -90,6 +90,7 @@ export const toolParamNames = [
 	"quality",
 	"background",
 	"output_format",
+	"output_compression",
 	"reference_artifact_ids",
 	"mask_artifact_id",
 ] as const

@@ -92,6 +92,14 @@ describe("ClineMessage command identity conversion", () => {
 describe("ClineMessage image generation conversion", () => {
 	it("preserves a structured image presentation across the proto boundary without embedding image bytes", () => {
 		const artifactId = `image:sha256:${"a".repeat(64)}`
+		const previewId = `image-preview:sha256:${"b".repeat(64)}`
+		const previews = [2, 0, 1].map((sequence) => ({
+			id: previewId,
+			mimeType: "image/png" as const,
+			width: 512,
+			height: 288,
+			sequence,
+		}))
 		const applicationMessage = {
 			ts: 200,
 			type: "say",
@@ -107,6 +115,7 @@ describe("ClineMessage image generation conversion", () => {
 					providerId: "openai",
 					modelId: "gpt-image-2",
 					count: 1,
+					previews,
 					artifacts: [
 						{
 							id: artifactId,
@@ -130,12 +139,14 @@ describe("ClineMessage image generation conversion", () => {
 			schemaVersion: 1,
 			status: expect.anything(),
 			requestId: "request-1",
+			previews,
 			artifacts: [{ id: artifactId, mimeType: "image/png" }],
 		})
 		expect(restoredPresentation).toMatchObject({
 			schemaVersion: 1,
 			status: "completed",
 			requestId: "request-1",
+			previews,
 			artifacts: [{ id: artifactId, mimeType: "image/png" }],
 		})
 		expect(JSON.stringify(protoMessage)).not.toContain("base64")

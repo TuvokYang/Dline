@@ -1,5 +1,5 @@
 import type { ImageArtifact } from "@core/artifacts/TaskArtifactStore"
-import type { ApiProfile } from "@shared/proto/dline/profile"
+import { ImageGenerationSource, type ApiProfile } from "@shared/proto/dline/profile"
 import { describe, expect, it, vi } from "vitest"
 import type { ImageGenerationAdapter, ImageGenerationRequest } from "../contracts"
 import { ImageGenerationAdapterRegistry } from "../ImageGenerationAdapterRegistry"
@@ -36,6 +36,8 @@ function request(requestId: string): ImageGenerationRequest {
 
 function resolvedProfile(overrides: Partial<NonNullable<ApiProfile["imageGeneration"]>> = {}): ResolvedImageProfile {
 	return {
+		source: ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT,
+		adapterId: "openai",
 		profile: {
 			id: "profile-1",
 			name: "OpenAI Images",
@@ -104,7 +106,7 @@ describe("ImageGenerationService execution limits", () => {
 		expect(runtime.reserve.mock.invocationCallOrder[0]).toBeLessThan(generate.mock.invocationCallOrder[0])
 	})
 
-	it("fails closed when the configured concurrency limit is already occupied", async () => {
+	it("shares the configured concurrency limit with services rebound to another Profile resolver", async () => {
 		let releaseFirst: (() => void) | undefined
 		const firstStarted = new Promise<void>((resolve) => {
 			releaseFirst = resolve
@@ -129,12 +131,45 @@ describe("ImageGenerationService execution limits", () => {
 		const runtime = service(adapter, resolvedProfile({ maxConcurrentRequests: 1 }))
 		const first = runtime.service.generate(request("request-1"), { signal: new AbortController().signal })
 		await entered
-		const second = runtime.service.generate(request("request-2"), { signal: new AbortController().signal })
+		const reboundService = runtime.service.withProfileResolver({ resolve: () => resolvedProfile(), hasAvailableProfile: () => true })
+		const second = reboundService.generate(request("request-2"), { signal: new AbortController().signal })
 		const secondExpectation = expect(second).rejects.toMatchObject({ code: "concurrency_limit_exceeded" })
 		releaseFirst?.()
 		await first
 
 		await secondExpectation
+	})
+
+	it("uses a three-minute default timeout", async () => {
+		vi.useFakeTimers()
+		const outerController = new AbortController()
+		try {
+			let adapterSignal: AbortSignal | undefined
+			const adapter: ImageGenerationAdapter = {
+				async *generate(imageRequest, context) {
+					adapterSignal = context.signal
+					await new Promise<void>((resolve) => context.signal.addEventListener("abort", () => resolve(), { once: true }))
+					yield {
+						type: "cancelled",
+						requestId: imageRequest.requestId,
+						timestampMs: 1,
+						reason: "aborted",
+					}
+				},
+			}
+			const runtime = service(adapter, resolvedProfile({ requestTimeoutMs: undefined }))
+			const generation = runtime.service.generate(request("request-default-timeout"), { signal: outerController.signal })
+			const expectation = expect(generation).rejects.toMatchObject({ code: "timeout", retryable: true })
+
+			await vi.advanceTimersByTimeAsync(179_999)
+			expect(adapterSignal?.aborted).toBe(false)
+			await vi.advanceTimersByTimeAsync(1)
+
+			await expectation
+		} finally {
+			outerController.abort("test_cleanup")
+			vi.useRealTimers()
+		}
 	})
 
 	it("aborts the adapter at the configured timeout and reports a timeout error", async () => {

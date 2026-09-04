@@ -101,8 +101,8 @@ const agentFeatures: FeatureToggle[] = [
 	},
 	{
 		id: "image-generation",
-		label: "Image Generation",
-		description: "Allow AI models to call configured image generation providers.",
+		label: "Enable Image Generation",
+		description: "Expose the generate_image tool and route calls through the configured image source.",
 		stateKey: "imageGenerationEnabled",
 		settingKey: "imageGenerationEnabled",
 	},

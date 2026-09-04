@@ -73,9 +73,18 @@ describe("profile facade preflight", () => {
 		expect(result.systemPrompt).toContain("## Task Closure Contract")
 		expect(result.systemPrompt).toContain("The current working directory is `/workspace/project`")
 		expect(result.systemPrompt).not.toContain("[MISSING:")
-		expect(toolNames(result.tools)).toEqual([...STANDARD_TOOL_IDS])
+		expect(toolNames(result.tools)).toEqual(STANDARD_TOOL_IDS.filter((toolId) => toolId !== "generate_image"))
 		expect(toolNames(result.tools).slice(0, 3)).toEqual(["write_to_file", "replace_in_file", "read_file"])
 		expect(toolNames(result.tools)).not.toContain("generate_explanation")
+	})
+
+	it("projects generate_image for both transports when image generation is available", async () => {
+		const enabledContext = { ...BASE_CONTEXT, imageGenerationAvailable: true }
+		const nativeResult = await new SystemPromptGenerator().generate(enabledContext)
+		const xmlResult = await new SystemPromptGenerator().generate({ ...enabledContext, enableNativeToolCalls: false })
+
+		expect(toolNames(nativeResult.tools)).toContain("generate_image")
+		expect(xmlResult.systemPrompt).toContain("## generate_image")
 	})
 
 	it("preserves the established Native section order", async () => {
@@ -115,7 +124,7 @@ describe("profile facade preflight", () => {
 		expect(result.systemPrompt).toContain("ACT MODE V.S. PLAN MODE (STRICT)")
 		expect(result.systemPrompt).toContain("CURIOSITY & FIRST CONTACT")
 		expect(result.systemPrompt).toContain("FILE EDITING RULES")
-		expect(names).toEqual([...LITE_TOOL_IDS])
+		expect(names).toEqual(LITE_TOOL_IDS.filter((toolId) => toolId !== "generate_image"))
 		expect(names).not.toContain("use_subagent")
 		expect(names).not.toContain("use_subagents")
 		expect(names).not.toContain("load_subagent")

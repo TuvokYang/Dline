@@ -33,7 +33,7 @@ export function createEmptyApiProfile(): ApiProfile {
 		modelId: "",
 		imageModelId: undefined,
 		imageGeneration: undefined,
-		imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT,
+		imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED,
 		imageProfileId: undefined,
 		modelInfo: undefined,
 		legacyNames: [],

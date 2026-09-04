@@ -211,6 +211,8 @@ function convertImageGenerationToProto(
 		modelId: presentation.modelId,
 		count: presentation.count,
 		artifacts: presentation.artifacts ?? [],
+		preview: presentation.preview,
+		previews: presentation.previews ?? [],
 		usage: presentation.usage,
 		error: presentation.error,
 	}

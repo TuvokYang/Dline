@@ -884,7 +884,12 @@ export const ChatRowContent = memo(
 				case "generateImage": {
 					const imageGeneration = message.imageGeneration ?? parseImageGenerationPresentation(tool.imageGeneration)
 					return imageGeneration ? (
-						<ImageGenerationRow onAddToInput={onAddToInput} presentation={imageGeneration} />
+						<ImageGenerationRow
+							isExpanded={isExpanded}
+							onAddToInput={onAddToInput}
+							onToggleExpand={handleToggle}
+							presentation={imageGeneration}
+						/>
 					) : (
 						<InvisibleSpacer />
 					)

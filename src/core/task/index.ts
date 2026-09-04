@@ -6642,7 +6642,10 @@ export class Task {
 			subagentsEnabled: this.stateManager.getGlobalSettingsKey("subagentsEnabled"),
 			clineWebToolsEnabled: webToolsEnabled,
 			webSearchRoutingPlan,
-			imageGenerationAvailable: hasAvailableImageProfile(this.stateManager),
+			imageGenerationAvailable: hasAvailableImageProfile(this.stateManager, {
+				taskId: this.taskId,
+				getCurrentMode: () => this.getMode(),
+			}),
 			isMultiRootEnabled: multiRootEnabled,
 			workspaceRoots,
 			isSubagentRun: false,
@@ -6836,7 +6839,6 @@ export class Task {
 			model: providerInfo.model.id,
 		}
 		await recordProviderAdapterInput(roundContext, { systemPrompt, messages: apiConversationMessages, tools })
-
 		// Log the API request context: profile, provider, model, and thinking status
 		const apiConfig = this.stateManager.getApiConfiguration()
 		const mode = providerInfo.mode
@@ -8035,7 +8037,7 @@ export class Task {
 			this.stateManager.getGlobalSettingsKey("customPrompt"),
 			this.stateManager.getGlobalSettingsKey("clineWebToolsEnabled"),
 			this.explicitInstructionRegistry,
-			this.stateManager.getGlobalSettingsKey("imageGenerationEnabled"),
+			this.stateManager.getCanonicalSettingsKey("imageGenerationEnabled"),
 		)
 		if (persistedRequest) {
 			const replayDeclaration = this.compactionRequestReplay.getDeclaration(apiIndex)

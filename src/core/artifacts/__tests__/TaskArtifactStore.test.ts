@@ -300,6 +300,31 @@ describe("TaskArtifactStore", () => {
 		)
 	})
 
+	it("persists canonical parent provenance and returns defensive copies", async () => {
+		const store = createStore()
+		const parentArtifactId = `image:sha256:${"b".repeat(64)}`
+		const parentArtifactIds = [parentArtifactId]
+		const artifact = await store.storeImage({
+			bytes: PNG_1X1,
+			declaredMimeType: "image/png",
+			provenance: { providerId: "openai", parentArtifactIds },
+		})
+
+		parentArtifactIds.length = 0
+		expect(artifact.provenance?.parentArtifactIds).toEqual([parentArtifactId])
+		artifact.provenance?.parentArtifactIds?.push(`image:sha256:${"c".repeat(64)}`)
+		expect((await store.getImage(artifact.id)).provenance?.parentArtifactIds).toEqual([parentArtifactId])
+
+		await expectArtifactError(
+			store.storeImage({
+				bytes: createPng(1, 1, [9]),
+				declaredMimeType: "image/png",
+				provenance: { parentArtifactIds: ["image:sha256:not-canonical"] },
+			}),
+			"invalid_manifest",
+		)
+	})
+
 	it("fails closed for invalid artifact IDs and detects persisted file tampering", async () => {
 		const store = createStore()
 		const resolver = new ArtifactResolver(store)

@@ -197,35 +197,15 @@ export function resolveWebSearchRoutingPlan(input: WebSearchRoutingInput): WebSe
 			)
 }
 
-/** Resolve the provider-hosted image route selected by the current API Profile. */
+/**
+ * Hosted image generation is coordinated by the ordinary generate_image tool.
+ * Main conversation requests never project the image server tool directly.
+ */
 export function resolveHostedImageGenerationPlan(input: HostedImageGenerationInput): HostedImageGenerationPlan {
-	const serverToolPlan = resolveServerToolPlan(input.modelInfo, input.selectedApiFormat)
-	if (!input.enabled || input.source !== ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED) {
-		return Object.freeze({ route: "disabled", serverToolPlan, serverTools: Object.freeze([]) })
-	}
-	if (
-		input.selectedApiFormat !== ApiFormat.OPENAI_RESPONSES &&
-		input.selectedApiFormat !== ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE
-	) {
-		return Object.freeze({
-			route: "unavailable",
-			serverToolPlan,
-			serverTools: Object.freeze([]),
-			unavailableReason: "server_tool_transport_unsupported",
-		})
-	}
-	if (!input.remoteAdapterAvailable) {
-		return Object.freeze({
-			route: "unavailable",
-			serverToolPlan,
-			serverTools: Object.freeze([]),
-			unavailableReason: "server_tool_adapter_unavailable",
-		})
-	}
 	return Object.freeze({
-		route: "hosted",
-		serverToolPlan,
-		serverTools: Object.freeze([ServerTool.IMAGE_GENERATION]),
+		route: "disabled",
+		serverToolPlan: resolveServerToolPlan(input.modelInfo, input.selectedApiFormat),
+		serverTools: Object.freeze([]),
 	})
 }
 

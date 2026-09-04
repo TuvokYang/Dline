@@ -161,32 +161,16 @@ describe("resolveHostedImageGenerationPlan", () => {
 		remoteAdapterAvailable: true,
 	}
 
-	it("activates only the selected Responses hosted route", () => {
-		expect(resolveHostedImageGenerationPlan(base)).toMatchObject({
-			route: "hosted",
-			serverTools: [ServerTool.IMAGE_GENERATION],
-		})
-		expect(
-			resolveHostedImageGenerationPlan({
-				...base,
-				source: ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT,
-			}),
-		).toMatchObject({ route: "disabled", serverTools: [] })
-	})
-
-	it("does not let stale model metadata intercept Hosted, but still requires Responses transport and adapter support", () => {
-		expect(resolveHostedImageGenerationPlan({ ...base, modelInfo: { capabilities: { tools: [] } } })).toMatchObject({
-			route: "hosted",
-			serverTools: [ServerTool.IMAGE_GENERATION],
-		})
-		expect(resolveHostedImageGenerationPlan({ ...base, selectedApiFormat: ApiFormat.OPENAI_CHAT })).toMatchObject({
-			route: "unavailable",
-			unavailableReason: "server_tool_transport_unsupported",
-		})
-		expect(resolveHostedImageGenerationPlan({ ...base, remoteAdapterAvailable: false })).toMatchObject({
-			route: "unavailable",
-			unavailableReason: "server_tool_adapter_unavailable",
-		})
+	it("never projects image generation into the main conversation request", () => {
+		for (const input of [
+			base,
+			{ ...base, source: ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT },
+			{ ...base, modelInfo: { capabilities: { tools: [] } } },
+			{ ...base, selectedApiFormat: ApiFormat.OPENAI_CHAT },
+			{ ...base, remoteAdapterAvailable: false },
+		]) {
+			expect(resolveHostedImageGenerationPlan(input)).toMatchObject({ route: "disabled", serverTools: [] })
+		}
 	})
 })
 

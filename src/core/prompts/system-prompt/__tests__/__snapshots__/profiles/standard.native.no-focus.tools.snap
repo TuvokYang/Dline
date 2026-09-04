@@ -830,6 +830,71 @@
   {
     "type": "function",
     "function": {
+      "name": "generate_image",
+      "description": "Generate or edit images through the configured Current, Independent, or Hosted image source. This is the only AI-callable image generation entry point and is a paid external operation. Choose output size, quality, format, compression, and background explicitly when the user requests them. Outputs are stored as task artifacts; the tool result contains artifact IDs and safe metadata, never full base64 image data.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "Describe the image to generate or the edit to apply."
+          },
+          "profile": {
+            "type": "string",
+            "description": "Optional name or ID of the currently bound Image profile. This cannot switch to unrelated credentials."
+          },
+          "count": {
+            "type": "integer",
+            "description": "Number of images to generate. Must be a positive integer within the model and task limits."
+          },
+          "width": {
+            "type": "integer",
+            "description": "Optional desired output width in pixels. Provide height together with width. The selected image model may map it to the closest supported output. Omit both for the default 16:9 target around 2048×1152."
+          },
+          "height": {
+            "type": "integer",
+            "description": "Optional desired output height in pixels. Provide width together with height. The selected image model may map it to the closest supported output. Omit both for the default 16:9 target around 2048×1152."
+          },
+          "aspect_ratio": {
+            "type": "string",
+            "description": "Optional desired aspect ratio. The selected image model maps it to a supported output ratio."
+          },
+          "quality": {
+            "type": "string",
+            "description": "Optional quality: auto, low, medium, or high. Defaults to auto."
+          },
+          "background": {
+            "type": "string",
+            "description": "Optional background mode: auto, opaque, or transparent. Transparent output requires PNG or WebP."
+          },
+          "output_format": {
+            "type": "string",
+            "description": "Optional output format: png, jpeg, or webp. Defaults to png."
+          },
+          "output_compression": {
+            "type": "integer",
+            "description": "Optional integer compression level from 0 to 100. Only valid for JPEG and WebP output."
+          },
+          "reference_artifact_ids": {
+            "type": "string",
+            "description": "Optional JSON array of task image Artifact IDs to use as references."
+          },
+          "mask_artifact_id": {
+            "type": "string",
+            "description": "Optional task image Artifact ID to use as an edit mask."
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
       "name": "generate_report",
       "description": "[TURN-END] Generate a structured technical report for the user to review. This tool pauses execution and waits for the user to respond before you can continue. Use this when the user requests a formal report, summary of findings, or technical analysis that requires their review before proceeding to the next steps.\n\nThe report should include relevant code snippets, architectural decisions, error analysis, or performance data as appropriate. After the user reviews the report, they will provide feedback or instructions for the next steps.",
       "strict": false,

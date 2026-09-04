@@ -1,4 +1,5 @@
 import { createOpenAIClientForProfile } from "@core/api/providers/openai-client-factory"
+import { GPT_IMAGE_2_SUBSCRIPTION_MODEL_ID } from "@shared/image-generation"
 import OpenAI, { toFile } from "openai"
 import type {
 	ImageGenerationAdapter,
@@ -8,6 +9,7 @@ import type {
 	ImageProviderOutput,
 } from "../contracts"
 import { ImageGenerationError } from "../contracts"
+import { resolveOpenAIImageSize } from "../ImageGenerationSizes"
 
 interface OpenAIImageClient {
 	images: OpenAI["images"]
@@ -38,10 +40,6 @@ function mimeTypeForFormat(format: ImageGenerationRequest["outputFormat"]): stri
 		default:
 			return "image/png"
 	}
-}
-
-function sizeForRequest(request: ImageGenerationRequest): string | undefined {
-	return request.size ? `${request.size.width}x${request.size.height}` : undefined
 }
 
 function qualityForRequest(request: ImageGenerationRequest): "low" | "medium" | "high" | "auto" | undefined {
@@ -75,7 +73,7 @@ function providerStatus(error: unknown): number | undefined {
 	return typeof status === "number" ? status : undefined
 }
 
-function mapProviderError(error: unknown): ImageGenerationError {
+export function mapOpenAIImageProviderError(error: unknown): ImageGenerationError {
 	const status = providerStatus(error)
 	const code = providerCode((typeof error === "object" && error !== null ? error : {}) as OpenAiProviderError)
 	if (status === 429 || code === "rate_limit_exceeded" || code === "rate_limit") {
@@ -177,6 +175,13 @@ export class OpenAIImageGenerationAdapter implements ImageGenerationAdapter {
 		yield { type: "queued", requestId: request.requestId, timestampMs: startedAt }
 		try {
 			throwIfAborted(context.signal)
+			if (this.modelId === GPT_IMAGE_2_SUBSCRIPTION_MODEL_ID) {
+				throw new ImageGenerationError({
+					code: "invalid_request",
+					message: "GPT Image 2 Subscription requires the Current Responses image source.",
+					retryable: false,
+				})
+			}
 			yield {
 				type: "started",
 				requestId: request.requestId,
@@ -206,7 +211,7 @@ export class OpenAIImageGenerationAdapter implements ImageGenerationAdapter {
 					})
 				: error instanceof ImageGenerationError
 					? error
-					: mapProviderError(error)
+					: mapOpenAIImageProviderError(error)
 			if (mapped.code === "cancelled") {
 				yield { type: "cancelled", requestId: request.requestId, timestampMs: timestamp(), reason: mapped.message }
 			} else {
@@ -224,7 +229,7 @@ export class OpenAIImageGenerationAdapter implements ImageGenerationAdapter {
 	private async generateImage(request: ImageGenerationRequest, signal: AbortSignal) {
 		const client = this.getClient()
 		const useCodexDefaults = this.modelId === "gpt-image-2"
-		const size = sizeForRequest(request) ?? (useCodexDefaults ? "auto" : undefined)
+		const size = resolveOpenAIImageSize(this.modelId, request.size)
 		const quality = qualityForRequest(request) ?? (useCodexDefaults ? "auto" : undefined)
 		const background = request.background ?? (useCodexDefaults ? "auto" : undefined)
 		return client.images.generate(
@@ -238,6 +243,7 @@ export class OpenAIImageGenerationAdapter implements ImageGenerationAdapter {
 				...(request.outputFormat && (!useCodexDefaults || request.outputFormat !== "png")
 					? { output_format: request.outputFormat }
 					: {}),
+				...(request.outputCompression === undefined ? {} : { output_compression: request.outputCompression }),
 			},
 			{ signal },
 		)
@@ -274,6 +280,7 @@ export class OpenAIImageGenerationAdapter implements ImageGenerationAdapter {
 		)
 		const images = resolved.filter(({ reference }) => reference.role === "reference").map(({ file }) => file)
 		const mask = resolved.find(({ reference }) => reference.role === "mask")?.file
+		const size = resolveOpenAIImageSize(this.modelId, request.size)
 		return this.getClient().images.edit(
 			{
 				model: this.modelId,
@@ -281,10 +288,11 @@ export class OpenAIImageGenerationAdapter implements ImageGenerationAdapter {
 				prompt: request.prompt,
 				n: request.count,
 				...(mask ? { mask } : {}),
-				...(sizeForRequest(request) ? { size: sizeForRequest(request) } : {}),
+				...(size ? { size } : {}),
 				...(qualityForRequest(request) ? { quality: qualityForRequest(request) } : {}),
 				...(request.background ? { background: request.background } : {}),
 				...(request.outputFormat ? { output_format: request.outputFormat } : {}),
+				...(request.outputCompression === undefined ? {} : { output_compression: request.outputCompression }),
 			},
 			{ signal },
 		)

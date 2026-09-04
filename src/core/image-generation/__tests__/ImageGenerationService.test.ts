@@ -1,5 +1,5 @@
 import type { ImageArtifact } from "@core/artifacts/TaskArtifactStore"
-import type { ApiProfile } from "@shared/proto/dline/profile"
+import { ImageGenerationSource, type ApiProfile } from "@shared/proto/dline/profile"
 import { describe, expect, it, vi } from "vitest"
 import type { ImageGenerationEvent, ImageGenerationExecutionContext, ImageGenerationRequest, ImageProviderOutput } from "../contracts"
 import { ImageGenerationAdapterRegistry } from "../ImageGenerationAdapterRegistry"
@@ -31,6 +31,8 @@ const artifact: ImageArtifact = {
 }
 
 const resolvedProfile: ResolvedImageProfile = {
+	source: ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT,
+	adapterId: "openai",
 	profile: {
 		id: "profile-1",
 		name: "OpenAI Images",
@@ -41,7 +43,7 @@ const resolvedProfile: ResolvedImageProfile = {
 	} as ApiProfile,
 	model: {
 		id: "gpt-image-2",
-		capabilities: { supportsGeneration: true, maxImages: 4 },
+		capabilities: { supportsGeneration: true, supportsEditing: true, supportsReferenceImages: true, maxImages: 4 },
 		pricing: { pricePerImage: 0.04, currency: "USD" },
 	},
 }
@@ -91,6 +93,42 @@ describe("ImageGenerationService", () => {
 			expect.any(AbortSignal),
 		)
 		expect(JSON.stringify(result)).not.toContain("aW1hZ2U=")
+	})
+
+	it("records deduplicated parent artifacts for local edit outputs", async () => {
+		const registry = new ImageGenerationAdapterRegistry()
+		registry.register("openai", () => new FakeImageGenerationAdapter({ outputs: [output], now: () => 20 }))
+		const persistProviderOutputs = vi.fn(async () => [artifact])
+		const service = new ImageGenerationService({
+			profileResolver: { resolve: () => resolvedProfile, hasAvailableProfile: () => true },
+			adapterRegistry: registry,
+			policy: new ImageGenerationPolicy(),
+			artifactResolver: { persistProviderOutputs },
+		})
+		const parentArtifactId = `image:sha256:${"b".repeat(64)}`
+
+		await service.generate(
+			{
+				...request(),
+				operation: "edit",
+				references: [
+					{ artifactId: parentArtifactId, role: "reference" },
+					{ artifactId: parentArtifactId, role: "reference" },
+				],
+			},
+			{ signal: new AbortController().signal },
+		)
+
+		expect(persistProviderOutputs).toHaveBeenCalledWith(
+			[output],
+			{
+				providerId: "openai",
+				modelId: "gpt-image-2",
+				requestId: "request-1",
+				parentArtifactIds: [parentArtifactId],
+			},
+			expect.any(AbortSignal),
+		)
 	})
 
 	it("reserves before the provider call and settles before committing artifacts", async () => {
@@ -211,16 +249,32 @@ describe("ImageGenerationService", () => {
 		const registry = new ImageGenerationAdapterRegistry()
 		registry.register("openai", () => new FakeImageGenerationAdapter({ outputs: [output], previewOutputs: [output], now: () => 20 }))
 		const onProgress = vi.fn()
+		const persistPreview = vi.fn(async (_requestId: string, sequence: number) => ({
+			id: `image-preview:sha256:${String(sequence).repeat(64)}`,
+			mimeType: "image/png" as const,
+			width: 512,
+			height: 288,
+			sequence,
+		}))
+		const clearRequest = vi.fn(async () => undefined)
 		const service = new ImageGenerationService({
 			profileResolver: { resolve: () => resolvedProfile, hasAvailableProfile: () => true },
 			adapterRegistry: registry,
 			policy: new ImageGenerationPolicy(),
 			artifactResolver: { persistProviderOutputs: vi.fn(async () => [artifact]) },
+			previewStore: { persistPreview, clearRequest },
 		})
 
 		await service.generate(request(), { signal: new AbortController().signal, onProgress })
 
-		expect(onProgress).toHaveBeenCalledWith({ type: "preview", requestId: "request-1", timestampMs: 20 })
+		expect(persistPreview).toHaveBeenCalledWith("request-1", 0, "aW1hZ2U=")
+		expect(onProgress).toHaveBeenCalledWith({
+			type: "preview",
+			requestId: "request-1",
+			timestampMs: 20,
+			preview: expect.objectContaining({ sequence: 0, width: 512, height: 288 }),
+		})
+		expect(clearRequest).not.toHaveBeenCalled()
 		expect(JSON.stringify(onProgress.mock.calls)).not.toContain(output.source.kind === "base64" ? output.source.data : "")
 	})
 

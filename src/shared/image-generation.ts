@@ -1,4 +1,5 @@
 export const IMAGE_GENERATION_PRESENTATION_SCHEMA_VERSION = 1 as const
+export const GPT_IMAGE_2_SUBSCRIPTION_MODEL_ID = "gpt-image-2-sub"
 
 export type ImageGenerationPresentationStatus = "queued" | "started" | "preview" | "completed" | "failed" | "cancelled"
 
@@ -10,6 +11,14 @@ export interface ImageGenerationArtifactPresentationV1 {
 	width: number
 	height: number
 	revisedPrompt?: string
+}
+
+export interface ImageGenerationPreviewPresentationV1 {
+	id: string
+	mimeType: "image/png" | "image/jpeg" | "image/webp"
+	width: number
+	height: number
+	sequence: number
 }
 
 export interface ImageGenerationUsagePresentationV1 {
@@ -35,6 +44,9 @@ export interface ImageGenerationPresentationV1 {
 	modelId?: string
 	count: number
 	artifacts?: ImageGenerationArtifactPresentationV1[]
+	previews?: ImageGenerationPreviewPresentationV1[]
+	/** Legacy single-preview field retained for stored message compatibility. */
+	preview?: ImageGenerationPreviewPresentationV1
 	usage?: ImageGenerationUsagePresentationV1
 	error?: ImageGenerationErrorPresentationV1
 }
@@ -89,6 +101,27 @@ function parseArtifact(value: unknown): ImageGenerationArtifactPresentationV1 | 
 	}
 }
 
+function parsePreview(value: unknown): ImageGenerationPreviewPresentationV1 | undefined {
+	if (value === undefined) return undefined
+	if (
+		!isRecord(value) ||
+		!isNonEmptyString(value.id) ||
+		!new Set(["image/png", "image/jpeg", "image/webp"]).has(value.mimeType as string) ||
+		!isPositiveInteger(value.width) ||
+		!isPositiveInteger(value.height) ||
+		!isNonNegativeInteger(value.sequence)
+	) {
+		return undefined
+	}
+	return {
+		id: value.id,
+		mimeType: value.mimeType as ImageGenerationPreviewPresentationV1["mimeType"],
+		width: value.width,
+		height: value.height,
+		sequence: value.sequence,
+	}
+}
+
 function parseUsage(value: unknown): ImageGenerationUsagePresentationV1 | undefined {
 	if (value === undefined) return undefined
 	if (!isRecord(value) || !isNonNegativeInteger(value.imageCount)) return undefined
@@ -133,6 +166,10 @@ export function parseImageGenerationPresentation(value: unknown): ImageGeneratio
 	}
 	const artifacts = value.artifacts === undefined ? undefined : Array.isArray(value.artifacts) ? value.artifacts.map(parseArtifact) : []
 	if (artifacts?.some((artifact) => artifact === undefined)) return undefined
+	const previews = value.previews === undefined ? undefined : Array.isArray(value.previews) ? value.previews.map(parsePreview) : []
+	if (previews?.some((preview) => preview === undefined)) return undefined
+	const preview = parsePreview(value.preview)
+	if (value.preview !== undefined && !preview) return undefined
 	const usage = parseUsage(value.usage)
 	if (value.usage !== undefined && !usage) return undefined
 	const error = parseError(value.error)
@@ -147,6 +184,8 @@ export function parseImageGenerationPresentation(value: unknown): ImageGeneratio
 		...(typeof value.providerId === "string" ? { providerId: value.providerId } : {}),
 		...(typeof value.modelId === "string" ? { modelId: value.modelId } : {}),
 		...(artifacts ? { artifacts: artifacts as ImageGenerationArtifactPresentationV1[] } : {}),
+		...(previews ? { previews: previews as ImageGenerationPreviewPresentationV1[] } : {}),
+		...(preview ? { preview } : {}),
 		...(usage ? { usage } : {}),
 		...(error ? { error } : {}),
 	}

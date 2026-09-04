@@ -120,6 +120,7 @@ describe("GenerateImageToolHandler", () => {
 			expect.objectContaining({ signal: config.taskState.operationSignal }),
 		)
 		expect(JSON.stringify(result)).toContain(artifact.id)
+		expect(JSON.stringify(result)).toContain("reference_artifact_ids")
 		expect(JSON.stringify(result)).not.toContain("base64")
 
 		const completedMessage = JSON.parse(say.mock.calls.at(-1)?.[1] as string)
@@ -150,7 +151,20 @@ describe("GenerateImageToolHandler", () => {
 	it("publishes preview state without exposing raw provider payloads", async () => {
 		const { config, generate, say } = createConfig(true)
 		generate.mockImplementationOnce(async (_request, context) => {
-			await context?.onProgress?.({ type: "preview", requestId: "image-request-1", timestampMs: 10 })
+			for (const sequence of [2, 0, 1]) {
+				await context?.onProgress?.({
+					type: "preview",
+					requestId: "image-request-1",
+					timestampMs: 10 + sequence,
+					preview: {
+						id: `image-preview:sha256:${String(sequence).repeat(64)}`,
+						mimeType: "image/png",
+						width: 512,
+						height: 288,
+						sequence,
+					},
+				})
+			}
 			return {
 				requestId: "image-request-1",
 				profileId: "profile-1",
@@ -167,6 +181,8 @@ describe("GenerateImageToolHandler", () => {
 			.map((call) => JSON.parse(call[1] as string))
 			.find((message) => message.imageGeneration?.status === "preview")
 		expect(previewMessage.imageGeneration).toMatchObject({ status: "preview", requestId: "image-request-1" })
+		const completedMessage = JSON.parse(say.mock.calls.at(-1)?.[1] as string)
+		expect(completedMessage.imageGeneration.previews.map((preview: { sequence: number }) => preview.sequence)).toEqual([0, 1, 2])
 		expect(JSON.stringify(previewMessage)).not.toContain("base64")
 		expect(JSON.stringify(previewMessage)).not.toContain("data:")
 	})

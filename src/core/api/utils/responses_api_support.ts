@@ -62,6 +62,15 @@ export function mapResponsesImageGenerationEvent(event: any): ApiRawStreamServer
 	}
 	const functionId = event.item_id
 	if (typeof functionId !== "string" || functionId.length === 0) return undefined
+	if (event.type === "response.image_generation_call.partial_image") {
+		if (typeof event.partial_image_b64 !== "string" || event.partial_image_b64.length === 0) return undefined
+		return createImageGenerationChunk(functionId, "preview", {
+			result: {
+				partialImageB64: event.partial_image_b64,
+				sequence: Number.isSafeInteger(event.partial_image_index) ? event.partial_image_index : 0,
+			},
+		})
+	}
 	return createImageGenerationChunk(functionId, "in_progress")
 }
 

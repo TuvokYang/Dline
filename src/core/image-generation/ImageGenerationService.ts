@@ -3,6 +3,7 @@ import type { ImageArtifact } from "@core/artifacts/TaskArtifactStore"
 import type {
 	ImageGenerationBudget,
 	ImageGenerationExecutionContext,
+	ImageGenerationPreview,
 	ImageGenerationRequest,
 	ImageGenerationUsage,
 } from "./contracts"
@@ -30,6 +31,11 @@ interface ArtifactPersistenceBoundary {
 	resolveImage?: ArtifactResolver["resolveImage"]
 }
 
+interface ImagePreviewPersistenceBoundary {
+	persistPreview(requestId: string, sequence: number, base64: string): Promise<ImageGenerationPreview>
+	clearRequest(requestId: string): Promise<void>
+}
+
 interface ImageGenerationBudgetBoundary {
 	reserve(input: ImageGenerationBudgetReservationInput): Promise<void>
 	settle(requestId: string): Promise<void>
@@ -41,11 +47,12 @@ export interface ImageGenerationServiceOptions {
 	adapterRegistry: ImageGenerationAdapterRegistry
 	policy: ImageGenerationPolicy
 	artifactResolver: ArtifactPersistenceBoundary
+	previewStore?: ImagePreviewPersistenceBoundary
 	budgetLedger?: ImageGenerationBudgetBoundary
 	isFeatureEnabled?: () => boolean
 }
 
-const DEFAULT_IMAGE_GENERATION_TIMEOUT_MS = 120_000
+const DEFAULT_IMAGE_GENERATION_TIMEOUT_MS = 180_000
 const DEFAULT_MAX_CONCURRENT_IMAGE_REQUESTS = 1
 const MAX_IMAGE_GENERATION_TIMEOUT_MS = 30 * 60_000
 const MAX_CONCURRENT_IMAGE_REQUESTS = 8
@@ -97,9 +104,14 @@ function createExecutionSignal(parent: AbortSignal, timeoutMs: number): Executio
 }
 
 export class ImageGenerationService {
-	private readonly activeRequestsByProfile = new Map<string, number>()
+	constructor(
+		private readonly options: ImageGenerationServiceOptions,
+		private readonly activeRequestsByProfile = new Map<string, number>(),
+	) {}
 
-	constructor(private readonly options: ImageGenerationServiceOptions) {}
+	withProfileResolver(profileResolver: ImageGenerationServiceOptions["profileResolver"]): ImageGenerationService {
+		return new ImageGenerationService({ ...this.options, profileResolver }, this.activeRequestsByProfile)
+	}
 
 	hasAvailableProfile(): boolean {
 		return this.isFeatureEnabled() && this.options.profileResolver.hasAvailableProfile()
@@ -132,6 +144,7 @@ export class ImageGenerationService {
 		const execution = createExecutionSignal(context.signal, timeoutMs)
 		let budgetReserved = false
 		let providerCompleted = false
+		let resultCommitted = false
 
 		try {
 			const preflight = this.options.policy.validate({
@@ -154,7 +167,7 @@ export class ImageGenerationService {
 				budgetReserved = true
 			}
 
-			const adapter = this.options.adapterRegistry.create(request.providerId, {
+			const adapter = this.options.adapterRegistry.create(resolved.adapterId, {
 				profile: resolved.profile,
 				modelId: request.modelId,
 				...(this.options.artifactResolver.resolveImage
@@ -190,9 +203,34 @@ export class ImageGenerationService {
 					})
 				}
 				if (event.type === "preview") {
-					await Promise.resolve(context.onProgress?.({ type: "preview", requestId: event.requestId, timestampMs: event.timestampMs })).catch(
-						() => undefined,
-					)
+					if (!this.options.previewStore) {
+						await Promise.resolve(
+							context.onProgress?.({ type: "preview", requestId: event.requestId, timestampMs: event.timestampMs }),
+						).catch(() => undefined)
+						continue
+					}
+					for (const [index, output] of event.outputs.entries()) {
+						if (output.source.kind !== "base64") {
+							throw new ImageGenerationError({
+								code: "invalid_response",
+								message: "Image provider returned a partial preview without inline image data.",
+								retryable: false,
+							})
+						}
+						const preview = await this.options.previewStore.persistPreview(
+							event.requestId,
+							event.sequence + index,
+							output.source.data,
+						)
+						await Promise.resolve(
+							context.onProgress?.({
+								type: "preview",
+								requestId: event.requestId,
+								timestampMs: event.timestampMs,
+								preview,
+							}),
+						).catch(() => undefined)
+					}
 					continue
 				}
 				if (event.type === "failed") throw new ImageGenerationError(event.error)
@@ -204,12 +242,19 @@ export class ImageGenerationService {
 				providerCompleted = true
 				if (budgetReserved) await this.options.budgetLedger?.settle(request.requestId)
 
+				const parentArtifactIds = [...new Set(request.references.map((reference) => reference.artifactId))]
 				const artifacts = await this.options.artifactResolver.persistProviderOutputs(
 					event.outputs,
-					{ providerId: request.providerId, modelId: request.modelId, requestId: request.requestId },
+					{
+						providerId: request.providerId,
+						modelId: request.modelId,
+						requestId: request.requestId,
+						...(parentArtifactIds.length > 0 ? { parentArtifactIds } : {}),
+					},
 					execution.signal,
 				)
 				const totalOutputBytes = artifacts.reduce((total, artifact) => total + artifact.byteLength, 0)
+				resultCommitted = true
 				return {
 					requestId: request.requestId,
 					profileId: resolved.profile.id,
@@ -231,6 +276,9 @@ export class ImageGenerationService {
 				retryable: false,
 			})
 		} catch (error) {
+			if (!resultCommitted) {
+				await this.options.previewStore?.clearRequest(request.requestId).catch(() => undefined)
+			}
 			if (budgetReserved && !providerCompleted) {
 				await this.options.budgetLedger?.release(request.requestId).catch(() => undefined)
 			}
@@ -292,7 +340,6 @@ export class ImageGenerationService {
 		if (
 			request.profileId !== resolved.profile.id ||
 			request.providerId !== resolved.profile.provider ||
-			request.modelId !== resolved.profile.imageModelId ||
 			request.modelId !== resolved.model.id
 		) {
 			throw new ImageGenerationError({

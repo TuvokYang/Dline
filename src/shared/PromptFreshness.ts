@@ -17,12 +17,13 @@ export type PromptFreshnessChangeKind =
 
 /** Stable, content-safe projection persisted beside one frozen prompt. */
 export interface PromptFreshnessBaseline {
-	readonly schemaVersion: 2
+	readonly schemaVersion: 3
 	readonly providerId: string
 	readonly modelId: string
 	readonly promptProfile: "standard" | "lite"
 	readonly transport: "native" | "xml"
 	readonly parallelToolsEnabled: boolean
+	readonly imageGenerationAvailable: boolean
 	readonly browserEnabled: boolean
 	readonly browserViewport: string
 	readonly webToolsEnabled: boolean

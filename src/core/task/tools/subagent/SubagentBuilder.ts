@@ -30,6 +30,7 @@ export class SubagentBuilder {
 	private readonly agentConfig: AgentConfig = {}
 	private readonly allowedTools: ClineDefaultTool[]
 	private readonly apiHandler: ReturnType<typeof buildApiHandler>
+	private readonly profileId: string | undefined
 	private readonly profileName: string | undefined
 	private readonly reasoningConfig: ReturnType<typeof resolveProfileReasoningConfig>
 
@@ -41,14 +42,20 @@ export class SubagentBuilder {
 		this.agentConfig = agentConfig ?? {}
 		this.allowedTools = this.resolveAllowedTools(this.agentConfig.tools, !subagentName || isDefaultSubagentName(subagentName))
 
-		const apiConfiguration = this.baseConfig.services.stateManager.getApiConfiguration()
-		this.profileName = this.resolveProfile(this.agentConfig.profile, apiConfiguration.actModeProfile)
+		const apiConfiguration = this.baseConfig.services.stateManager.getApiConfigurationForTask(this.baseConfig.taskId)
+		const requiresExplicitImageProfile = this.agentConfig.tools?.includes(ClineDefaultTool.GENERATE_IMAGE) === true
+		this.profileName = this.resolveProfile(
+			this.agentConfig.profile,
+			apiConfiguration.actModeProfile,
+			requiresExplicitImageProfile,
+		)
 		const effectiveApiConfiguration = {
 			...apiConfiguration,
 			actModeProfile: this.profileName,
 			ulid: this.baseConfig.ulid,
 		}
 		const profile = readApiProfiles().find((candidate) => candidate.name === this.profileName)
+		this.profileId = profile?.id
 		const runtimeProfile = profile ? applyTaskRuntimeOverrides(profile, effectiveApiConfiguration, "act") : undefined
 		this.reasoningConfig = resolveProfileReasoningConfig(runtimeProfile)
 		this.apiHandler = buildApiHandler(effectiveApiConfiguration, "act")
@@ -68,6 +75,10 @@ export class SubagentBuilder {
 
 	getConfiguredMaxOutputTokens(): number | undefined {
 		return this.agentConfig.maxOutputTokens
+	}
+
+	getProfileId(): string | undefined {
+		return this.profileId
 	}
 
 	getProfileName(): string | undefined {
@@ -96,13 +107,23 @@ export class SubagentBuilder {
 	 * @param defaultProfile Act profile used when no valid subagent profile exists.
 	 * @returns Valid subagent profile name or the default act profile.
 	 */
-	private resolveProfile(configuredProfile: string | null | undefined, defaultProfile?: string): string | undefined {
+	private resolveProfile(
+		configuredProfile: string | null | undefined,
+		defaultProfile?: string,
+		requireExplicitProfile = false,
+	): string | undefined {
 		const profileName = configuredProfile?.trim()
 		if (!profileName) {
+			if (requireExplicitProfile) {
+				throw new Error("Subagents configured with generate_image require an explicit API Profile.")
+			}
 			return defaultProfile
 		}
 		const profile = readApiProfiles().find((candidate) => candidate.name === profileName)
 		if (!profile?.enabled || !profile.usedFor.includes("subagents")) {
+			if (requireExplicitProfile) {
+				throw new Error(`Subagent image Profile '${profileName}' is unavailable or not enabled for subagents.`)
+			}
 			return defaultProfile
 		}
 		return profile.name

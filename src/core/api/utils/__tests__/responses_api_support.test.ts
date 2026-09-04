@@ -102,14 +102,19 @@ describe("responses_api_support hosted tools", () => {
 		expect(chunks.some((chunk) => chunk.type === "tool_calls")).to.equal(false)
 	})
 
-	it("emits hosted image lifecycle while ignoring partial image bytes", async () => {
+	it("emits hosted image partials as ephemeral preview chunks", async () => {
 		const result = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
 		const chunks = await collectChunks([
 			{
 				type: "response.output_item.added",
 				item: { type: "image_generation_call", id: "ig_1", status: "in_progress" },
 			},
-			{ type: "response.image_generation_call.partial_image", item_id: "ig_1", partial_image_b64: "secret-preview" },
+			{
+				type: "response.image_generation_call.partial_image",
+				item_id: "ig_1",
+				partial_image_index: 1,
+				partial_image_b64: "secret-preview",
+			},
 			{
 				type: "response.output_item.done",
 				item: {
@@ -135,7 +140,8 @@ describe("responses_api_support hosted tools", () => {
 				function_id: "ig_1",
 				provider_metadata: { item_id: "ig_1" },
 				tool: ServerTool.IMAGE_GENERATION,
-				phase: "in_progress",
+				phase: "preview",
+				result: { partialImageB64: "secret-preview", sequence: 1 },
 			},
 			{
 				type: "server_tool",
@@ -146,7 +152,7 @@ describe("responses_api_support hosted tools", () => {
 				result: { b64Json: result, revisedPrompt: "A blue owl" },
 			},
 		])
-		expect(JSON.stringify(chunks)).not.to.contain("secret-preview")
+		expect(JSON.stringify(chunks.filter((chunk) => chunk.phase !== "preview"))).not.to.contain("secret-preview")
 	})
 
 	it("classifies official Responses cache write tokens separately from uncached input", async () => {

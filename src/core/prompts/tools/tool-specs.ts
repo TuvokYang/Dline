@@ -333,6 +333,7 @@ export const STANDARD_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = 
 			param("quality", false, getPrompt("generateImage", "qualityInstruction")),
 			param("background", false, getPrompt("generateImage", "backgroundInstruction")),
 			param("output_format", false, getPrompt("generateImage", "outputFormatInstruction")),
+			param("output_compression", false, getPrompt("generateImage", "outputCompressionInstruction"), "integer"),
 			param("reference_artifact_ids", false, getPrompt("generateImage", "referenceArtifactIdsInstruction")),
 			param("mask_artifact_id", false, getPrompt("generateImage", "maskArtifactIdInstruction")),
 			taskProgress,

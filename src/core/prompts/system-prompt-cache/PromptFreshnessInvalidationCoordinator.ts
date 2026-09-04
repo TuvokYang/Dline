@@ -6,6 +6,7 @@ export type PromptFreshnessInvalidationSource =
 	| "capability_mutation"
 	| "remote_config"
 	| "mcp_registry"
+	| "profile_catalog"
 	| "settings"
 
 export interface PromptFreshnessInvalidationCoordinatorDeps {

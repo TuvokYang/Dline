@@ -192,8 +192,13 @@ function readProfilesFromJson(data: unknown): Omit<ParsedApiProfiles, "recovered
 	return { profiles, migrated }
 }
 
-function clearHostedImageBindings(profile: ApiProfile): boolean {
-	if (profile.imageSource !== ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED) return false
+function clearImageBindings(profile: ApiProfile): boolean {
+	if (
+		profile.imageSource !== ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED &&
+		profile.imageSource !== ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED
+	) {
+		return false
+	}
 	if (profile.imageProfileId === undefined && profile.imageModelId === undefined) return false
 	profile.imageProfileId = undefined
 	profile.imageModelId = undefined
@@ -203,8 +208,10 @@ function clearHostedImageBindings(profile: ApiProfile): boolean {
 function normalizeApiProfileWithMigration(profile: unknown): { profile: ApiProfile; migrated: boolean } {
 	const normalized = ApiProfile.fromJSON(profile ?? {})
 	let migrated = false
+	let hasExplicitImageSource = false
 	if (profile && typeof profile === "object") {
 		const rawProfile = profile as Record<string, unknown>
+		hasExplicitImageSource = Object.hasOwn(rawProfile, "imageSource") || Object.hasOwn(rawProfile, "image_source")
 		if (!Object.hasOwn(rawProfile, "enabled")) {
 			normalized.enabled = true
 			migrated = true
@@ -276,14 +283,13 @@ function normalizeApiProfileWithMigration(profile: unknown): { profile: ApiProfi
 		normalized.usedFor = normalizedUses
 		migrated = true
 	}
-	if (
-		normalized.imageSource === undefined ||
-		normalized.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED
-	) {
-		normalized.imageSource = ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT
+	if (!hasExplicitImageSource) {
+		normalized.imageSource = normalized.imageModelId
+			? ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT
+			: ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED
 		migrated = true
 	}
-	if (clearHostedImageBindings(normalized)) migrated = true
+	if (clearImageBindings(normalized)) migrated = true
 	const openai = normalized.openai
 	if (openai && openai.apiFormat === undefined) {
 		const legacyApiFormat = openAiEndpointToApiFormat(openai.apiEndpoint)
@@ -361,7 +367,7 @@ export function applyRegistryModelDefaults(profiles: ApiProfile[]): boolean {
 	let changed = false
 	const usedNames = new Set(profiles.map((profile) => profile.name).filter(Boolean))
 	for (const profile of profiles) {
-		if (clearHostedImageBindings(profile)) changed = true
+		if (clearImageBindings(profile)) changed = true
 		if (!profile.provider) continue
 		const providerModels = registry.getProviderModels(profile.provider)
 

@@ -52,6 +52,19 @@ export class ImageGenerationPolicy {
 			}
 		}
 
+		if (
+			request.outputCompression !== undefined &&
+			(!Number.isSafeInteger(request.outputCompression) || request.outputCompression < 0 || request.outputCompression > 100)
+		) {
+			this.reject("invalid_request", "Image output compression must be an integer between 0 and 100.")
+		}
+		if (request.outputCompression !== undefined && request.outputFormat !== "jpeg" && request.outputFormat !== "webp") {
+			this.reject("invalid_request", "Image output compression is only supported for JPEG and WebP.")
+		}
+		if (request.background === "transparent" && request.outputFormat === "jpeg") {
+			this.reject("invalid_request", "Transparent image output requires PNG or WebP format.")
+		}
+
 		if (request.references.length > this.limits.maxReferenceImages) {
 			this.reject("reference_limit_exceeded", "Too many image references were provided.")
 		}

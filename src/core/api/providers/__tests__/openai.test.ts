@@ -971,7 +971,7 @@ describe("OpenAiHandler", () => {
 			expect(handler.supportsServerTool(ServerTool.WEB_SEARCH)).to.equal(true)
 		})
 
-		it("projects hosted image generation and removes the local generate_image declaration", async () => {
+		it("keeps generate_image local and does not project Hosted image options into the main Responses request", async () => {
 			const handler = new OpenAiHandler({
 				profile: ApiProfile.create({
 					provider: "openai",
@@ -997,12 +997,36 @@ describe("OpenAiHandler", () => {
 						function: { name: "generate_image", description: "Local image", parameters: { type: "object" } },
 					},
 				],
-				{ serverTools: [ServerTool.IMAGE_GENERATION] },
+				{
+					serverTools: [ServerTool.IMAGE_GENERATION],
+					imageGeneration: {
+						partialImages: 2,
+						size: { width: 2048, height: 1152 },
+						references: [
+							{
+								artifactId: `image:sha256:${"a".repeat(64)}`,
+								mimeType: "image/png",
+								base64: "reference-image-base64",
+							},
+						],
+					},
+				},
 			)) {
 			}
 
-			expect(responsesCreate.mock.calls[0]?.[0]?.tools).to.deep.equal([{ type: "image_generation" }])
-			expect(handler.supportsServerTool(ServerTool.IMAGE_GENERATION)).to.equal(true)
+			const request = responsesCreate.mock.calls[0]?.[0]
+			expect(request?.store).to.equal(false)
+			expect(request?.tools).to.deep.equal([
+				{
+					type: "function",
+					name: "generate_image",
+					description: "Local image",
+					parameters: { type: "object" },
+					strict: true,
+				},
+			])
+			expect(JSON.stringify(request?.input)).not.to.contain("reference-image-base64")
+			expect(handler.supportsServerTool(ServerTool.IMAGE_GENERATION)).to.equal(false)
 			expect(handler.getImageGenerationSource()).to.equal(ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED)
 		})
 

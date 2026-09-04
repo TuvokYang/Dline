@@ -29,6 +29,7 @@ interface HostedServerToolState {
 const PHASE_RANK: Readonly<Record<ApiStreamServerToolChunk["phase"], number>> = {
 	started: 0,
 	in_progress: 1,
+	preview: 1,
 	searching: 1,
 	completed: 2,
 	failed: 2,

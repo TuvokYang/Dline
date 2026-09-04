@@ -62,6 +62,7 @@ describe("getAvailableModels handler", () => {
 	it("projects the image model catalog without mixing it into chat models", async () => {
 		const mockRegistry = {
 			isInitialized: true,
+			waitForDeferredProviders: vi.fn().mockResolvedValue(undefined),
 			getAllModels: vi.fn().mockReturnValue([
 				{
 					provider: "openai",

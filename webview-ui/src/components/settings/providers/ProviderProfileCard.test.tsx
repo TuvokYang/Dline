@@ -27,8 +27,19 @@ const providerCatalog = vi.hoisted(() => ({
 	openai: {
 		defaultModelId: "model-a",
 		defaultImageModelId: "gpt-image-2",
-		models: { "model-a": { id: "model-a", name: "Model A" } },
-		imageModels: { "gpt-image-2": { id: "gpt-image-2", name: "GPT Image 2" } },
+		models: {
+			"model-a": {
+				id: "model-a",
+				name: "Model A",
+				apiFormats: [4],
+				capabilities: { tools: [2] },
+			},
+		},
+		imageModels: {
+			"gpt-image-1": { id: "gpt-image-1", name: "GPT Image 1" },
+			"gpt-image-2": { id: "gpt-image-2", name: "GPT Image 2" },
+			"gpt-image-2-sub": { id: "gpt-image-2-sub", name: "GPT Image 2 (Subscription)" },
+		},
 	},
 }))
 
@@ -298,10 +309,75 @@ describe("ProviderProfileCard", () => {
 			/>,
 		)
 		expect(screen.getByRole("combobox", { name: "Image source" })).toHaveValue(
-			String(ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT),
+			String(ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED),
 		)
-		expect(screen.getByRole("combobox", { name: "Image model" })).toHaveValue("gpt-image-2")
+		expect(screen.getByRole("option", { name: "None" })).toBeInTheDocument()
+		expect(screen.queryByRole("combobox", { name: "Image model" })).not.toBeInTheDocument()
 		expect(screen.queryByRole("checkbox", { name: "Image" })).not.toBeInTheDocument()
+	})
+
+	it("shows Current image models from provider metadata and persists the selected model", () => {
+		const onUpdate = vi.fn()
+		const profile = ApiProfile.create({
+			...buildProfile(),
+			modelId: "custom-responses-model",
+			modelInfo: { id: "custom-responses-model", apiFormats: [ApiFormat.OPENAI_RESPONSES] },
+			imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT,
+			openai: OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_RESPONSES }),
+		})
+
+		render(
+			<ProviderProfileCard
+				currentMode="act"
+				editMode={false}
+				imageGenerationEnabled={true}
+				isExpanded={true}
+				onDelete={vi.fn()}
+				onToggleExpand={vi.fn()}
+				onUpdate={onUpdate}
+				profile={profile}
+				providerOptions={providerOptions}
+			/>,
+		)
+
+		const imageModel = screen.getByRole("combobox", { name: "Image model" })
+		expect(imageModel).toHaveValue("gpt-image-2")
+		expect(screen.getByRole("option", { name: "GPT Image 1" })).toBeInTheDocument()
+		expect(screen.getByRole("option", { name: "GPT Image 2" })).toBeInTheDocument()
+		expect(screen.getByRole("option", { name: "GPT Image 2 (Subscription)" })).toBeInTheDocument()
+
+		fireEvent.change(imageModel, { target: { value: "gpt-image-1" } })
+		expect(onUpdate).toHaveBeenCalledWith({ imageModelId: "gpt-image-1" })
+	})
+
+	it("hides the subscription alias from an Independent OpenAI Images connection", () => {
+		const profile = ApiProfile.create({
+			...buildProfile(),
+			imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT,
+			imageProfileId: "independent-openai",
+			imageModelId: "gpt-image-2",
+		})
+		const imageProfiles: ImageGenerationProfile[] = [
+			{ id: "independent-openai", name: "Independent OpenAI", provider: "openai", enabled: true, legacyNames: [] },
+		]
+
+		render(
+			<ProviderProfileCard
+				currentMode="act"
+				editMode={false}
+				imageGenerationEnabled={true}
+				imageProfiles={imageProfiles}
+				isExpanded={true}
+				onDelete={vi.fn()}
+				onToggleExpand={vi.fn()}
+				onUpdate={vi.fn()}
+				profile={profile}
+				providerOptions={providerOptions}
+			/>,
+		)
+
+		expect(screen.getByRole("option", { name: "GPT Image 2" })).toBeInTheDocument()
+		expect(screen.queryByRole("option", { name: "GPT Image 2 (Subscription)" })).not.toBeInTheDocument()
 	})
 
 	it("shows Independent source controls and uses the selected Image Profile provider catalog", () => {
@@ -375,6 +451,7 @@ describe("ProviderProfileCard", () => {
 
 		const source = screen.getByRole("combobox", { name: "Image source" })
 		expect(source).toHaveValue(String(ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED))
+		expect(screen.getByRole("option", { name: "None" })).toBeInTheDocument()
 		expect(screen.getByRole("option", { name: "Current" })).toBeInTheDocument()
 		expect(screen.queryByRole("option", { name: "Independent" })).not.toBeInTheDocument()
 		expect(screen.getByRole("option", { name: "Hosted" })).toBeEnabled()
@@ -422,6 +499,39 @@ describe("ProviderProfileCard", () => {
 		})
 	})
 
+	it("selects None and clears all image bindings", () => {
+		const onUpdate = vi.fn()
+		const profile = ApiProfile.create({
+			...buildProfile(),
+			imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT,
+			imageProfileId: "independent-gemini",
+			imageModelId: "gemini-3.1-flash-image",
+		})
+		render(
+			<ProviderProfileCard
+				currentMode="act"
+				editMode={false}
+				imageGenerationEnabled={true}
+				isExpanded={true}
+				onDelete={vi.fn()}
+				onToggleExpand={vi.fn()}
+				onUpdate={onUpdate}
+				profile={profile}
+				providerOptions={providerOptions}
+			/>,
+		)
+
+		fireEvent.change(screen.getByRole("combobox", { name: "Image source" }), {
+			target: { value: String(ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED) },
+		})
+
+		expect(onUpdate).toHaveBeenCalledWith({
+			imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED,
+			imageProfileId: undefined,
+			imageModelId: undefined,
+		})
+	})
+
 	it("hides image configuration when the global feature is disabled without mutating saved fields", () => {
 		const onUpdate = vi.fn()
 		const profile = {
@@ -448,11 +558,15 @@ describe("ProviderProfileCard", () => {
 		expect(profile).toHaveProperty("imageModelId", "gpt-image-2")
 	})
 
-	it("re-resolves both chat and image defaults when the provider changes", () => {
+	it.each([
+		ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT,
+		ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED,
+	])("clears an OpenAI-only image source when the provider changes", (imageSource) => {
 		const onUpdate = vi.fn()
 		const profile = {
 			...buildProfile(),
-			imageModelId: "gpt-image-2",
+			imageSource,
+			imageModelId: imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT ? "gpt-image-2" : undefined,
 			usedFor: ["act"],
 		} as ApiProfile
 		render(
@@ -475,7 +589,9 @@ describe("ProviderProfileCard", () => {
 			expect.objectContaining({
 				provider: "gemini",
 				modelId: "gemini-chat",
-				imageModelId: "gemini-3.1-flash-image",
+				imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED,
+				imageProfileId: undefined,
+				imageModelId: undefined,
 			}),
 		)
 	})
@@ -496,6 +612,10 @@ describe("ProviderProfileCard", () => {
 			/>,
 		)
 
+		expect(screen.getByRole("option", { name: "None" })).toBeInTheDocument()
+		expect(screen.getByRole("combobox", { name: "Image source" })).toHaveValue(
+			String(ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED),
+		)
 		expect(screen.queryByRole("option", { name: "Current" })).not.toBeInTheDocument()
 		expect(screen.queryByRole("option", { name: "Independent" })).not.toBeInTheDocument()
 		expect(screen.queryByRole("option", { name: "Hosted" })).not.toBeInTheDocument()

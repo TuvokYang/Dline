@@ -1,3 +1,4 @@
+import { GPT_IMAGE_2_SUBSCRIPTION_MODEL_ID } from "@shared/image-generation"
 import { ApiFormat, type ThinkingConfig } from "@shared/proto/dline/models/metadata"
 import {
 	ImageGenerationSource,
@@ -79,29 +80,40 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 		profile.name || (hasProvider && profile.modelId ? `${profile.provider}:${profile.modelId}` : "Unnamed profile")
 	const currentCatalog = useProviderModels(profile.provider || "")
 	const source =
+		profile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT ||
+		profile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT ||
 		profile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED
-			? ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED
-			: profile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT
-				? ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT
-				: ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT
+			? profile.imageSource
+			: ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED
 	const selectedImageProfile = imageProfiles.find((candidate) => candidate.id === profile.imageProfileId && candidate.enabled)
 	const imageProvider =
 		source === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT
 			? selectedImageProfile?.provider || ""
 			: profile.provider || ""
 	const selectedCatalog = useProviderModels(imageProvider)
-	const supportsCurrent = Object.keys(currentCatalog.imageModels).length > 0 && Boolean(currentCatalog.defaultImageModelId)
 	const hasIndependent = imageProfiles.some((candidate) => candidate.enabled)
-	const imageModels = selectedCatalog.imageModels
+	const imageModels =
+		source === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT && imageProvider === "openai"
+			? Object.fromEntries(
+					Object.entries(selectedCatalog.imageModels).filter(([modelId]) => modelId !== GPT_IMAGE_2_SUBSCRIPTION_MODEL_ID),
+				)
+			: selectedCatalog.imageModels
 	const defaultImageModelId = selectedCatalog.defaultImageModelId
+	const effectiveImageModelId =
+		profile.imageModelId && imageModels[profile.imageModelId] ? profile.imageModelId : defaultImageModelId
 	const models = currentCatalog.models
 	const catalogModelInfo = models[profile.modelId]
 	const selectedModelInfo = profile.modelInfo || catalogModelInfo
 	const selectedApiFormat = profile.openai?.apiFormat ?? profile.modelInfo?.apiFormats?.[0] ?? catalogModelInfo?.apiFormats?.[0]
-	const supportsHosted =
+	const supportsResponses =
+		selectedApiFormat === ApiFormat.OPENAI_RESPONSES ||
+		selectedApiFormat === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE
+	const supportsCurrent =
 		profile.provider === "openai" &&
-		(selectedApiFormat === ApiFormat.OPENAI_RESPONSES ||
-			selectedApiFormat === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE)
+		supportsResponses &&
+		Object.keys(currentCatalog.imageModels).length > 0 &&
+		Boolean(currentCatalog.defaultImageModelId)
+	const supportsHosted = profile.provider === "openai" && supportsResponses
 
 	const toggleUse = (mode: "act" | "plan" | "subagents"): void => {
 		onUpdate({
@@ -194,17 +206,29 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 							id={`profile-provider-${profile.id}`}
 							onChange={(e) => {
 								const provider = e.target.value
-								const imageModelId =
+								const keepsIndependentSource =
 									profile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT
+								const keepsOpenAISource =
+									provider === "openai" &&
+									(profile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT ||
+										profile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED)
+								const imageSource =
+									keepsIndependentSource || keepsOpenAISource
+										? profile.imageSource
+										: ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED
+								const imageModelId =
+									imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT
 										? profile.imageModelId
-										: profile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED
-											? undefined
-											: getCachedProviderDefaultImageModelId(provider)
+										: imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT
+											? getCachedProviderDefaultImageModelId(provider)
+											: undefined
 								const updates = {
 									provider,
 									apiKey: "",
 									baseUrl: undefined,
 									modelId: getCachedProviderDefaultModelId(provider),
+									imageSource,
+									imageProfileId: keepsIndependentSource ? profile.imageProfileId : undefined,
 									imageModelId: imageModelId || undefined,
 									usedFor: profile.usedFor,
 									modelInfo: undefined,
@@ -260,17 +284,25 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 									onChange={(event) => {
 										const nextSource = Number(event.target.value) as ImageGenerationSource
 										const independent = imageProfiles.find((candidate) => candidate.enabled)
-										const provider = nextSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT ? profile.provider : independent?.provider
+										const provider =
+											nextSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT
+												? profile.provider
+												: nextSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT
+													? independent?.provider
+													: undefined
 										onUpdate({
 											imageSource: nextSource,
-											imageProfileId: nextSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT ? independent?.id : undefined,
+											imageProfileId:
+												nextSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT ? independent?.id : undefined,
 											imageModelId:
-												nextSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED
-													? undefined
-													: getCachedProviderDefaultImageModelId(provider || "") || undefined,
+												nextSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT ||
+												nextSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT
+													? getCachedProviderDefaultImageModelId(provider || "") || undefined
+													: undefined,
 										})
 									}}
 									value={source}>
+									<option value={ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED}>None</option>
 									{supportsCurrent ? <option value={ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT}>Current</option> : null}
 									{hasIndependent ? <option value={ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT}>Independent</option> : null}
 									{supportsHosted ? <option value={ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED}>Hosted</option> : null}
@@ -295,17 +327,22 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 								<p className="m-0 text-xs text-description">
 									Uses OpenAI Responses hosted image generation and separate API Platform billing. ChatGPT/GPT subscriptions are not used.
 								</p>
-							) : (
+							) : source === ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT ||
+							  source === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT ? (
 								<ProfileField label="Image model">
 									<select
 										aria-label="Image model"
 										className="min-h-7 w-full rounded-xs border border-input-border bg-input-background px-2 text-sm"
 										onChange={(event) => onUpdate({ imageModelId: event.target.value })}
-										value={profile.imageModelId || defaultImageModelId || ""}>
-										{Object.keys(imageModels).map((modelId) => <option key={modelId} value={modelId}>{modelId}</option>)}
+										value={effectiveImageModelId || ""}>
+										{Object.entries(imageModels).map(([modelId, model]) => (
+											<option key={modelId} value={modelId}>
+												{model.name || modelId}
+											</option>
+										))}
 									</select>
 								</ProfileField>
-							)}
+							) : null}
 						</ProfileSection>
 					) : null}
 

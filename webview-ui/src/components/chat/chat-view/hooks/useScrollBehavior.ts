@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useEvent } from "react-use"
 import { ListRange, VirtuosoHandle } from "react-virtuoso"
 import { ScrollBehavior } from "../types/chatTypes"
+import { resolveMessageRowExpanded, toggleMessageRowExpansion } from "../utils/messageUtils"
 
 // Height of the sticky user message header (padding + content)
 const STICKY_HEADER_HEIGHT = 32
@@ -283,7 +284,9 @@ export function useScrollBehavior(
 	// scroll when user toggles certain rows
 	const toggleRowExpansion = useCallback(
 		(ts: number) => {
-			const isCollapsing = expandedRows[ts] ?? false
+			const row = groupedMessages.find((candidate) => !Array.isArray(candidate) && candidate.ts === ts)
+			const message = Array.isArray(row) ? undefined : row
+			const isCollapsing = resolveMessageRowExpanded(message, expandedRows)
 			const lastGroup = groupedMessages.at(-1)
 			const isLast = Array.isArray(lastGroup) ? lastGroup[0].ts === ts : lastGroup?.ts === ts
 			const secondToLastGroup = groupedMessages.at(-2)
@@ -297,10 +300,7 @@ export function useScrollBehavior(
 				lastGroup?.say === "api_req_started" &&
 				!expandedRows[lastGroup.ts]
 
-			setExpandedRows((prev) => ({
-				...prev,
-				[ts]: !prev[ts],
-			}))
+			setExpandedRows((prev) => toggleMessageRowExpansion(message, prev))
 
 			// disable auto scroll when user expands row
 			if (!isCollapsing) {

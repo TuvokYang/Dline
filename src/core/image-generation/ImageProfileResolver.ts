@@ -1,15 +1,22 @@
 import { resolveProfileReference } from "@core/profiles/profile-binding"
+import { GPT_IMAGE_2_SUBSCRIPTION_MODEL_ID } from "@shared/image-generation"
 import type { ImageModelInfo } from "@shared/proto/dline/models"
+import { ApiFormat } from "@shared/proto/dline/models/metadata"
 import {
 	ApiProfile,
 	ImageGenerationSource,
 	type ImageGenerationProfile,
 } from "@shared/proto/dline/profile"
+import { openAiEndpointToApiFormat, resolveApiFormat } from "@shared/providers/api-format"
 import { ImageGenerationError } from "./contracts"
+
+export const OPENAI_HOSTED_IMAGE_ADAPTER_ID = "openai:hosted"
 
 export interface ResolvedImageProfile {
 	profile: ApiProfile
 	model: ImageModelInfo
+	source: ImageGenerationSource
+	adapterId: string
 }
 
 export interface ImageProfileResolverOptions {
@@ -21,6 +28,7 @@ export interface ImageProfileResolverOptions {
 	getCurrentProfileId: () => string | undefined
 	getCurrentProfileName: () => string | undefined
 	getImageModel: (providerId: string, modelId: string) => ImageModelInfo | undefined
+	getDefaultImageModelId: (providerId: string) => string | undefined
 }
 
 function unavailable(message: string): never {
@@ -49,17 +57,50 @@ export class ImageProfileResolver {
 		if (!apiProfile.enabled) {
 			return unavailable("The current API Profile is disabled.")
 		}
-		if (apiProfile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED) {
-			return unavailable("Hosted image generation is executed by the current Provider request.")
+		if (
+			apiProfile.imageSource === undefined ||
+			apiProfile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED ||
+			apiProfile.imageSource === ImageGenerationSource.UNRECOGNIZED
+		) {
+			return unavailable("Image generation is disabled for the current API Profile.")
+		}
+		const source = apiProfile.imageSource
+		if (
+			source === ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT ||
+			source === ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED
+		) {
+			if (apiProfile.provider !== "openai") {
+				return unavailable("Current image generation requires an OpenAI API Profile.")
+			}
+			const selectedApiFormat = apiProfile.openai?.apiFormat ?? openAiEndpointToApiFormat(apiProfile.openai?.apiEndpoint)
+			const apiFormat = resolveApiFormat(selectedApiFormat, apiProfile.modelInfo, ApiFormat.OPENAI_CHAT)
+			if (apiFormat !== ApiFormat.OPENAI_RESPONSES && apiFormat !== ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE) {
+				return unavailable("Current image generation requires the OpenAI Responses transport.")
+			}
+			if (!apiProfile.modelId) {
+				return unavailable("Current image generation requires a configured conversation model.")
+			}
+			const imageModelId = apiProfile.imageModelId || this.options.getDefaultImageModelId(apiProfile.provider)
+			if (!imageModelId) return unavailable("The current API Profile has no available image model.")
+			const model = this.options.getImageModel(apiProfile.provider, imageModelId)
+			const capabilities = model?.capabilities
+			if (!model || (capabilities?.supportsGeneration !== true && capabilities?.supportsEditing !== true)) {
+				return unavailable("The selected image model is unavailable for the current API Profile.")
+			}
+			if (selector && ![apiProfile.id, apiProfile.name, ...(apiProfile.legacyNames ?? [])].includes(selector)) {
+				return unavailable("The requested Image Profile does not match the current API Profile binding.")
+			}
+			return { profile: apiProfile, model, source, adapterId: OPENAI_HOSTED_IMAGE_ADAPTER_ID }
+		}
+		if (source !== ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT) {
+			return unavailable("The configured image source is unsupported.")
 		}
 		if (!apiProfile.imageModelId) {
 			return unavailable("Image generation is not enabled for the current API Profile.")
 		}
-
-		const source =
-			apiProfile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT
-				? ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT
-				: ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT
+		if (apiProfile.imageModelId === GPT_IMAGE_2_SUBSCRIPTION_MODEL_ID) {
+			return unavailable("GPT Image 2 Subscription is only available with the Current image source.")
+		}
 		let profile = apiProfile
 		if (source === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT) {
 			const imageProfile = (this.options.readImageProfiles?.() ?? [])
@@ -86,6 +127,6 @@ export class ImageProfileResolver {
 		if (!model || (capabilities?.supportsGeneration !== true && capabilities?.supportsEditing !== true)) {
 			return unavailable("The selected image model is unavailable for the configured image source.")
 		}
-		return { profile, model }
+		return { profile, model, source, adapterId: profile.provider }
 	}
 }

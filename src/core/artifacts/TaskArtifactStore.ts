@@ -48,6 +48,7 @@ export interface ImageArtifactProvenance {
 	providerOutputId?: string
 	revisedPrompt?: string
 	sourceKind?: "bytes" | "base64" | "url"
+	parentArtifactIds?: string[]
 }
 
 export interface ImageArtifact {
@@ -185,8 +186,21 @@ function validateLimits(limits: TaskArtifactStoreLimits): void {
 function validateProvenance(value: unknown): ImageArtifactProvenance | undefined {
 	if (value === undefined) return undefined
 	if (!isRecord(value)) throw new ArtifactStoreError("invalid_manifest", "Image artifact provenance is invalid.")
-	const allowedKeys = ["providerId", "modelId", "requestId", "providerOutputId", "revisedPrompt", "sourceKind"] as const
-	for (const key of allowedKeys) {
+	const allowedKeys = new Set([
+		"providerId",
+		"modelId",
+		"requestId",
+		"providerOutputId",
+		"revisedPrompt",
+		"sourceKind",
+		"parentArtifactIds",
+	])
+	for (const key of Object.keys(value)) {
+		if (!allowedKeys.has(key)) {
+			throw new ArtifactStoreError("invalid_manifest", `Image artifact provenance field ${key} is not supported.`)
+		}
+	}
+	for (const key of ["providerId", "modelId", "requestId", "providerOutputId", "revisedPrompt", "sourceKind"] as const) {
 		if (value[key] !== undefined && typeof value[key] !== "string") {
 			throw new ArtifactStoreError("invalid_manifest", `Image artifact provenance field ${key} is invalid.`)
 		}
@@ -199,7 +213,33 @@ function validateProvenance(value: unknown): ImageArtifactProvenance | undefined
 	) {
 		throw new ArtifactStoreError("invalid_manifest", "Image artifact provenance source kind is invalid.")
 	}
-	return value as ImageArtifactProvenance
+	let parentArtifactIds: string[] | undefined
+	if (value.parentArtifactIds !== undefined) {
+		if (!Array.isArray(value.parentArtifactIds)) {
+			throw new ArtifactStoreError("invalid_manifest", "Image artifact parent IDs must be an array.")
+		}
+		parentArtifactIds = []
+		const seen = new Set<string>()
+		for (const artifactId of value.parentArtifactIds) {
+			if (typeof artifactId !== "string") {
+				throw new ArtifactStoreError("invalid_manifest", "Image artifact parent ID is invalid.")
+			}
+			try {
+				parseArtifactId(artifactId)
+			} catch {
+				throw new ArtifactStoreError("invalid_manifest", "Image artifact parent ID is invalid.")
+			}
+			if (seen.has(artifactId)) {
+				throw new ArtifactStoreError("invalid_manifest", "Image artifact parent IDs contain duplicates.")
+			}
+			seen.add(artifactId)
+			parentArtifactIds.push(artifactId)
+		}
+	}
+	return {
+		...(value as ImageArtifactProvenance),
+		...(parentArtifactIds ? { parentArtifactIds } : {}),
+	}
 }
 
 function validateManifestArtifact(value: unknown): ImageArtifact {
@@ -273,10 +313,17 @@ async function atomicWrite(filePath: string, bytes: Uint8Array): Promise<void> {
 	}
 }
 
+function cloneProvenance(provenance: ImageArtifactProvenance): ImageArtifactProvenance {
+	return {
+		...provenance,
+		...(provenance.parentArtifactIds ? { parentArtifactIds: [...provenance.parentArtifactIds] } : {}),
+	}
+}
+
 function cloneArtifact(artifact: ImageArtifact): ImageArtifact {
 	const clone: ImageArtifact = { ...artifact }
 	if (artifact.provenance) {
-		clone.provenance = { ...artifact.provenance }
+		clone.provenance = cloneProvenance(artifact.provenance)
 	} else {
 		delete clone.provenance
 	}
@@ -319,13 +366,16 @@ export class TaskArtifactStore {
 		if (inputs.length === 0) return []
 		return this.runExclusive(async () => {
 			this.throwIfAborted(signal)
-			const validatedInputs = inputs.map((input) => ({ input, validated: this.validateImage(input) }))
+			const validatedInputs = inputs.map((input) => ({
+				provenance: validateProvenance(input.provenance),
+				validated: this.validateImage(input),
+			}))
 			await this.ensureManagedDirectories()
 			const manifest = await this.loadManifest()
 			const artifactsByHash = new Map(manifest.artifacts.map((artifact) => [artifact.sha256, artifact]))
 			const pendingByHash = new Map<string, { artifact: ImageArtifact; bytes: Uint8Array }>()
 
-			for (const { input, validated } of validatedInputs) {
+			for (const { provenance, validated } of validatedInputs) {
 				const existing = artifactsByHash.get(validated.sha256)
 				if (existing) {
 					await this.readAndVerifyArtifact(existing)
@@ -344,7 +394,7 @@ export class TaskArtifactStore {
 					height: validated.height,
 					relativePath: expectedRelativePath(validated.sha256, validated.format),
 					createdAtMs: this.now(),
-					provenance: input.provenance ? { ...input.provenance } : undefined,
+					provenance: provenance ? cloneProvenance(provenance) : undefined,
 				}
 				pendingByHash.set(validated.sha256, { artifact, bytes: validated.bytes })
 				artifactsByHash.set(validated.sha256, artifact)

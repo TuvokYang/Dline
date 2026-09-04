@@ -178,6 +178,8 @@ export type OpenAiMockResponse =
 			type: "hosted-image-generation"
 			id?: string
 			b64Json: string
+			partialImages?: readonly string[]
+			afterPartialImageDelayMs?: number
 			revisedPrompt?: string
 			followupTools?: readonly MockToolCall[]
 	  } & MockResponseOptions)
@@ -1588,10 +1590,30 @@ export class ClineApiServerMock {
 							for (const type of [
 								"response.image_generation_call.in_progress",
 								"response.image_generation_call.generating",
-								"response.image_generation_call.completed",
 							]) {
 								writeSse({ type, item_id: hostedImageOutputItem.id, output_index: outputIndex }, type)
 							}
+							if (scriptedResponse.type === "hosted-image-generation") {
+								for (const [partialImageIndex, partialImageB64] of (scriptedResponse.partialImages ?? []).entries()) {
+									const type = "response.image_generation_call.partial_image"
+									writeSse(
+										{
+											type,
+											item_id: hostedImageOutputItem.id,
+											output_index: outputIndex,
+											partial_image_b64: partialImageB64,
+											partial_image_index: partialImageIndex,
+										},
+										type,
+									)
+									if (!(await waitForOpenConnection(scriptedResponse.afterPartialImageDelayMs))) return
+								}
+							}
+							const completedType = "response.image_generation_call.completed"
+							writeSse(
+								{ type: completedType, item_id: hostedImageOutputItem.id, output_index: outputIndex },
+								completedType,
+							)
 							writeSse(
 								{ type: "response.output_item.done", output_index: outputIndex, item: hostedImageOutputItem },
 								"response.output_item.done",

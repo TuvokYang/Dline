@@ -3,9 +3,11 @@ import type {
 	ImageBackground,
 	ImageGenerationRequest,
 	ImageOutputFormat,
+	ImageQuality,
 	ImageReferenceInput,
 } from "@core/image-generation/contracts"
 import { ImageGenerationError } from "@core/image-generation/contracts"
+import { DEFAULT_IMAGE_GENERATION_SIZE } from "@core/image-generation/ImageGenerationSizes"
 import { formatResponse } from "@core/prompts/responses"
 import type { ClineAsk, ClineSayTool } from "@shared/ExtensionMessage"
 import {
@@ -21,6 +23,7 @@ import { ToolResultUtils } from "../utils/ToolResultUtils"
 
 const BACKGROUNDS = new Set<ImageBackground>(["auto", "opaque", "transparent"])
 const OUTPUT_FORMATS = new Set<ImageOutputFormat>(["png", "jpeg", "webp"])
+const QUALITIES = new Set<ImageQuality>(["auto", "low", "medium", "high"])
 
 function parsePositiveInteger(value: string | undefined, name: string, fallback?: number): number | undefined {
 	if (value === undefined || value.trim() === "") return fallback
@@ -29,6 +32,19 @@ function parsePositiveInteger(value: string | undefined, name: string, fallback?
 		throw new ImageGenerationError({
 			code: "invalid_request",
 			message: `Image generation parameter ${name} must be a positive integer.`,
+			retryable: false,
+		})
+	}
+	return parsed
+}
+
+function parseCompression(value: string | undefined): number | undefined {
+	if (value === undefined || value.trim() === "") return undefined
+	const parsed = Number(value)
+	if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 100) {
+		throw new ImageGenerationError({
+			code: "invalid_request",
+			message: "Image output compression must be an integer between 0 and 100.",
 			retryable: false,
 		})
 	}
@@ -107,6 +123,7 @@ export class GenerateImageToolHandler implements IFullyManagedTool {
 
 	async execute(config: TaskConfig, block: ToolUse): Promise<ToolResponse> {
 		let activePresentation: ImageGenerationPresentationV1 | undefined
+		const previewsBySequence = new Map<number, NonNullable<ImageGenerationPresentationV1["previews"]>[number]>()
 		try {
 			const prompt = block.params.prompt?.trim()
 			if (!prompt) {
@@ -125,6 +142,23 @@ export class GenerateImageToolHandler implements IFullyManagedTool {
 					retryable: false,
 				})
 			}
+			const outputFormat = parseEnum(block.params.output_format, OUTPUT_FORMATS, "output_format") ?? "png"
+			const outputCompression = parseCompression(block.params.output_compression)
+			const background = parseEnum(block.params.background, BACKGROUNDS, "background") ?? "auto"
+			if (outputCompression !== undefined && outputFormat !== "jpeg" && outputFormat !== "webp") {
+				throw new ImageGenerationError({
+					code: "invalid_request",
+					message: "Image output compression is only supported for JPEG and WebP.",
+					retryable: false,
+				})
+			}
+			if (background === "transparent" && outputFormat === "jpeg") {
+				throw new ImageGenerationError({
+					code: "invalid_request",
+					message: "Transparent image output requires PNG or WebP format.",
+					retryable: false,
+				})
+			}
 			const references = parseReferences(block.params.reference_artifact_ids)
 			if (block.params.mask_artifact_id?.trim()) {
 				references.push({ artifactId: block.params.mask_artifact_id.trim(), role: "mask" })
@@ -137,11 +171,12 @@ export class GenerateImageToolHandler implements IFullyManagedTool {
 				operation: references.length > 0 ? "edit" : "generate",
 				prompt,
 				count,
-				size: width !== undefined && height !== undefined ? { width, height } : undefined,
+				size: width !== undefined && height !== undefined ? { width, height } : DEFAULT_IMAGE_GENERATION_SIZE,
 				aspectRatio: block.params.aspect_ratio?.trim() || undefined,
-				quality: block.params.quality?.trim() || undefined,
-				background: parseEnum(block.params.background, BACKGROUNDS, "background"),
-				outputFormat: parseEnum(block.params.output_format, OUTPUT_FORMATS, "output_format"),
+				quality: parseEnum(block.params.quality, QUALITIES, "quality") ?? "auto",
+				background,
+				outputFormat,
+				outputCompression,
 				references,
 			}
 
@@ -178,7 +213,12 @@ export class GenerateImageToolHandler implements IFullyManagedTool {
 				signal: config.taskState.operationSignal,
 				onProgress: async (event) => {
 					if (event.type !== "preview" || !activePresentation) return
-					activePresentation = { ...activePresentation, status: "preview" }
+					if (event.preview) previewsBySequence.set(event.preview.sequence, event.preview)
+					activePresentation = {
+						...activePresentation,
+						status: "preview",
+						previews: [...previewsBySequence.values()].sort((left, right) => left.sequence - right.sequence),
+					}
 					await config.callbacks.say(
 						"tool",
 						JSON.stringify(createToolPresentation(activePresentation)),
@@ -217,6 +257,7 @@ export class GenerateImageToolHandler implements IFullyManagedTool {
 					profileId: result.profileId,
 					providerId: result.providerId,
 					modelId: result.modelId,
+					reference_artifact_ids: result.artifacts.map((artifact) => artifact.id),
 					artifacts: result.artifacts.map((artifact) => ({
 						id: artifact.id,
 						mimeType: artifact.mimeType,

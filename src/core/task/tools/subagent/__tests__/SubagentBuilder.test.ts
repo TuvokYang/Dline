@@ -21,12 +21,17 @@ function createTaskConfig(
 	actModeReasoningOverride?: { kind: "effort"; effort: string },
 ): TaskConfig {
 	return {
+		taskId: "parent-task",
 		ulid: "ulid-123",
 		services: {
 			stateManager: {
 				getGlobalSettingsKey: (key: string) => (key === "mode" ? mode : undefined),
-				getApiConfiguration: () =>
-					({
+				getApiConfiguration: () => {
+					throw new Error("SubagentBuilder must not consult the shared active-task cursor")
+				},
+				getApiConfigurationForTask: (taskId: string) => {
+					assert.equal(taskId, "parent-task")
+					return {
 						actModeProfile: provider,
 						planModeProfile: provider,
 						actModeReasoningOverride,
@@ -34,7 +39,8 @@ function createTaskConfig(
 						planModeApiModelId: "plan-default",
 						actModeOpenAiModelId: "openai-act-default",
 						planModeOpenRouterModelId: "openrouter-plan-default",
-					}) as any,
+					} as any
+				},
 			},
 		},
 	} as unknown as TaskConfig
@@ -68,6 +74,7 @@ describe("SubagentBuilder", () => {
 		assert.equal((effectiveApiConfig as Record<string, unknown>).ulid, "ulid-123")
 		assert.equal((effectiveApiConfig as Record<string, unknown>).actModeProfile, "subagent-profile")
 		assert.equal((effectiveApiConfig as Record<string, unknown>).planModeProfile, "act-default-profile")
+		assert.equal(builder.getProfileName(), "subagent-profile")
 
 		assert.deepEqual(builder.getAllowedTools(), [ClineDefaultTool.LIST_FILES, ClineDefaultTool.ATTEMPT])
 		const prompt = builder.buildSystemPrompt("generated system prompt")
@@ -180,6 +187,30 @@ describe("SubagentBuilder", () => {
 		const [effectiveApiConfig, selectedMode] = buildApiHandlerStub.mock.calls[0]
 		assert.equal(selectedMode, "act")
 		assert.equal((effectiveApiConfig as Record<string, unknown>).actModeProfile, "act-default-profile")
+	})
+
+	it.each([
+		[undefined, []],
+		[null, []],
+		["missing-profile", []],
+		["disabled-profile", [{ name: "disabled-profile", enabled: false, usedFor: ["subagents"] }]],
+		["plan-only-profile", [{ name: "plan-only-profile", enabled: true, usedFor: ["plan"] }]],
+	] as const)("rejects generate_image without an available explicit subagent Profile: %s", (profile, profiles) => {
+		vi.spyOn(profileStore, "readApiProfiles").mockReturnValue(
+			profiles as unknown as ReturnType<typeof profileStore.readApiProfiles>,
+		)
+		vi.spyOn(api, "buildApiHandler").mockReturnValue({ getModel: vi.fn(), createMessage: vi.fn() } as never)
+
+		expect(
+			() =>
+				new SubagentBuilder(createTaskConfig("act", "parent-profile"), "image-agent", {
+					name: "image-agent",
+					description: "image agent",
+					profile,
+					tools: [ClineDefaultTool.GENERATE_IMAGE],
+					systemPrompt: "",
+				}),
+		).toThrow(/generate_image require an explicit API Profile|unavailable or not enabled for subagents/)
 	})
 
 	it("removes execute_command from the built-in default even when a legacy YAML still declares it", () => {

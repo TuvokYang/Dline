@@ -160,6 +160,63 @@ describe("getApiProfiles", () => {
 		expect(profile.imageModelId).to.equal(undefined)
 	})
 
+	it("preserves an explicit None image source and clears stale image bindings", () => {
+		const profile = normalizeApiProfile({
+			id: "none-openai",
+			name: "None OpenAI",
+			provider: "openai",
+			modelId: "gpt-5.4-mini",
+			imageSource: "IMAGE_GENERATION_SOURCE_UNSPECIFIED",
+			imageProfileId: "stale-independent-profile",
+			imageModelId: "gpt-image-2",
+		})
+
+		expect(profile.imageSource).to.equal(ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED)
+		expect(profile.imageProfileId).to.equal(undefined)
+		expect(profile.imageModelId).to.equal(undefined)
+	})
+
+	it("migrates a legacy missing image source with an image model binding to Current", () => {
+		const profile = normalizeApiProfile({
+			id: "legacy-current-openai",
+			name: "Legacy Current OpenAI",
+			provider: "openai",
+			modelId: "gpt-5.4-mini",
+			imageModelId: "gpt-image-2",
+		})
+
+		expect(profile.imageSource).to.equal(ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT)
+		expect(profile.imageModelId).to.equal("gpt-image-2")
+	})
+
+	it("preserves an explicit Current source and selected image model", () => {
+		const profile = normalizeApiProfile({
+			id: "current-openai",
+			name: "Current OpenAI",
+			provider: "openai",
+			modelId: "gpt-5.4-mini",
+			imageSource: "IMAGE_GENERATION_SOURCE_CURRENT",
+			imageModelId: "gpt-image-1",
+		})
+
+		expect(profile.imageSource).to.equal(ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT)
+		expect(profile.imageModelId).to.equal("gpt-image-1")
+		expect(profile.imageProfileId).to.equal(undefined)
+	})
+
+	it("keeps a legacy missing image source without image bindings as None", () => {
+		const profile = normalizeApiProfile({
+			id: "legacy-none-anthropic",
+			name: "Legacy None Anthropic",
+			provider: "anthropic",
+			modelId: "claude-chat",
+		})
+
+		expect(profile.imageSource).to.equal(ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED)
+		expect(profile.imageProfileId).to.equal(undefined)
+		expect(profile.imageModelId).to.equal(undefined)
+	})
+
 	it("persists historical Profile names for name-only Task migration", () => {
 		const stored = serializeApiProfilesForStorage([
 			ApiProfile.create({
@@ -834,7 +891,7 @@ describe("getApiProfiles", () => {
 		expect(storedProfiles[0].modelId).to.equal("registry-default-model")
 	})
 
-	it("removes legacy Image uses and fills Current image defaults independently of Profile uses", async () => {
+	it("removes legacy Image uses while preserving only explicitly bound legacy Current profiles", async () => {
 		const providersDir = path.join(process.env.DLINE_HOME_DIR!, "providers")
 		const settingsDir = path.join(process.env.DLINE_DIR!, "data", "settings")
 		const storedProfilesPath = path.join(settingsDir, "api_profiles.json")
@@ -899,16 +956,26 @@ describe("getApiProfiles", () => {
 		const profiles = response.profiles as unknown as Array<{
 			id: string
 			modelId: string
+			imageSource?: ImageGenerationSource
 			imageModelId?: string
 			usedFor: string[]
 		}>
 
+		expect(profiles.find((profile) => profile.id === "explicit-image-profile")?.imageSource).to.equal(
+			ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT,
+		)
 		expect(profiles.find((profile) => profile.id === "explicit-image-profile")?.imageModelId).to.equal("custom-image-model")
-		expect(profiles.find((profile) => profile.id === "default-image-profile")?.imageModelId).to.equal("gpt-image-2")
+		expect(profiles.find((profile) => profile.id === "default-image-profile")?.imageSource).to.equal(
+			ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED,
+		)
+		expect(profiles.find((profile) => profile.id === "default-image-profile")?.imageModelId).to.equal(undefined)
 		expect(profiles.find((profile) => profile.id === "default-image-profile")?.modelId).to.equal("gpt-chat")
 		expect(profiles.find((profile) => profile.id === "explicit-image-profile")?.usedFor).to.deep.equal(["act"])
 		expect(profiles.find((profile) => profile.id === "default-image-profile")?.usedFor).to.deep.equal(["plan"])
-		expect(profiles.find((profile) => profile.id === "legacy-profile")?.imageModelId).to.equal("gpt-image-2")
+		expect(profiles.find((profile) => profile.id === "legacy-profile")?.imageSource).to.equal(
+			ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED,
+		)
+		expect(profiles.find((profile) => profile.id === "legacy-profile")?.imageModelId).to.equal(undefined)
 		expect(profiles.find((profile) => profile.id === "legacy-profile")?.usedFor).to.deep.equal(["act", "plan", "subagents"])
 		expect(setGlobalState.mock.calls.some(([key]) => key === "imageProfileId" || key === "imageProfile")).to.equal(false)
 
@@ -916,10 +983,8 @@ describe("getApiProfiles", () => {
 		expect(stored.find((profile: { id: string }) => profile.id === "explicit-image-profile").imageModelId).to.equal(
 			"custom-image-model",
 		)
-		expect(stored.find((profile: { id: string }) => profile.id === "default-image-profile").imageModelId).to.equal(
-			"gpt-image-2",
-		)
-		expect(stored.find((profile: { id: string }) => profile.id === "legacy-profile").imageModelId).to.equal("gpt-image-2")
+		expect(stored.find((profile: { id: string }) => profile.id === "default-image-profile").imageModelId).to.equal(undefined)
+		expect(stored.find((profile: { id: string }) => profile.id === "legacy-profile").imageModelId).to.equal(undefined)
 	})
 
 	it("rejects an unreadable profile file instead of returning an empty list", async () => {

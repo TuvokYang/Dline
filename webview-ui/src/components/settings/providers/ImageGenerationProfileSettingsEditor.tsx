@@ -34,7 +34,7 @@ export const ImageGenerationProfileSettingsEditor = ({ profile, onUpdate }: Imag
 				<span>Task budget (USD)</span>
 			</DebouncedTextField>
 			<DebouncedTextField
-				initialValue={profile.imageGeneration?.requestTimeoutMs?.toString() ?? "120000"}
+				initialValue={profile.imageGeneration?.requestTimeoutMs?.toString() ?? "180000"}
 				onChange={(value) => updateSetting("requestTimeoutMs", value, true, 1)}>
 				<span>Request timeout (ms)</span>
 			</DebouncedTextField>

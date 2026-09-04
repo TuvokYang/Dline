@@ -26,6 +26,18 @@ function enrichMissingSeedMetadata(providerId: string, config: ProviderModelsCon
 	return reconcileProviderModels(seedConfig, config, "fill-missing")
 }
 
+function withRequiredServerTool(model: ModelInfo, tool: ServerTool): ModelInfo {
+	const tools = model.capabilities?.tools ?? []
+	if (tools.includes(tool)) return model
+	return {
+		...model,
+		capabilities: {
+			...model.capabilities,
+			tools: [...tools, tool],
+		},
+	}
+}
+
 function parseProviderModelsConfig(providerId: string, raw: string): ProviderModelsConfig {
 	const config = JSON.parse(raw) as ProviderModelsConfig
 	if (!config || typeof config !== "object") {
@@ -249,16 +261,22 @@ export class ModelRegistry {
 		}
 
 		const seed = getProviderSeedConfig("openai")
+		const models = {
+			...(seed?.models ?? {}),
+			...(configured?.models ?? {}),
+		}
 		return {
 			...(seed ?? configured),
 			...configured,
 			provider: "openai",
 			providerName: "OpenAI",
 			billingMode: configured?.billingMode ?? seed?.billingMode ?? "token",
-			models: {
-				...(seed?.models ?? {}),
-				...(configured?.models ?? {}),
-			},
+			models: Object.fromEntries(
+				Object.entries(models).map(([modelId, model]) => [
+					modelId,
+					withRequiredServerTool(model, ServerTool.IMAGE_GENERATION),
+				]),
+			),
 			defaultModelId: configured?.defaultModelId ?? seed?.defaultModelId,
 			imageModels: {
 				...(seed?.imageModels ?? {}),

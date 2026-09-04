@@ -511,7 +511,11 @@ export class ToolExecutor {
 		) => Promise<void>,
 	) {
 		this.autoApprover = new AutoApprove(this.stateManager)
-		this.imageGenerationService = createImageGenerationRuntime({ taskId: this.taskId, stateManager: this.stateManager }).service
+		this.imageGenerationService = createImageGenerationRuntime({
+			taskId: this.taskId,
+			stateManager: this.stateManager,
+			getCurrentMode: this.getMode,
+		}).service
 
 		// Initialize the coordinator and register all tool handlers
 		this.coordinator = new ToolExecutorCoordinator()

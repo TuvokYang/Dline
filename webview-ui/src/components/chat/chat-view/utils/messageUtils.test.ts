@@ -1,6 +1,13 @@
 import type { ClineMessage, TaskViewState } from "@shared/ExtensionMessage"
 import { describe, expect, it } from "vitest"
-import { groupLowStakesTools, groupMessages, isToolGroup, resolveApiErrorMessage } from "./messageUtils"
+import {
+	groupLowStakesTools,
+	groupMessages,
+	isToolGroup,
+	resolveApiErrorMessage,
+	resolveMessageRowExpanded,
+	toggleMessageRowExpansion,
+} from "./messageUtils"
 
 const createTextMessage = (ts: number, text: string): ClineMessage => ({
 	type: "say",
@@ -127,6 +134,36 @@ describe("resolveApiErrorMessage", () => {
 		})
 
 		expect(resolved).toBeUndefined()
+	})
+})
+
+describe("image generation row expansion", () => {
+	const imageMessage: ClineMessage = {
+		ts: 42,
+		type: "say",
+		say: "tool",
+		text: JSON.stringify({
+			tool: "generateImage",
+			imageGeneration: {
+				schemaVersion: 1,
+				status: "completed",
+				requestId: "request-1",
+				prompt: "A blue owl",
+				count: 1,
+			},
+		}),
+	}
+
+	it("defaults image rows to expanded and toggles from the effective state", () => {
+		expect(resolveMessageRowExpanded(imageMessage, {})).toBe(true)
+		const collapsed = toggleMessageRowExpansion(imageMessage, {})
+		expect(collapsed).toEqual({ 42: false })
+		expect(resolveMessageRowExpanded(imageMessage, collapsed)).toBe(false)
+		expect(toggleMessageRowExpansion(imageMessage, collapsed)).toEqual({ 42: true })
+	})
+
+	it("keeps ordinary rows collapsed by default", () => {
+		expect(resolveMessageRowExpanded(createTextMessage(7, "answer"), {})).toBe(false)
 	})
 })
 

@@ -1,5 +1,6 @@
 import type { ArtifactResolver } from "@core/artifacts/ArtifactResolver"
-import { createTaskArtifactResolver } from "@core/artifacts/runtime"
+import { createTaskArtifactResolver, createTaskImagePreviewStore } from "@core/artifacts/runtime"
+import type { TaskImagePreviewStore } from "@core/artifacts/TaskImagePreviewStore"
 import type { ImageArtifact } from "@core/artifacts/TaskArtifactStore"
 import type { ApiStreamServerToolChunk } from "@core/api/transform/stream"
 import type { ImageProviderOutput } from "@core/image-generation/contracts"
@@ -15,6 +16,8 @@ export interface HostedImageGenerationContext {
 	readonly enabled: boolean
 	readonly providerId: string
 	readonly modelId: string
+	readonly referenceArtifactIds?: readonly string[]
+	readonly prompt?: string
 }
 
 export interface HostedImageGenerationUpdate {
@@ -25,6 +28,7 @@ export interface HostedImageGenerationUpdate {
 
 interface HostedImageGenerationState {
 	readonly functionId: string
+	readonly previewsBySequence: Map<number, ImageGenerationPresentationV1["preview"] extends infer T ? NonNullable<T> : never>
 	prompt: string
 	terminal: boolean
 }
@@ -33,6 +37,7 @@ export interface HostedImageGenerationLifecycleOptions {
 	readonly taskId: string
 	readonly context: HostedImageGenerationContext
 	readonly artifactResolver?: Pick<ArtifactResolver, "persistProviderOutput">
+	readonly previewStore?: Pick<TaskImagePreviewStore, "persistPreview" | "clearRequest">
 	readonly onUpdate: (update: HostedImageGenerationUpdate) => Promise<void> | void
 }
 
@@ -51,6 +56,14 @@ function readResult(result: unknown): { b64Json: string; revisedPrompt?: string 
 	if (!b64Json) return undefined
 	const revisedPrompt = textFromUnknown(result.revisedPrompt) ?? textFromUnknown(result.revised_prompt)
 	return { b64Json, ...(revisedPrompt ? { revisedPrompt } : {}) }
+}
+
+function readPreviewResult(result: unknown): { base64: string; sequence: number } | undefined {
+	if (!isRecord(result)) return undefined
+	const base64 = textFromUnknown(result.partialImageB64) ?? textFromUnknown(result.partial_image_b64)
+	const sequence = result.sequence
+	if (!base64 || typeof sequence !== "number" || !Number.isSafeInteger(sequence) || sequence < 0) return undefined
+	return { base64, sequence }
 }
 
 function promptFromChunk(chunk: ApiStreamServerToolChunk, fallback: string): string {
@@ -87,9 +100,11 @@ function createMessage(presentation: ImageGenerationPresentationV1): ClineSayToo
 export class HostedImageGenerationLifecycle {
 	private readonly calls = new Map<string, HostedImageGenerationState>()
 	private readonly artifactResolver
+	private readonly previewStore
 
 	constructor(private readonly options: HostedImageGenerationLifecycleOptions) {
 		this.artifactResolver = options.artifactResolver ?? createTaskArtifactResolver(options.taskId)
+		this.previewStore = options.previewStore ?? createTaskImagePreviewStore(options.taskId)
 	}
 
 	private accepts(chunk: ApiStreamServerToolChunk): boolean {
@@ -136,7 +151,8 @@ export class HostedImageGenerationLifecycle {
 
 		const state: HostedImageGenerationState = existing ?? {
 			functionId: chunk.function_id,
-			prompt: "Provider-hosted image generation",
+			previewsBySequence: new Map(),
+			prompt: this.options.context.prompt?.trim() || "Provider-hosted image generation",
 			terminal: false,
 		}
 		state.prompt = promptFromChunk(chunk, state.prompt)
@@ -144,6 +160,7 @@ export class HostedImageGenerationLifecycle {
 
 		if (chunk.phase === "failed") {
 			state.terminal = true
+			await this.previewStore.clearRequest(dlineTid)
 			await this.emit(
 				dlineTid,
 				{
@@ -156,6 +173,23 @@ export class HostedImageGenerationLifecycle {
 					},
 				},
 				false,
+			)
+			return true
+		}
+
+		if (chunk.phase === "preview") {
+			const partial = readPreviewResult(chunk.result)
+			if (!partial) return true
+			const preview = await this.previewStore.persistPreview(dlineTid, partial.sequence, partial.base64)
+			state.previewsBySequence.set(preview.sequence, preview)
+			await this.emit(
+				dlineTid,
+				{
+					...this.basePresentation(dlineTid, state.prompt),
+					status: "preview",
+					previews: [...state.previewsBySequence.values()].sort((left, right) => left.sequence - right.sequence),
+				},
+				true,
 			)
 			return true
 		}
@@ -178,6 +212,9 @@ export class HostedImageGenerationLifecycle {
 				providerId: this.options.context.providerId,
 				modelId: this.options.context.modelId,
 				requestId: dlineTid,
+				...(this.options.context.referenceArtifactIds?.length
+					? { parentArtifactIds: [...new Set(this.options.context.referenceArtifactIds)] }
+					: {}),
 			})
 			state.terminal = true
 			await this.emit(
@@ -185,6 +222,7 @@ export class HostedImageGenerationLifecycle {
 				{
 					...this.basePresentation(dlineTid, state.prompt),
 					status: "completed",
+					previews: [...state.previewsBySequence.values()].sort((left, right) => left.sequence - right.sequence),
 					artifacts: [artifactPresentation(artifact)],
 					usage: { imageCount: 1, totalOutputBytes: artifact.byteLength },
 				},
@@ -192,6 +230,7 @@ export class HostedImageGenerationLifecycle {
 			)
 		} catch {
 			state.terminal = true
+			await this.previewStore.clearRequest(dlineTid)
 			await this.emit(
 				dlineTid,
 				{
@@ -213,6 +252,7 @@ export class HostedImageGenerationLifecycle {
 		for (const [dlineTid, state] of this.calls) {
 			if (state.terminal) continue
 			state.terminal = true
+			await this.previewStore.clearRequest(dlineTid)
 			await this.emit(
 				dlineTid,
 				{

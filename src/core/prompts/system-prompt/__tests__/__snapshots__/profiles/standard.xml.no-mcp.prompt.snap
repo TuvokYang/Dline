@@ -531,6 +531,39 @@ Usage:
 <task_progress></task_progress>
 </status_update>
 
+## generate_image
+Description: Generate or edit images through the configured Current, Independent, or Hosted image source. This is the only AI-callable image generation entry point and is a paid external operation. Choose output size, quality, format, compression, and background explicitly when the user requests them. Outputs are stored as task artifacts; the tool result contains artifact IDs and safe metadata, never full base64 image data.
+Parameters:
+- prompt: (required) Describe the image to generate or the edit to apply.
+- profile: (optional) Optional name or ID of the currently bound Image profile. This cannot switch to unrelated credentials.
+- count: (optional) Number of images to generate. Must be a positive integer within the model and task limits.
+- width: (optional) Optional desired output width in pixels. Provide height together with width. The selected image model may map it to the closest supported output. Omit both for the default 16:9 target around 2048×1152.
+- height: (optional) Optional desired output height in pixels. Provide width together with height. The selected image model may map it to the closest supported output. Omit both for the default 16:9 target around 2048×1152.
+- aspect_ratio: (optional) Optional desired aspect ratio. The selected image model maps it to a supported output ratio.
+- quality: (optional) Optional quality: auto, low, medium, or high. Defaults to auto.
+- background: (optional) Optional background mode: auto, opaque, or transparent. Transparent output requires PNG or WebP.
+- output_format: (optional) Optional output format: png, jpeg, or webp. Defaults to png.
+- output_compression: (optional) Optional integer compression level from 0 to 100. Only valid for JPEG and WebP output.
+- reference_artifact_ids: (optional) Optional JSON array of task image Artifact IDs to use as references.
+- mask_artifact_id: (optional) Optional task image Artifact ID to use as an edit mask.
+- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
+Usage:
+<generate_image>
+<prompt></prompt>
+<profile></profile>
+<count></count>
+<width></width>
+<height></height>
+<aspect_ratio></aspect_ratio>
+<quality></quality>
+<background></background>
+<output_format></output_format>
+<output_compression></output_compression>
+<reference_artifact_ids></reference_artifact_ids>
+<mask_artifact_id></mask_artifact_id>
+<task_progress></task_progress>
+</generate_image>
+
 ## generate_report
 Description: [TURN-END] Generate a structured technical report for the user to review. This tool pauses execution and waits for the user to respond before you can continue. Use this when the user requests a formal report, summary of findings, or technical analysis that requires their review before proceeding to the next steps.
 

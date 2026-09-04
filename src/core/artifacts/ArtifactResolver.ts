@@ -32,6 +32,7 @@ export interface ProviderOutputProvenance {
 	providerId: string
 	modelId: string
 	requestId: string
+	parentArtifactIds?: readonly string[]
 }
 
 const DEFAULT_MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
@@ -112,6 +113,9 @@ export class ArtifactResolver {
 			providerOutputId: output.id,
 			revisedPrompt: output.revisedPrompt,
 			sourceKind: output.source.kind,
+			...(provenance.parentArtifactIds?.length
+				? { parentArtifactIds: [...new Set(provenance.parentArtifactIds)] }
+				: {}),
 		}
 		switch (output.source.kind) {
 			case "bytes":

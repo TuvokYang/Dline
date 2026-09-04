@@ -1,16 +1,17 @@
 import type { ArtifactUrlDownloader } from "@core/artifacts/ArtifactResolver"
-import { createTaskArtifactResolver, getTaskArtifactDirectory } from "@core/artifacts/runtime"
+import { createTaskArtifactResolver, createTaskImagePreviewStore, getTaskArtifactDirectory } from "@core/artifacts/runtime"
 import { readApiProfiles } from "@core/controller/file/getApiProfiles"
 import { readImageGenerationProfiles } from "@core/controller/file/imageGenerationProfiles"
 import { ModelRegistry } from "@core/model-registry/ModelRegistry"
 import type { StateManager } from "@core/storage/StateManager"
 import { GeminiImageGenerationAdapter } from "./adapters/GeminiImageGenerationAdapter"
+import { OpenAIHostedImageGenerationAdapter } from "./adapters/OpenAIHostedImageGenerationAdapter"
 import { OpenAIImageGenerationAdapter } from "./adapters/OpenAIImageGenerationAdapter"
 import { ImageGenerationAdapterRegistry } from "./ImageGenerationAdapterRegistry"
 import { ImageGenerationBudgetLedger } from "./ImageGenerationBudgetLedger"
 import { ImageGenerationPolicy } from "./ImageGenerationPolicy"
 import { ImageGenerationService } from "./ImageGenerationService"
-import { ImageProfileResolver } from "./ImageProfileResolver"
+import { ImageProfileResolver, OPENAI_HOSTED_IMAGE_ADAPTER_ID } from "./ImageProfileResolver"
 
 export interface ImageGenerationRuntime {
 	profileResolver: ImageProfileResolver
@@ -18,42 +19,74 @@ export interface ImageGenerationRuntime {
 	service: ImageGenerationService
 }
 
-export interface CreateImageGenerationRuntimeOptions {
+export interface ImageGenerationTaskBinding {
 	taskId: string
+	getCurrentMode: () => "plan" | "act"
+}
+
+export interface ImageProfileReferenceBinding {
+	profileId?: string
+	profileName?: string
+}
+
+export interface CreateImageGenerationRuntimeOptions extends ImageGenerationTaskBinding {
 	stateManager: StateManager
 	urlDownloader?: ArtifactUrlDownloader
 }
 
-export function createImageProfileResolver(stateManager: StateManager): ImageProfileResolver {
+function isImageGenerationEnabled(stateManager: StateManager): boolean {
+	return stateManager.getCanonicalSettingsKey("imageGenerationEnabled") === true
+}
+
+function createBoundImageProfileResolver(
+	getCurrentProfileId: () => string | undefined,
+	getCurrentProfileName: () => string | undefined,
+): ImageProfileResolver {
 	return new ImageProfileResolver({
 		readApiProfiles,
 		readImageProfiles: readImageGenerationProfiles,
-		getCurrentProfileId: () => {
-			const configuration = stateManager.getApiConfiguration()
-			return stateManager.getGlobalSettingsKey("mode") === "plan"
-				? configuration.planModeProfileId
-				: configuration.actModeProfileId
-		},
-		getCurrentProfileName: () => {
-			const configuration = stateManager.getApiConfiguration()
-			return stateManager.getGlobalSettingsKey("mode") === "plan"
-				? configuration.planModeProfile
-				: configuration.actModeProfile
-		},
+		getCurrentProfileId,
+		getCurrentProfileName,
 		getImageModel: (providerId, modelId) => ModelRegistry.getInstance().getProviderModels(providerId)?.imageModels?.[modelId],
+		getDefaultImageModelId: (providerId) => ModelRegistry.getInstance().getProviderModels(providerId)?.defaultImageModelId,
 	})
 }
 
-export function hasAvailableImageProfile(stateManager: StateManager): boolean {
-	return stateManager.getGlobalSettingsKey("imageGenerationEnabled") === true && createImageProfileResolver(stateManager).hasAvailableProfile()
+export function createImageProfileResolver(
+	stateManager: StateManager,
+	binding: ImageGenerationTaskBinding,
+): ImageProfileResolver {
+	return createBoundImageProfileResolver(
+		() => {
+			const configuration = stateManager.getApiConfigurationForTask(binding.taskId)
+			return binding.getCurrentMode() === "plan" ? configuration.planModeProfileId : configuration.actModeProfileId
+		},
+		() => {
+			const configuration = stateManager.getApiConfigurationForTask(binding.taskId)
+			return binding.getCurrentMode() === "plan" ? configuration.planModeProfile : configuration.actModeProfile
+		},
+	)
+}
+
+export function createImageProfileResolverForProfile(binding: ImageProfileReferenceBinding): ImageProfileResolver {
+	return createBoundImageProfileResolver(
+		() => binding.profileId,
+		() => binding.profileName,
+	)
+}
+
+export function hasAvailableImageProfile(stateManager: StateManager, binding: ImageGenerationTaskBinding): boolean {
+	return isImageGenerationEnabled(stateManager) && createImageProfileResolver(stateManager, binding).hasAvailableProfile()
 }
 
 export function createImageGenerationRuntime(options: CreateImageGenerationRuntimeOptions): ImageGenerationRuntime {
-	const profileResolver = createImageProfileResolver(options.stateManager)
+	const profileResolver = createImageProfileResolver(options.stateManager, options)
 	const adapterRegistry = new ImageGenerationAdapterRegistry()
 	adapterRegistry.register("openai", (config) => new OpenAIImageGenerationAdapter(config))
+	adapterRegistry.register(OPENAI_HOSTED_IMAGE_ADAPTER_ID, (config) => new OpenAIHostedImageGenerationAdapter(config))
 	adapterRegistry.register("gemini", (config) => new GeminiImageGenerationAdapter(config))
 	const artifactResolver = createTaskArtifactResolver(options.taskId, { urlDownloader: options.urlDownloader })
+	const previewStore = createTaskImagePreviewStore(options.taskId)
 	const budgetLedger = new ImageGenerationBudgetLedger({
 		taskId: options.taskId,
 		taskDirectory: getTaskArtifactDirectory(options.taskId),
@@ -63,8 +96,9 @@ export function createImageGenerationRuntime(options: CreateImageGenerationRunti
 		adapterRegistry,
 		policy: new ImageGenerationPolicy(),
 		artifactResolver,
+		previewStore,
 		budgetLedger,
-		isFeatureEnabled: () => options.stateManager.getGlobalSettingsKey("imageGenerationEnabled") === true,
+		isFeatureEnabled: () => isImageGenerationEnabled(options.stateManager),
 	})
 	return { profileResolver, adapterRegistry, service }
 }

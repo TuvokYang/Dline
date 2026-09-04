@@ -1733,7 +1733,7 @@ export class Controller {
 		const doubleCheckCompletionEnabled = this.stateManager.getGlobalSettingsKey("doubleCheckCompletionEnabled")
 		const lazyTeammateModeEnabled = this.stateManager.getGlobalSettingsKey("lazyTeammateModeEnabled")
 		const mcpEnabled = this.stateManager.getGlobalSettingsKey("mcpEnabled")
-		const imageGenerationEnabled = this.stateManager.getGlobalSettingsKey("imageGenerationEnabled")
+		const imageGenerationEnabled = this.stateManager.getCanonicalSettingsKey("imageGenerationEnabled")
 		const showFeatureTips = this.stateManager.getGlobalSettingsKey("showFeatureTips")
 		const showActiveTasksInEnvDetails = this.stateManager.getGlobalSettingsKey("showActiveTasksInEnvDetails")
 

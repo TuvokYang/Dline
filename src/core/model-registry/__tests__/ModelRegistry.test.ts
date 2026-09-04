@@ -305,6 +305,30 @@ describe("ModelRegistry", () => {
 	})
 
 	describe("getProviderModels", () => {
+		it("marks every OpenAI conversation model as capable of the image generation server tool", async () => {
+			await fsPromises.writeFile(
+				path.join(tempDir, "openai.json"),
+				JSON.stringify({
+					provider: "openai",
+					providerName: "OpenAI",
+					billingMode: "token",
+					models: {
+						"custom-responses-model": {
+							id: "custom-responses-model",
+							userDefined: true,
+							apiFormats: [ApiFormat.OPENAI_RESPONSES],
+							capabilities: { supportsTools: true, tools: [ServerTool.WEB_SEARCH] },
+						},
+					},
+				}),
+			)
+
+			await registry.initialize()
+
+			const model = registry.getProviderModels("openai")?.models["custom-responses-model"]
+			expect(model?.capabilities?.tools).to.deep.equal([ServerTool.WEB_SEARCH, ServerTool.IMAGE_GENERATION])
+		})
+
 		it("fills only missing native-tool capability from built-in seed metadata in memory", async () => {
 			const filePath = path.join(tempDir, "anthropic.json")
 			const config = {

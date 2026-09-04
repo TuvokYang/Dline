@@ -142,13 +142,9 @@ export class OpenAiHandler implements ApiHandler {
 
 	supportsServerTool(tool: ServerTool): boolean {
 		return (
-			(tool === ServerTool.WEB_SEARCH || tool === ServerTool.IMAGE_GENERATION) &&
+			tool === ServerTool.WEB_SEARCH &&
 			(this.apiFormat === ApiFormat.OPENAI_RESPONSES || this.apiFormat === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE)
 		)
-	}
-
-	getImageGenerationSource(): ImageGenerationSource | undefined {
-		return this.ctx.profile.imageSource
 	}
 
 	/**
@@ -156,6 +152,10 @@ export class OpenAiHandler implements ApiHandler {
 	 *
 	 * @returns Effective model metadata for requests and cost calculation.
 	 */
+	getImageGenerationSource(): ImageGenerationSource | undefined {
+		return this.ctx.profile.imageSource
+	}
+
 	private buildModelInfo(): ModelInfo {
 		return buildEffectiveModelInfo(
 			this.modelId,
@@ -421,13 +421,12 @@ export class OpenAiHandler implements ApiHandler {
 	): ApiStream {
 		const client = this.ensureClient()
 		const model = this.getModel()
-		const { input } = convertToOpenAIResponsesInput(messages, { usePreviousResponseId: false })
+		const converted = convertToOpenAIResponsesInput(messages, { usePreviousResponseId: false })
 		const hostedWebSearch = options?.serverTools?.includes(ServerTool.WEB_SEARCH) === true
-		const hostedImageGeneration = options?.serverTools?.includes(ServerTool.IMAGE_GENERATION) === true
+		const input = converted.input
 		const responseTools: OpenAI.Responses.Tool[] = (tools ?? [])
 			.filter((tool): tool is ChatCompletionFunctionTool => tool.type === "function")
 			.filter((tool) => !hostedWebSearch || tool.function.name !== "web_search")
-			.filter((tool) => !hostedImageGeneration || tool.function.name !== "generate_image")
 			.map((tool) => ({
 				type: "function" as const,
 				name: tool.function.name,
@@ -437,9 +436,6 @@ export class OpenAiHandler implements ApiHandler {
 			}))
 		if (hostedWebSearch) {
 			responseTools.push({ type: "web_search" })
-		}
-		if (hostedImageGeneration) {
-			responseTools.push({ type: "image_generation" })
 		}
 		const enableThinking = this.config?.reasoning?.enableThinking ?? true
 		const reasoningEffort = normalizeOpenaiReasoningEffort(this.reasoningEffort)

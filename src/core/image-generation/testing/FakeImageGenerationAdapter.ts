@@ -59,6 +59,7 @@ export class FakeImageGenerationAdapter implements ImageGenerationAdapter {
 				type: "preview",
 				requestId: request.requestId,
 				timestampMs: now(),
+				sequence: 0,
 				outputs: this.options.previewOutputs,
 			}
 		}

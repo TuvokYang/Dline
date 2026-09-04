@@ -17,16 +17,35 @@ interface ImageCatalogFixture {
 }
 
 describe("built-in image model catalogs", () => {
-	it("declares gpt-image-2 as the OpenAI default with generation, editing, and mask support", () => {
+	it("declares selectable gpt-image-1 and gpt-image-2 models with gpt-image-2 as the default", () => {
 		const openai = allProviderModels.openai as ImageCatalogFixture
 
 		expect(openai.defaultImageModelId).toBe("gpt-image-2")
+		expect(Object.keys(openai.imageModels ?? {})).toEqual(
+			expect.arrayContaining(["gpt-image-1", "gpt-image-2", "gpt-image-2-sub"]),
+		)
+		expect(openai.imageModels?.["gpt-image-1"]).toMatchObject({
+			id: "gpt-image-1",
+			capabilities: {
+				supportsEditing: true,
+				supportsGeneration: true,
+				supportsMask: true,
+			},
+		})
 		expect(openai.imageModels?.["gpt-image-2"]).toMatchObject({
 			id: "gpt-image-2",
 			capabilities: {
 				supportsEditing: true,
 				supportsGeneration: true,
 				supportsMask: true,
+			},
+		})
+		expect(openai.imageModels?.["gpt-image-2-sub"]).toMatchObject({
+			id: "gpt-image-2-sub",
+			capabilities: {
+				supportsEditing: true,
+				supportsGeneration: true,
+				supportsMask: false,
 			},
 		})
 	})

@@ -22,6 +22,7 @@ const PROMPT_FRESHNESS_SETTINGS_KEYS = new Set<SettingsKey>([
 	"clineWebToolsEnabled",
 	"enableParallelToolCalling",
 	"focusChainSettings",
+	"imageGenerationEnabled",
 	"lazyTeammateModeEnabled",
 	"localWebSearchEngine",
 	"mcpEnabled",
@@ -89,12 +90,13 @@ export function buildPromptFreshnessBaseline(
 	const browserEnabled = context.supportsBrowserUse === true && context.browserSettings?.disableToolUse !== true
 	const viewport = browserEnabled ? context.browserSettings?.viewport : undefined
 	return {
-		schemaVersion: 2,
+		schemaVersion: 3,
 		providerId: context.providerInfo.providerId,
 		modelId: context.providerInfo.model.id,
 		promptProfile: context.promptProfile,
 		transport: context.enableNativeToolCalls === true ? "native" : "xml",
 		parallelToolsEnabled: context.enableParallelToolCalling === true,
+		imageGenerationAvailable: context.imageGenerationAvailable === true,
 		browserEnabled,
 		browserViewport: viewport ? `${viewport.width}x${viewport.height}` : "disabled",
 		webToolsEnabled: standardProfile && context.clineWebToolsEnabled === true,
@@ -136,6 +138,9 @@ export function comparePromptFreshness(
 	if (frozen.promptProfile !== current.promptProfile) addChange(changes, "prompt_profile", "Prompt profile changed")
 	if (frozen.transport !== current.transport || frozen.parallelToolsEnabled !== current.parallelToolsEnabled) {
 		addChange(changes, "native_tools", "Tool calling settings changed")
+	}
+	if (frozen.imageGenerationAvailable !== current.imageGenerationAvailable) {
+		addChange(changes, "tool_set", "Image generation tools changed")
 	}
 	if (frozen.browserEnabled !== current.browserEnabled || frozen.browserViewport !== current.browserViewport) {
 		addChange(changes, "browser", "Browser settings changed")

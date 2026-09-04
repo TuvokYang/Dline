@@ -26,7 +26,9 @@ const EXPECTED_NAMESPACES = [
 	"findReferences",
 	"focusChain",
 	"generateExplanation",
+	"generateImage",
 	"generateReport",
+	"inputQueue",
 	"killCommand",
 	"listCodeDefinitionNames",
 	"listFiles",
@@ -111,13 +113,13 @@ async function collectSources(directory: string): Promise<string[]> {
 describe("prompt asset inventory", () => {
 	it("locks the final English namespace inventory", () => {
 		expect(sortValues(Object.keys(englishPrompts))).toEqual(sortValues(EXPECTED_NAMESPACES))
-		expect(EXPECTED_NAMESPACES).toHaveLength(61)
+		expect(EXPECTED_NAMESPACES).toHaveLength(63)
 	})
 
 	it("locks the static domain group order and coverage", () => {
 		expect(englishPromptGroups.map((group) => group.name)).toEqual(["system", "tools", "commands", "variants"])
-		expect(englishPromptGroups.map((group) => group.modules.length)).toEqual([23, 33, 3, 2])
-		expect(englishPromptGroups.flatMap((group) => group.modules)).toHaveLength(61)
+		expect(englishPromptGroups.map((group) => group.modules.length)).toEqual([24, 34, 3, 2])
+		expect(englishPromptGroups.flatMap((group) => group.modules)).toHaveLength(63)
 		expect(englishPromptGroups[3].modules.map((module) => module.name)).toEqual(["variants.standard", "variants.lite"])
 		for (const group of englishPromptGroups) {
 			for (const module of group.modules) {

@@ -32,6 +32,7 @@ function request(overrides: Partial<ImageGenerationRequest> = {}): ImageGenerati
 		quality: "high",
 		background: "opaque",
 		outputFormat: "webp",
+		outputCompression: 80,
 		references: [],
 		...overrides,
 	}
@@ -71,6 +72,7 @@ describe("OpenAIImageGenerationAdapter", () => {
 				quality: "high",
 				background: "opaque",
 				output_format: "webp",
+				output_compression: 80,
 			},
 			{ signal: expect.any(AbortSignal) },
 		)
@@ -91,7 +93,7 @@ describe("OpenAIImageGenerationAdapter", () => {
 		})
 	})
 
-	it("uses the OpenAI Codex gpt-image-2 defaults for a single PNG generation", async () => {
+		it("uses the 2K landscape default for a single GPT Image 2 PNG generation", async () => {
 		const generate = vi.fn(async () => ({ data: [{ b64_json: IMAGE_BASE64 }] }))
 		const adapter = new OpenAIImageGenerationAdapter({
 			profile: profile(),
@@ -101,7 +103,14 @@ describe("OpenAIImageGenerationAdapter", () => {
 
 		await collect(
 			adapter.generate(
-				request({ count: 1, size: undefined, quality: undefined, background: undefined, outputFormat: "png" }),
+				request({
+					count: 1,
+					size: undefined,
+					quality: undefined,
+					background: undefined,
+					outputFormat: "png",
+					outputCompression: undefined,
+				}),
 				{ signal: new AbortController().signal },
 			),
 		)
@@ -110,12 +119,31 @@ describe("OpenAIImageGenerationAdapter", () => {
 			{
 				model: "gpt-image-2",
 				prompt: "A blue owl",
-				size: "auto",
+				size: "2048x1152",
 				quality: "auto",
 				background: "auto",
 			},
 			{ signal: expect.any(AbortSignal) },
 		)
+	})
+
+	it.each([
+		{ width: 1920, height: 1080 },
+		{ width: 640, height: 480 },
+	])("rejects unsupported GPT Image 2 custom dimensions before calling OpenAI", async ({ width, height }) => {
+		const generate = vi.fn(async () => ({ data: [{ b64_json: IMAGE_BASE64 }] }))
+		const adapter = new OpenAIImageGenerationAdapter({
+			profile: profile(),
+			modelId: "gpt-image-2",
+			client: client({ generate, edit: vi.fn() }),
+		})
+
+		const events = await collect(
+			adapter.generate(request({ count: 1, size: { width, height } }), { signal: new AbortController().signal }),
+		)
+
+		expect(generate).not.toHaveBeenCalled()
+		expect(events.at(-1)).toMatchObject({ type: "failed", error: { code: "size_limit_exceeded", retryable: false } })
 	})
 
 	it("resolves reference artifacts for edit requests and forwards the mask", async () => {
@@ -160,6 +188,24 @@ describe("OpenAIImageGenerationAdapter", () => {
 			type: "completed",
 			outputs: [{ source: { kind: "base64", mimeType: "image/webp" } }],
 		})
+	})
+
+	it("fails closed before calling Images API with the subscription alias", async () => {
+		const generate = vi.fn()
+		const edit = vi.fn()
+		const adapter = new OpenAIImageGenerationAdapter({
+			profile: profile(),
+			modelId: "gpt-image-2-sub",
+			client: client({ generate, edit }),
+		})
+
+		const events = await collect(
+			adapter.generate(request({ modelId: "gpt-image-2-sub" }), { signal: new AbortController().signal }),
+		)
+
+		expect(generate).not.toHaveBeenCalled()
+		expect(edit).not.toHaveBeenCalled()
+		expect(events.at(-1)).toMatchObject({ type: "failed", error: { code: "invalid_request", retryable: false } })
 	})
 
 	it("maps provider rate limits to a retryable image error event", async () => {

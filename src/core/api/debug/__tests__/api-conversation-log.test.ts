@@ -57,25 +57,38 @@ describe("api_conversation_all round logging", () => {
 		expect(JSON.stringify(event.payload)).not.toContain("tool_use_id")
 	})
 
-	it("redacts hosted image bytes from provider debug output without changing the live stream", async () => {
-		const secretImage = "very-secret-base64-image"
+	it("redacts hosted preview and final image bytes from provider debug output without changing the live stream", async () => {
+		const secretPreview = "very-secret-partial-base64-image"
+		const secretFinal = "very-secret-final-base64-image"
 		async function* source(): ApiStream {
 			yield {
 				type: "server_tool",
 				function_id: "ig_1",
 				tool: ServerTool.IMAGE_GENERATION,
+				phase: "preview",
+				result: { partialImageB64: secretPreview, sequence: 0 },
+			}
+			yield {
+				type: "server_tool",
+				function_id: "ig_1",
+				tool: ServerTool.IMAGE_GENERATION,
 				phase: "completed",
-				result: { b64Json: secretImage },
+				result: { b64Json: secretFinal },
 			}
 		}
 
 		const received = []
 		for await (const chunk of recordProviderAdapterOutput(round, source())) received.push(chunk)
 
-		expect(JSON.stringify(received)).toContain(secretImage)
+		expect(JSON.stringify(received)).toContain(secretPreview)
+		expect(JSON.stringify(received)).toContain(secretFinal)
 		const event = vi.mocked(appendApiConversationEvent).mock.calls[0][1] as any
-		expect(JSON.stringify(event)).not.toContain(secretImage)
-		expect(event.payload.chunks[0].result).toEqual({ redacted: "hosted_image_bytes" })
+		expect(JSON.stringify(event)).not.toContain(secretPreview)
+		expect(JSON.stringify(event)).not.toContain(secretFinal)
+		expect(event.payload.chunks.map((chunk: any) => chunk.result)).toEqual([
+			{ redacted: "hosted_image_bytes" },
+			{ redacted: "hosted_image_bytes" },
+		])
 	})
 
 	it("records one assembled response instead of one event per stream chunk", async () => {

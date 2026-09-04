@@ -3,6 +3,7 @@ import type { ApiProfile } from "@shared/proto/dline/profile"
 
 export type ImageGenerationOperation = "generate" | "edit"
 export type ImageOutputFormat = "png" | "jpeg" | "webp"
+export type ImageQuality = "auto" | "low" | "medium" | "high"
 export type ImageBackground = "auto" | "opaque" | "transparent"
 export type ImageReferenceRole = "reference" | "mask"
 
@@ -26,9 +27,10 @@ export interface ImageGenerationRequest {
 	count: number
 	size?: ImageGenerationSize
 	aspectRatio?: string
-	quality?: string
+	quality?: ImageQuality
 	background?: ImageBackground
 	outputFormat?: ImageOutputFormat
+	outputCompression?: number
 	references: ImageReferenceInput[]
 }
 
@@ -70,7 +72,7 @@ interface ImageGenerationEventBase {
 export type ImageGenerationEvent =
 	| (ImageGenerationEventBase & { type: "queued" })
 	| (ImageGenerationEventBase & { type: "started"; providerId: string; modelId: string })
-	| (ImageGenerationEventBase & { type: "preview"; outputs: ImageProviderOutput[] })
+	| (ImageGenerationEventBase & { type: "preview"; sequence: number; outputs: ImageProviderOutput[] })
 	| (ImageGenerationEventBase & { type: "completed"; outputs: ImageProviderOutput[]; usage: ImageGenerationUsage })
 	| (ImageGenerationEventBase & { type: "failed"; error: ImageGenerationErrorDetails })
 	| (ImageGenerationEventBase & { type: "cancelled"; reason: string })
@@ -126,10 +128,19 @@ export class ImageGenerationError extends Error {
 	}
 }
 
+export interface ImageGenerationPreview {
+	id: string
+	mimeType: "image/png" | "image/jpeg" | "image/webp"
+	width: number
+	height: number
+	sequence: number
+}
+
 export interface ImageGenerationProgressEvent {
 	type: "preview"
 	requestId: string
 	timestampMs: number
+	preview?: ImageGenerationPreview
 }
 
 export interface ImageGenerationExecutionContext {

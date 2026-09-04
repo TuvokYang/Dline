@@ -63,6 +63,7 @@ const BASE_CONTEXT = {
 	subagentsEnabled: true,
 	clineWebToolsEnabled: true,
 	webSearchRoutingPlan: LOCAL_WEB_SEARCH_ROUTING_PLAN,
+	imageGenerationAvailable: true,
 	enableParallelToolCalling: true,
 	yoloModeToggled: false,
 	isCliEnvironment: false,
@@ -146,7 +147,7 @@ describe("complete explicit-profile snapshot matrix", () => {
 			.map((entry) => entry.name)
 			.sort()
 		expect(generatedNames).toEqual(expectedSnapshotNames())
-		expect(generatedNames).toHaveLength(54)
+		expect(generatedNames).toHaveLength(60)
 	})
 
 	for (const profile of SNAPSHOT_PROFILES) {
@@ -225,6 +226,14 @@ describe("complete explicit-profile snapshot matrix", () => {
 					if (transport === "xml" && profile !== "lite") {
 						expect(generated.systemPrompt).toContain("## spawn_task")
 						expect(generated.systemPrompt).toContain("<spawn_task>")
+					}
+					if (snapshotCase.id === "no-image") {
+						expect(generated.systemPrompt).not.toContain("generate_image")
+						expect(serializeTools(generated.tools)).not.toContain('"generate_image"')
+					} else if (transport === "native") {
+						expect(serializeTools(generated.tools)).toContain('"generate_image"')
+					} else {
+						expect(generated.systemPrompt).toContain("## generate_image")
 					}
 					if (profile === "lite") {
 						for (const toolName of [

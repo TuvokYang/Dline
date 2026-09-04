@@ -6,7 +6,7 @@ import ChatRow from "@/components/chat/ChatRow"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { cn } from "@/lib/utils"
 import type { MessageHandlers } from "../../types/chatTypes"
-import { findReasoningForApiReq, isTextMessagePendingToolCall, isToolGroup } from "../../utils/messageUtils"
+import { findReasoningForApiReq, isTextMessagePendingToolCall, isToolGroup, resolveMessageRowExpanded } from "../../utils/messageUtils"
 import { ToolGroupRenderer } from "./ToolGroupRenderer"
 
 interface MessageRendererProps {
@@ -107,7 +107,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = ({
 			})}
 			data-message-ts={messageOrGroup.ts}>
 			<ChatRow
-				isExpanded={expandedRows[messageOrGroup.ts] || false}
+				isExpanded={resolveMessageRowExpanded(messageOrGroup, expandedRows)}
 				isLast={isLastMessage}
 				isRequestInProgress={isRequestInProgress}
 				key={messageOrGroup.ts}

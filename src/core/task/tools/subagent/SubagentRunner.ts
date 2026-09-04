@@ -9,6 +9,7 @@ import { createStreamNormalizer, normalizeApiStream } from "@core/api/transform/
 import { ApiUsageAccumulator } from "@core/api/transform/usage-accumulator"
 import { parseAssistantMessageV2, ToolUse } from "@core/assistant-message"
 import { discoverAvailableSkills } from "@core/context/instructions/user-instructions/skills"
+import { createImageProfileResolverForProfile } from "@core/image-generation/runtime"
 import { formatResponse } from "@core/prompts/responses"
 import { getSystemPrompt, type SystemPromptContext } from "@core/prompts/system-prompt"
 import type { ProviderRequestRoundAdmission } from "@core/task/performance/provider-request-round-port"
@@ -524,8 +525,14 @@ export class SubagentRunner {
 		let activeProviderExecution: ProviderExecutionCompletion | undefined
 
 		try {
-			const mode = this.baseConfig.services.stateManager.getGlobalSettingsKey("mode")
+			const mode = "act" as const
 			const api = this.apiHandler
+			const imageGenerationService = this.baseConfig.services.imageGenerationService.withProfileResolver(
+				createImageProfileResolverForProfile({
+					profileId: this.agent.getProfileId(),
+					profileName: this.agent.getProfileName(),
+				}),
+			)
 			const outputBudget = resolveSubagentOutputBudget(this.baseConfig, this.agent.getConfiguredMaxOutputTokens())
 			const promptWithBudget = buildSubagentOutputBudgetPrompt(prompt, outputBudget.outputTokens)
 			this.activeApiAbort = api.abort?.bind(api)
@@ -608,7 +615,7 @@ export class SubagentRunner {
 				disableTools: Object.values(ClineDefaultTool).filter((tool) => !allowedTools.has(tool)),
 				clineWebToolsEnabled: webToolsEnabled,
 				webSearchRoutingPlan,
-				imageGenerationAvailable: this.baseConfig.services.imageGenerationService.hasAvailableProfile(),
+				imageGenerationAvailable: imageGenerationService.hasAvailableProfile(),
 			}
 
 			const generated = await getSystemPrompt(context)
@@ -1102,7 +1109,12 @@ export class SubagentRunner {
 						},
 					})
 
-					const subagentConfig = this.createSubagentTaskConfig(state, webToolsEnabled, webSearchRoutingPlan)
+					const subagentConfig = this.createSubagentTaskConfig(
+						state,
+						webToolsEnabled,
+						webSearchRoutingPlan,
+						imageGenerationService,
+					)
 					const handler = this.baseConfig.coordinator.getHandler(toolName)
 					let toolResult: unknown
 					let toolError: string | undefined
@@ -1209,6 +1221,7 @@ export class SubagentRunner {
 		state: TaskState,
 		webToolsEnabled: boolean,
 		webSearchRoutingPlan: WebSearchRoutingPlan,
+		imageGenerationService: TaskConfig["services"]["imageGenerationService"],
 	): TaskConfig {
 		const baseCallbacks = this.baseConfig.callbacks
 		const coordinator = new ToolExecutorCoordinator()
@@ -1222,6 +1235,7 @@ export class SubagentRunner {
 			...this.baseConfig,
 			api: this.apiHandler,
 			coordinator,
+			services: { ...this.baseConfig.services, imageGenerationService },
 			taskState: state,
 			isSubagentExecution: true,
 			webToolsEnabled,
