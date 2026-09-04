@@ -60,7 +60,7 @@ const getActivityText = (tool: ClineSayTool): string | null => {
 		case "searchFiles":
 			return tool.regex && tool.path ? `Searching ${formatSearchRegex(tool.regex, tool.path, tool.filePattern)}...` : null
 		case "findReferences":
-			return tool.path ? `Finding references in ${cleanedPath}/...` : null
+			return tool.path ? "Finding references..." : null
 		case "listCodeDefinitionNames":
 			return tool.path ? `Analyzing ${cleanedPath}/...` : null
 		default:
@@ -190,6 +190,7 @@ export const ToolGroupRenderer = memo(({ messages, allMessages, isLastGroup }: T
 
 					const isExpandable = EXPANDABLE_TOOLS.has(parsedTool.tool)
 					const isItemExpanded = expandedItems[tool.ts] ?? false
+					const isReferencesTool = parsedTool.tool === "findReferences"
 					const content = parsedTool.content || null
 
 					// Active items render with "Reading..." TypewriterText (match completed item structure exactly)
@@ -198,14 +199,18 @@ export const ToolGroupRenderer = memo(({ messages, allMessages, isLastGroup }: T
 							<div className="min-w-0" key={tool.ts}>
 								{/* ACTIVE "READING..." ITEM STYLING - Modify vertical spacing here via py-0 and -my-0.5 */}
 								<Button
+									aria-label={isReferencesTool ? "Finding references" : undefined}
 									className="flex items-center gap-[3px] text-[13px] text-description py-[1px] min-w-0 max-w-full px-0 leading-tight -my-0.5"
 									disabled
 									size="icon"
-									variant="text">
+									title={isReferencesTool ? "Finding references" : undefined}
+									variant={isReferencesTool ? "icon" : "text"}>
 									<info.icon className="opacity-70 shrink-0 size-[12px]" />
-									<span className="flex-1 min-w-0 whitespace-nowrap overflow-hidden text-ellipsis text-left text-[13px]">
-										<TypewriterText speed={15} text={activityText} />
-									</span>{" "}
+									{!isReferencesTool && (
+										<span className="flex-1 min-w-0 whitespace-nowrap overflow-hidden text-ellipsis text-left text-[13px]">
+											<TypewriterText speed={15} text={activityText} />
+										</span>
+									)}
 								</Button>
 							</div>
 						)
@@ -215,6 +220,8 @@ export const ToolGroupRenderer = memo(({ messages, allMessages, isLastGroup }: T
 					return (
 						<div className="min-w-0" key={tool.ts}>
 							<Button
+								aria-expanded={isReferencesTool ? isItemExpanded : undefined}
+								aria-label={isReferencesTool ? `${isItemExpanded ? "Hide" : "Show"} references` : undefined}
 								className="flex items-center gap-[3px] cursor-pointer text-[13px] text-description py-[1px] hover:text-link min-w-0 max-w-full px-0 leading-tight -my-0.5"
 								onClick={() => {
 									if (isExpandable) {
@@ -228,17 +235,20 @@ export const ToolGroupRenderer = memo(({ messages, allMessages, isLastGroup }: T
 									}
 								}}
 								size="icon"
-								variant="text">
+								title={isReferencesTool ? `${isItemExpanded ? "Hide" : "Show"} references` : undefined}
+								variant={isReferencesTool ? "icon" : "text"}>
 								<info.icon className="opacity-70 shrink-0 size-[12px]" />
-								<span
-									className={cn(
-										"flex-1 min-w-0 whitespace-nowrap overflow-hidden text-ellipsis text-left [direction:rtl] text-[13px]",
-										{
-											"[direction:ltr]": !!info.displayText,
-										},
-									)}>
-									{`${info.displayText || cleanPathPrefix(info.path)}\u200E`}
-								</span>
+								{!isReferencesTool && (
+									<span
+										className={cn(
+											"flex-1 min-w-0 whitespace-nowrap overflow-hidden text-ellipsis text-left [direction:rtl] text-[13px]",
+											{
+												"[direction:ltr]": !!info.displayText,
+											},
+										)}>
+										{`${info.displayText || cleanPathPrefix(info.path)}\u200E`}
+									</span>
+								)}
 							</Button>
 							{/* Expanded content for matches/references/folders/search */}
 							{isExpandable && isItemExpanded && (
@@ -350,18 +360,12 @@ function getToolDisplayInfo(tool: ClineSayTool) {
 				label: `search: ${tool.regex}`,
 				displayText: formatSearchDisplay(tool.regex || "", filePath, tool.filePattern),
 			}
-		case "findReferences": {
-			const _refCount = (tool as any).count as number | undefined
-			const symbol = (tool as any).symbolName as string | undefined
+		case "findReferences":
 			return {
 				icon,
 				path: filePath,
 				label: "references",
-				displayText: symbol
-					? `"${symbol}" in ${cleanPathPrefix(filePath)}/`
-					: `references in ${cleanPathPrefix(filePath)}/`,
 			}
-		}
 		case "renameSymbol": {
 			const newName = (tool as any).regex as string | undefined
 			const cnt = (tool as any).count as number | undefined
@@ -520,13 +524,15 @@ function ExpandedToolContent({ parsedTool, onOpenFile, content }: ExpandedToolCo
 					const ctx = (r.context as string) || ""
 					return (
 						<div
-							className="flex items-start gap-2 py-0.5 px-1 rounded-sm text-xs cursor-pointer hover:bg-accent/30"
+							className="flex flex-col items-stretch gap-0.5 py-1 px-1 rounded-sm text-xs cursor-pointer hover:bg-accent/30"
 							key={ri}
 							onClick={() => onOpenFile(`${r.file}:${r.line}`)}>
-							<span className="text-description opacity-50 shrink-0">
+							<span className="block w-full break-all text-description opacity-50" title={r.file}>
 								{r.file} L{r.line}
 							</span>
-							<span className="whitespace-pre-wrap break-all">{renderHighlightedContext(ctx, symbolName)}</span>
+							<span className="block w-full min-w-0 whitespace-pre-wrap break-words font-mono">
+								{renderHighlightedContext(ctx, symbolName)}
+							</span>
 						</div>
 					)
 				})}
