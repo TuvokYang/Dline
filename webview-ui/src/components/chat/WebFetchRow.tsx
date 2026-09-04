@@ -43,9 +43,7 @@ const WebFetchRow = ({ messageType, url, webFetch }: WebFetchRowProps) => {
 						})
 					}}
 					type="button">
-					<span className="ph-no-capture block overflow-hidden text-ellipsis whitespace-nowrap [direction:rtl]">
-						{`${resolvedUrl}\u200E`}
-					</span>
+					<span className="ph-no-capture block break-all text-left [direction:ltr]">{resolvedUrl}</span>
 				</button>
 				{webFetch?.prompt && <div className="ph-no-capture break-words text-xs text-description">{webFetch.prompt}</div>}
 				{webFetch?.error && (

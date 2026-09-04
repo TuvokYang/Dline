@@ -4,6 +4,8 @@ import TurndownService from "turndown"
 import { StateManager } from "@/core/storage/StateManager"
 import { ensureChromiumExists } from "./utils"
 
+const WEB_FETCH_NAVIGATION_TIMEOUT_MS = 30_000
+
 function abortError(signal: AbortSignal): Error {
 	return signal.reason instanceof Error ? signal.reason : new Error("Browser operation was cancelled")
 }
@@ -120,7 +122,7 @@ export class UrlContentFetcher {
 		*/
 		await waitForAbort(
 			page.goto(url, {
-				timeout: 10_000,
+				timeout: WEB_FETCH_NAVIGATION_TIMEOUT_MS,
 				waitUntil: ["domcontentloaded", "networkidle2"],
 			}),
 			signal,

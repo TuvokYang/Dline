@@ -11,6 +11,7 @@ import type { LocalWebFetchProvider } from "@/services/web-fetch/LocalWebFetchPr
 import { type LocalSearchProvider, LocalSearchRegistry } from "@/services/web-search/LocalSearchProvider"
 import type { ToolUse } from "../../../assistant-message"
 import { AutoApprove } from "../autoApprove"
+import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 import { ToolHookUtils } from "../utils/ToolHookUtils"
 import { NO_TOOL_RESULT } from "../utils/ToolResultUtils"
 import { WebFetchToolHandler } from "./WebFetchToolHandler"
@@ -233,6 +234,41 @@ describe("local Web Tool routing", () => {
 
 		expect(String(await new WebFetchToolHandler().execute(taskConfig, block("web_fetch")))).toContain("disabled")
 		expect(taskConfig.callbacks.sayAndCreateMissingParamError).not.toHaveBeenCalled()
+	})
+
+	it("waits for a non-empty URL before rendering partial Web Fetch approval", async () => {
+		const ask = vi.fn<StronglyTypedUIHelpers["ask"]>(async () => ({ response: "yesButtonClicked" }))
+		const uiHelpers: StronglyTypedUIHelpers = {
+			say: vi.fn(async () => undefined),
+			ask,
+			removeClosingTag: (_block: ToolUse, _parameter: string, value?: string) => value ?? "",
+			shouldAutoApproveTool: vi.fn(() => false),
+			shouldAutoApproveToolWithPath: vi.fn(async () => false),
+			askApproval: vi.fn(async () => false),
+			captureTelemetry: vi.fn(),
+			showNotificationIfEnabled: vi.fn(),
+			getConfig: vi.fn(() => {
+				throw new Error("getConfig should not be called while rendering a partial Web Fetch block")
+			}),
+		}
+		const handler = new WebFetchToolHandler()
+		const fetchBlock = block("web_fetch")
+
+		await handler.handlePartialBlock(fetchBlock, uiHelpers)
+		expect(ask).not.toHaveBeenCalled()
+
+		const url = "https://example.test/streamed-url"
+		await handler.handlePartialBlock({ ...fetchBlock, params: { url } } as ToolUse, uiHelpers)
+
+		expect(ask).toHaveBeenCalledOnce()
+		const serializedPayload = ask.mock.calls[0]?.[1]
+		if (!serializedPayload) throw new Error("Expected Web Fetch approval payload")
+		const payload = JSON.parse(serializedPayload)
+		expect(payload).toMatchObject({
+			tool: "webFetch",
+			path: url,
+			webFetch: { schemaVersion: 1, status: "running", url },
+		})
 	})
 
 	it("executes an OpenAI local Web Search without consulting Cline Auth", async () => {

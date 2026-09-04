@@ -331,6 +331,35 @@ describe("ChatRow hosted Web Search rendering", () => {
 		expect(screen.getByText("Browser / Bing search failed: navigation timed out")).toBeInTheDocument()
 	})
 
+	it("renders the complete URL in a pending Web Fetch approval", () => {
+		const url = "https://example.com/a/long/path/to/current/api/documentation"
+		render(
+			<ChatRowContent
+				{...baseProps}
+				message={{
+					ts: 3,
+					type: "ask",
+					ask: "tool",
+					partial: false,
+					text: JSON.stringify({
+						tool: "webFetch",
+						path: url,
+						webFetch: {
+							schemaVersion: 1,
+							status: "running",
+							url,
+							prompt: "Read the current API documentation",
+						},
+					}),
+				}}
+			/>,
+		)
+
+		const link = screen.getByRole("button", { name: url })
+		expect(link).toHaveTextContent(url)
+		expect(link.firstElementChild).toHaveClass("break-all", "text-left", "[direction:ltr]")
+	})
+
 	it("renders completed Web Fetch content in a 40vh scroll container", () => {
 		render(
 			<ChatRowContent

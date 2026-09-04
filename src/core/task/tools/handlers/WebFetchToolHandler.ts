@@ -34,6 +34,7 @@ export class WebFetchToolHandler implements IFullyManagedTool {
 	async handlePartialBlock(block: ToolUse, uiHelpers: StronglyTypedUIHelpers): Promise<void> {
 		const url = block.params.url || ""
 		const normalizedUrl = uiHelpers.removeClosingTag(block, "url", url)
+		if (!normalizedUrl.trim()) return
 		const sharedMessageProps: ClineSayTool = {
 			tool: "webFetch",
 			path: normalizedUrl,
