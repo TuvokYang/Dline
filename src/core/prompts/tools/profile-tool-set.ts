@@ -16,6 +16,7 @@ export interface ProfileToolParam {
 	readonly required: boolean
 	readonly instruction: string
 	readonly type?: ToolParamType
+	readonly enumValues?: readonly string[]
 	readonly dependencies?: readonly ClineDefaultTool[]
 	readonly contextRequirements?: (context: SystemPromptContext) => boolean
 }

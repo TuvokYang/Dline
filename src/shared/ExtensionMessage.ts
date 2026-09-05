@@ -13,8 +13,8 @@ import type { CodeExecutionPresentationV1 } from "./code-execution-tools"
 import type { ContextWindowIndicatorSnapshot } from "./context-window-indicator"
 import { FocusChainSettings } from "./FocusChainSettings"
 import { HistoryItem } from "./HistoryItem"
-import type { ImageGenerationPresentationV1 } from "./image-generation"
 import type { QueuedInputEntry } from "./InputQueue"
+import type { ImageGenerationPresentationV1 } from "./image-generation"
 import type { LoadCapabilityPayload } from "./load-capabilities"
 import { McpDisplayMode } from "./McpDisplayMode"
 import { ClineMessageModelInfo } from "./messages"
@@ -748,6 +748,7 @@ export interface ClineAskNewTask {
 
 export interface ClineAskSpawnTask {
 	task: string
+	mode: Mode
 	context: string
 }
 

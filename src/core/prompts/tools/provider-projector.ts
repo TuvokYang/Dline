@@ -51,6 +51,7 @@ function buildSchema(
 		properties[parameter.name] = {
 			type: parameter.type ?? "string",
 			description: parameter.instruction,
+			...(parameter.enumValues ? { enum: parameter.enumValues } : {}),
 		}
 		if (parameter.required) required.push(parameter.name)
 	}

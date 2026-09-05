@@ -98,9 +98,45 @@ describe("SpawnTaskHandler", () => {
 			await handler.execute(config, {
 				name: "spawn_task",
 				dline_tid: "tid-reset",
-				params: { task: "Test task" },
+				params: { task: "Test task", mode: "plan" },
 			} as any)
 			config.taskState.consecutiveMistakeCount.should.equal(0)
+		})
+
+		it("should report a missing mode when task is provided without one", async () => {
+			const sayAndCreateMissingParamError = vi.fn(async () => "Missing mode error")
+			const config = {
+				taskState: { consecutiveMistakeCount: 0 },
+				callbacks: { sayAndCreateMissingParamError },
+			} as any
+
+			const result = await handler.execute(config, {
+				name: "spawn_task",
+				dline_tid: "tid-missing-mode",
+				params: { task: "Test task" },
+			} as any)
+
+			expect(result).toBe("Missing mode error")
+			expect(config.taskState.consecutiveMistakeCount).toBe(1)
+			expect(sayAndCreateMissingParamError).toHaveBeenCalledWith("spawn_task", "mode", undefined, undefined)
+		})
+
+		it("should reject an unsupported mode before opening approval", async () => {
+			const open = vi.fn()
+			const config = {
+				taskState: { consecutiveMistakeCount: 0 },
+				interactions: { open },
+			} as any
+
+			const result = await handler.execute(config, {
+				name: "spawn_task",
+				dline_tid: "tid-invalid-mode",
+				params: { task: "Test task", mode: "review" },
+			} as any)
+
+			expect(result).toMatch(/Invalid mode 'review'/)
+			expect(config.taskState.consecutiveMistakeCount).toBe(1)
+			expect(open).not.toHaveBeenCalled()
 		})
 	})
 
@@ -127,7 +163,7 @@ describe("SpawnTaskHandler", () => {
 			const result = await handler.execute(config, {
 				name: "spawn_task",
 				dline_tid: "tid-deny",
-				params: { task: "Test task" },
+				params: { task: "Test task", mode: "plan" },
 			} as any)
 
 			result.should.match(/denied|not approved/i)
@@ -158,7 +194,7 @@ describe("SpawnTaskHandler", () => {
 			const result = await handler.execute(config, {
 				name: "spawn_task",
 				dline_tid: "tid-feedback",
-				params: { task: "Test task", context: "some context" },
+				params: { task: "Test task", mode: "act", context: "some context" },
 			} as any)
 
 			result.should.match(/feedback/)
@@ -166,7 +202,10 @@ describe("SpawnTaskHandler", () => {
 	})
 
 	describe("execute — approved spawn", () => {
-		it("returns after background admission without waiting for the child task loop", async () => {
+		it.each([
+			["plan", "parent-plan-profile"],
+			["act", "parent-act-profile"],
+		] as const)("starts the child in %s mode without waiting for its task loop", async (requestedMode, expectedProfile) => {
 			const neverCompletes = new Promise<void>(() => undefined)
 			spawnMocks.initTask.mockImplementation(async (...args: unknown[]) => {
 				const options = args[5] as
@@ -181,17 +220,19 @@ describe("SpawnTaskHandler", () => {
 				await options?.beforeStart?.("child-1")
 				return "child-1"
 			})
+			const open = vi.fn(async () => ({ actionId: "approve" }))
 			const config = {
 				taskId: "parent-1",
 				mode: "plan",
 				taskState: { consecutiveMistakeCount: 0, abort: false },
-				interactions: { open: async () => ({ actionId: "approve" }) },
+				interactions: { open },
 				callbacks: { say: async () => {} },
 				services: {
 					stateManager: {
-						getApiConfiguration: () => ({ planModeProfile: "parent-profile" }),
-						getApiConfigurationForTask: () => ({ planModeProfile: "parent-profile" }),
-						getGlobalSettingsKey: () => "plan",
+						getApiConfigurationForTask: () => ({
+							planModeProfile: "parent-plan-profile",
+							actModeProfile: "parent-act-profile",
+						}),
 					},
 				},
 				controllerContext: {},
@@ -200,7 +241,7 @@ describe("SpawnTaskHandler", () => {
 			const execution = handler.execute(config, {
 				name: "spawn_task",
 				dline_tid: "tid-background",
-				params: { task: "Background child", context: "Context" },
+				params: { task: "Background child", mode: requestedMode, context: "Context" },
 			} as any)
 			const result = await Promise.race([
 				execution,
@@ -208,7 +249,22 @@ describe("SpawnTaskHandler", () => {
 			])
 
 			expect(result).not.toBe("SPAWN_BLOCKED")
+			expect(open).toHaveBeenCalledWith(
+				expect.objectContaining({
+					kind: "spawn_task_approval",
+					presentation: JSON.stringify({ task: "Background child", mode: requestedMode, context: "Context" }),
+				}),
+			)
+			expect(result).toContain(`${requestedMode.toUpperCase()} task`)
 			expect(result).toContain("child-1")
+			expect(spawnMocks.initTask).toHaveBeenCalledWith(
+				"Background child",
+				undefined,
+				undefined,
+				undefined,
+				{ planModeProfile: expectedProfile, actModeProfile: expectedProfile, mode: requestedMode },
+				expect.objectContaining({ startInBackground: true }),
+			)
 			expect(spawnMocks.recordSpawn).toHaveBeenCalledWith("parent-1", "child-1")
 		})
 
@@ -233,7 +289,7 @@ describe("SpawnTaskHandler", () => {
 			const result = await handler.execute(config, {
 				name: "spawn_task",
 				dline_tid: "tid-init-error",
-				params: { task: "Failing child" },
+				params: { task: "Failing child", mode: "plan" },
 			} as any)
 
 			expect(result).toMatch(/init failed/i)
@@ -260,7 +316,7 @@ describe("SpawnTaskHandler", () => {
 			const result = await handler.execute(config, {
 				name: "spawn_task",
 				dline_tid: "tid-error",
-				params: { task: "Test task" },
+				params: { task: "Test task", mode: "plan" },
 			} as any)
 
 			result.should.match(/spawn task failed/i)

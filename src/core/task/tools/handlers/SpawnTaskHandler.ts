@@ -1,6 +1,7 @@
 import type { ToolUse } from "@core/assistant-message"
 import { getPrompt } from "@core/prompts/i18n"
 import { formatResponse } from "@core/prompts/responses"
+import type { Mode } from "@shared/storage/types"
 
 import { ClineDefaultTool } from "@/shared/tools"
 import type { ToolResponse } from "../../index"
@@ -8,14 +9,16 @@ import type { IToolHandler } from "../ToolExecutorCoordinator"
 import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
+/** Reports whether a tool-provided startup mode is supported. */
+function isSpawnTaskMode(value: string | undefined): value is Mode {
+	return value === "plan" || value === "act"
+}
+
 /**
- * SpawnTaskHandler â€?handles the spawn_task tool.
+ * Creates a first-class peer task in a new Editor Tab panel.
  *
- * Creates a new Editor Tab panel with an independent Controller/Task
- * that inherits the parent task's (provider ?? ""), MCP servers, and rules.
- * The spawned task starts in PLAN mode with auto-run.
- *
- * Only available on main (non-spawned) tasks.
+ * The task inherits the parent's API profile for the requested mode, MCP
+ * servers, and rules, then starts independently in the background.
  */
 export class SpawnTaskHandler implements IToolHandler {
 	readonly name = ClineDefaultTool.SPAWN_TASK
@@ -27,16 +30,25 @@ export class SpawnTaskHandler implements IToolHandler {
 	async execute(config: TaskConfig, block: ToolUse): Promise<ToolResponse> {
 		const params = block.params as Record<string, string | undefined>
 		const taskDescription: string | undefined = params.task
+		const requestedMode: string | undefined = params.mode
 		const contextParam: string | undefined = params.context
 
 		if (!taskDescription) {
 			config.taskState.consecutiveMistakeCount++
 			return await config.callbacks.sayAndCreateMissingParamError(this.name, "task", undefined, block.ts)
 		}
+		if (!requestedMode) {
+			config.taskState.consecutiveMistakeCount++
+			return await config.callbacks.sayAndCreateMissingParamError(this.name, "mode", undefined, block.ts)
+		}
+		if (!isSpawnTaskMode(requestedMode)) {
+			config.taskState.consecutiveMistakeCount++
+			return formatResponse.toolError(`Invalid mode '${requestedMode}' for spawn_task. Expected 'plan' or 'act'.`)
+		}
 
 		config.taskState.consecutiveMistakeCount = 0
 
-		const approvalBody = JSON.stringify({ task: taskDescription, context: contextParam })
+		const approvalBody = JSON.stringify({ task: taskDescription, mode: requestedMode, context: contextParam })
 		const outcome = await config.interactions.open({
 			turnId: interactionTurnId(block),
 			interactionId: interactionId(block),
@@ -89,9 +101,9 @@ export class SpawnTaskHandler implements IToolHandler {
 			// process-wide active-task routing cursor.
 			const parentTaskId = config.taskId
 			const apiConfiguration = config.services.stateManager.getApiConfigurationForTask(parentTaskId)
-			const currentProfile = config.mode === "plan" ? apiConfiguration.planModeProfile : apiConfiguration.actModeProfile
-			if (!currentProfile) {
-				return formatResponse.toolError(`No profile configured for ${config.mode} mode`)
+			const selectedProfile = requestedMode === "plan" ? apiConfiguration.planModeProfile : apiConfiguration.actModeProfile
+			if (!selectedProfile) {
+				return formatResponse.toolError(`No profile configured for ${requestedMode} mode`)
 			}
 
 			const panelProvider = new VscodeWebviewPanelProvider(controllerContext, { deferController: false })
@@ -123,9 +135,9 @@ export class SpawnTaskHandler implements IToolHandler {
 				undefined,
 				undefined,
 				{
-					planModeProfile: currentProfile,
-					actModeProfile: currentProfile,
-					mode: "plan",
+					planModeProfile: selectedProfile,
+					actModeProfile: selectedProfile,
+					mode: requestedMode,
 				},
 				{
 					...(contextParam ? { context: [contextParam] } : {}),
@@ -146,7 +158,7 @@ export class SpawnTaskHandler implements IToolHandler {
 			// Return success once the child has been admitted. Its agent loop remains
 			// owned by the child controller and continues in the background.
 			return formatResponse.toolResult(
-				`Spawned new task "${taskDescription}" with ID: ${childTaskId}. The task has been created in a new editor tab.`,
+				`Spawned new ${requestedMode.toUpperCase()} task "${taskDescription}" with ID: ${childTaskId}. The task has been created in a new editor tab.`,
 			)
 		} catch (error) {
 			await disposePanel?.().catch(() => undefined)

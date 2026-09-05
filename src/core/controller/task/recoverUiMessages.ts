@@ -83,7 +83,7 @@ function formatAskText(name: string, input: Record<string, unknown>): string {
 		case "browser_action":
 			return JSON.stringify(input)
 		case "spawn_task":
-			return JSON.stringify({ task: input.task, context: input.context })
+			return JSON.stringify({ task: input.task, mode: input.mode, context: input.context })
 		case "ask_followup_question":
 			return JSON.stringify({ question: input.question, options: input.options })
 		case "attempt_completion":

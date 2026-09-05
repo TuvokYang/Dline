@@ -134,7 +134,7 @@ describe("handler interaction matrix", () => {
 		const taskConfig = config({ actionId: "reject" })
 		await new SpawnTaskHandler().execute(
 			taskConfig,
-			block(ClineDefaultTool.SPAWN_TASK, { task: "Child", context: "Context" }),
+			block(ClineDefaultTool.SPAWN_TASK, { task: "Child", mode: "plan", context: "Context" }),
 		)
 		expect(taskConfig.interactions.open).toHaveBeenCalledWith(expect.objectContaining({ kind: "spawn_task_approval" }))
 	})

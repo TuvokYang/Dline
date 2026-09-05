@@ -499,13 +499,15 @@ Usage:
 </apply_patch>
 
 ## spawn_task
-Description: Spawn a new independent task. The spawned task has its OWN context — it does NOT inherit the parent's conversation history. Use the task parameter for goals and the context parameter for background information. The task runs autonomously in PLAN mode with auto-run enabled, inheriting the parent's API provider, MCP servers, and rules. The user must approve before creation.
+Description: Spawn a first-class peer task, not a subagent. The spawned task runs independently with its own conversation context and the normal task capability and approval model. It does NOT inherit the parent's conversation history. Use the task parameter for goals, mode to choose whether it starts in PLAN or ACT mode, and context for background information. The task starts immediately in the background, inheriting the parent's API profile for the selected mode, MCP servers, and rules. The user must approve before creation.
 Parameters:
 - task: (required) Describe what the spawned task should investigate or execute. Be specific about the goals and expected work to be done.
+- mode: (required) Required startup mode. Use "plan" for investigation or planning and "act" for implementation or other state-changing work.
 - context: (optional) Provide relevant background context for the spawned task. Include: why this task is needed, relevant conversation history or prior work, key technical concepts, constraints, and configuration. The spawned task cannot access the parent's conversation history — include everything it needs to know.
 Usage:
 <spawn_task>
 <task></task>
+<mode></mode>
 <context></context>
 </spawn_task>
 
@@ -576,14 +578,14 @@ Usage:
 </status_update>
 
 ## generate_image
-Description: Generate or edit images through the configured Current, Independent, or Hosted image source. This is the only AI-callable image generation entry point and is a paid external operation. Choose output size, quality, format, compression, and background explicitly when the user requests them. Outputs are stored as task artifacts; the tool result contains artifact IDs and safe metadata, never full base64 image data.
+Description: Generate or edit images through the configured Current, Independent, or Hosted image source. This is the only AI-callable image generation entry point and is a paid external operation. Choose output size, quality, format, compression, and background explicitly when the user requests them. Outputs are stored as task artifacts; the tool result contains artifact IDs and safe metadata, never full base64 image data. Arbitrary output resolutions are supported. Request dimensions through width and height under these constraints: both edges must be multiples of 16, the longest edge must not exceed 3840 pixels, the long-to-short edge ratio must stay within 3:1, and the total pixel count must be between 655,360 and 8,294,400. Common choices are 1024x1024, 1536x1024, 1024x1536, 2048x2048, 2048x1152, 3840x2160, and 2160x3840; square images generate fastest and outputs above 2,560x1,440 pixels are experimental. Dimensions outside these constraints are rejected before the request is sent. Omit width and height to use the default 2048x1152 target.
 Parameters:
 - prompt: (required) Describe the image to generate or the edit to apply.
 - profile: (optional) Optional name or ID of the currently bound Image profile. This cannot switch to unrelated credentials.
 - count: (optional) Number of images to generate. Must be a positive integer within the model and task limits.
-- width: (optional) Optional desired output width in pixels. Provide height together with width. The selected image model may map it to the closest supported output. Omit both for the default 16:9 target around 2048×1152.
-- height: (optional) Optional desired output height in pixels. Provide width together with height. The selected image model may map it to the closest supported output. Omit both for the default 16:9 target around 2048×1152.
-- aspect_ratio: (optional) Optional desired aspect ratio. The selected image model maps it to a supported output ratio.
+- width: (optional) Optional desired output width in pixels. Provide height together with width, and use a value the selected image model actually supports. Omit both to use the default target for the selected model.
+- height: (optional) Optional desired output height in pixels. Provide width together with height, and use a value the selected image model actually supports. Omit both to use the default target for the selected model.
+- aspect_ratio: (optional) Optional desired aspect ratio. Use a ratio the selected image model actually supports.
 - quality: (optional) Optional quality: auto, low, medium, or high. Defaults to auto.
 - background: (optional) Optional background mode: auto, opaque, or transparent. Transparent output requires PNG or WebP.
 - output_format: (optional) Optional output format: png, jpeg, or webp. Defaults to png.

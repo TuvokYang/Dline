@@ -46,7 +46,7 @@ e2e("Spawn task - approval chain closes and the conversation continues", async (
 			type: "tool",
 			id: "call_spawn_task",
 			name: "spawn_task",
-			arguments: { task: "E2E spawned sub-task", context: "E2E spawn context" },
+			arguments: { task: "E2E spawned sub-task", mode: "plan", context: "E2E spawn context" },
 		},
 		{
 			type: "tool",

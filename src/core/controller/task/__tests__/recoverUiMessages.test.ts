@@ -86,4 +86,44 @@ describe("recoverUiMessages", () => {
 		expect(resumeFromHistory).not.toHaveBeenCalled()
 		expect(postStateToWebview).toHaveBeenCalledOnce()
 	})
+
+	it("preserves the selected mode in a recovered spawn task approval", async () => {
+		mocks.getSavedApiConversationHistory.mockResolvedValue([
+			{
+				role: "user",
+				content: [{ type: "text", text: "<task>Spawn implementation work</task>" }],
+			},
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "tool_use",
+						function_id: "call-spawn-1",
+						dline_tid: "interaction-spawn-1",
+						name: "spawn_task",
+						input: { task: "Implement feature", mode: "act", context: "Use the existing architecture" },
+					},
+				],
+			},
+		])
+		const controller = {
+			task: {
+				taskId: "task-1",
+				displayHistory: vi.fn().mockResolvedValue(undefined),
+				resumeFromHistory: vi.fn().mockResolvedValue(undefined),
+				taskState: {},
+			},
+			postStateToWebview: vi.fn().mockResolvedValue(undefined),
+		}
+
+		await recoverUiMessages(controller as never)
+
+		const savedMessages = mocks.saveClineMessages.mock.calls[0]?.[1] as ClineMessage[] | undefined
+		const recoveredAsk = savedMessages?.find((message) => message.type === "ask" && message.ask === "spawn_task")
+		expect(JSON.parse(recoveredAsk?.text ?? "{}")).toEqual({
+			task: "Implement feature",
+			mode: "act",
+			context: "Use the existing architecture",
+		})
+	})
 })

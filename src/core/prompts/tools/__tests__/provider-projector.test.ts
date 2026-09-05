@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest"
+import {
+	GPT_IMAGE_1_MODEL_ID,
+	GPT_IMAGE_2_MODEL_ID,
+	GPT_IMAGE_2_SUBSCRIPTION_MODEL_ID,
+} from "../../../../shared/image-generation"
 import { ClineDefaultTool } from "../../../../shared/tools"
 import {
 	DISABLED_WEB_SEARCH_ROUTING_PLAN,
@@ -182,7 +187,16 @@ describe("provider tool projector", () => {
 		const context = { ...BASE_CONTEXT, subagentsEnabled: false, isSubagentRun: false }
 		const tools = new ToolPromptGenerator().generate(PromptProfile.Standard, context)
 
-		expect(findTool(tools, ClineDefaultTool.SPAWN_TASK)).toBeDefined()
+		expect(findTool(tools, ClineDefaultTool.SPAWN_TASK)).toMatchObject({
+			function: {
+				parameters: {
+					required: ["task", "mode"],
+					properties: {
+						mode: { type: "string", enum: ["plan", "act"] },
+					},
+				},
+			},
+		})
 		expect(findTool(tools, ClineDefaultTool.USE_SUBAGENT)).toBeUndefined()
 		expect(findTool(tools, ClineDefaultTool.USE_SUBAGENTS)).toBeUndefined()
 	})
@@ -448,5 +462,40 @@ describe("provider tool projector", () => {
 			name: ClineDefaultTool.FILE_READ,
 			parameters: { required: ["path"] },
 		})
+	})
+
+	it.each([
+		[GPT_IMAGE_2_MODEL_ID, "gptImage2SizingDescription"],
+		[GPT_IMAGE_2_SUBSCRIPTION_MODEL_ID, "gptImage2SubscriptionSizingDescription"],
+		[GPT_IMAGE_1_MODEL_ID, "gptImage1SizingDescription"],
+		[undefined, undefined],
+	] as const)("keeps only the bound image model sizing guidance for Native and XML (%s)", (imageModelId, keptPromptKey) => {
+		const context = {
+			...BASE_CONTEXT,
+			imageGenerationAvailable: true,
+			imageModelId,
+		} as unknown as SystemPromptContext
+		const generator = new ToolPromptGenerator()
+		const sizingPromptKeys = [
+			"gptImage2SizingDescription",
+			"gptImage2SubscriptionSizingDescription",
+			"gptImage1SizingDescription",
+		] as const
+		const nativeDescription = toolDescription(
+			findTool(generator.generate(PromptProfile.Standard, context), ClineDefaultTool.GENERATE_IMAGE),
+		)
+		const xmlDescription = generator.generateXml(PromptProfile.Standard, context)
+
+		expect(nativeDescription).toContain(getPrompt("generateImage", "standardDescription"))
+		for (const promptKey of sizingPromptKeys) {
+			const sizingText = getPrompt("generateImage", promptKey)
+			if (promptKey === keptPromptKey) {
+				expect(nativeDescription).toContain(sizingText)
+				expect(xmlDescription).toContain(sizingText)
+			} else {
+				expect(nativeDescription).not.toContain(sizingText)
+				expect(xmlDescription).not.toContain(sizingText)
+			}
+		}
 	})
 })

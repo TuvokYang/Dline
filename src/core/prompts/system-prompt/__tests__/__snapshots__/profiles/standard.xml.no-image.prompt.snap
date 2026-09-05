@@ -499,13 +499,15 @@ Usage:
 </apply_patch>
 
 ## spawn_task
-Description: Spawn a new independent task. The spawned task has its OWN context — it does NOT inherit the parent's conversation history. Use the task parameter for goals and the context parameter for background information. The task runs autonomously in PLAN mode with auto-run enabled, inheriting the parent's API provider, MCP servers, and rules. The user must approve before creation.
+Description: Spawn a first-class peer task, not a subagent. The spawned task runs independently with its own conversation context and the normal task capability and approval model. It does NOT inherit the parent's conversation history. Use the task parameter for goals, mode to choose whether it starts in PLAN or ACT mode, and context for background information. The task starts immediately in the background, inheriting the parent's API profile for the selected mode, MCP servers, and rules. The user must approve before creation.
 Parameters:
 - task: (required) Describe what the spawned task should investigate or execute. Be specific about the goals and expected work to be done.
+- mode: (required) Required startup mode. Use "plan" for investigation or planning and "act" for implementation or other state-changing work.
 - context: (optional) Provide relevant background context for the spawned task. Include: why this task is needed, relevant conversation history or prior work, key technical concepts, constraints, and configuration. The spawned task cannot access the parent's conversation history — include everything it needs to know.
 Usage:
 <spawn_task>
 <task></task>
+<mode></mode>
 <context></context>
 </spawn_task>
 

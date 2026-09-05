@@ -1,3 +1,4 @@
+import { GPT_IMAGE_1_MODEL_ID, GPT_IMAGE_2_MODEL_ID, GPT_IMAGE_2_SUBSCRIPTION_MODEL_ID } from "../../../shared/image-generation"
 import { ClineDefaultTool } from "../../../shared/tools"
 import { getPrompt } from "../i18n"
 import { PromptProfile } from "../profiles/types"
@@ -29,8 +30,9 @@ function param(
 	required: boolean,
 	instruction: string,
 	type: ProfileToolParam["type"] = "string",
+	enumValues?: readonly string[],
 ): ProfileToolParam {
-	return { name, required, instruction, type }
+	return { name, required, instruction, type, ...(enumValues ? { enumValues } : {}) }
 }
 
 /** Reports whether at least one connected enabled MCP server is available. */
@@ -78,6 +80,24 @@ function hasSubagents(context: SystemPromptContext): boolean {
 function hasImageGeneration(context: SystemPromptContext): boolean {
 	return context.imageGenerationAvailable === true
 }
+
+/** Creates a predicate that keeps one model-specific sizing fragment only for its bound image model. */
+function whenImageModelIsNot(modelId: string): (context: SystemPromptContext) => boolean {
+	return (context) => context.imageModelId !== modelId
+}
+
+const gptImage2Sizing = ` ${getPrompt("generateImage", "gptImage2SizingDescription")}`
+const gptImage2SubscriptionSizing = ` ${getPrompt("generateImage", "gptImage2SubscriptionSizingDescription")}`
+const gptImage1Sizing = ` ${getPrompt("generateImage", "gptImage1SizingDescription")}`
+
+/** Complete generate_image description carrying every model-specific sizing fragment. */
+const generateImageDescription = `${getPrompt("generateImage", "standardDescription")}${gptImage2Sizing}${gptImage2SubscriptionSizing}${gptImage1Sizing}`
+
+const imageSizingFragments: readonly ProfilePromptFragment[] = [
+	fragment(gptImage2Sizing, whenImageModelIsNot(GPT_IMAGE_2_MODEL_ID)),
+	fragment(gptImage2SubscriptionSizing, whenImageModelIsNot(GPT_IMAGE_2_SUBSCRIPTION_MODEL_ID)),
+	fragment(gptImage1Sizing, whenImageModelIsNot(GPT_IMAGE_1_MODEL_ID)),
+]
 
 /** Creates the canonical Standard descriptor for one built-in tool. */
 function spec(
@@ -294,6 +314,7 @@ export const STANDARD_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = 
 		getPrompt("spawnTask", "description"),
 		[
 			param("task", true, getPrompt("spawnTask", "taskInstruction")),
+			param("mode", true, getPrompt("spawnTask", "modeInstruction"), "string", ["plan", "act"]),
 			param("context", false, getPrompt("spawnTask", "contextInstruction")),
 		],
 		canSpawnTask,
@@ -322,7 +343,7 @@ export const STANDARD_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = 
 	),
 	spec(
 		ClineDefaultTool.GENERATE_IMAGE,
-		getPrompt("generateImage", "standardDescription"),
+		generateImageDescription,
 		[
 			param("prompt", true, getPrompt("generateImage", "promptInstruction")),
 			param("profile", false, getPrompt("generateImage", "profileInstruction")),
@@ -339,6 +360,7 @@ export const STANDARD_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = 
 			taskProgress,
 		],
 		hasImageGeneration,
+		imageSizingFragments,
 	),
 	spec(
 		ClineDefaultTool.GENERATE_EXPLANATION,

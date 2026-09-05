@@ -1477,10 +1477,12 @@ export const ChatRowContent = memo(
 						)
 					case "spawn_task": {
 						let spawnTask: string | undefined
+						let spawnMode: ClineAskSpawnTask["mode"] | undefined
 						let spawnContext: string | undefined
 						try {
 							const parsed = JSON.parse(message.text || "{}") as ClineAskSpawnTask
 							spawnTask = parsed.task
+							spawnMode = parsed.mode === "plan" || parsed.mode === "act" ? parsed.mode : undefined
 							spawnContext = parsed.context
 						} catch {
 							spawnTask = message.text
@@ -1489,10 +1491,11 @@ export const ChatRowContent = memo(
 							<div>
 								<div className={HEADER_CLASSNAMES}>
 									<FilePlus2Icon className="size-2" />
-									<span className="text-foreground font-bold">Dline wants to spawn a sub-task:</span>
+									<span className="text-foreground font-bold">Dline wants to spawn an independent task:</span>
 								</div>
 								<NewTaskPreview
 									context={spawnContext ? [spawnContext] : undefined}
+									mode={spawnMode}
 									task={spawnTask || message.text || ""}
 								/>
 							</div>

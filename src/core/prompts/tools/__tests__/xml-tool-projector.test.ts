@@ -116,7 +116,9 @@ describe("XML tool projection", () => {
 		})
 
 		expect(xml).toContain("## spawn_task")
+		expect(xml).toContain('- mode: (required) Required startup mode. Use "plan"')
 		expect(xml).toContain("<spawn_task>")
+		expect(xml).toContain("<mode></mode>")
 	})
 
 	it("documents subagent context boundaries and resolves its default timeout through runtime env", async () => {

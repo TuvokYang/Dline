@@ -46,6 +46,7 @@ export const toolParamNames = [
 	"prompt",
 	"agent_name",
 	"task",
+	"mode",
 	"server_name",
 	"tool_name",
 	"arguments",
