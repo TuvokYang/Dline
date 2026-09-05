@@ -3,7 +3,7 @@ import type { ApiHandler, buildApiHandler } from "@core/api"
 import { recordProviderAdapterInput, recordProviderAdapterOutput } from "@core/api/debug/api-conversation-log"
 import type { WebSearchRoutingPlan } from "@core/api/server-tools"
 import { isOutputLimitExceededError } from "@core/api/stream/OutputLimitExceededError"
-import { createIdentityFactory } from "@core/api/transform/block-identity"
+import { createIdentityFactory, type IdentityFactory } from "@core/api/transform/block-identity"
 import type { ApiProviderStreamChunk } from "@core/api/transform/stream"
 import { createStreamNormalizer, normalizeApiStream } from "@core/api/transform/stream-identity-normalizer"
 import { ApiUsageAccumulator } from "@core/api/transform/usage-accumulator"
@@ -246,8 +246,8 @@ function formatToolCallPreview(toolName: string, params: Partial<Record<string, 
  * Providers emit scaffolding before any answer: Anthropic adaptive thinking opens a
  * thinking block and streams `signature_delta` with empty reasoning text, and both
  * Anthropic and Codex emit standalone separators for subsequent text blocks. None of
- * that is observable to the caller, and reasoning is never appended to the subagent
- * conversation, so replaying an attempt that only produced scaffolding is safe.
+ * that commits a Provider turn. Reasoning remains retryable, but its accumulator must
+ * be reset whenever the attempt is discarded so failed content is never replayed.
  *
  * Treating every non-usage chunk as observable disabled the whole backoff sequence for
  * adaptive-thinking models, because the scaffolding always precedes the failure.
@@ -318,7 +318,7 @@ function toAssistantToolUseBlock(call: SubagentToolCall): ClineAssistantToolUseB
 	}
 }
 
-function parseNonNativeToolCalls(assistantText: string): SubagentToolCall[] {
+function parseNonNativeToolCalls(assistantText: string, identityFactory: IdentityFactory): SubagentToolCall[] {
 	let ephemeralTs = Date.now()
 	const identities = new Map<string, { function_id: string; dline_tid: string }>()
 	const registry = {
@@ -326,10 +326,9 @@ function parseNonNativeToolCalls(assistantText: string): SubagentToolCall[] {
 		getOrCreateToolIdentityForBlock: (key: string) => {
 			const existing = identities.get(key)
 			if (existing) return existing
-			const index = identities.size + 1
 			const identity = {
-				function_id: `subagent_xml_function_${index}`,
-				dline_tid: `subagent_xml_tid_${index}`,
+				function_id: identityFactory.nextFunctionId(),
+				dline_tid: identityFactory.nextTraceId(),
 			}
 			identities.set(key, identity)
 			return identity
@@ -384,6 +383,7 @@ export class SubagentRunner {
 	private readonly agent: SubagentBuilder
 	private readonly apiHandler: ApiHandler
 	private readonly allowedTools: ClineDefaultTool[]
+	private readonly identityFactory = createIdentityFactory()
 	private activeApiAbort: (() => void) | undefined
 	private activeRetryAbortController: AbortController | undefined
 	private abortRequested = false
@@ -754,7 +754,7 @@ export class SubagentRunner {
 				// only need to satisfy the ToolUse type contract.
 				let ephemeralTs = Date.now()
 				const streamHandler = new StreamResponseHandler(() => ++ephemeralTs)
-				const { toolUseHandler } = streamHandler.getHandlers()
+				const { reasonsHandler, toolUseHandler } = streamHandler.getHandlers()
 				usageState.currentRequest = createEmptyRequestUsageState()
 				const requestUsage = usageState.currentRequest
 
@@ -814,9 +814,15 @@ export class SubagentRunner {
 					contextState,
 					requestWebSearchRoutingPlan,
 					providerRequestRound,
+					() => {
+						reasonsHandler.reset()
+						assistantText = ""
+						assistantTextSignature = undefined
+						requestId = undefined
+					},
 					onProgress,
 				)
-				const stream = normalizeApiStream(providerStream, createStreamNormalizer(createIdentityFactory()))
+				const stream = normalizeApiStream(providerStream, createStreamNormalizer(this.identityFactory))
 
 				try {
 					for await (const chunk of stream) {
@@ -886,12 +892,26 @@ export class SubagentRunner {
 								await activeHostedServerToolLifecycle.consume(chunk)
 								break
 							}
-							case "reasoning":
+							case "reasoning": {
 								requestId = requestId ?? chunk.provider_metadata?.response_id
+								const details = chunk.details
+									? Array.isArray(chunk.details)
+										? chunk.details
+										: [chunk.details]
+									: []
+								reasonsHandler.processReasoningDelta({
+									provider_metadata: chunk.provider_metadata,
+									reasoning: chunk.reasoning,
+									signature: chunk.signature,
+									details,
+									redacted_data: chunk.redacted_data,
+									redacted_phase: chunk.redacted_phase,
+								})
 								if (chunk.reasoning) {
 									onProgress({ event: { kind: "thinking", phase: "delta", text: chunk.reasoning } })
 								}
 								break
+							}
 						}
 
 						if (this.shouldAbort()) {
@@ -961,13 +981,16 @@ export class SubagentRunner {
 						isNativeToolCall: true,
 					}
 				})
-				const parsedNonNativeToolCalls = parseNonNativeToolCalls(assistantText)
+				const parsedNonNativeToolCalls = useNativeToolCalls
+					? []
+					: parseNonNativeToolCalls(assistantText, this.identityFactory)
 				const fallbackNonNativeToolCalls = nativeFinalizedToolCalls.map((toolCall) => ({
 					...toolCall,
 					isNativeToolCall: false,
 				}))
 
 				let finalizedToolCalls: SubagentToolCall[] = []
+				let usedStructuredNonNativeFallback = false
 				if (useNativeToolCalls) {
 					finalizedToolCalls = nativeFinalizedToolCalls
 				} else if (parsedNonNativeToolCalls.length > 0) {
@@ -978,6 +1001,7 @@ export class SubagentRunner {
 					Logger.warn(
 						"[SubagentRunner] Received structured tool_calls while native tool calling is disabled; falling back to non-native result serialization.",
 					)
+					usedStructuredNonNativeFallback = true
 					finalizedToolCalls = fallbackNonNativeToolCalls
 				}
 				providerExecution.setToolCount(finalizedToolCalls.length)
@@ -998,7 +1022,11 @@ export class SubagentRunner {
 					}
 				}
 
-				const assistantContent: ClineAssistantContent[] = []
+				const assistantContent: ClineAssistantContent[] = [...reasonsHandler.getRedactedThinking()]
+				const thinkingBlock = reasonsHandler.getCurrentReasoning()
+				if (thinkingBlock) {
+					assistantContent.push({ ...thinkingBlock })
+				}
 				if (assistantText.trim().length > 0) {
 					onProgress({ event: { kind: "assistant_message", phase: "final", text: assistantText } })
 					assistantContent.push({
@@ -1007,15 +1035,27 @@ export class SubagentRunner {
 						signature: assistantTextSignature,
 					})
 				}
+				if (usedStructuredNonNativeFallback && assistantText.trim().length === 0) {
+					assistantContent.push({
+						type: "text",
+						text: `Tool calls: ${finalizedToolCalls.map((call) => call.name).join(", ")}`,
+					})
+				}
 				if (useNativeToolCalls) {
 					assistantContent.push(...finalizedToolCalls.map(toAssistantToolUseBlock))
+				}
+				if (finalizedToolCalls.length === 0 && !assistantContent.some((block) => block.type === "text")) {
+					assistantContent.push({
+						type: "text",
+						text: "Failure: I did not provide a response.",
+					})
 				}
 
 				if (assistantContent.length > 0) {
 					conversation.push({
 						role: "assistant",
 						content: assistantContent,
-						provider_metadata: requestId ? { response_id: requestId } : undefined,
+						provider_metadata: requestId && !usedStructuredNonNativeFallback ? { response_id: requestId } : undefined,
 					})
 				}
 
@@ -1029,18 +1069,6 @@ export class SubagentRunner {
 
 					// Mirror the main loop's no-tools-used nudge so empty/blank model turns
 					// can recover without surfacing an immediate hard failure in subagent UI.
-					if (assistantContent.length === 0) {
-						conversation.push({
-							role: "assistant",
-							content: [
-								{
-									type: "text",
-									text: "Failure: I did not provide a response.",
-								},
-							],
-							provider_metadata: requestId ? { response_id: requestId } : undefined,
-						})
-					}
 					conversation.push({
 						role: "user",
 						content: [
@@ -1459,6 +1487,7 @@ export class SubagentRunner {
 		contextState: SubagentContextState,
 		webSearchRoutingPlan: WebSearchRoutingPlan,
 		providerRequestRound: ProviderRequestRoundAdmission | undefined,
+		onReplayableAttemptDiscarded: () => void,
 		onProgress: (update: SubagentProgressUpdate) => void,
 	) {
 		let cumulativeRetryDelayMs = 0
@@ -1502,9 +1531,9 @@ export class SubagentRunner {
 						continue
 					}
 					if (!producesUnreplayableOutput(nextChunk.value)) {
-						// Content-free scaffolding: forward it, but keep the attempt replayable.
-						for (const usageChunk of bufferedUsageChunks) yield usageChunk
-						bufferedUsageChunks.length = 0
+						// Forward replayable scaffolding for live progress, but keep usage buffered
+						// until this attempt commits. The caller resets attempt-local accumulators
+						// if a retry discards the attempt.
 						yield nextChunk.value
 						continue
 					}
@@ -1516,7 +1545,10 @@ export class SubagentRunner {
 					return
 				}
 			} catch (error) {
-				if (this.finishRequested && !this.shouldAbort()) return
+				if (this.finishRequested && !this.shouldAbort()) {
+					if (!didYieldUnreplayableOutput) onReplayableAttemptDiscarded()
+					return
+				}
 
 				// Usage and content-free scaffolding remain replayable.
 				// Once observable output exists, replay would duplicate content or tool lifecycles.
@@ -1537,6 +1569,7 @@ export class SubagentRunner {
 					Logger.warn(
 						`[SubagentRunner] Context window exceeded on initial stream attempt ${attempt}; compacted conversation and retrying.`,
 					)
+					onReplayableAttemptDiscarded()
 					continue
 				}
 
@@ -1550,6 +1583,7 @@ export class SubagentRunner {
 
 				const delayMs = INITIAL_STREAM_RETRY_DELAYS_MS[attempt - 1]
 				if (delayMs === undefined) throw error
+				onReplayableAttemptDiscarded()
 				cumulativeRetryDelayMs += delayMs
 				onProgress({
 					event: {

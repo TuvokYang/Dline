@@ -814,6 +814,264 @@ describe("SubagentRunner", () => {
 		assert.ok(completedToolEvents.every((event) => event.toolCallId?.startsWith("dline_tid_")))
 	})
 
+	it("replays provider reasoning with its final signature before native tool use", async () => {
+		const createMessage = vi.fn()
+		let secondConversation: unknown[] = []
+		createMessage.mockImplementationOnce(async function* () {
+			yield { type: "reasoning", reasoning: "Inspecting the workspace" }
+			yield { type: "reasoning", reasoning: "", signature: "provider-signature" }
+			yield {
+				type: "tool_calls",
+				function_id: "provider-read",
+				tool_index: 0,
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.LIST_FILES,
+						arguments: JSON.stringify({ path: ".", recursive: false }),
+					},
+				},
+			}
+		})
+		createMessage.mockImplementationOnce(async function* (_systemPrompt: string, conversation: unknown[]) {
+			secondConversation = conversation
+			yield {
+				type: "tool_calls",
+				function_id: "provider-complete",
+				tool_index: 0,
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.ATTEMPT,
+						arguments: JSON.stringify({ result: "done" }),
+					},
+				},
+			}
+		})
+		stubSystemPrompt(true)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(true)).run("Inspect files", () => {})
+
+		assert.equal(result.status, "completed", result.error)
+		assert.equal(result.result, "done")
+		assert.equal(createMessage.mock.calls.length, 2)
+		const assistant = secondConversation[1] as { content: Array<Record<string, unknown>>; role: string }
+		assert.equal(assistant.role, "assistant")
+		assert.deepEqual(assistant.content[0], {
+			type: "thinking",
+			thinking: "Inspecting the workspace",
+			signature: "provider-signature",
+			summary: [],
+			provider_metadata: undefined,
+		})
+		assert.equal(assistant.content[1]?.type, "tool_use")
+		assert.equal(assistant.content[1]?.function_id, "provider-read")
+	})
+
+	it("discards reasoning from a failed replayable attempt before retrying", async () => {
+		const createMessage = vi.fn()
+		let nextRoundConversation: unknown[] = []
+		createMessage.mockImplementationOnce(async function* () {
+			yield {
+				type: "reasoning",
+				reasoning: "Failed attempt reasoning",
+				provider_metadata: { response_id: "failed-reasoning" },
+			}
+			yield { type: "reasoning", reasoning: "", signature: "failed-signature" }
+			throw Object.assign(new Error("stream_read_error"), {
+				code: "stream_read_error",
+				error: { code: "stream_read_error", message: "stream_read_error", type: "upstream_error" },
+			})
+		})
+		createMessage.mockImplementationOnce(async function* () {
+			yield {
+				type: "reasoning",
+				reasoning: "Successful attempt reasoning",
+				provider_metadata: { response_id: "successful-reasoning" },
+			}
+			yield { type: "reasoning", reasoning: "", signature: "successful-signature" }
+			yield {
+				type: "tool_calls",
+				function_id: "provider-read-after-retry",
+				tool_index: 0,
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.LIST_FILES,
+						arguments: JSON.stringify({ path: ".", recursive: false }),
+					},
+				},
+			}
+		})
+		createMessage.mockImplementationOnce(async function* (_systemPrompt: string, conversation: unknown[]) {
+			nextRoundConversation = conversation
+			yield {
+				type: "tool_calls",
+				function_id: "provider-complete-after-retry",
+				tool_index: 0,
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.ATTEMPT,
+						arguments: JSON.stringify({ result: "done" }),
+					},
+				},
+			}
+		})
+		vi.spyOn(global, "setTimeout").mockImplementation(((callback: (...args: unknown[]) => void) => {
+			queueMicrotask(callback)
+			return {} as NodeJS.Timeout
+		}) as typeof setTimeout)
+		stubSystemPrompt(true)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(true)).run("Inspect files", () => {})
+
+		assert.equal(result.status, "completed", result.error)
+		const assistant = nextRoundConversation[1] as {
+			content: Array<Record<string, unknown>>
+			provider_metadata?: { response_id?: string }
+		}
+		assert.deepEqual(assistant.content[0], {
+			type: "thinking",
+			thinking: "Successful attempt reasoning",
+			signature: "successful-signature",
+			summary: [],
+			provider_metadata: { response_id: "successful-reasoning" },
+		})
+		assert.equal(assistant.provider_metadata?.response_id, "successful-reasoning")
+	})
+
+	it("adds a text follower when a provider turn contains reasoning only", async () => {
+		const createMessage = vi.fn()
+		let nextRoundConversation: unknown[] = []
+		createMessage.mockImplementationOnce(async function* () {
+			yield { type: "reasoning", reasoning: "Reasoning without a response", signature: "reasoning-only-signature" }
+		})
+		createMessage.mockImplementationOnce(async function* (_systemPrompt: string, conversation: unknown[]) {
+			nextRoundConversation = conversation
+			yield {
+				type: "tool_calls",
+				function_id: "provider-complete-after-reasoning-only",
+				tool_index: 0,
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.ATTEMPT,
+						arguments: JSON.stringify({ result: "done" }),
+					},
+				},
+			}
+		})
+		stubSystemPrompt(true)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(true)).run("Inspect files", () => {})
+
+		assert.equal(result.status, "completed", result.error)
+		const assistant = nextRoundConversation[1] as { content: Array<Record<string, unknown>> }
+		assert.equal(assistant.content[0]?.type, "thinking")
+		assert.deepEqual(assistant.content[1], {
+			type: "text",
+			text: "Failure: I did not provide a response.",
+		})
+	})
+
+	it("records structured tool calls received while non-native mode is enabled", async () => {
+		const createMessage = vi.fn()
+		let nextRoundConversation: unknown[] = []
+		createMessage.mockImplementationOnce(async function* () {
+			yield { type: "reasoning", reasoning: "Inspecting through a structured fallback" }
+			yield {
+				type: "tool_calls",
+				function_id: "provider-structured-fallback-read",
+				tool_index: 0,
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.LIST_FILES,
+						arguments: JSON.stringify({ path: ".", recursive: false }),
+					},
+				},
+			}
+		})
+		createMessage.mockImplementationOnce(async function* (_systemPrompt: string, conversation: unknown[]) {
+			nextRoundConversation = conversation
+			yield {
+				type: "tool_calls",
+				function_id: "provider-structured-fallback-complete",
+				tool_index: 0,
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.ATTEMPT,
+						arguments: JSON.stringify({ result: "done" }),
+					},
+				},
+			}
+		})
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false)).run("Inspect files", () => {})
+
+		assert.equal(result.status, "completed", result.error)
+		const assistant = nextRoundConversation[1] as {
+			content: Array<Record<string, unknown>>
+			provider_metadata?: { response_id?: string }
+		}
+		assert.equal(assistant.content[0]?.type, "thinking")
+		assert.deepEqual(assistant.content[1], {
+			type: "text",
+			text: "Tool calls: list_files",
+		})
+		assert.equal(assistant.provider_metadata, undefined)
+	})
+
+	it("allocates unique identities for non-native tools across provider rounds", async () => {
+		const createMessage = vi.fn()
+		createMessage.mockImplementationOnce(async function* () {
+			yield {
+				type: "text",
+				text: "<list_files>\n<path>.</path>\n<recursive>false</recursive>\n</list_files>",
+			}
+		})
+		createMessage.mockImplementationOnce(async function* () {
+			yield {
+				type: "text",
+				text: "<list_files>\n<path>src</path>\n<recursive>false</recursive>\n</list_files>",
+			}
+		})
+		createMessage.mockImplementationOnce(async function* () {
+			yield {
+				type: "text",
+				text: "<attempt_completion>\n<result>done</result>\n</attempt_completion>",
+			}
+		})
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+		const progress = vi.fn()
+
+		const result = await new SubagentRunner(createTaskConfig(false)).run("Inspect files", progress)
+
+		assert.equal(result.status, "completed", result.error)
+		assert.equal(result.result, "done")
+		const completedToolEvents = progress.mock.calls
+			.map(([update]) => update.event)
+			.filter((event) => event?.kind === "tool_call" && event.toolStatus === "completed")
+		assert.equal(completedToolEvents.length, 3)
+		assert.equal(new Set(completedToolEvents.map((event) => event.toolCallId)).size, 3)
+	})
+
 	it("stops the current attempt at attempt_completion before executing later tool calls", async () => {
 		const executeListFiles = vi.fn().mockResolvedValue("must not run")
 		const createMessage = vi.fn().mockImplementationOnce(async function* () {
