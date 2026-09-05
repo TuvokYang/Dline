@@ -4779,9 +4779,18 @@ export class Task {
 			throw new Error(`Task initialization rejected: ${initializing.error?.code ?? "invalid_runtime_event"}`)
 		}
 		const initializeDispatchedAt = performance.now()
-		Logger.debug(
-			`[Task ${this.taskId}] startTask admission phase=initializeDispatch elapsedMs=${Math.round(initializeDispatchedAt - taskSaidAt)}`,
+		recordPerfPhase(
+			PerfDomain.TaskInit,
+			"stage",
+			initializeDispatchedAt - taskSaidAt,
+			{ stage: "initializeDispatch", kind: "admission" },
+			{ taskId: this.taskId },
 		)
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[Task ${this.taskId}] startTask admission phase=initializeDispatch elapsedMs=${Math.round(initializeDispatchedAt - taskSaidAt)}`,
+			)
+		}
 
 		const imageBlocks: ClineImageContentBlock[] = formatResponse.imageBlocks(images)
 
@@ -4811,9 +4820,18 @@ export class Task {
 			}
 		}
 		const filesProcessedAt = performance.now()
-		Logger.debug(
-			`[Task ${this.taskId}] startTask admission phase=processFiles elapsedMs=${Math.round(filesProcessedAt - taskSaidAt)}`,
+		recordPerfPhase(
+			PerfDomain.TaskInit,
+			"stage",
+			filesProcessedAt - initializeDispatchedAt,
+			{ stage: "processFiles", kind: "admission", elapsedMs: Math.round(filesProcessedAt - taskSaidAt) },
+			{ taskId: this.taskId },
 		)
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[Task ${this.taskId}] startTask admission phase=processFiles elapsedMs=${Math.round(filesProcessedAt - taskSaidAt)}`,
+			)
+		}
 
 		userContent.push(...cloneDeep(initialUserContent))
 
@@ -4864,9 +4882,18 @@ export class Task {
 		}
 
 		const taskStartHookAt = performance.now()
-		Logger.debug(
-			`[Task ${this.taskId}] startTask admission phase=taskStartHook elapsedMs=${Math.round(taskStartHookAt - taskSaidAt)}`,
+		recordPerfPhase(
+			PerfDomain.TaskInit,
+			"stage",
+			taskStartHookAt - filesProcessedAt,
+			{ stage: "taskStartHook", kind: "admission", elapsedMs: Math.round(taskStartHookAt - taskSaidAt) },
+			{ taskId: this.taskId },
 		)
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[Task ${this.taskId}] startTask admission phase=taskStartHook elapsedMs=${Math.round(taskStartHookAt - taskSaidAt)}`,
+			)
+		}
 
 		// Defensive check: Verify task wasn't aborted during hook execution before continuing
 		// Must be OUTSIDE the hooksEnabled block to prevent UserPromptSubmit from running
@@ -4877,9 +4904,18 @@ export class Task {
 		// Run UserPromptSubmit hook for initial task (after TaskStart for UI ordering)
 		const userPromptHookResult = await this.runUserPromptSubmitHook(userContent, "initial_task")
 		const userPromptHookAt = performance.now()
-		Logger.debug(
-			`[Task ${this.taskId}] startTask admission phase=userPromptHook elapsedMs=${Math.round(userPromptHookAt - taskSaidAt)}`,
+		recordPerfPhase(
+			PerfDomain.TaskInit,
+			"stage",
+			userPromptHookAt - taskStartHookAt,
+			{ stage: "userPromptHook", kind: "admission", elapsedMs: Math.round(userPromptHookAt - taskSaidAt) },
+			{ taskId: this.taskId },
 		)
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[Task ${this.taskId}] startTask admission phase=userPromptHook elapsedMs=${Math.round(userPromptHookAt - taskSaidAt)}`,
+			)
+		}
 
 		// Defensive check: Verify task wasn't aborted during hook execution (handles async cancellation)
 		if (this.taskState.abort) {
@@ -4908,9 +4944,18 @@ export class Task {
 			Logger.error("Failed to record environment metadata:", error)
 		}
 		const environmentRecordedAt = performance.now()
-		Logger.debug(
-			`[Task ${this.taskId}] startTask admission phase=recordEnvironment elapsedMs=${Math.round(environmentRecordedAt - taskSaidAt)}`,
+		recordPerfPhase(
+			PerfDomain.TaskInit,
+			"stage",
+			environmentRecordedAt - userPromptHookAt,
+			{ stage: "recordEnvironment", kind: "admission", elapsedMs: Math.round(environmentRecordedAt - taskSaidAt) },
+			{ taskId: this.taskId },
 		)
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[Task ${this.taskId}] startTask admission phase=recordEnvironment elapsedMs=${Math.round(environmentRecordedAt - taskSaidAt)}`,
+			)
+		}
 
 		const initialized = await this.dispatchRuntime({
 			type: "TASK_INITIALIZED",
@@ -4921,22 +4966,38 @@ export class Task {
 			throw new Error(`Task initialization commit rejected: ${initialized.error?.code ?? "invalid_runtime_event"}`)
 		}
 		const initializedDispatchedAt = performance.now()
-		Logger.debug(
-			`[Task ${this.taskId}] startTask admission phase=initializedDispatch elapsedMs=${Math.round(initializedDispatchedAt - taskSaidAt)}`,
+		recordPerfPhase(
+			PerfDomain.TaskInit,
+			"stage",
+			initializedDispatchedAt - environmentRecordedAt,
+			{ stage: "initializedDispatch", kind: "admission", elapsedMs: Math.round(initializedDispatchedAt - taskSaidAt) },
+			{ taskId: this.taskId },
+		)
+		recordPerfPhase(
+			PerfDomain.TaskInit,
+			"stage",
+			initializedDispatchedAt - taskSaidAt,
+			{ stage: "admissionTotal", kind: "admission", hooksEnabled },
+			{ taskId: this.taskId },
 		)
 
 		// Everything above is awaited before the first API request can start, so an
 		// unattributed stall here is invisible unless each stage reports its own cost.
-		Logger.debug(
-			`[Task ${this.taskId}] startTask admission timing: ` +
-				`initializeDispatch=${Math.round(initializeDispatchedAt - taskSaidAt)}ms, ` +
-				`processFiles=${Math.round(filesProcessedAt - initializeDispatchedAt)}ms, ` +
-				`taskStartHook=${Math.round(taskStartHookAt - filesProcessedAt)}ms, ` +
-				`userPromptHook=${Math.round(userPromptHookAt - taskStartHookAt)}ms, ` +
-				`recordEnvironment=${Math.round(environmentRecordedAt - userPromptHookAt)}ms, ` +
-				`initializedDispatch=${Math.round(initializedDispatchedAt - environmentRecordedAt)}ms, ` +
-				`totalMs=${Math.round(initializedDispatchedAt - taskSaidAt)}, hooksEnabled=${hooksEnabled}`,
-		)
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[Task ${this.taskId}] startTask admission phase=initializedDispatch elapsedMs=${Math.round(initializedDispatchedAt - taskSaidAt)}`,
+			)
+			Logger.debug(
+				`[Task ${this.taskId}] startTask admission timing: ` +
+					`initializeDispatch=${Math.round(initializeDispatchedAt - taskSaidAt)}ms, ` +
+					`processFiles=${Math.round(filesProcessedAt - initializeDispatchedAt)}ms, ` +
+					`taskStartHook=${Math.round(taskStartHookAt - filesProcessedAt)}ms, ` +
+					`userPromptHook=${Math.round(userPromptHookAt - taskStartHookAt)}ms, ` +
+					`recordEnvironment=${Math.round(environmentRecordedAt - userPromptHookAt)}ms, ` +
+					`initializedDispatch=${Math.round(initializedDispatchedAt - environmentRecordedAt)}ms, ` +
+					`totalMs=${Math.round(initializedDispatchedAt - taskSaidAt)}, hooksEnabled=${hooksEnabled}`,
+			)
+		}
 
 		// Mark task as initialized so checkpoint restore can proceed
 		this.taskState.isInitialized = true
