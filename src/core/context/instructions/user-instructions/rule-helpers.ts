@@ -9,6 +9,8 @@ import { fileExistsAtPath, isDirectory, readDirectory } from "@utils/fs"
 import fs from "fs/promises"
 import * as path from "path"
 import { Controller } from "@/core/controller"
+import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import { Logger } from "@/shared/services/Logger"
 import { parseYamlFrontmatter } from "./frontmatter"
 import { evaluateRuleConditionals, RuleEvaluationContext } from "./rule-conditionals"
@@ -147,9 +149,18 @@ export async function scanRuleToggles(
 		complete = false
 	}
 
-	Logger.debug(
-		`[CapabilityPerf] phase=rule_toggle_scan durationMs=${Math.round(performance.now() - startedAt)} kind=${pathKind} files=${discoveredFiles} toggles=${Object.keys(updatedToggles).length} extension=${allowedFileExtension || "any"} complete=${complete}`,
-	)
+	recordPerfPhase(PerfDomain.Capability, "rule_toggle_scan", performance.now() - startedAt, {
+		kind: pathKind,
+		files: discoveredFiles,
+		toggles: Object.keys(updatedToggles).length,
+		extension: allowedFileExtension || "any",
+		complete,
+	})
+	if (Logger.isDebugEnabled()) {
+		Logger.debug(
+			`[CapabilityPerf] phase=rule_toggle_scan durationMs=${Math.round(performance.now() - startedAt)} kind=${pathKind} files=${discoveredFiles} toggles=${Object.keys(updatedToggles).length} extension=${allowedFileExtension || "any"} complete=${complete}`,
+		)
+	}
 	return { toggles: updatedToggles, complete }
 }
 

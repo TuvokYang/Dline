@@ -14,6 +14,8 @@ import { fileExistsAtPath, isDirectory } from "@utils/fs"
 import fs from "fs/promises"
 import path from "path"
 import { Controller } from "@/core/controller"
+import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import { Logger } from "@/shared/services/Logger"
 
 /** One editor-rule family's raw scan: what exists, and whether the scan is trustworthy. */
@@ -66,9 +68,22 @@ export async function refreshExternalRulesToggles(
 	const localAgentsRulesFilePath = path.resolve(workingDirectory, GlobalFileNames.agentsRulesFile)
 	const agentsScan = await scanRuleToggles(localAgentsRulesFilePath, {})
 	const updatedLocalAgentsToggles = resolveCapabilityToggles(controller.stateManager, "agentsRules", agentsScan.toggles)
-	Logger.debug(
-		`[CapabilityPerf] phase=external_rules_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} windsurf=${Object.keys(updatedLocalWindsurfToggles).length} cursor=${Object.keys(updatedLocalCursorToggles).length} agents=${Object.keys(updatedLocalAgentsToggles).length}`,
+	recordPerfPhase(
+		PerfDomain.Capability,
+		"external_rules_refresh",
+		performance.now() - startedAt,
+		{
+			windsurf: Object.keys(updatedLocalWindsurfToggles).length,
+			cursor: Object.keys(updatedLocalCursorToggles).length,
+			agents: Object.keys(updatedLocalAgentsToggles).length,
+		},
+		{ taskId: controller.task?.taskId },
 	)
+	if (Logger.isDebugEnabled()) {
+		Logger.debug(
+			`[CapabilityPerf] phase=external_rules_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} windsurf=${Object.keys(updatedLocalWindsurfToggles).length} cursor=${Object.keys(updatedLocalCursorToggles).length} agents=${Object.keys(updatedLocalAgentsToggles).length}`,
+		)
+	}
 
 	return {
 		windsurfLocalToggles: updatedLocalWindsurfToggles,

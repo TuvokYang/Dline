@@ -4,6 +4,8 @@ import type { SkillContent, SkillMetadata } from "@shared/skills"
 import { fileExistsAtPath, isDirectory } from "@utils/fs"
 import * as fs from "fs/promises"
 import * as path from "path"
+import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import { Logger } from "@/shared/services/Logger"
 import { parseYamlFrontmatter } from "./frontmatter"
 
@@ -180,9 +182,18 @@ export async function discoverSkills(cwd: string, remoteSkillEntries?: GlobalIns
 	// Insert in order: remote → disk-global → project.
 	// getAvailableSkills iterates backwards so project/local wins over global and remote entries.
 	skills.push(...remoteSkills, ...diskGlobalSkills, ...projectSkills)
-	Logger.debug(
-		`[CapabilityPerf] phase=skills_discover durationMs=${Math.round(performance.now() - startedAt)} directories=${scanDirs.length} global=${diskGlobalSkills.length} project=${projectSkills.length} remote=${remoteSkills.length} total=${skills.length}`,
-	)
+	recordPerfPhase(PerfDomain.Capability, "skills_discover", performance.now() - startedAt, {
+		directories: scanDirs.length,
+		global: diskGlobalSkills.length,
+		project: projectSkills.length,
+		remote: remoteSkills.length,
+		total: skills.length,
+	})
+	if (Logger.isDebugEnabled()) {
+		Logger.debug(
+			`[CapabilityPerf] phase=skills_discover durationMs=${Math.round(performance.now() - startedAt)} directories=${scanDirs.length} global=${diskGlobalSkills.length} project=${projectSkills.length} remote=${remoteSkills.length} total=${skills.length}`,
+		)
+	}
 
 	return skills
 }
@@ -233,9 +244,15 @@ export async function discoverAvailableSkills(cwd: string, toggleState: SkillTog
 	const startedAt = performance.now()
 	const allSkills = await discoverSkills(cwd, toggleState.remoteSkillEntries)
 	const available = filterEnabledSkills(getAvailableSkills(allSkills), toggleState)
-	Logger.debug(
-		`[CapabilityPerf] phase=skills_available durationMs=${Math.round(performance.now() - startedAt)} discovered=${allSkills.length} enabled=${available.length}`,
-	)
+	recordPerfPhase(PerfDomain.Capability, "skills_available", performance.now() - startedAt, {
+		discovered: allSkills.length,
+		enabled: available.length,
+	})
+	if (Logger.isDebugEnabled()) {
+		Logger.debug(
+			`[CapabilityPerf] phase=skills_available durationMs=${Math.round(performance.now() - startedAt)} discovered=${allSkills.length} enabled=${available.length}`,
+		)
+	}
 	return available
 }
 

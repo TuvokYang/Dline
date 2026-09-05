@@ -39,6 +39,8 @@ import { ProviderToApiKeyMap } from "@shared/storage/provider-keys"
 import fsSync from "fs"
 import fs from "fs/promises"
 import path from "path"
+import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import type { Controller } from ".."
 
 const API_PROFILES_FILE = "api_profiles.json"
@@ -592,9 +594,27 @@ export async function getApiProfiles(controller: Controller, _request: EmptyRequ
 			publishMs = Math.round(performance.now() - stageStartedAt)
 		}
 		recordProfileCatalogBaseline(controller, profiles)
-		Logger.debug(
-			`[ProfilePerf] phase=get_profiles taskId=${controller.task?.taskId ?? "none"} outcome=read profiles=${profiles.length} readMs=${readMs} hydrateMs=${hydrateMs} firstFlushMs=${firstFlushMs} defaultsChanged=${defaultsChanged} defaultsFlushMs=${defaultsFlushMs} publishMs=${publishMs} totalMs=${Math.round(performance.now() - startedAt)}`,
+		recordPerfPhase(
+			PerfDomain.Profile,
+			"get_profiles",
+			performance.now() - startedAt,
+			{
+				outcome: "read",
+				profiles: profiles.length,
+				readMs,
+				hydrateMs,
+				firstFlushMs,
+				defaultsChanged,
+				defaultsFlushMs,
+				publishMs,
+			},
+			{ taskId: controller.task?.taskId },
 		)
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[ProfilePerf] phase=get_profiles taskId=${controller.task?.taskId ?? "none"} outcome=read profiles=${profiles.length} readMs=${readMs} hydrateMs=${hydrateMs} firstFlushMs=${firstFlushMs} defaultsChanged=${defaultsChanged} defaultsFlushMs=${defaultsFlushMs} publishMs=${publishMs} totalMs=${Math.round(performance.now() - startedAt)}`,
+			)
+		}
 		return ApiProfilesResponse.create({ profiles })
 	} catch (err: any) {
 		if (err.code === "ENOENT") {
@@ -618,9 +638,22 @@ export async function getApiProfiles(controller: Controller, _request: EmptyRequ
 			// Always post on first initialization so webview picks up defaults
 			await controller.postStateToWebview()
 			recordProfileCatalogBaseline(controller, profiles)
-			Logger.debug(
-				`[ProfilePerf] phase=get_profiles taskId=${controller.task?.taskId ?? "none"} outcome=initialize profiles=${profiles.length} initializeMs=${Math.round(performance.now() - initializeStartedAt)} totalMs=${Math.round(performance.now() - startedAt)}`,
+			recordPerfPhase(
+				PerfDomain.Profile,
+				"get_profiles",
+				performance.now() - startedAt,
+				{
+					outcome: "initialize",
+					profiles: profiles.length,
+					initializeMs: Math.round(performance.now() - initializeStartedAt),
+				},
+				{ taskId: controller.task?.taskId },
 			)
+			if (Logger.isDebugEnabled()) {
+				Logger.debug(
+					`[ProfilePerf] phase=get_profiles taskId=${controller.task?.taskId ?? "none"} outcome=initialize profiles=${profiles.length} initializeMs=${Math.round(performance.now() - initializeStartedAt)} totalMs=${Math.round(performance.now() - startedAt)}`,
+				)
+			}
 			return ApiProfilesResponse.create({ profiles })
 		}
 		Logger.error("[getApiProfiles] Failed to read api_profiles.json:", err)

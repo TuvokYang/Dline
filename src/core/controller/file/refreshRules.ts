@@ -3,6 +3,8 @@ import { refreshExternalRulesToggles } from "@core/context/instructions/user-ins
 import { refreshWorkflowToggles } from "@core/context/instructions/user-instructions/workflows"
 import { EmptyRequest } from "@shared/proto/dline/common"
 import { RefreshedDlineToggles } from "@shared/proto/dline/file"
+import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import { Logger } from "@/shared/services/Logger"
 import { getCwd, getDesktopDir } from "@/utils/path"
 import type { Controller } from "../index"
@@ -75,9 +77,31 @@ async function scanRules(controller: Controller): Promise<RefreshedDlineToggles>
 			workflowsRefresh.discoveredLocalToggles,
 			workflowsRefresh.localScanComplete,
 		)
-		Logger.debug(
-			`[CapabilityPerf] phase=rules_refresh_rpc taskId=${controller.task?.taskId ?? "none"} cwdMs=${cwdMs} dlineRulesMs=${dlineRulesMs} externalRulesMs=${externalRulesMs} workflowsMs=${workflowsMs} skillsMs=${skillsMs} totalMs=${Math.round(performance.now() - startedAt)} dlineRules=${Object.keys(globalToggles).length + Object.keys(localToggles).length} externalRules=${Object.keys(cursorLocalToggles).length + Object.keys(windsurfLocalToggles).length + Object.keys(agentsLocalToggles).length} workflows=${Object.keys(localWorkflowToggles).length + Object.keys(globalWorkflowToggles).length} skills=${globalSkills.length + localSkills.length}`,
+		recordPerfPhase(
+			PerfDomain.Capability,
+			"rules_refresh_rpc",
+			performance.now() - startedAt,
+			{
+				cwdMs,
+				dlineRulesMs,
+				externalRulesMs,
+				workflowsMs,
+				skillsMs,
+				dlineRules: Object.keys(globalToggles).length + Object.keys(localToggles).length,
+				externalRules:
+					Object.keys(cursorLocalToggles).length +
+					Object.keys(windsurfLocalToggles).length +
+					Object.keys(agentsLocalToggles).length,
+				workflows: Object.keys(localWorkflowToggles).length + Object.keys(globalWorkflowToggles).length,
+				skills: globalSkills.length + localSkills.length,
+			},
+			{ taskId: controller.task?.taskId },
 		)
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[CapabilityPerf] phase=rules_refresh_rpc taskId=${controller.task?.taskId ?? "none"} cwdMs=${cwdMs} dlineRulesMs=${dlineRulesMs} externalRulesMs=${externalRulesMs} workflowsMs=${workflowsMs} skillsMs=${skillsMs} totalMs=${Math.round(performance.now() - startedAt)} dlineRules=${Object.keys(globalToggles).length + Object.keys(localToggles).length} externalRules=${Object.keys(cursorLocalToggles).length + Object.keys(windsurfLocalToggles).length + Object.keys(agentsLocalToggles).length} workflows=${Object.keys(localWorkflowToggles).length + Object.keys(globalWorkflowToggles).length} skills=${globalSkills.length + localSkills.length}`,
+			)
+		}
 
 		return RefreshedDlineToggles.create({
 			globalClineRulesToggles: { toggles: globalToggles },
@@ -92,9 +116,14 @@ async function scanRules(controller: Controller): Promise<RefreshedDlineToggles>
 		})
 	} catch (error) {
 		Logger.error("Failed to refresh rules:", error)
-		Logger.debug(
-			`[CapabilityPerf] phase=rules_refresh_rpc_error taskId=${controller.task?.taskId ?? "none"} totalMs=${Math.round(performance.now() - startedAt)}`,
-		)
+		recordPerfPhase(PerfDomain.Capability, "rules_refresh_rpc_error", performance.now() - startedAt, undefined, {
+			taskId: controller.task?.taskId,
+		})
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[CapabilityPerf] phase=rules_refresh_rpc_error taskId=${controller.task?.taskId ?? "none"} totalMs=${Math.round(performance.now() - startedAt)}`,
+			)
+		}
 		throw error
 	}
 }

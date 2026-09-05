@@ -4,6 +4,8 @@ import path from "node:path"
 import type { ApiProfile } from "@shared/proto/dline/profile"
 import { Logger } from "@shared/services/Logger"
 import chokidar, { type FSWatcher } from "chokidar"
+import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import { FileLock } from "../storage/backend/jsonl/FileLock"
 
 export interface ProfileCatalogCommit {
@@ -125,9 +127,15 @@ export class ProfileCatalogRepository {
 		this.snapshotHash = profileHash(this.snapshot)
 		this.initialized = true
 		if (this.watchEnabled) await this.startWatcher()
-		Logger.debug(
-			`[ProfilePerf] phase=catalog_initialize durationMs=${Math.round(performance.now() - startedAt)} profiles=${this.snapshot.length} watch=${this.watchEnabled}`,
-		)
+		recordPerfPhase(PerfDomain.Profile, "catalog_initialize", performance.now() - startedAt, {
+			profiles: this.snapshot.length,
+			watch: this.watchEnabled,
+		})
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[ProfilePerf] phase=catalog_initialize durationMs=${Math.round(performance.now() - startedAt)} profiles=${this.snapshot.length} watch=${this.watchEnabled}`,
+			)
+		}
 		return cloneProfiles(this.snapshot)
 	}
 
@@ -150,9 +158,19 @@ export class ProfileCatalogRepository {
 				commit = { previous: cloneProfiles(latest), profiles: cloneProfiles(profiles) }
 			})
 			if (!commit) throw new Error("Profile Catalog transaction completed without a commit")
-			Logger.debug(
-				`[ProfilePerf] phase=catalog_mutate queueMs=${queueMs} lockWaitMs=${Math.round(lockAcquiredAt - lockRequestedAt)} transactionMs=${Math.round(performance.now() - lockAcquiredAt)} totalMs=${Math.round(performance.now() - requestedAt)} baseline=${baseline.length} requested=${requested.length} committed=${commit.profiles.length}`,
-			)
+			recordPerfPhase(PerfDomain.Profile, "catalog_mutate", performance.now() - requestedAt, {
+				queueMs,
+				lockWaitMs: Math.round(lockAcquiredAt - lockRequestedAt),
+				transactionMs: Math.round(performance.now() - lockAcquiredAt),
+				baseline: baseline.length,
+				requested: requested.length,
+				committed: commit.profiles.length,
+			})
+			if (Logger.isDebugEnabled()) {
+				Logger.debug(
+					`[ProfilePerf] phase=catalog_mutate queueMs=${queueMs} lockWaitMs=${Math.round(lockAcquiredAt - lockRequestedAt)} transactionMs=${Math.round(performance.now() - lockAcquiredAt)} totalMs=${Math.round(performance.now() - requestedAt)} baseline=${baseline.length} requested=${requested.length} committed=${commit.profiles.length}`,
+				)
+			}
 			return commit
 		})
 	}
@@ -206,8 +224,14 @@ export class ProfileCatalogRepository {
 		this.snapshot = cloneProfiles(profiles)
 		this.snapshotHash = nextHash
 		for (const listener of this.listeners) await listener({ previous, profiles: cloneProfiles(profiles) })
-		Logger.debug(
-			`[ProfilePerf] phase=catalog_reconcile durationMs=${Math.round(performance.now() - startedAt)} profiles=${profiles.length} listeners=${this.listeners.size}`,
-		)
+		recordPerfPhase(PerfDomain.Profile, "catalog_reconcile", performance.now() - startedAt, {
+			profiles: profiles.length,
+			listeners: this.listeners.size,
+		})
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[ProfilePerf] phase=catalog_reconcile durationMs=${Math.round(performance.now() - startedAt)} profiles=${profiles.length} listeners=${this.listeners.size}`,
+			)
+		}
 	}
 }

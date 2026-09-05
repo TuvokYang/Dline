@@ -13,6 +13,8 @@ import path from "path"
 import { parseYamlFrontmatter } from "@/core/context/instructions/user-instructions/frontmatter"
 import { getSkillsDirectoriesForScan } from "@/core/storage/disk"
 import { HostProvider } from "@/hosts/host-provider"
+import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import { Logger } from "@/shared/services/Logger"
 import { fileExistsAtPath, isDirectory } from "@/utils/fs"
 import { Controller } from ".."
@@ -167,9 +169,24 @@ async function scanSkills(controller: Controller): Promise<RefreshedSkills> {
 	const discoveredIds = new Set([...globalScan.items, ...localScan.items].map((skill) => capabilityResourceId(skill.path)))
 	await pruneCapabilityOrphans(controller.stateManager, "skills", discoveredIds, scanComplete)
 
-	Logger.debug(
-		`[CapabilityPerf] phase=skills_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} directories=${scannedDirectories} global=${globalSkills.length} local=${localSkills.length} remote=${validatedRemoteSkills.length} complete=${scanComplete}`,
+	recordPerfPhase(
+		PerfDomain.Capability,
+		"skills_refresh",
+		performance.now() - startedAt,
+		{
+			directories: scannedDirectories,
+			global: globalSkills.length,
+			local: localSkills.length,
+			remote: validatedRemoteSkills.length,
+			complete: scanComplete,
+		},
+		{ taskId: controller.task?.taskId },
 	)
+	if (Logger.isDebugEnabled()) {
+		Logger.debug(
+			`[CapabilityPerf] phase=skills_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} directories=${scannedDirectories} global=${globalSkills.length} local=${localSkills.length} remote=${validatedRemoteSkills.length} complete=${scanComplete}`,
+		)
+	}
 	return RefreshedSkills.create({
 		globalSkills,
 		localSkills,

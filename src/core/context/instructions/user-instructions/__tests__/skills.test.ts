@@ -35,7 +35,7 @@ vi.mock("@/core/storage/disk", () => ({
 }))
 
 vi.mock("@/shared/services/Logger", () => ({
-	Logger: { warn: mockLoggerWarn, info: vi.fn(), error: vi.fn(), debug: vi.fn() },
+	Logger: { warn: mockLoggerWarn, info: vi.fn(), error: vi.fn(), debug: vi.fn(), isDebugEnabled: () => false },
 }))
 
 // skills.ts uses `import * as fs from "fs/promises"` — mock the module directly

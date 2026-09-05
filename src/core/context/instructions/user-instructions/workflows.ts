@@ -4,6 +4,8 @@ import { resolveCapabilityToggles } from "@core/storage/settings/capability-togg
 import { ClineRulesToggles } from "@shared/cline-rules"
 import { Logger } from "@shared/services/Logger"
 import { Controller } from "@/core/controller"
+import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 
 /**
  * Refresh the workflow toggles.
@@ -51,9 +53,23 @@ export async function refreshWorkflowToggles(
 	// workspace or task override applies to both.
 	const globalToggles = resolveCapabilityToggles(controller.stateManager, "workflows", discoveredGlobal)
 	const localToggles = resolveCapabilityToggles(controller.stateManager, "workflows", discoveredLocal)
-	Logger.debug(
-		`[CapabilityPerf] phase=workflows_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} directories=${scanDirs.length} global=${Object.keys(globalToggles).length} local=${Object.keys(localToggles).length} localComplete=${localScanComplete}`,
+	recordPerfPhase(
+		PerfDomain.Capability,
+		"workflows_refresh",
+		performance.now() - startedAt,
+		{
+			directories: scanDirs.length,
+			global: Object.keys(globalToggles).length,
+			local: Object.keys(localToggles).length,
+			localComplete: localScanComplete,
+		},
+		{ taskId: controller.task?.taskId },
 	)
+	if (Logger.isDebugEnabled()) {
+		Logger.debug(
+			`[CapabilityPerf] phase=workflows_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} directories=${scanDirs.length} global=${Object.keys(globalToggles).length} local=${Object.keys(localToggles).length} localComplete=${localScanComplete}`,
+		)
+	}
 
 	return {
 		globalWorkflowToggles: globalToggles,

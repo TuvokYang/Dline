@@ -12,6 +12,8 @@ import { RefreshedSubagents, SubagentInfo } from "@shared/proto/dline/file"
 import fs from "fs/promises"
 import path from "path"
 import { HostProvider } from "@/hosts/host-provider"
+import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import { Logger } from "@/shared/services/Logger"
 import { fileExistsAtPath, isDirectory } from "@/utils/fs"
 import { Controller } from ".."
@@ -140,18 +142,42 @@ export async function refreshSubagents(controller: Controller): Promise<Refreshe
 		const discoveredIds = new Set([...globalScan.items, ...localScan.items].map((agent) => capabilityResourceId(agent.path)))
 		await pruneCapabilityOrphans(controller.stateManager, "subagents", discoveredIds, scanComplete)
 
-		Logger.debug(
-			`[CapabilityPerf] phase=subagents_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} directories=${scannedDirectories} global=${visibleGlobalSubagents.length} local=${localSubagents.length} shadowedGlobal=${globalSubagents.length - visibleGlobalSubagents.length} complete=${scanComplete}`,
+		recordPerfPhase(
+			PerfDomain.Capability,
+			"subagents_refresh",
+			performance.now() - startedAt,
+			{
+				directories: scannedDirectories,
+				global: visibleGlobalSubagents.length,
+				local: localSubagents.length,
+				shadowedGlobal: globalSubagents.length - visibleGlobalSubagents.length,
+				complete: scanComplete,
+			},
+			{ taskId: controller.task?.taskId },
 		)
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[CapabilityPerf] phase=subagents_refresh taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} directories=${scannedDirectories} global=${visibleGlobalSubagents.length} local=${localSubagents.length} shadowedGlobal=${globalSubagents.length - visibleGlobalSubagents.length} complete=${scanComplete}`,
+			)
+		}
 		return RefreshedSubagents.create({
 			globalSubagents: visibleGlobalSubagents,
 			localSubagents,
 		})
 	} catch (error) {
 		Logger.error("refreshSubagents failed:", error)
-		Logger.debug(
-			`[CapabilityPerf] phase=subagents_refresh_error taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} directories=${scannedDirectories}`,
+		recordPerfPhase(
+			PerfDomain.Capability,
+			"subagents_refresh_error",
+			performance.now() - startedAt,
+			{ directories: scannedDirectories },
+			{ taskId: controller.task?.taskId },
 		)
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[CapabilityPerf] phase=subagents_refresh_error taskId=${controller.task?.taskId ?? "none"} durationMs=${Math.round(performance.now() - startedAt)} directories=${scannedDirectories}`,
+			)
+		}
 		return RefreshedSubagents.create({
 			globalSubagents: [],
 			localSubagents: [],
