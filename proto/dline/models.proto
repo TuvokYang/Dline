@@ -31,6 +31,8 @@ service ModelsService {
   rpc refreshHuggingFaceModels(EmptyRequest) returns (OpenRouterCompatibleModelInfo);
   // Refreshes and returns OpenAI models
   rpc refreshOpenAiModels(OpenAiModelsRequest) returns (StringArray);
+  // Lists the model ids a provider currently exposes, without persisting them
+  rpc refreshProviderModels(ProviderModelsRequest) returns (StringArray);
   // Refreshes and returns Requesty models
   rpc refreshRequestyModels(EmptyRequest) returns (OpenRouterCompatibleModelInfo);
   // Refreshes and returns Hicap models
@@ -198,6 +200,16 @@ message OpenAiModelsRequest {
   Metadata metadata = 1;
   string base_url = 2;
   string api_key = 3;
+}
+
+// Request for previewing the models a provider currently exposes.
+// base_url and api_key are optional; when empty the saved profile
+// credentials for the provider are used.
+message ProviderModelsRequest {
+  Metadata metadata = 1;
+  string provider_id = 2;
+  string base_url = 3;
+  string api_key = 4;
 }
 
 // Request for fetching SAP AI Core models

@@ -16,7 +16,6 @@ import { DebouncedTextField } from "../common/DebouncedTextField"
 import { ModelAutocomplete } from "../common/ModelAutocomplete"
 import { ModelConfiguration } from "../common/ModelConfiguration"
 import { ModelInfoView } from "../common/ModelInfoView"
-import { ModelSelector } from "../common/ModelSelector"
 import OpenAIServiceTierSelector from "../OpenAIServiceTierSelector"
 import { ProfileActionRow, ProfileField, ProfileNotice, ProfileSection, ProfileSectionTitle } from "../profile-ui"
 import ThinkingControl from "../ThinkingControl"
@@ -25,7 +24,7 @@ import type { ApiProfile } from "./ProviderProfile"
 import { ProviderWebSearchSettings } from "./ProviderWebSearchSettings"
 import { useModelProbe } from "./useModelProbe"
 import { usePendingProviderConfig } from "./usePendingProviderConfig"
-import { useProviderModels } from "./useProviderModels"
+import { useProviderModelOptions } from "./useProviderModelOptions"
 
 interface OpenAIProviderProps {
 	showModelOptions: boolean
@@ -68,7 +67,18 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate: o
 	const configToUpdate = useCallback(() => latest(), [latest])
 	const fieldId = useId()
 	const streamIdleTimeoutId = `${fieldId}-stream-idle-timeout`
-	const { models, defaultModelId, modelInfoSaneDefaults } = useProviderModels("openai")
+	const {
+		models,
+		defaultModelId,
+		modelInfoSaneDefaults,
+		options: officialModelOptions,
+		refreshRemoteModels,
+	} = useProviderModelOptions({
+		providerId: "openai",
+		baseUrl: profile.baseUrl,
+		apiKey: profile.apiKey,
+		selectedModelId: profile.modelId,
+	})
 	// Profiles created by the former OpenAI Compatible provider have no
 	// customModelEnabled flag. Preserve their free-form model ID after the
 	// provider consolidation instead of forcing an unknown ID into the
@@ -234,14 +244,14 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate: o
 							selectedModelId={modelId}
 						/>
 					) : (
-						<>
-							<ModelSelector
-								label="Model"
-								models={models}
-								onChange={(event) => handleOfficialModelChange((event.target as HTMLSelectElement).value)}
-								selectedModelId={modelId}
-							/>
-						</>
+						<ModelAutocomplete
+							label="Model"
+							models={officialModelOptions}
+							onChange={handleOfficialModelChange}
+							onOpen={refreshRemoteModels}
+							placeholder="Search and select a model..."
+							selectedModelId={modelId}
+						/>
 					)}
 
 					<ApiFormatSelector

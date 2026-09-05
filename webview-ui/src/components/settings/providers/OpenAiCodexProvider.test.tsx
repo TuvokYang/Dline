@@ -33,8 +33,14 @@ vi.mock("@/services/grpc-client", () => ({
 	WebServiceClient: { openInBrowser: mocks.openInBrowser },
 }))
 
-vi.mock("./useProviderModels", () => ({
-	useProviderModels: () => ({ models: {}, defaultModelId: "gpt-5-codex", modelInfoSaneDefaults: {} }),
+vi.mock("./useProviderModelOptions", () => ({
+	useProviderModelOptions: () => ({
+		models: {},
+		defaultModelId: "gpt-5-codex",
+		modelInfoSaneDefaults: {},
+		options: {},
+		refreshRemoteModels: vi.fn(),
+	}),
 }))
 
 const profile = ApiProfile.create({

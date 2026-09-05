@@ -19,8 +19,10 @@ const registryModel: ModelInfo = {
 	pricing: { inputPrice: 1, outputPrice: 2, currency: "USD" } as ModelPricing,
 }
 
-vi.mock("./useProviderModels", () => ({
-	useProviderModels: () => ({
+vi.mock("./useProviderModelOptions", () => ({
+	useProviderModelOptions: () => ({
+		options: { "gpt-custom": registryModel },
+		refreshRemoteModels: vi.fn(),
 		models: { "gpt-custom": registryModel },
 		defaultModelId: "gpt-custom",
 		modelInfoSaneDefaults: registryModel,
@@ -30,7 +32,6 @@ vi.mock("./useProviderModels", () => ({
 
 vi.mock("../common/ApiKeyField", () => ({ ApiKeyField: () => <div /> }))
 vi.mock("../common/BaseUrlField", () => ({ BaseUrlField: () => <div /> }))
-vi.mock("../common/ModelSelector", () => ({ ModelSelector: () => <div /> }))
 vi.mock("../common/ModelAutocomplete", () => ({ ModelAutocomplete: () => <div /> }))
 vi.mock("../ThinkingControl", () => ({ default: () => <div /> }))
 vi.mock("../OpenAIServiceTierSelector", () => ({ default: () => <div /> }))

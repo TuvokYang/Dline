@@ -9,6 +9,7 @@ import { aiHubMixModelSource } from "./aihubmix"
 import { anthropicModelSource } from "./anthropic"
 import { basetenModelSource } from "./baseten"
 import { clineModelSource } from "./cline"
+import { deepSeekModelSource } from "./deepseek"
 import { groqModelSource } from "./groq"
 import { hicapModelSource } from "./hicap"
 import { huggingFaceModelSource } from "./huggingface"
@@ -27,6 +28,7 @@ export const MODEL_SOURCES: readonly ProviderRemoteSource[] = [
 	anthropicModelSource,
 	basetenModelSource,
 	clineModelSource,
+	deepSeekModelSource,
 	groqModelSource,
 	hicapModelSource,
 	huggingFaceModelSource,

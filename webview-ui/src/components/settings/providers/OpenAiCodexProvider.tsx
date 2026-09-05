@@ -1,13 +1,13 @@
 import { OpenAiCodexProviderConfig } from "@shared/proto/dline/provider/openai_codex"
 import { buildEffectiveModelInfo } from "@shared/providers/effective-model-info"
 import { OPENAI_REASONING_EFFORT_OPTIONS } from "@shared/storage/types"
+import { ModelAutocomplete } from "../common/ModelAutocomplete"
 import { ModelInfoView } from "../common/ModelInfoView"
-import { ModelSelector } from "../common/ModelSelector"
 import OpenAIServiceTierSelector from "../OpenAIServiceTierSelector"
 import ThinkingControl from "../ThinkingControl"
 import { OpenAiCodexOAuthControl } from "./OpenAiCodexOAuthControl"
 import type { ApiProfile } from "./ProviderProfile"
-import { useProviderModels } from "./useProviderModels"
+import { useProviderModelOptions } from "./useProviderModelOptions"
 
 interface OpenAiCodexProviderProps {
 	showModelOptions: boolean
@@ -28,7 +28,18 @@ function getCodexConfig(profile: ApiProfile): OpenAiCodexProviderConfig {
 
 export const OpenAiCodexProvider = ({ showModelOptions, isPopup, profile, onUpdate }: OpenAiCodexProviderProps) => {
 	const pc = getCodexConfig(profile)
-	const { models, defaultModelId, modelInfoSaneDefaults } = useProviderModels("openai-codex")
+	const {
+		models,
+		defaultModelId,
+		modelInfoSaneDefaults,
+		options: modelOptions,
+		refreshRemoteModels,
+	} = useProviderModelOptions({
+		providerId: "openai-codex",
+		baseUrl: profile.baseUrl,
+		apiKey: profile.apiKey,
+		selectedModelId: profile.modelId,
+	})
 	const modelId = profile.modelId || defaultModelId
 	const registryModel = models[profile.modelId ?? ""] ?? modelInfoSaneDefaults
 	const modelInfo = buildEffectiveModelInfo(modelId, registryModel, {
@@ -40,10 +51,12 @@ export const OpenAiCodexProvider = ({ showModelOptions, isPopup, profile, onUpda
 			<OpenAiCodexOAuthControl profileId={profile.id} />
 			{showModelOptions && (
 				<>
-					<ModelSelector
+					<ModelAutocomplete
 						label="Model"
-						models={models}
-						onChange={(e) => onUpdate({ modelId: (e.target as HTMLSelectElement).value })}
+						models={modelOptions}
+						onChange={(value) => onUpdate({ modelId: value })}
+						onOpen={refreshRemoteModels}
+						placeholder="Search and select a model..."
 						selectedModelId={modelId}
 					/>
 					{/* Store reasoning under the existing proto-generated openaiCodex field. */}

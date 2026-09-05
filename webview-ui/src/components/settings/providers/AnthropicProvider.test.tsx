@@ -83,18 +83,22 @@ vi.mock("@/context/ExtensionStateContext", () => ({
 	useExtensionState: () => ({ remoteConfigSettings: {} }),
 }))
 
-vi.mock("./useProviderModels", () => ({
-	useProviderModels: () => ({
-		models: {
-			"claude-custom": registryModel,
-			"claude-native": nativeContextModel,
-			"claude-sonnet-4-6": adaptiveModel,
-			"claude-opus-5": defaultAdaptiveModel,
-			"claude-fable-5": requiredAdaptiveModel,
-		},
+const catalogModels = {
+	"claude-custom": registryModel,
+	"claude-native": nativeContextModel,
+	"claude-sonnet-4-6": adaptiveModel,
+	"claude-opus-5": defaultAdaptiveModel,
+	"claude-fable-5": requiredAdaptiveModel,
+}
+
+vi.mock("./useProviderModelOptions", () => ({
+	useProviderModelOptions: () => ({
+		models: catalogModels,
 		defaultModelId: "claude-custom",
 		modelInfoSaneDefaults: registryModel,
 		loading: false,
+		options: catalogModels,
+		refreshRemoteModels: vi.fn(),
 	}),
 }))
 
@@ -146,7 +150,7 @@ vi.mock("../common/ApiKeyField", () => ({ ApiKeyField: () => <div /> }))
 vi.mock("../common/BaseUrlField", () => ({ BaseUrlField: () => <div /> }))
 vi.mock("../common/ContextWindowSwitcher", () => ({ ContextWindowSwitcher: () => <div /> }))
 vi.mock("../common/DebouncedTextField", () => ({ DebouncedTextField: () => <div /> }))
-vi.mock("../common/ModelSelector", () => ({ ModelSelector: () => <div /> }))
+vi.mock("../common/ModelAutocomplete", () => ({ ModelAutocomplete: () => <div /> }))
 vi.mock("../common/RemotelyConfiguredInputWrapper", () => ({
 	RemotelyConfiguredInputWrapper: ({ children }: { children: ReactNode }) => <>{children}</>,
 }))

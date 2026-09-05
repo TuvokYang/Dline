@@ -51,12 +51,18 @@ e2e("Profile Catalog - captures compact profile settings across widths and theme
 	await expect(capabilityLists.first().locator("[style*='mask']")).toHaveCount(0)
 
 	await page.setViewportSize({ height: 800, width: 700 })
-	const thinkingCard = sidebar.getByTestId("api-profile-card").filter({ hasText: "DeepSeek Thinking" }).first()
+	// The expanded body now lists model options, so a plain hasText filter can also
+	// match another card whose picker happens to contain the name. Match the toggle.
+	const thinkingCard = sidebar.getByTestId("api-profile-card").filter({
+		has: sidebar.getByRole("button", { name: /^(Expand|Collapse) .*DeepSeek Thinking.*$/ }),
+	})
 	await thinkingCard.getByRole("button", { name: /^Expand / }).click()
 	const profileNameInput = thinkingCard.locator('input[aria-label="Profile name"]')
 	await expect(profileNameInput).toBeVisible()
 	expect(await profileNameInput.evaluate((element) => element.getBoundingClientRect().width)).toBeLessThanOrEqual(320)
-	await expect(thinkingCard.getByText(/deepseek · .* · Thinking:/i)).toBeVisible()
+	// Expanding replaces the summary line with the editable name field, so the
+	// summary stays in the DOM as the card's accessible description.
+	await expect(thinkingCard.getByText(/deepseek · .* · Thinking:/i)).toBeAttached()
 	const webSearchMode = thinkingCard.getByRole("combobox", { name: "Web Search mode" })
 	await expect(webSearchMode.getByRole("option")).toHaveText(["Auto", "Force Local", "Off", "Force Remote"])
 	await captureProfileSettings(sidebar, "profile-settings-expanded-thinking-700")

@@ -469,12 +469,13 @@ e2e(
 		catalog.models[modelId] = { ...templateModel, id: modelId, name: modelId }
 		await writeFile(providerPath, `${JSON.stringify(catalog, null, 2)}\n`, "utf8")
 
-		const modelSelector = profileCard.getByRole("combobox", { name: "Model", exact: true })
-		await expect(modelSelector.locator(`vscode-option[value="${modelId}"]`)).toHaveCount(1, { timeout: 15_000 })
-		await modelSelector.evaluate((element, value) => {
-			;(element as HTMLInputElement).value = value
-			element.dispatchEvent(new Event("change", { bubbles: true }))
-		}, modelId)
+		// The model picker is searchable: typing filters the merged catalog and
+		// remote list, and the reloaded entry must appear without a restart.
+		const modelSearch = profileCard.locator('vscode-text-field[placeholder="Search and select a model..."] input')
+		await modelSearch.click()
+		await modelSearch.fill(modelId)
+		await sidebar.getByRole("option", { name: modelId, exact: true }).click({ timeout: 15_000 })
+		await expect(modelSearch).toHaveValue(modelId)
 
 		await E2ETestHelper.waitUntil(async () => {
 			const profiles = await readJson<StoredProfile[]>(profilesPath)

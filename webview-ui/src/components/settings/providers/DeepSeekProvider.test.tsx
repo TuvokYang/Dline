@@ -21,19 +21,29 @@ const models = {
 	} as ModelInfo,
 }
 
-vi.mock("./useProviderModels", () => ({
-	useProviderModels: () => ({
+const remoteModels = {
+	"deepseek-v4-preview": { id: "deepseek-v4-preview" } as ModelInfo,
+}
+
+vi.mock("./useProviderModelOptions", () => ({
+	useProviderModelOptions: () => ({
 		models,
 		defaultModelId: "deepseek-v4-flash",
 		modelInfoSaneDefaults: models["deepseek-v4-flash"],
+		imageModels: {},
+		defaultImageModelId: "",
+		loading: false,
+		// Catalog entries win over discovered ids, matching the hook's merge.
+		options: { ...remoteModels, ...models },
+		refreshRemoteModels: vi.fn(),
 	}),
 }))
 
 vi.mock("../common/ApiKeyField", () => ({ ApiKeyField: () => <div /> }))
 vi.mock("../common/ModelInfoView", () => ({ ModelInfoView: () => <div /> }))
 vi.mock("../ReasoningEffortSelector", () => ({ default: () => <div /> }))
-vi.mock("../common/ModelSelector", () => ({
-	ModelSelector: ({ models: availableModels }: { models: Record<string, ModelInfo> }) => (
+vi.mock("../common/ModelAutocomplete", () => ({
+	ModelAutocomplete: ({ models: availableModels }: { models: Record<string, ModelInfo> }) => (
 		<div data-testid="deepseek-models">{Object.keys(availableModels).join(",")}</div>
 	),
 }))
@@ -118,7 +128,10 @@ describe("DeepSeekProvider", () => {
 
 		render(<DeepSeekProvider onUpdate={onUpdate} profile={profile} showModelOptions={true} />)
 
-		expect(screen.getByTestId("deepseek-models")).toHaveTextContent("deepseek-v4-pro,deepseek-v4-flash")
+		// The picker lists remote discoveries alongside the local catalog.
+		expect(screen.getByTestId("deepseek-models")).toHaveTextContent(
+			"deepseek-v4-preview,deepseek-v4-pro,deepseek-v4-flash",
+		)
 		const format = screen.getByRole("combobox", { name: "API Format" })
 		expect(format).toHaveValue(String(ApiFormat.OPENAI_CHAT))
 		expect(screen.getByRole("option", { name: "OpenAI Chat" })).toBeInTheDocument()

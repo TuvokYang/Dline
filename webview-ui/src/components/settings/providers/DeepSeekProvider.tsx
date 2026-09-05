@@ -9,12 +9,12 @@ import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
 import { useEffect, useRef, useState } from "react"
 import { ApiFormatSelector } from "../common/ApiFormatSelector"
 import { ApiKeyField } from "../common/ApiKeyField"
+import { ModelAutocomplete } from "../common/ModelAutocomplete"
 import { ModelInfoView } from "../common/ModelInfoView"
-import { ModelSelector } from "../common/ModelSelector"
 import ReasoningEffortSelector from "../ReasoningEffortSelector"
 import type { ApiProfile } from "./ProviderProfile"
 import { ProviderWebSearchSettings } from "./ProviderWebSearchSettings"
-import { useProviderModels } from "./useProviderModels"
+import { useProviderModelOptions } from "./useProviderModelOptions"
 
 /**
  * Props for the DeepSeekProvider component
@@ -32,7 +32,17 @@ interface DeepSeekProviderProps {
  * Reasoning effort stored in deepseek.
  */
 export const DeepSeekProvider = ({ showModelOptions, isPopup, profile, onUpdate }: DeepSeekProviderProps) => {
-	const { models: deepSeekModels, defaultModelId: deepSeekDefaultModelId } = useProviderModels("deepseek")
+	const {
+		models: deepSeekModels,
+		defaultModelId: deepSeekDefaultModelId,
+		options: deepSeekModelOptions,
+		refreshRemoteModels,
+	} = useProviderModelOptions({
+		providerId: "deepseek",
+		baseUrl: profile.baseUrl,
+		apiKey: profile.apiKey,
+		selectedModelId: profile.modelId,
+	})
 
 	const modelId = profile.modelId || deepSeekDefaultModelId
 	const pc = profile.deepseek ?? BaseProviderConfig.create()
@@ -86,21 +96,24 @@ export const DeepSeekProvider = ({ showModelOptions, isPopup, profile, onUpdate 
 
 			{showModelOptions && (
 				<>
-					<ModelSelector
+					<ModelAutocomplete
 						label="Model"
-						models={deepSeekModels}
-						onChange={(e: any) => {
-							const newModelId = e.target.value
+						models={deepSeekModelOptions}
+						onChange={(newModelId) => {
+							// Only catalog entries carry metadata; a discovered id keeps
+							// the profile's existing model info untouched.
 							const nextModel = deepSeekModels[newModelId]
 							onUpdate({
 								modelId: newModelId,
-								modelInfo: nextModel,
+								...(nextModel ? { modelInfo: nextModel } : {}),
 								deepseek: {
 									...pc,
 									apiFormat: resolveApiFormat(pc.apiFormat, nextModel, ApiFormat.OPENAI_CHAT),
 								},
 							})
 						}}
+						onOpen={refreshRemoteModels}
+						placeholder="Search and select a model..."
 						selectedModelId={modelId}
 					/>
 

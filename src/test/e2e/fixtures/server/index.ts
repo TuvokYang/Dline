@@ -254,6 +254,8 @@ export interface MockModelListRequest {
 	target: MockApiTarget
 	path: string
 	authorization?: string
+	/** Anthropic authenticates model listing with `x-api-key` instead of a bearer token. */
+	apiKey?: string
 }
 
 function createResponseQueues(): Record<MockApiTarget, OpenAiMockResponse[]> {
@@ -903,11 +905,20 @@ export class ClineApiServerMock {
 		return undefined
 	}
 
+	/**
+	 * Model listing endpoints mirror each vendor's real discovery path:
+	 * OpenAI-compatible and DeepSeek list under `<basePath>/models`, while
+	 * Anthropic lists under `<basePath>/v1/models`.
+	 */
 	private static matchMockModelListRoute(path: string, method: string): MockApiTarget | undefined {
 		if (method !== "GET") return undefined
 		for (const target of Object.keys(E2E_MOCK_PROVIDER_ROUTES) as MockApiTarget[]) {
 			const route = E2E_MOCK_PROVIDER_ROUTES[target]
-			if (route.provider === "openai" && path === `${route.basePath}/models`) return target
+			if (route.provider === "anthropic") {
+				if (path === `${route.basePath}/v1/models`) return target
+				continue
+			}
+			if (path === `${route.basePath}/models`) return target
 		}
 		return undefined
 	}
@@ -1085,12 +1096,33 @@ export class ClineApiServerMock {
 				}
 
 				if (mockModelListTarget) {
+					const listRoute = E2E_MOCK_PROVIDER_ROUTES[mockModelListTarget]
+					const apiKeyHeader = req.headers["x-api-key"]
 					controller.mockModelListRequests.push({
 						receivedAtMs: Date.now(),
 						target: mockModelListTarget,
 						path,
 						...(authHeader ? { authorization: authHeader } : {}),
+						...(typeof apiKeyHeader === "string" ? { apiKey: apiKeyHeader } : {}),
 					})
+					if (listRoute.provider === "anthropic") {
+						return sendJson({
+							data: [
+								{ type: "model", id: "claude-sonnet-4-6", display_name: "Claude Sonnet 4.6" },
+								{ type: "model", id: "dline-e2e-discovered-model", display_name: "Dline E2E Discovered" },
+							],
+							has_more: false,
+						})
+					}
+					if (listRoute.provider === "deepseek") {
+						return sendJson({
+							object: "list",
+							data: [
+								{ id: "deepseek-v4-flash", object: "model", owned_by: "deepseek" },
+								{ id: "dline-e2e-discovered-model", object: "model", owned_by: "deepseek" },
+							],
+						})
+					}
 					return sendJson({
 						object: "list",
 						data: [

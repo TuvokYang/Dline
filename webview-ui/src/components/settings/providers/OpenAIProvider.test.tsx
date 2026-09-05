@@ -37,9 +37,11 @@ const multiFormatModel: ModelInfo = {
 	} as ModelCapabilities,
 }
 
-vi.mock("./useProviderModels", () => ({
-	useProviderModels: () => ({
-		models: { "gpt-multi": multiFormatModel, "gpt-custom": registryModel },
+const catalogModels = { "gpt-multi": multiFormatModel, "gpt-custom": registryModel }
+
+vi.mock("./useProviderModelOptions", () => ({
+	useProviderModelOptions: () => ({
+		models: catalogModels,
 		defaultModelId: "gpt-multi",
 		modelInfoSaneDefaults: multiFormatModel,
 		imageModels: {
@@ -48,6 +50,9 @@ vi.mock("./useProviderModels", () => ({
 		},
 		defaultImageModelId: "gpt-image-2",
 		loading: false,
+		// Catalog entries win over discovered ids, matching the hook's merge.
+		options: { "gpt-listed-only": { id: "gpt-listed-only" }, ...catalogModels },
+		refreshRemoteModels: vi.fn(),
 	}),
 }))
 
@@ -118,32 +123,20 @@ vi.mock("../common/DebouncedTextField", () => ({
 		)
 	},
 }))
-vi.mock("../common/ModelSelector", () => ({
-	ModelSelector: ({ label, models, onChange, selectedModelId }: any) => (
-		<label>
-			{label}
-			<select aria-label={label} onChange={onChange} value={selectedModelId}>
-				{Object.keys(models).map((modelId) => (
-					<option key={modelId} value={modelId}>
-						{modelId}
-					</option>
-				))}
-			</select>
-		</label>
-	),
-}))
 vi.mock("../common/ModelAutocomplete", () => ({
-	ModelAutocomplete: ({ models, onChange, onOpen, selectedModelId }: any) => (
+	ModelAutocomplete: ({ label, models, onChange, onOpen, selectedModelId }: any) => (
 		<div>
-			<button aria-label="Open Model" onClick={onOpen} type="button">
-				Open Model
+			<button aria-label={`Open ${label}`} onClick={onOpen} type="button">
+				Open {label}
 			</button>
 			<input
-				aria-label="Model ID"
+				aria-label={label}
 				defaultValue={selectedModelId}
 				onChange={(event) => onChange(event.target.value, models[event.target.value])}
 			/>
-			<span data-testid="discovered-models">{Object.keys(models).join(",")}</span>
+			<span data-testid={`${label === "Model ID" ? "discovered" : "official"}-models`}>
+				{Object.keys(models).join(",")}
+			</span>
 		</div>
 	),
 }))
@@ -209,8 +202,10 @@ describe("OpenAIProvider", () => {
 
 		render(<OpenAIProvider onUpdate={onUpdate} profile={profile} showModelOptions={true} />)
 
-		expect(screen.getByRole("combobox", { name: "Model" })).toHaveValue("gpt-multi")
+		expect(screen.getByRole("textbox", { name: "Model" })).toHaveValue("gpt-multi")
 		expect(screen.queryByRole("textbox", { name: "Model ID" })).not.toBeInTheDocument()
+		// Official mode still offers models the local catalog does not carry.
+		expect(screen.getByTestId("official-models")).toHaveTextContent("gpt-listed-only")
 		const apiFormat = screen.getByRole("combobox", { name: "API Format" })
 		expect(apiFormat).toHaveValue(String(ApiFormat.OPENAI_RESPONSES))
 		expect(apiFormat).toHaveStyle({
@@ -274,7 +269,7 @@ describe("OpenAIProvider", () => {
 
 		render(<OpenAIProvider onUpdate={vi.fn()} profile={profile} showModelOptions={true} />)
 
-		fireEvent.click(screen.getByRole("button", { name: "Open Model" }))
+		fireEvent.click(screen.getByRole("button", { name: "Open Model ID" }))
 
 		await waitFor(() =>
 			expect(ModelsServiceClient.refreshOpenAiModels).toHaveBeenCalledWith(

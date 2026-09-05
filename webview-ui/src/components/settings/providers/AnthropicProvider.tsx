@@ -21,13 +21,13 @@ import { useExtensionState } from "@/context/ExtensionStateContext"
 import { ApiKeyField } from "../common/ApiKeyField"
 import { BaseUrlField } from "../common/BaseUrlField"
 import { DebouncedTextField } from "../common/DebouncedTextField"
+import { ModelAutocomplete } from "../common/ModelAutocomplete"
 import { ModelConfiguration } from "../common/ModelConfiguration"
 import { ModelInfoView } from "../common/ModelInfoView"
-import { ModelSelector } from "../common/ModelSelector"
 import { RemotelyConfiguredInputWrapper } from "../common/RemotelyConfiguredInputWrapper"
 import ThinkingControl from "../ThinkingControl"
 import { ANTHROPIC_THINKING_DISPLAY_DESCRIPTION, ANTHROPIC_THINKING_DISPLAY_SELECTOR_OPTIONS } from "./anthropicThinkingDisplay"
-import { useProviderModels } from "./useProviderModels"
+import { useProviderModelOptions } from "./useProviderModelOptions"
 
 const StyledCheckbox = styled(VSCodeCheckbox)`
 	margin-bottom: 4px;
@@ -56,7 +56,14 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 		models: anthropicModels,
 		defaultModelId: anthropicDefaultModelId,
 		modelInfoSaneDefaults: anthropicModelInfoSaneDefaults,
-	} = useProviderModels("anthropic")
+		options: anthropicModelOptions,
+		refreshRemoteModels,
+	} = useProviderModelOptions({
+		providerId: "anthropic",
+		baseUrl: profile.baseUrl,
+		apiKey: profile.apiKey,
+		selectedModelId: profile.modelId,
+	})
 
 	const pc = profile.anthropic ?? AnthropicProviderConfig.create()
 	const modelId = profile.modelId || anthropicDefaultModelId
@@ -187,10 +194,12 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 						/>
 					) : (
 						<>
-							<ModelSelector
+							<ModelAutocomplete
 								label="Model"
-								models={anthropicModels}
-								onChange={(e) => handleModelChange((e.target as HTMLSelectElement).value)}
+								models={anthropicModelOptions}
+								onChange={handleModelChange}
+								onOpen={refreshRemoteModels}
+								placeholder="Search and select a model..."
 								selectedModelId={modelId}
 							/>
 
