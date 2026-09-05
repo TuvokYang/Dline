@@ -35,6 +35,28 @@ service StateService {
   rpc refreshRemoteConfig(EmptyRequest) returns (Empty);
   rpc testOtelConnection(EmptyRequest) returns (TestConnectionResult);
   rpc testPromptUploading(EmptyRequest) returns (TestConnectionResult);
+  rpc exportRuntimeTelemetryBundle(ExportRuntimeTelemetryBundleRequest) returns (ExportRuntimeTelemetryBundleResponse);
+}
+
+// Ask the extension host to write a diagnostic bundle to disk.
+message ExportRuntimeTelemetryBundleRequest {
+  // Opt in to including raw artifacts. Absent means the default: excluded.
+  optional bool include_raw_artifacts = 1;
+}
+
+// Outcome of an export attempt.
+//
+// The host chooses the destination, so an export either produces an archive or
+// explains why it could not.
+message ExportRuntimeTelemetryBundleResponse {
+  reserved 1;
+  reserved "cancelled";
+  // Absolute path of the written archive. Empty when the export failed.
+  string path = 2;
+  // Bytes on disk, so the UI can tell an empty bundle from a real one.
+  int64 size_bytes = 3;
+  // Human-readable failure reason. Empty on success.
+  string error = 4;
 }
 
 message AutoApprovalActions {

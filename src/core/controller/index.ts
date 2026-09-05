@@ -72,6 +72,7 @@ import { featureFlagsService } from "@/services/feature-flags"
 import { getDistinctId } from "@/services/logging/distinctId"
 import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
 import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
+import { getRuntimeTelemetryLifecycle } from "@/services/runtime-telemetry/runtime-telemetry-host"
 import { telemetryService } from "@/services/telemetry"
 import { ClineExtensionContext } from "@/shared/cline"
 import { getAxiosSettings } from "@/shared/net"
@@ -990,6 +991,18 @@ export class Controller {
 
 		this.stateManager.setGlobalState("telemetrySetting", telemetrySetting)
 		telemetryService.updateTelemetryState(isOptedIn)
+
+		// The runtime diagnostics pipeline holds its own consent state, decided
+		// when it started. Without this it would keep the choice made at
+		// activation until the next window reload, so a user who opts in would
+		// see no journal and an empty diagnostic bundle.
+		try {
+			await getRuntimeTelemetryLifecycle()?.applyConsent(telemetrySetting)
+		} catch (error) {
+			// Diagnostics are an aid; failing to apply consent must not stop
+			// the setting itself from being saved and reported.
+			Logger.error("[Controller] Failed to apply runtime telemetry consent:", error)
+		}
 
 		// Capture opt-in event AFTER updating (so telemetry is enabled to receive it)
 		if (!wasOptedIn && isOptedIn) {

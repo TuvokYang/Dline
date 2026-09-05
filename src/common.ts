@@ -20,6 +20,7 @@ import { getDistinctId } from "./services/logging/distinctId"
 import { DlineRuntimeFileManager } from "./services/runtime-files"
 import { recordPerfPhase } from "./services/runtime-telemetry/instrumentation/duration-recorder"
 import { PerfDomain } from "./services/runtime-telemetry/instrumentation/perf-domains"
+import { activateRuntimeTelemetry, deactivateRuntimeTelemetry } from "./services/runtime-telemetry/runtime-telemetry-activation"
 import { telemetryService } from "./services/telemetry"
 import { PostHogClientProvider } from "./services/telemetry/providers/posthog/PostHogClientProvider"
 import { cleanupTestMode } from "./services/test/TestMode"
@@ -151,6 +152,18 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 	}
 
 	const stateManager = StateManager.get()
+
+	// Start runtime diagnostics once consent is readable. Failure is contained:
+	// diagnostics assist troubleshooting, so they must never block activation.
+	try {
+		await activateRuntimeTelemetry({
+			dataDir: storageContext.dataDir,
+			telemetrySetting: stateManager.getGlobalSettingsKey("telemetrySetting") ?? "unset",
+		})
+	} catch (error) {
+		Logger.error("[Dline] Failed to start runtime telemetry:", error)
+	}
+
 	// Non-blocking announcement check and display
 	showVersionUpdateAnnouncement(stateManager)
 	// Check if this workspace was opened from worktree quick launch
@@ -246,6 +259,13 @@ async function checkWorktreeAutoOpen(stateManager: StateManager): Promise<void> 
  * Performs cleanup when Cline is deactivated that is common to all platforms.
  */
 export async function tearDown(): Promise<void> {
+	// Stop diagnostics first so its final flush happens while storage is open.
+	try {
+		await deactivateRuntimeTelemetry()
+	} catch (error) {
+		Logger.error("[Dline] Runtime telemetry shutdown failed:", error)
+	}
+
 	AgentConfigLoader.getInstance()?.dispose()
 	PostHogClientProvider.getInstance().dispose()
 	telemetryService.dispose()

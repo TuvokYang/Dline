@@ -70,7 +70,10 @@ const FORBIDDEN_FIELD_NAMES = new Set([
 	"credential",
 	"credentials",
 	"diff",
+	"directory",
 	"filecontent",
+	"filepath",
+	"folder",
 	"idtoken",
 	"input",
 	"message",
@@ -80,6 +83,7 @@ const FORBIDDEN_FIELD_NAMES = new Set([
 	"passphrase",
 	"password",
 	"patch",
+	"path",
 	"payload",
 	"privatekey",
 	"prompt",
@@ -88,6 +92,7 @@ const FORBIDDEN_FIELD_NAMES = new Set([
 	"refreshtoken",
 	"response",
 	"result",
+	"root",
 	"secret",
 	"secretkey",
 	"sessiontoken",
@@ -124,6 +129,14 @@ const FORBIDDEN_FIELD_FRAGMENTS: readonly string[] = [
 	"refreshtoken",
 	"secret",
 	"sessiontoken",
+	// Absolute paths name the user, their disk layout and their projects, so
+	// they are personal data even though they are not credentials. Producers
+	// that need a correlatable location must record a fingerprint instead.
+	"directory",
+	"filepath",
+	"filename",
+	"path",
+	"workspace",
 ]
 
 function normalizeFieldName(name: string): string {
