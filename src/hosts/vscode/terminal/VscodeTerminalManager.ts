@@ -11,6 +11,8 @@ import {
 	TerminalManagerConfiguration,
 	TerminalManagerConfigurationResult,
 } from "@/integrations/terminal/types"
+import { DiagnosticDomain, DiagnosticOutcome } from "@/services/runtime-telemetry/instrumentation/diagnostic-events"
+import { recordDiagnostic } from "@/services/runtime-telemetry/instrumentation/diagnostic-recorder"
 import { markPerfPhase, recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
 import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import { Logger } from "@/shared/services/Logger"
@@ -245,6 +247,12 @@ export class VscodeTerminalManager implements ITerminalManager {
 			recordPerfPhase(PerfDomain.Terminal, "capability_failure", performance.now() - requestedAt, {
 				terminalId: vscodeTerminalInfo.id,
 				capability: "no_shell_integration",
+			})
+			// The timing above says how long the wait cost; this says what the
+			// system lost. Without shell integration there is no authoritative
+			// exit code, so the terminal is retired instead of reused.
+			recordDiagnostic(DiagnosticDomain.Terminal, "shell_integration_unavailable", DiagnosticOutcome.Degraded, {
+				terminalId: vscodeTerminalInfo.id,
 			})
 			Logger.warn(
 				`[TerminalPerf] phase=capability_failure terminalId=${vscodeTerminalInfo.id} capability=no_shell_integration durationMs=${Math.round(performance.now() - requestedAt)}`,

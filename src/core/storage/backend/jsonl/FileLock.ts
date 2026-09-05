@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto"
 import * as path from "node:path"
 import fs from "fs/promises"
+import { DiagnosticDomain, DiagnosticOutcome } from "@/services/runtime-telemetry/instrumentation/diagnostic-events"
+import { recordDiagnostic } from "@/services/runtime-telemetry/instrumentation/diagnostic-recorder"
 import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
 import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import { Logger } from "@/shared/services/Logger"
@@ -78,9 +80,16 @@ async function breakStaleLock(lockPath: string): Promise<void> {
 	try {
 		const raw = await fs.readFile(lockPath, "utf8")
 		const payload = JSON.parse(raw) as LockPayload
+		// The age is the diagnostic value: a lock broken far past the timeout
+		// points at a crashed or suspended owner rather than slow contention.
+		recordDiagnostic(DiagnosticDomain.Storage, "stale_lock_broken", DiagnosticOutcome.Recovered, {
+			ageMs: Date.now() - payload.ts,
+			readable: true,
+		})
 		Logger.warn(`[FileLock] Breaking stale lock: path=${lockPath}, ownerPid=${payload.pid}, age=${Date.now() - payload.ts}ms`)
 	} catch {
 		// Corrupted lock — just warn generically
+		recordDiagnostic(DiagnosticDomain.Storage, "stale_lock_broken", DiagnosticOutcome.Recovered, { readable: false })
 		Logger.warn(`[FileLock] Breaking stale/corrupted lock: path=${lockPath}`)
 	}
 	try {

@@ -3,6 +3,8 @@ import fs from "fs/promises"
 import * as path from "path"
 import simpleGit, { type SimpleGit } from "simple-git"
 import { getDlineCheckpointsDir } from "@/core/storage/disk"
+import { DiagnosticDomain, DiagnosticOutcome } from "@/services/runtime-telemetry/instrumentation/diagnostic-events"
+import { recordDiagnostic } from "@/services/runtime-telemetry/instrumentation/diagnostic-recorder"
 import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
 import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import { telemetryService } from "@/services/telemetry"
@@ -431,6 +433,13 @@ export class GitOperations {
 				const nestedFiles = ownedFiles.filter((_file, index) => nestedOwnership[index])
 				const safeFiles = ownedFiles.filter((_file, index) => !nestedOwnership[index])
 				if (nestedFiles.length > 0) {
+					recordDiagnostic(
+						DiagnosticDomain.Checkpoint,
+						"nested_repository_skipped",
+						DiagnosticOutcome.Degraded,
+						{ excluded: nestedFiles.length, total: ownedFiles.length },
+						{ taskId },
+					)
 					Logger.warn(`[Task ${taskId}] Checkpoint add excluded ${nestedFiles.length} nested repository file(s)`)
 				}
 				if (safeFiles.length === 0) {
@@ -464,6 +473,13 @@ export class GitOperations {
 				)
 				const absentPaths = safeFiles.filter((file) => !stageFiles.includes(file)).map((file) => file.relative)
 				if (absentPaths.length > 0) {
+					recordDiagnostic(
+						DiagnosticDomain.Checkpoint,
+						"paths_unstageable",
+						DiagnosticOutcome.Degraded,
+						{ absent: absentPaths.length, total: safeFiles.length },
+						{ taskId },
+					)
 					Logger.warn(
 						`[Task ${taskId}] Checkpoint add ignored ${absentPaths.length} path(s) absent from both worktree and shadow index`,
 					)
@@ -504,6 +520,9 @@ export class GitOperations {
 			if (mode === "baseline") {
 				// Rebuild the complete index so newly ignored or newly excluded files
 				// are removed from the current baseline as well as omitted from additions.
+				recordDiagnostic(DiagnosticDomain.Checkpoint, "baseline_rebuilt", DiagnosticOutcome.Observed, undefined, {
+					taskId,
+				})
 				await git.raw(["read-tree", "--empty"])
 			}
 			await git.add([".", "--ignore-errors"])
