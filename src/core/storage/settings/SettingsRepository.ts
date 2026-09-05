@@ -6,6 +6,8 @@ import { Logger } from "@shared/services/Logger"
 import type { Settings, SettingsKey } from "@shared/storage/state-keys"
 import { SettingsKeys } from "@shared/storage/state-keys"
 import chokidar, { type FSWatcher } from "chokidar"
+import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import { FileLock } from "../backend/jsonl/FileLock"
 import {
 	SETTINGS_REPOSITORY_SCHEMA_VERSION,
@@ -161,9 +163,23 @@ export class SettingsRepository {
 			if (!commit) throw new Error("Settings transaction completed without a commit")
 			const publishStartedAt = performance.now()
 			if (commit.changedKeys.length > 0) await this.publish(commit)
-			Logger.debug(
-				`[SettingsRepositoryPerf] phase=mutate_complete queueMs=${queueMs} mkdirMs=${mkdirMs} lockWaitMs=${Math.round(lockAcquiredAt - lockRequestedAt)} transactionMs=${Math.round(publishStartedAt - lockAcquiredAt)} readMs=${readMs} writeMs=${writeMs} publishMs=${Math.round(performance.now() - publishStartedAt)} totalMs=${Math.round(performance.now() - requestedAt)} revision=${commit.revision} changedKeys=${commit.changedKeys.join(",") || "none"} listeners=${this.listeners.size} path=${path.basename(path.dirname(this.filePath))}/${path.basename(this.filePath)}`,
-			)
+			recordPerfPhase(PerfDomain.SettingsRepository, "mutate_complete", performance.now() - requestedAt, {
+				queueMs,
+				mkdirMs,
+				lockWaitMs: Math.round(lockAcquiredAt - lockRequestedAt),
+				transactionMs: Math.round(publishStartedAt - lockAcquiredAt),
+				readMs,
+				writeMs,
+				publishMs: Math.round(performance.now() - publishStartedAt),
+				revision: commit.revision,
+				changedKeys: commit.changedKeys.length,
+				listeners: this.listeners.size,
+			})
+			if (Logger.isDebugEnabled()) {
+				Logger.debug(
+					`[SettingsRepositoryPerf] phase=mutate_complete queueMs=${queueMs} mkdirMs=${mkdirMs} lockWaitMs=${Math.round(lockAcquiredAt - lockRequestedAt)} transactionMs=${Math.round(publishStartedAt - lockAcquiredAt)} readMs=${readMs} writeMs=${writeMs} publishMs=${Math.round(performance.now() - publishStartedAt)} totalMs=${Math.round(performance.now() - requestedAt)} revision=${commit.revision} changedKeys=${commit.changedKeys.join(",") || "none"} listeners=${this.listeners.size} path=${path.basename(path.dirname(this.filePath))}/${path.basename(this.filePath)}`,
+				)
+			}
 			return commit
 		})
 	}
@@ -245,9 +261,16 @@ export class SettingsRepository {
 			snapshot: this.currentSnapshot,
 			sourceId: parsed.sourceId,
 		})
-		Logger.debug(
-			`[SettingsRepositoryPerf] phase=reconcile durationMs=${Math.round(performance.now() - startedAt)} revision=${revision} changedKeys=${keys.join(",")} listeners=${this.listeners.size}`,
-		)
+		recordPerfPhase(PerfDomain.SettingsRepository, "reconcile", performance.now() - startedAt, {
+			revision,
+			changedKeys: keys.length,
+			listeners: this.listeners.size,
+		})
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[SettingsRepositoryPerf] phase=reconcile durationMs=${Math.round(performance.now() - startedAt)} revision=${revision} changedKeys=${keys.join(",")} listeners=${this.listeners.size}`,
+			)
+		}
 	}
 
 	private async publish(commit: SettingsCommit): Promise<void> {
@@ -260,14 +283,26 @@ export class SettingsRepository {
 			} catch (error) {
 				Logger.error("[SettingsRepository] Commit listener failed:", error)
 			} finally {
-				Logger.debug(
-					`[SettingsRepositoryPerf] phase=listener index=${index} durationMs=${Math.round(performance.now() - listenerStartedAt)} revision=${commit.revision}`,
-				)
+				recordPerfPhase(PerfDomain.SettingsRepository, "listener", performance.now() - listenerStartedAt, {
+					index,
+					revision: commit.revision,
+				})
+				if (Logger.isDebugEnabled()) {
+					Logger.debug(
+						`[SettingsRepositoryPerf] phase=listener index=${index} durationMs=${Math.round(performance.now() - listenerStartedAt)} revision=${commit.revision}`,
+					)
+				}
 				index++
 			}
 		}
-		Logger.debug(
-			`[SettingsRepositoryPerf] phase=publish durationMs=${Math.round(performance.now() - startedAt)} revision=${commit.revision} listeners=${this.listeners.size}`,
-		)
+		recordPerfPhase(PerfDomain.SettingsRepository, "publish", performance.now() - startedAt, {
+			revision: commit.revision,
+			listeners: this.listeners.size,
+		})
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[SettingsRepositoryPerf] phase=publish durationMs=${Math.round(performance.now() - startedAt)} revision=${commit.revision} listeners=${this.listeners.size}`,
+			)
+		}
 	}
 }

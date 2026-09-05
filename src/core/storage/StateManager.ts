@@ -22,6 +22,8 @@ import type { StorageContext } from "@shared/storage/storage-context"
 import { taskServiceTierOverrideFromFields } from "@shared/task-provider-overrides"
 import { taskReasoningOverrideFromFields } from "@shared/task-reasoning"
 import { initializeDistinctId } from "@/services/logging/distinctId"
+import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import { Logger } from "@/shared/services/Logger"
 import { fileExistsAtPath } from "@/utils/fs"
 import { AgentConfigLoader } from "../task/tools/subagent/AgentConfigLoader"
@@ -420,15 +422,28 @@ export class StateManager {
 			} catch (error) {
 				Logger.error("[StateManager] Failed to broadcast committed Settings state:", error)
 			} finally {
-				Logger.debug(
-					`[SettingsPerf] phase=sync_callback index=${index} source=${event.source} durationMs=${Math.round(performance.now() - callbackStartedAt)} callbacks=${callbacks.size}`,
-				)
+				recordPerfPhase(PerfDomain.Settings, "sync_callback", performance.now() - callbackStartedAt, {
+					index,
+					source: event.source,
+					callbacks: callbacks.size,
+				})
+				if (Logger.isDebugEnabled()) {
+					Logger.debug(
+						`[SettingsPerf] phase=sync_callback index=${index} source=${event.source} durationMs=${Math.round(performance.now() - callbackStartedAt)} callbacks=${callbacks.size}`,
+					)
+				}
 				index++
 			}
 		}
-		Logger.debug(
-			`[SettingsPerf] phase=sync_broadcast source=${event.source} callbacks=${callbacks.size} totalMs=${Math.round(performance.now() - startedAt)}`,
-		)
+		recordPerfPhase(PerfDomain.Settings, "sync_broadcast", performance.now() - startedAt, {
+			source: event.source,
+			callbacks: callbacks.size,
+		})
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[SettingsPerf] phase=sync_broadcast source=${event.source} callbacks=${callbacks.size} totalMs=${Math.round(performance.now() - startedAt)}`,
+			)
+		}
 	}
 
 	public static get(): StateManager {
@@ -1442,9 +1457,19 @@ export class StateManager {
 			await this.persistPendingState()
 			await this.settingsRepository?.flush()
 		} while (this.hasPendingState())
-		Logger.debug(
-			`[SettingsPerf] phase=state_flush durationMs=${Math.round(performance.now() - startedAt)} passes=${drainPasses} initialGlobal=${initialPending.global} initialSettings=${initialPending.settings} initialSecrets=${initialPending.secrets} initialWorkspace=${initialPending.workspace} initialTasks=${initialPending.tasks}`,
-		)
+		recordPerfPhase(PerfDomain.Settings, "state_flush", performance.now() - startedAt, {
+			passes: drainPasses,
+			initialGlobal: initialPending.global,
+			initialSettings: initialPending.settings,
+			initialSecrets: initialPending.secrets,
+			initialWorkspace: initialPending.workspace,
+			initialTasks: initialPending.tasks,
+		})
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[SettingsPerf] phase=state_flush durationMs=${Math.round(performance.now() - startedAt)} passes=${drainPasses} initialGlobal=${initialPending.global} initialSettings=${initialPending.settings} initialSecrets=${initialPending.secrets} initialWorkspace=${initialPending.workspace} initialTasks=${initialPending.tasks}`,
+			)
+		}
 	}
 
 	/**
