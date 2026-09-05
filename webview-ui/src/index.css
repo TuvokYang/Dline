@@ -69,3 +69,27 @@
 		margin: calc(var(--design-unit) * 1px) 0;
 	}
 }
+
+/**
+ * LaTeX formula blocks rendered by MathJax (SVG output).
+ * Glyphs are vector paths inheriting currentColor, so light/dark VS Code themes
+ * are handled without theme-specific overrides.
+ */
+.latex-block {
+	overflow-x: auto;
+	overflow-y: hidden;
+	padding: 0.35em 0;
+	color: var(--vscode-editor-foreground);
+}
+
+.latex-block svg {
+	max-width: 100%;
+	vertical-align: middle;
+}
+
+/* Fallback shown when the TeX source cannot be typeset. */
+.latex-block-error {
+	color: var(--vscode-errorForeground);
+	white-space: pre-wrap;
+	word-break: break-word;
+}

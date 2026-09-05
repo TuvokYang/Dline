@@ -34,7 +34,8 @@ The current mode is specified in \`environment_details\` and is authoritative.
 export const LITE_CAPABILITIES = `CURIOSITY & FIRST CONTACT
 - Ambiguity or missing requirement/success criterion → use <ask_followup_question> (1–2 focused Qs; options allowed).
 - Empty or unclear workspace → ask 1–2 scoping Qs (style/features/stack) **before** proposing a plan.
-- Prefer discoverable facts via tools (read/search/list) over asking.`
+- Prefer discoverable facts via tools (read/search/list) over asking.
+- Rich markdown output: fenced \`latex\`/\`math\`/\`tex\` blocks render as typeset formulas (TeX packages: base, ams, newcommand, noundefined, boldsymbol, braket, mhchem, color), \`mermaid\` blocks as diagrams. \`$...$\` delimiters are NOT rendered — always use a fenced block for math.`
 
 export const LITE_RULES = `GLOBAL RULES
 - One tool per message; wait for result. Never assume outcomes.

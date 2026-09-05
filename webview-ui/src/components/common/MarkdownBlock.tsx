@@ -9,6 +9,7 @@ import remarkGfm from "remark-gfm"
 import type { Node } from "unist"
 import { visit } from "unist-util-visit"
 import { useModeSwitch } from "@/components/chat/mode-switch/useModeSwitch"
+import LatexBlock from "@/components/common/LatexBlock"
 import MermaidBlock from "@/components/common/MermaidBlock"
 import { Button } from "@/components/ui/button"
 import { useExtensionState } from "@/context/ExtensionStateContext"
@@ -16,6 +17,54 @@ import { cn } from "@/lib/utils"
 import { FileServiceClient } from "@/services/grpc-client"
 import { WithCopyButton } from "./CopyButton"
 import UnsafeImage from "./UnsafeImage"
+
+/**
+ * Fenced code block languages that are typeset as math instead of highlighted code.
+ * Keep in sync with the capability declaration in the system prompt.
+ */
+const LATEX_LANGUAGE_PATTERN = /(?:^|\s)language-(?:latex|math|tex)(?:\s|$)/
+
+/** Opening fence of a math code block, capturing its fence run so the closer can be matched. */
+const MATH_FENCE_OPENING_PATTERN = /^[ \t]{0,3}(`{3,}|~{3,})[ \t]*(?:latex|math|tex)[ \t]*$/
+
+/**
+ * Reports whether a markdown block is a math fence that has not been closed yet.
+ *
+ * Both `marked` and CommonMark let a fenced block end implicitly at EOF, so a
+ * streaming response emits a complete-looking code token while the formula is
+ * still half-written. Typesetting that partial source produces flicker and
+ * throws away work on every chunk, so such a block stays plain text until its
+ * closing fence arrives.
+ */
+export function isUnterminatedMathFence(block: string): boolean {
+	const lines = block.split("\n")
+	const opening = lines[0] !== undefined ? MATH_FENCE_OPENING_PATTERN.exec(lines[0]) : null
+	if (!opening) {
+		return false
+	}
+
+	const fence = opening[1]
+	const closingPattern = new RegExp(`^[ \\t]{0,3}${fence[0]}{${fence.length},}[ \\t]*$`)
+	return !lines.slice(1).some((line) => closingPattern.test(line))
+}
+
+/**
+ * Returns the `className` of a `<pre>`'s single `<code>` child.
+ *
+ * react-markdown does not guarantee that `children` is an array, so the child is
+ * normalized through React.Children instead of relying on Array.isArray.
+ */
+function getSoleCodeChildClassName(children: React.ReactNode): string | undefined {
+	const items = React.Children.toArray(children)
+	if (items.length !== 1) {
+		return undefined
+	}
+	const child = items[0]
+	if (!React.isValidElement(child)) {
+		return undefined
+	}
+	return (child as React.ReactElement<{ className?: string }>).props?.className
+}
 
 function parseMarkdownIntoBlocks(markdown: string): string[] {
 	try {
@@ -28,15 +77,17 @@ function parseMarkdownIntoBlocks(markdown: string): string[] {
 
 const MemoizedMarkdownBlock = memo(
 	({ content }: { content: string }) => {
+		// A streaming math fence stays highlighted source until its closing fence arrives.
+		const typesetMath = !isUnterminatedMathFence(content)
 		return (
 			<ReactMarkdown
 				components={{
 					pre: ({ children, ...preProps }: React.HTMLAttributes<HTMLPreElement>) => {
-						if (Array.isArray(children) && children.length === 1 && React.isValidElement(children[0])) {
-							const child = children[0] as React.ReactElement<{ className?: string }>
-							if (child.props?.className?.includes("language-mermaid")) {
-								return child
-							}
+						const childClassName = getSoleCodeChildClassName(children) ?? ""
+						// Specialized blocks render their own container, so drop the <pre> wrapper.
+						const isMath = typesetMath && LATEX_LANGUAGE_PATTERN.test(childClassName)
+						if (childClassName.includes("language-mermaid") || isMath) {
+							return <>{children}</>
 						}
 						return <PreWithCopyButton {...preProps}>{children}</PreWithCopyButton>
 					},
@@ -45,6 +96,10 @@ const MemoizedMarkdownBlock = memo(
 						if (className.includes("language-mermaid")) {
 							const codeText = String(props.children || "")
 							return <MermaidBlock code={codeText} />
+						}
+						if (typesetMath && LATEX_LANGUAGE_PATTERN.test(className)) {
+							// Fenced code content carries a trailing newline from the markdown source.
+							return <LatexBlock code={String(props.children || "").replace(/\n$/, "")} />
 						}
 
 						// Use the async file check component for potential file paths

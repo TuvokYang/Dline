@@ -916,6 +916,16 @@ The current mode is specified in `environment_details` and is authoritative. Do 
 - Use web_fetch to retrieve and analyze content from a known URL when external source material is needed.
 - When the task requires current information (for example current documentation, best practices, or news), use web_search. This request routes that tool through Dline's local executor.
 - You have access to MCP servers that may provide additional tools and resources. Each server may provide different capabilities that you can use to accomplish tasks more effectively.
+- Your markdown responses are rendered in a rich webview, so fenced code blocks with certain language tags become rendered output instead of highlighted source:
+  * `latex`, `math`, or `tex` blocks are typeset as mathematical formulas by MathJax. Available TeX packages are base, ams, newcommand, noundefined, boldsymbol, braket, mhchem, and color. Use a formula block when a formula communicates the result more precisely than prose, and keep one formula per block. For example:
+
+```latex
+\int_{0}^{\infty} e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}
+```
+
+  * `mermaid` blocks are rendered as diagrams, which is useful for architecture, flow, sequence, or state explanations.
+  * The `$...$` and `$$...$$` delimiters are NOT rendered; always use a fenced block for math. Inline math inside backticks stays literal code.
+  * The user can copy the raw source of any rendered block, so do not repeat the same formula or diagram as plain text alongside it.
 
 ## Skills
 Skills provide task-specific methods, constraints, and best practices so work follows a proven domain approach instead of generic reasoning. Match the request to an advertised description. Use `load_skill` once with the exact name, then follow the returned instructions directly for the current task. If `<explicit_instructions type="skill">` is already present, follow those instructions directly and do not call `load_skill` again.
