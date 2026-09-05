@@ -1,31 +1,75 @@
 import type { ScenarioStep } from "../export/bundle-builder"
-import { ReplayEffect, ReplayNotPermitted, type ReplayPort, type ReplayRequest, type ReplayResult } from "./replay-ports"
+import {
+	ReplayEffect,
+	ReplayNotPermitted,
+	type ReplayPolicy,
+	type ReplayPort,
+	type ReplayRequest,
+	type ReplayResult,
+	resolveReplayPort,
+} from "./replay-ports"
 
 /**
- * Replays a recorded scenario through a single injected port.
+ * Replays a recorded scenario through a simulator selected by policy.
  *
  * The runner is deliberately thin: it classifies each step, hands it to the
- * port, and reports what the port returned. All effect execution lives behind
- * the port, so "a scenario cannot touch the machine" is enforced by the type
- * signature instead of by discipline.
+ * port, and reports what the port returned. The caller chooses a policy rather
+ * than supplying a port, so "a scenario cannot touch the machine" holds even
+ * when the caller is careless: there is no seam through which a real terminal,
+ * client, socket, or file system can be injected.
  *
  * Timing is reported, never awaited. Sleeping through the original delays
  * would make replaying an incident as slow as the incident itself and would
  * add nothing: the recorded duration is already in the step.
  */
 
-/** Effect classification for a step, derived from its component name. */
-const COMPONENT_EFFECTS: Readonly<Record<string, ReplayEffect>> = {
-	terminal: ReplayEffect.Command,
-	terminalPool: ReplayEffect.Command,
-	mcp: ReplayEffect.McpTool,
-	provider: ReplayEffect.Network,
-	telemetry: ReplayEffect.Network,
-	checkpoint: ReplayEffect.FileWrite,
-	settings: ReplayEffect.FileWrite,
-	settingsRepository: ReplayEffect.FileWrite,
-	fileLock: ReplayEffect.FileWrite,
-}
+/**
+ * Effect classification for a step, derived from its component name.
+ *
+ * Keys are the component names a bundle actually carries. `buildScenarioSteps`
+ * derives an absent component from the event name, and `PerfDomain` spells
+ * those in snake_case (`terminal_pool`, `settings_repository`), so a map that
+ * only knew camelCase would refuse to replay the scenarios this codebase
+ * produces. Both spellings are listed rather than normalised, because
+ * normalising would also fold apart names that a reviewer intended to keep
+ * distinct. `DiagnosticDomain` contributes a few further names — `storage`,
+ * `hook`, `task`, `workspace` — that no performance domain spells.
+ */
+const COMPONENT_EFFECTS: ReadonlyMap<string, ReplayEffect> = new Map([
+	["terminal", ReplayEffect.Command],
+	["terminalPool", ReplayEffect.Command],
+	["terminal_pool", ReplayEffect.Command],
+	["mcp", ReplayEffect.McpTool],
+	["provider", ReplayEffect.Network],
+	["telemetry", ReplayEffect.Network],
+	["checkpoint", ReplayEffect.FileWrite],
+	["settings", ReplayEffect.FileWrite],
+	["settingsRepository", ReplayEffect.FileWrite],
+	["settings_repository", ReplayEffect.FileWrite],
+	["fileLock", ReplayEffect.FileWrite],
+	["file_lock", ReplayEffect.FileWrite],
+	["storage", ReplayEffect.FileWrite],
+	// Domains that only read or compute. They are listed so a scenario built
+	// from this codebase's own events replays end to end instead of aborting
+	// on the first startup sample; `Inert` still reaches the port, which
+	// performs nothing.
+	["activation", ReplayEffect.Inert],
+	["capability", ReplayEffect.Inert],
+	["controller_close", ReplayEffect.Inert],
+	["hook", ReplayEffect.Inert],
+	["hook_discovery", ReplayEffect.Inert],
+	["profile", ReplayEffect.Inert],
+	["prompt_build", ReplayEffect.Inert],
+	["prompt_freshness", ReplayEffect.Inert],
+	["prompt_input_watcher", ReplayEffect.Inert],
+	["runtime", ReplayEffect.Inert],
+	["state", ReplayEffect.Inert],
+	["task", ReplayEffect.Inert],
+	["task_close", ReplayEffect.Inert],
+	["task_init", ReplayEffect.Inert],
+	["task_snapshot", ReplayEffect.Inert],
+	["workspace", ReplayEffect.Inert],
+])
 
 /**
  * Steps whose component is unrecognised are classified as unknown.
@@ -43,7 +87,14 @@ export interface ReplayedStep {
 	readonly effect: ReplayEffect
 	readonly recordedOutcome: string
 	readonly replayedOutcome: string
-	readonly simulated: boolean
+	/**
+	 * Always `true`, carried through from `ReplayResult`.
+	 *
+	 * Widening this to `boolean` would let a future change report a real
+	 * execution as an ordinary field value; the literal keeps the compiler
+	 * involved in the guarantee.
+	 */
+	readonly simulated: true
 }
 
 export interface ScenarioReplayReport {
@@ -51,20 +102,31 @@ export interface ScenarioReplayReport {
 	/** Steps whose replayed outcome differed from the recorded one. */
 	readonly divergences: readonly number[]
 	readonly totalRecordedDurationMs: number
-}
-
-export function classifyStepEffect(component: string): ReplayEffect {
-	return COMPONENT_EFFECTS[component] ?? UNCLASSIFIED_EFFECT
+	/** The port that handled the run, for assertions about routing. */
+	readonly port: ReplayPort
 }
 
 /**
- * Replay every step through `port`.
+ * Map a component name onto the effect it is allowed to replay.
  *
- * The caller supplies the port because the decision to allow any effect at all
- * belongs to the caller, not to the scenario file, which arrives from an
- * untrusted bug report.
+ * A Map rather than an object literal: a scenario file arrives from an
+ * untrusted bug report, and `constructor`, `toString` or `__proto__` would
+ * resolve through an object's prototype chain and silently escape the
+ * fail-closed Unknown branch.
  */
-export function replayScenario(steps: readonly ScenarioStep[], port: ReplayPort): ScenarioReplayReport {
+export function classifyStepEffect(component: string): ReplayEffect {
+	return COMPONENT_EFFECTS.get(component) ?? UNCLASSIFIED_EFFECT
+}
+
+/**
+ * Replay every step under `policy`.
+ *
+ * The caller chooses the policy because the decision to allow any handling at
+ * all belongs to the caller, not to the scenario file, which arrives from an
+ * untrusted bug report. The caller cannot choose the implementation.
+ */
+export function replayScenario(steps: readonly ScenarioStep[], policy: ReplayPolicy): ScenarioReplayReport {
+	const port = resolveReplayPort(policy)
 	const replayed: ReplayedStep[] = []
 	const divergences: number[] = []
 	let totalRecordedDurationMs = 0
@@ -100,5 +162,5 @@ export function replayScenario(steps: readonly ScenarioStep[], port: ReplayPort)
 		})
 	}
 
-	return { steps: replayed, divergences, totalRecordedDurationMs }
+	return { steps: replayed, divergences, totalRecordedDurationMs, port }
 }

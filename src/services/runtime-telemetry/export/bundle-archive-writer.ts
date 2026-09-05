@@ -57,7 +57,16 @@ export async function writeBundleArchive(bundle: BuiltBundle, destinationPath: s
 		await commitStagedArchive(temporaryPath, destinationPath)
 		return { path: destinationPath, byteLength, entryCount: bundle.entries.length }
 	} catch (error) {
-		await discardPartial(temporaryPath)
+		const cleanupFailure = await discardPartial(temporaryPath)
+		if (cleanupFailure !== undefined) {
+			// A staging file the caller does not know about is a leak, and on a
+			// shared machine a leftover bundle is also a privacy problem, so the
+			// path is named rather than swallowed.
+			throw new BundleArchiveError(
+				`failed to write diagnostic bundle to ${destinationPath}; the partial file ${temporaryPath} could not be removed`,
+				error,
+			)
+		}
 		throw new BundleArchiveError(`failed to write diagnostic bundle to ${destinationPath}`, error)
 	}
 }
@@ -144,12 +153,18 @@ function writeArchive(bundle: BuiltBundle, temporaryPath: string): Promise<numbe
 	})
 }
 
-/** Remove the staged file, ignoring the case where it was never created. */
-async function discardPartial(temporaryPath: string): Promise<void> {
+/**
+ * Remove the staged file, ignoring the case where it was never created.
+ *
+ * Returns the cleanup failure instead of throwing: the caller is already
+ * reporting a primary error and must not lose it, but a staging file that
+ * survives is still something the user has to know about.
+ */
+async function discardPartial(temporaryPath: string): Promise<unknown> {
 	try {
 		await rm(temporaryPath, { force: true })
-	} catch {
-		// The staged file is unreachable; the caller is already handling a
-		// failure and cannot act on this either.
+		return undefined
+	} catch (error) {
+		return error
 	}
 }

@@ -60,13 +60,14 @@ export {
 	type ThresholdPolicyOptions,
 } from "./performance/threshold-policy"
 export {
-	FakeReplayPort,
-	RejectingReplayPort,
+	countReplayedEffects,
 	ReplayEffect,
 	ReplayNotPermitted,
+	ReplayPolicy,
 	type ReplayPort,
 	type ReplayRequest,
 	type ReplayResult,
+	resolveReplayPort,
 } from "./reproduction/replay-ports"
 export {
 	classifyStepEffect,

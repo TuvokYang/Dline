@@ -1,10 +1,34 @@
-import { mkdtemp, readdir, rm, stat } from "node:fs/promises"
+import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { RuntimeEventPriority, type RuntimeTelemetryEvent } from "../../types"
 import { BundleArchiveError, writeBundleArchive } from "../bundle-archive-writer"
 import { type BundleEnvironment, buildDiagnosticBundle } from "../bundle-builder"
+
+/** Local file header signature that precedes every stored zip entry. */
+const ZIP_LOCAL_HEADER = 0x04034b50
+
+/**
+ * Names of the entries physically stored in a zip.
+ *
+ * Read by scanning local file headers rather than by unzipping: the writer's
+ * own report cannot prove that anything was appended, and an empty archive is
+ * still a non-empty file, so a size assertion alone would pass even if every
+ * entry were dropped.
+ */
+async function archivedEntryNames(path: string): Promise<string[]> {
+	const bytes = await readFile(path)
+	const names: string[] = []
+	for (let offset = 0; offset + 30 <= bytes.length; offset += 1) {
+		if (bytes.readUInt32LE(offset) !== ZIP_LOCAL_HEADER) continue
+		const nameLength = bytes.readUInt16LE(offset + 26)
+		const nameStart = offset + 30
+		if (nameStart + nameLength > bytes.length) continue
+		names.push(bytes.subarray(nameStart, nameStart + nameLength).toString("utf8"))
+	}
+	return names
+}
 
 const ENVIRONMENT: BundleEnvironment = {
 	platform: "linux",
@@ -52,6 +76,8 @@ describe("writeBundleArchive", () => {
 		expect(result.entryCount).toBe(bundle.entries.length)
 		expect(result.byteLength).toBeGreaterThan(0)
 		expect((await stat(result.path)).size).toBe(result.byteLength)
+		// The archive itself must carry every entry, not just the report.
+		expect((await archivedEntryNames(result.path)).sort()).toEqual(bundle.entries.map((entry) => entry.name).sort())
 	})
 
 	it("leaves no staged file behind after a successful write", async () => {

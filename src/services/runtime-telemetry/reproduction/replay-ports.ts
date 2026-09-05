@@ -1,16 +1,17 @@
 /**
- * Ports a reproduction scenario is allowed to touch.
+ * Simulators a reproduction scenario is allowed to reach.
  *
  * A diagnostic bundle describes a failure that already happened. Replaying it
  * must never re-run the original side effects: the maintainer opening a bug
  * report is not the user who chose to run that command, call that MCP tool, or
- * write that file. Every effectful capability is therefore expressed as a
- * narrow port, and the runner accepts nothing else.
+ * write that file.
  *
- * The default implementation records the request and returns the recorded
- * outcome. That is what lets a test prove "no side effect" as a property of the
- * design rather than as a code review promise: there is no wiring from a
- * scenario to a real terminal, client, socket, or file system.
+ * The guarantee is structural rather than contractual. `resolveReplayPort`
+ * returns one of a closed set of module-private simulators, and the runner
+ * takes a policy rather than an implementation, so a caller cannot supply an
+ * object that performs real work and then reports `simulated: true`. Adding a
+ * new capability means adding a simulator here, where it is reviewable,
+ * instead of injecting one at a call site.
  */
 
 /** Effect category a step wants to perform. */
@@ -19,6 +20,8 @@ export enum ReplayEffect {
 	McpTool = "mcp_tool",
 	Network = "network",
 	FileWrite = "file_write",
+	/** Reviewed component that only reads or computes; nothing to re-perform. */
+	Inert = "inert",
 	/** Component the classifier does not recognise; never replayed. */
 	Unknown = "unknown",
 }
@@ -57,27 +60,38 @@ export interface ReplayResult {
 /** The single capability a scenario runner is given. */
 export interface ReplayPort {
 	perform(request: ReplayRequest): ReplayResult
+	/** Requests seen so far, in order. */
+	readonly requests: readonly ReplayRequest[]
+}
+
+/**
+ * How a caller wants a scenario handled.
+ *
+ * A policy, not an implementation: the caller decides whether the scenario is
+ * simulated or refused, and cannot decide what "simulated" means.
+ */
+export enum ReplayPolicy {
+	/** Return the recorded outcome without performing anything. */
+	Simulate = "simulate",
+	/** Refuse every step, so an accidental replay fails loudly. */
+	Refuse = "refuse",
 }
 
 /**
  * Replay port that performs nothing and returns the recorded outcome.
  *
- * Kept observable through `requests` so a test can assert both that the runner
- * routed every step through the port and that no other channel was used.
+ * Module-private: exposing the class would let a caller subclass it, override
+ * `perform`, and reintroduce the very side effects the port exists to prevent.
+ * Callers obtain an instance through `resolveReplayPort`.
+ *
+ * Requests are kept observable so a test can assert both that the runner routed
+ * every step through the port and that no other channel was used.
  */
-export class FakeReplayPort implements ReplayPort {
+class SimulatingReplayPort implements ReplayPort {
 	private readonly performed: ReplayRequest[] = []
 
 	get requests(): readonly ReplayRequest[] {
 		return this.performed
-	}
-
-	get callCount(): number {
-		return this.performed.length
-	}
-
-	countFor(effect: ReplayEffect): number {
-		return this.performed.reduce((total, request) => (request.effect === effect ? total + 1 : total), 0)
 	}
 
 	perform(request: ReplayRequest): ReplayResult {
@@ -91,15 +105,61 @@ export class FakeReplayPort implements ReplayPort {
 }
 
 /**
+ * Seal a port so its behaviour cannot be swapped after construction.
+ *
+ * Making the classes module-private hides their names but not their
+ * prototypes: a caller holding an instance from `resolveReplayPort` could
+ * reach `Object.getPrototypeOf(port)` and overwrite `perform`, and every
+ * later instance would inherit the replacement. Freezing the prototype and
+ * the instance closes that path, so "a replay performs nothing" survives a
+ * hostile or careless consumer rather than only an honest one.
+ */
+function sealPort<T extends ReplayPort>(port: T): T {
+	Object.freeze(Object.getPrototypeOf(port))
+	return Object.freeze(port)
+}
+
+/**
  * Replay port that refuses every request.
  *
  * Used where a caller wants a scenario inspected but never executed, so an
  * accidental run fails loudly instead of quietly reporting simulated success.
  */
-export class RejectingReplayPort implements ReplayPort {
+class RefusingReplayPort implements ReplayPort {
+	get requests(): readonly ReplayRequest[] {
+		return []
+	}
+
 	perform(request: ReplayRequest): ReplayResult {
 		throw new ReplayNotPermitted(request)
 	}
+}
+
+/**
+ * Build the port for a policy.
+ *
+ * The only way to obtain a port. Every returned instance comes from this
+ * module, which is what makes "a replay cannot touch the machine" a property
+ * of the code rather than of the caller's good intentions.
+ */
+export function resolveReplayPort(policy: ReplayPolicy): ReplayPort {
+	switch (policy) {
+		case ReplayPolicy.Simulate:
+			return sealPort(new SimulatingReplayPort())
+		case ReplayPolicy.Refuse:
+			return sealPort(new RefusingReplayPort())
+		default:
+			return assertNeverPolicy(policy)
+	}
+}
+
+/** Count the requests routed to `port` for one effect. */
+export function countReplayedEffects(port: ReplayPort, effect: ReplayEffect): number {
+	return port.requests.reduce((total, request) => (request.effect === effect ? total + 1 : total), 0)
+}
+
+function assertNeverPolicy(policy: never): never {
+	throw new Error(`unsupported replay policy: ${String(policy)}`)
 }
 
 export class ReplayNotPermitted extends Error {

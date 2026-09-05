@@ -1,3 +1,4 @@
+import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -131,9 +132,17 @@ const writeBuildIdentity = {
 				sourceMap: `${path.basename(build.initialOptions.outfile)}.map`,
 			}
 			// Stage and rename so a reader never sees a half-written identity.
-			const stagingPath = `${identityPath}.partial`
-			fs.writeFileSync(stagingPath, `${JSON.stringify(identity, null, 2)}\n`, "utf8")
-			fs.renameSync(stagingPath, identityPath)
+			// The staging name is unique because two builds sharing an output
+			// directory would otherwise interleave writes into one temp file
+			// and rename a truncated document into place.
+			const stagingPath = `${identityPath}.${crypto.randomBytes(6).toString("hex")}.partial`
+			try {
+				fs.writeFileSync(stagingPath, `${JSON.stringify(identity, null, 2)}\n`, "utf8")
+				fs.renameSync(stagingPath, identityPath)
+			} catch (error) {
+				fs.rmSync(stagingPath, { force: true })
+				throw error
+			}
 		})
 	},
 }

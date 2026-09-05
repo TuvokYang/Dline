@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs"
 import path from "node:path"
+import { transformSync } from "esbuild"
 import { afterEach, describe, expect, it } from "vitest"
 import { interpretBuildId, readBuildIdentity, UNKNOWN_BUILD_ID } from "../build-identity"
 
@@ -47,15 +48,21 @@ describe("readBuildIdentity", () => {
 		expect(readBuildIdentity()).toEqual({ buildId: "stamped-id", symbolicatable: true })
 	})
 
-	it("reads the exact expression esbuild substitutes", () => {
+	it("compiles to the stamped id rather than a runtime environment lookup", () => {
 		// esbuild `define` replaces the literal expression
 		// `process.env.DLINE_BUILD_ID`. Capturing `process.env` into a
-		// variable first would compile to a real lookup in the shipped bundle
-		// and every released build would report `unknown`.
+		// variable first would still typecheck and still pass the unit tests
+		// above, but would compile to a real lookup and make every released
+		// build report `unknown`. Running the actual substitution is the only
+		// check that fails when that happens.
 		const source = readFileSync(path.join(__dirname, "..", "build-identity.ts"), "utf8")
-		const runtimeRead = source.slice(source.indexOf("export function readBuildIdentity"))
 
-		expect(runtimeRead).toContain("process.env.DLINE_BUILD_ID")
-		expect(runtimeRead).not.toMatch(/=\s*process\.env\b/)
+		const { code } = transformSync(source, {
+			loader: "ts",
+			define: { "process.env.DLINE_BUILD_ID": JSON.stringify("release-abc123") },
+		})
+
+		expect(code).toContain("release-abc123")
+		expect(code).not.toContain("process.env.DLINE_BUILD_ID")
 	})
 })
