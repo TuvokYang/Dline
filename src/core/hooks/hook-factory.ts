@@ -1,5 +1,7 @@
 import fs from "fs/promises"
 import path from "path"
+import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import { Logger } from "@/shared/services/Logger"
 import { version as clineVersion } from "../../../package.json"
 import { getDistinctId } from "../../services/logging/distinctId"
@@ -917,7 +919,11 @@ export class HookFactory {
 			const fileCheckStartedAt = performance.now()
 			const script = await HookFactory.findHookInHooksDir(hookName, hooksDir)
 			const durationMs = Math.round(performance.now() - fileCheckStartedAt)
-			if (durationMs >= 100) {
+			recordPerfPhase(PerfDomain.HookDiscovery, "file_check", performance.now() - fileCheckStartedAt, {
+				hook: hookName,
+				directoryIndex,
+			})
+			if (durationMs >= 100 && Logger.isDebugEnabled()) {
 				Logger.debug(
 					`[HookDiscoveryPerf] phase=file_check hook=${hookName} directoryIndex=${directoryIndex} durationMs=${durationMs}`,
 				)
@@ -928,7 +934,14 @@ export class HookFactory {
 		const scripts = (await Promise.all(hookScripts)).filter(isDefined)
 		const completedAt = performance.now()
 		const totalMs = Math.round(completedAt - startedAt)
-		if (totalMs >= 100) {
+		recordPerfPhase(PerfDomain.HookDiscovery, "has_hook_scan", completedAt - startedAt, {
+			hook: hookName,
+			directories: hooksDirs.length,
+			directoriesMs: Math.round(directoriesReadyAt - startedAt),
+			filesMs: Math.round(completedAt - directoriesReadyAt),
+			found: scripts.length,
+		})
+		if (totalMs >= 100 && Logger.isDebugEnabled()) {
 			Logger.debug(
 				`[HookDiscoveryPerf] phase=has_hook_scan hook=${hookName} directories=${hooksDirs.length} directoriesMs=${Math.round(directoriesReadyAt - startedAt)} filesMs=${Math.round(completedAt - directoriesReadyAt)} totalMs=${totalMs} found=${scripts.length}`,
 			)

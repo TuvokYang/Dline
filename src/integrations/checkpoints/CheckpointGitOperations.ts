@@ -3,6 +3,8 @@ import fs from "fs/promises"
 import * as path from "path"
 import simpleGit, { type SimpleGit } from "simple-git"
 import { getDlineCheckpointsDir } from "@/core/storage/disk"
+import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import { telemetryService } from "@/services/telemetry"
 import { Logger } from "@/shared/services/Logger"
 import { getLfsPatterns, loadWorkspaceIgnoreContent, writeExcludesFile } from "./CheckpointExclusions"
@@ -310,9 +312,25 @@ export class GitOperations {
 				await git.commit(`workspace baseline-${taskId}`, { "--no-verify": null })
 				Logger.info(`[Task ${taskId}] Refreshed existing checkpoints shadow baseline`)
 			}
-			Logger.debug(
-				`[CheckpointPerf] phase=existing_shadow_baseline taskId=${taskId} mode=${mode} exclusionsChanged=${exclusionsChanged} stageMs=${stageMs} detectMs=${detectMs} commitMs=${Math.round(performance.now() - commitStartedAt)} totalMs=${Math.round(performance.now() - startedAt)} staged=${staged}`,
+			recordPerfPhase(
+				PerfDomain.Checkpoint,
+				"existing_shadow_baseline",
+				performance.now() - startedAt,
+				{
+					mode,
+					exclusionsChanged,
+					stageMs,
+					detectMs,
+					commitMs: Math.round(performance.now() - commitStartedAt),
+					staged,
+				},
+				{ taskId },
 			)
+			if (Logger.isDebugEnabled()) {
+				Logger.debug(
+					`[CheckpointPerf] phase=existing_shadow_baseline taskId=${taskId} mode=${mode} exclusionsChanged=${exclusionsChanged} stageMs=${stageMs} detectMs=${detectMs} commitMs=${Math.round(performance.now() - commitStartedAt)} totalMs=${Math.round(performance.now() - startedAt)} staged=${staged}`,
+				)
+			}
 		} catch (error) {
 			try {
 				// Initialization never owns staged user work: discard both this

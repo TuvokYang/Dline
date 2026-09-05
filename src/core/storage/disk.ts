@@ -15,6 +15,8 @@ import os from "os"
 import * as path from "path"
 import { HostProvider } from "@/hosts/host-provider"
 import { ExtensionRegistryInfo } from "@/registry"
+import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import { telemetryService } from "@/services/telemetry"
 import { McpMarketplaceCatalog } from "@/shared/mcp"
 import type { ClineStorageMessage } from "@/shared/messages/content"
@@ -1012,7 +1014,12 @@ export async function getGlobalHooksDir(): Promise<string | undefined> {
 	const exists = await isDirectory(d)
 	const completedAt = performance.now()
 	const totalMs = Math.round(completedAt - startedAt)
-	if (totalMs >= 100) {
+	recordPerfPhase(PerfDomain.HookDiscovery, "global_directory", completedAt - startedAt, {
+		ensureMs: Math.round(directoryReadyAt - startedAt),
+		statMs: Math.round(completedAt - directoryReadyAt),
+		exists,
+	})
+	if (totalMs >= 100 && Logger.isDebugEnabled()) {
 		Logger.debug(
 			`[HookDiscoveryPerf] phase=global_directory ensureMs=${Math.round(directoryReadyAt - startedAt)} statMs=${Math.round(completedAt - directoryReadyAt)} totalMs=${totalMs} exists=${exists}`,
 		)
@@ -1035,7 +1042,13 @@ export async function getAllHooksDirs(): Promise<string[]> {
 	dirs.push(...(await getWorkspaceHooksDirs()))
 	const completedAt = performance.now()
 	const totalMs = Math.round(completedAt - startedAt)
-	if (totalMs >= 100) {
+	recordPerfPhase(PerfDomain.HookDiscovery, "directories", completedAt - startedAt, {
+		runtimeMs: Math.round(runtimeReadyAt - startedAt),
+		globalMs: Math.round(globalReadyAt - runtimeReadyAt),
+		workspaceMs: Math.round(completedAt - globalReadyAt),
+		directories: dirs.length,
+	})
+	if (totalMs >= 100 && Logger.isDebugEnabled()) {
 		Logger.debug(
 			`[HookDiscoveryPerf] phase=directories runtimeMs=${Math.round(runtimeReadyAt - startedAt)} globalMs=${Math.round(globalReadyAt - runtimeReadyAt)} workspaceMs=${Math.round(completedAt - globalReadyAt)} totalMs=${totalMs} directories=${dirs.length}`,
 		)
@@ -1060,7 +1073,13 @@ export async function getWorkspaceHooksDirs(): Promise<string[]> {
 	).filter((p): p is string => Boolean(p))
 	const completedAt = performance.now()
 	const totalMs = Math.round(completedAt - startedAt)
-	if (totalMs >= 100) {
+	recordPerfPhase(PerfDomain.HookDiscovery, "workspace_directories", completedAt - startedAt, {
+		importMs: Math.round(importedAt - startedAt),
+		statMs: Math.round(completedAt - importedAt),
+		roots: roots.length,
+		directories: directories.length,
+	})
+	if (totalMs >= 100 && Logger.isDebugEnabled()) {
 		Logger.debug(
 			`[HookDiscoveryPerf] phase=workspace_directories importMs=${Math.round(importedAt - startedAt)} statMs=${Math.round(completedAt - importedAt)} totalMs=${totalMs} roots=${roots.length} directories=${directories.length}`,
 		)
