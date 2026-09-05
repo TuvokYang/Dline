@@ -76,7 +76,16 @@ export function createImageProfileResolverForProfile(binding: ImageProfileRefere
 }
 
 export function hasAvailableImageProfile(stateManager: StateManager, binding: ImageGenerationTaskBinding): boolean {
-	return isImageGenerationEnabled(stateManager) && createImageProfileResolver(stateManager, binding).hasAvailableProfile()
+	return resolveAvailableImageModelId(stateManager, binding) !== undefined
+}
+
+/** Returns the image model ID of the currently bound image profile, or undefined when image generation is unavailable. */
+export function resolveAvailableImageModelId(
+	stateManager: StateManager,
+	binding: ImageGenerationTaskBinding,
+): string | undefined {
+	if (!isImageGenerationEnabled(stateManager)) return undefined
+	return createImageProfileResolver(stateManager, binding).resolveAvailable()?.model.id
 }
 
 export function createImageGenerationRuntime(options: CreateImageGenerationRuntimeOptions): ImageGenerationRuntime {

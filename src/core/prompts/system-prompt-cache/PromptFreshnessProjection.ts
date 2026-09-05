@@ -97,6 +97,7 @@ export function buildPromptFreshnessBaseline(
 		transport: context.enableNativeToolCalls === true ? "native" : "xml",
 		parallelToolsEnabled: context.enableParallelToolCalling === true,
 		imageGenerationAvailable: context.imageGenerationAvailable === true,
+		imageModelId: context.imageModelId ?? "",
 		browserEnabled,
 		browserViewport: viewport ? `${viewport.width}x${viewport.height}` : "disabled",
 		webToolsEnabled: standardProfile && context.clineWebToolsEnabled === true,
@@ -139,7 +140,7 @@ export function comparePromptFreshness(
 	if (frozen.transport !== current.transport || frozen.parallelToolsEnabled !== current.parallelToolsEnabled) {
 		addChange(changes, "native_tools", "Tool calling settings changed")
 	}
-	if (frozen.imageGenerationAvailable !== current.imageGenerationAvailable) {
+	if (frozen.imageGenerationAvailable !== current.imageGenerationAvailable || frozen.imageModelId !== current.imageModelId) {
 		addChange(changes, "tool_set", "Image generation tools changed")
 	}
 	if (frozen.browserEnabled !== current.browserEnabled || frozen.browserViewport !== current.browserViewport) {

@@ -1,9 +1,9 @@
-import { GPT_IMAGE_2_SUBSCRIPTION_MODEL_ID } from "@shared/image-generation"
+import { GPT_IMAGE_1_MODEL_ID, GPT_IMAGE_2_MODEL_ID, GPT_IMAGE_2_SUBSCRIPTION_MODEL_ID } from "@shared/image-generation"
 import type { ImageModelInfo } from "@shared/proto/dline/models"
 
 export const openAIImageModels: Record<string, ImageModelInfo> = {
-	"gpt-image-1": {
-		id: "gpt-image-1",
+	[GPT_IMAGE_1_MODEL_ID]: {
+		id: GPT_IMAGE_1_MODEL_ID,
 		name: "GPT Image 1",
 		description: "Previous OpenAI image generation and editing model.",
 		capabilities: {
@@ -17,8 +17,8 @@ export const openAIImageModels: Record<string, ImageModelInfo> = {
 		pricing: undefined,
 		userDefined: false,
 	},
-	"gpt-image-2": {
-		id: "gpt-image-2",
+	[GPT_IMAGE_2_MODEL_ID]: {
+		id: GPT_IMAGE_2_MODEL_ID,
 		name: "GPT Image 2",
 		description: "OpenAI API Platform image generation and editing model.",
 		capabilities: {
@@ -49,4 +49,4 @@ export const openAIImageModels: Record<string, ImageModelInfo> = {
 	},
 }
 
-export const openAIDefaultImageModelId = "gpt-image-2"
+export const openAIDefaultImageModelId = GPT_IMAGE_2_MODEL_ID

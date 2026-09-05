@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises"
 import * as path from "node:path"
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { GPT_IMAGE_2_MODEL_ID } from "../../../../shared/image-generation"
 import { LOCAL_WEB_SEARCH_ROUTING_PLAN } from "../../__tests__/web-search-routing-fixtures"
 import { renderCapabilitiesSection } from "../../capabilities/CapabilitiesSection"
 import { SystemPromptGenerator } from "../../generators/SystemPromptGenerator"
@@ -64,6 +65,7 @@ const BASE_CONTEXT = {
 	clineWebToolsEnabled: true,
 	webSearchRoutingPlan: LOCAL_WEB_SEARCH_ROUTING_PLAN,
 	imageGenerationAvailable: true,
+	imageModelId: GPT_IMAGE_2_MODEL_ID,
 	enableParallelToolCalling: true,
 	yoloModeToggled: false,
 	isCliEnvironment: false,

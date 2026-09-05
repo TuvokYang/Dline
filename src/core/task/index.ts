@@ -76,7 +76,7 @@ import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import * as NotificationHook from "@core/hooks/notification-hook"
 import { executePreCompactHookWithCleanup, HookCancellationError, HookExecution } from "@core/hooks/precompact-executor"
 import { IgnoreController } from "@core/ignore/IgnoreController"
-import { hasAvailableImageProfile } from "@core/image-generation/runtime"
+import { resolveAvailableImageModelId } from "@core/image-generation/runtime"
 import { parseMentions } from "@core/mentions"
 import { CommandPermissionController } from "@core/permissions"
 import { summarizeTask } from "@core/prompts/contextManagement"
@@ -6784,6 +6784,11 @@ export class Task {
 			disableTools.push(ClineDefaultTool.SPAWN_TASK)
 		}
 
+		const boundImageModelId = resolveAvailableImageModelId(this.stateManager, {
+			taskId: this.taskId,
+			getCurrentMode: () => this.getMode(),
+		})
+
 		const promptContext: SystemPromptContext = {
 			taskId: this.taskId,
 			promptProfile: resolvePromptProfile({
@@ -6818,10 +6823,8 @@ export class Task {
 			subagentsEnabled: this.stateManager.getGlobalSettingsKey("subagentsEnabled"),
 			clineWebToolsEnabled: webToolsEnabled,
 			webSearchRoutingPlan,
-			imageGenerationAvailable: hasAvailableImageProfile(this.stateManager, {
-				taskId: this.taskId,
-				getCurrentMode: () => this.getMode(),
-			}),
+			imageGenerationAvailable: boundImageModelId !== undefined,
+			imageModelId: boundImageModelId,
 			isMultiRootEnabled: multiRootEnabled,
 			workspaceRoots,
 			isSubagentRun: false,

@@ -2,11 +2,7 @@ import { resolveProfileReference } from "@core/profiles/profile-binding"
 import { GPT_IMAGE_2_SUBSCRIPTION_MODEL_ID } from "@shared/image-generation"
 import type { ImageModelInfo } from "@shared/proto/dline/models"
 import { ApiFormat } from "@shared/proto/dline/models/metadata"
-import {
-	ApiProfile,
-	ImageGenerationSource,
-	type ImageGenerationProfile,
-} from "@shared/proto/dline/profile"
+import { ApiProfile, type ImageGenerationProfile, ImageGenerationSource } from "@shared/proto/dline/profile"
 import { openAiEndpointToApiFormat, resolveApiFormat } from "@shared/providers/api-format"
 import { ImageGenerationError } from "./contracts"
 
@@ -39,11 +35,15 @@ export class ImageProfileResolver {
 	constructor(private readonly options: ImageProfileResolverOptions) {}
 
 	hasAvailableProfile(): boolean {
+		return this.resolveAvailable() !== undefined
+	}
+
+	/** Resolves the bound image profile, returning undefined instead of throwing when none is available. */
+	resolveAvailable(selector?: string): ResolvedImageProfile | undefined {
 		try {
-			this.resolve()
-			return true
+			return this.resolve(selector)
 		} catch {
-			return false
+			return undefined
 		}
 	}
 
@@ -103,8 +103,9 @@ export class ImageProfileResolver {
 		}
 		let profile = apiProfile
 		if (source === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT) {
-			const imageProfile = (this.options.readImageProfiles?.() ?? [])
-				.find((candidate) => candidate.id === apiProfile.imageProfileId && candidate.enabled)
+			const imageProfile = (this.options.readImageProfiles?.() ?? []).find(
+				(candidate) => candidate.id === apiProfile.imageProfileId && candidate.enabled,
+			)
 			if (!imageProfile) return unavailable("The selected independent Image Profile is unavailable.")
 			profile = ApiProfile.create({
 				id: imageProfile.id,

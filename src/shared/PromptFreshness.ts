@@ -24,6 +24,7 @@ export interface PromptFreshnessBaseline {
 	readonly transport: "native" | "xml"
 	readonly parallelToolsEnabled: boolean
 	readonly imageGenerationAvailable: boolean
+	readonly imageModelId: string
 	readonly browserEnabled: boolean
 	readonly browserViewport: string
 	readonly webToolsEnabled: boolean

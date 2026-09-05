@@ -1,4 +1,6 @@
 export const IMAGE_GENERATION_PRESENTATION_SCHEMA_VERSION = 1 as const
+export const GPT_IMAGE_1_MODEL_ID = "gpt-image-1"
+export const GPT_IMAGE_2_MODEL_ID = "gpt-image-2"
 export const GPT_IMAGE_2_SUBSCRIPTION_MODEL_ID = "gpt-image-2-sub"
 
 export type ImageGenerationPresentationStatus = "queued" | "started" | "preview" | "completed" | "failed" | "cancelled"
@@ -51,14 +53,7 @@ export interface ImageGenerationPresentationV1 {
 	error?: ImageGenerationErrorPresentationV1
 }
 
-const STATUSES = new Set<ImageGenerationPresentationStatus>([
-	"queued",
-	"started",
-	"preview",
-	"completed",
-	"failed",
-	"cancelled",
-])
+const STATUSES = new Set<ImageGenerationPresentationStatus>(["queued", "started", "preview", "completed", "failed", "cancelled"])
 const FORMATS = new Set<ImageGenerationArtifactPresentationV1["format"]>(["png", "jpeg", "webp"])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -164,9 +159,11 @@ export function parseImageGenerationPresentation(value: unknown): ImageGeneratio
 	for (const field of ["profileId", "providerId", "modelId"] as const) {
 		if (value[field] !== undefined && typeof value[field] !== "string") return undefined
 	}
-	const artifacts = value.artifacts === undefined ? undefined : Array.isArray(value.artifacts) ? value.artifacts.map(parseArtifact) : []
+	const artifacts =
+		value.artifacts === undefined ? undefined : Array.isArray(value.artifacts) ? value.artifacts.map(parseArtifact) : []
 	if (artifacts?.some((artifact) => artifact === undefined)) return undefined
-	const previews = value.previews === undefined ? undefined : Array.isArray(value.previews) ? value.previews.map(parsePreview) : []
+	const previews =
+		value.previews === undefined ? undefined : Array.isArray(value.previews) ? value.previews.map(parsePreview) : []
 	if (previews?.some((preview) => preview === undefined)) return undefined
 	const preview = parsePreview(value.preview)
 	if (value.preview !== undefined && !preview) return undefined

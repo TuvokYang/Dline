@@ -116,6 +116,7 @@ describe("resolveFrozenPromptRuntime", () => {
 					transport: "xml",
 					parallelToolsEnabled: false,
 					imageGenerationAvailable: false,
+					imageModelId: "",
 					browserEnabled: true,
 					browserViewport: "900x600",
 					webToolsEnabled: true,

@@ -43,6 +43,8 @@ export interface SystemPromptContext {
 	readonly clineWebToolsEnabled?: boolean
 	readonly webSearchRoutingPlan?: WebSearchRoutingPlan
 	readonly imageGenerationAvailable?: boolean
+	/** Image model ID of the currently bound image profile, used to select model-specific tool guidance. */
+	readonly imageModelId?: string
 	readonly isMultiRootEnabled?: boolean
 	readonly workspaceRoots?: Array<{ path: string; name: string; vcs?: string }>
 	readonly isSubagentsEnabledAndCliInstalled?: boolean
