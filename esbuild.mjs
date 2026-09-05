@@ -13,6 +13,17 @@ const e2eBuild = process.argv.includes("--e2e-build")
 const destDir = standalone ? "dist-standalone" : "dist"
 
 /**
+ * Identity of this build, used to match a crash report against the source map
+ * that can decode it.
+ *
+ * A released bundle is minified and its map never ships, so a stack frame only
+ * becomes readable once the maintainer locates the map produced by the same
+ * build. CI supplies the commit sha; a local production build falls back to a
+ * timestamp so two builds can still be told apart.
+ */
+const buildId = production ? (process.env.DLINE_BUILD_ID ?? `local-${Date.now().toString(36)}`) : "dev"
+
+/**
  * @type {import('esbuild').Plugin}
  */
 const aliasResolverPlugin = {
@@ -88,6 +99,45 @@ const esbuildProblemMatcherPlugin = {
 	},
 }
 
+/**
+ * Records which build produced the bundle in `dist/`.
+ *
+ * Written next to the map rather than inside it: the map is deleted before
+ * packaging, and the identity file is what tells a maintainer which archived
+ * map a given crash report needs.
+ */
+const writeBuildIdentity = {
+	name: "write-build-identity",
+	setup(build) {
+		build.onEnd((result) => {
+			const identityPath = path.join(__dirname, destDir, "build-identity.json")
+
+			// A failed build left no bundle to identify. Keeping a stale file
+			// would point a maintainer at the wrong source map.
+			if (result.errors.length > 0) return
+
+			if (!production) {
+				// A dev build overwrites dist/ but emits no archived map, so a
+				// leftover production identity would misdescribe what is there.
+				fs.rmSync(identityPath, { force: true })
+				return
+			}
+
+			const identity = {
+				buildId,
+				builtAt: new Date().toISOString(),
+				// Names the map emitted by this same build; symbolication is
+				// impossible without it and the reader should see that.
+				sourceMap: `${path.basename(build.initialOptions.outfile)}.map`,
+			}
+			// Stage and rename so a reader never sees a half-written identity.
+			const stagingPath = `${identityPath}.partial`
+			fs.writeFileSync(stagingPath, `${JSON.stringify(identity, null, 2)}\n`, "utf8")
+			fs.renameSync(stagingPath, identityPath)
+		})
+	},
+}
+
 const copyWasmFiles = {
 	name: "copy-wasm-files",
 	setup(build) {
@@ -129,6 +179,10 @@ const copyWasmFiles = {
 const buildEnvVars = {
 	"import.meta.url": "_importMetaUrl",
 	"process.env.IS_STANDALONE": JSON.stringify(standalone ? "true" : "false"),
+	// Reported with diagnostics so a maintainer can find the matching source
+	// map. Baked in rather than read at runtime because the running extension
+	// has no other way to know which build produced it.
+	"process.env.DLINE_BUILD_ID": JSON.stringify(buildId),
 	// Prevent bluebird (bundled via exceljs) from detecting navigator global
 	// added in Node.js 24, which causes a fatal crash in VSCode 1.123.0+
 	navigator: "undefined",
@@ -182,13 +236,18 @@ if (process.env.OTEL_METRIC_EXPORT_INTERVAL) {
 const baseConfig = {
 	bundle: true,
 	minify: production,
-	sourcemap: !production,
+	// Production emits an external map so released stack traces stay
+	// symbolicatable, while `.vscodeignore` keeps `**/*.map` out of the VSIX.
+	// "external" also omits the sourceMappingURL comment, so an installed
+	// extension never advertises a map it does not ship.
+	sourcemap: production ? "external" : true,
 	logLevel: "silent",
 	define: buildEnvVars,
 	tsconfig: path.resolve(__dirname, "tsconfig.json"),
 	plugins: [
 		copyWasmFiles,
 		aliasResolverPlugin,
+		writeBuildIdentity,
 		/* add to the end of plugins array */
 		esbuildProblemMatcherPlugin,
 	],

@@ -12,6 +12,34 @@ export {
 } from "./analysis/root-cause-types"
 export { AttributeRejection, RuntimeContentPolicy, runtimeContentPolicyLimits } from "./content-policy"
 export { normalizeRuntimeError } from "./error-normalizer"
+export { type BuildIdentity, readBuildIdentity, UNKNOWN_BUILD_ID } from "./export/build-identity"
+export { BundleArchiveError, type BundleArchiveResult, writeBundleArchive } from "./export/bundle-archive-writer"
+export {
+	type BuiltBundle,
+	type BuiltBundleEntry,
+	type BundleEnvironment,
+	type BundleInput,
+	buildDiagnosticBundle,
+	type RawArtifact,
+	type ScenarioStep,
+	verifyBundleChecksums,
+} from "./export/bundle-builder"
+export {
+	BUNDLE_ENTRIES,
+	type BundleChecksums,
+	type BundleEntryName,
+	type BundleManifest,
+	isForbiddenBundleField,
+	redactBundleValue,
+} from "./export/bundle-contract"
+export {
+	type DiagnosticSource,
+	describeEnvironment,
+	type ExportRequest,
+	type ExportResult,
+	exportDiagnosticBundle,
+	type RawArtifactConsent,
+} from "./export/diagnostic-exporter"
 export {
 	RUNTIME_METRICS,
 	RuntimeSampler,
@@ -31,6 +59,21 @@ export {
 	ThresholdPolicy,
 	type ThresholdPolicyOptions,
 } from "./performance/threshold-policy"
+export {
+	FakeReplayPort,
+	RejectingReplayPort,
+	ReplayEffect,
+	ReplayNotPermitted,
+	type ReplayPort,
+	type ReplayRequest,
+	type ReplayResult,
+} from "./reproduction/replay-ports"
+export {
+	classifyStepEffect,
+	type ReplayedStep,
+	replayScenario,
+	type ScenarioReplayReport,
+} from "./reproduction/scenario-runner"
 export { RuntimeEventBus, type RuntimeEventBusOptions } from "./runtime-event-bus"
 export { RuntimeTelemetryContextHolder, type RuntimeTelemetryScope } from "./runtime-telemetry-context"
 export { RuntimeTelemetryLifecycle, type RuntimeTelemetryLifecycleOptions } from "./runtime-telemetry-lifecycle"

@@ -1,0 +1,341 @@
+import { createHash } from "node:crypto"
+import { describe, expect, it } from "vitest"
+import { DiagnosisConfidence, RootCauseCategory, type RootCauseDiagnosis } from "../../analysis/root-cause-types"
+import { RuntimeEventPriority, type RuntimeTelemetryEvent } from "../../types"
+import { type BundleEnvironment, buildDiagnosticBundle, UnsafeRawArtifact, verifyBundleChecksums } from "../bundle-builder"
+import {
+	BUNDLE_ENTRIES,
+	defaultBundleEntryNames,
+	isForbiddenBundleField,
+	REDACTION_MARKERS,
+	redactBundleValue,
+} from "../bundle-contract"
+
+const ENVIRONMENT: BundleEnvironment = {
+	platform: "win32",
+	arch: "x64",
+	nodeVersion: "v20.11.0",
+	hostVersion: "1.96.0",
+	extensionVersion: "0.9.1",
+	cpuCount: 8,
+	totalMemoryBytes: 34_359_738_368,
+}
+
+function event(overrides: Partial<RuntimeTelemetryEvent> = {}): RuntimeTelemetryEvent {
+	return {
+		eventId: "evt-1",
+		sequence: 1,
+		timestamp: 1_000,
+		monotonicMs: 10,
+		name: "terminal.execute_complete",
+		priority: RuntimeEventPriority.Performance,
+		context: { sessionId: "session-1" },
+		attributes: { component: "terminal", operation: "execute", outcome: "succeeded", durationMs: 42 },
+		...overrides,
+	}
+}
+
+function diagnosis(): RootCauseDiagnosis {
+	return {
+		incidentId: "incident-1",
+		category: RootCauseCategory.ProviderUpstreamLatency,
+		confidence: DiagnosisConfidence.High,
+		component: "provider",
+		operation: "stream",
+		evidenceEventIds: ["evt-1", "evt-2"],
+		failingEventId: "evt-2",
+		reproductionSteps: ["start a task", "wait for the first chunk"],
+	}
+}
+
+describe("bundle contract", () => {
+	it("treats content and credential field names as forbidden", () => {
+		for (const name of [
+			"command",
+			"prompt",
+			"stdout",
+			"Authorization",
+			"pairing_code",
+			"apiKey",
+			"access_token",
+			"refreshToken",
+			"idToken",
+			"clientSecret",
+			"privateKey",
+			"proxy-authorization",
+			"set-cookie",
+			"x-api-key",
+		]) {
+			expect(isForbiddenBundleField(name)).toBe(true)
+		}
+	})
+
+	it("keeps identity, timing and outcome field names", () => {
+		for (const name of ["component", "operation", "outcome", "durationMs", "sessionId", "taskId"]) {
+			expect(isForbiddenBundleField(name)).toBe(false)
+		}
+	})
+
+	it("drops forbidden fields at any nesting depth", () => {
+		const redacted = redactBundleValue({
+			component: "terminal",
+			command: "rm -rf /",
+			nested: { prompt: "secret question", durationMs: 5 },
+			list: [{ token: "abc", outcome: "failed" }],
+		}) as Record<string, unknown>
+
+		expect(redacted.component).toBe("terminal")
+		expect(redacted).not.toHaveProperty("command")
+		expect(redacted.nested).toEqual({ durationMs: 5 })
+		expect(redacted.list).toEqual([{ outcome: "failed" }])
+	})
+
+	it("scrubs credential shapes hidden inside allowed fields", () => {
+		const redacted = redactBundleValue({
+			operation: "retry after Authorization: Bearer abcdef0123456789",
+			note: "key sk-abcdefghijklmnopqrstuvwx failed",
+			outcome: "failed",
+		}) as Record<string, string>
+
+		expect(redacted.operation).not.toContain("abcdef0123456789")
+		expect(redacted.operation).toContain(REDACTION_MARKERS.secret)
+		expect(redacted.note).not.toContain("sk-abcdefghijklmnopqrstuvwx")
+		expect(redacted.outcome).toBe("failed")
+	})
+
+	it("refuses functions so toJSON cannot re-inject data later", () => {
+		const redacted = redactBundleValue({
+			outcome: "failed",
+			toJSON: () => ({ command: "rm -rf /" }),
+		}) as Record<string, unknown>
+
+		expect(redacted.toJSON).toBe(REDACTION_MARKERS.unsupported)
+		expect(JSON.stringify(redacted)).not.toContain("rm -rf")
+	})
+
+	it("does not let a __proto__ key mutate the redacted object", () => {
+		const hostile = JSON.parse('{"outcome":"failed","__proto__":{"polluted":true}}')
+		const redacted = redactBundleValue(hostile) as Record<string, unknown>
+
+		expect(redacted.outcome).toBe("failed")
+		expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+	})
+
+	it("marks cycles and over-deep nesting instead of dropping them silently", () => {
+		const cyclic: Record<string, unknown> = { outcome: "failed" }
+		cyclic.self = cyclic
+		expect((redactBundleValue(cyclic) as Record<string, unknown>).self).toBe(REDACTION_MARKERS.circular)
+
+		let deep: Record<string, unknown> = { outcome: "failed" }
+		for (let i = 0; i < 12; i++) deep = { nested: deep }
+		expect(JSON.stringify(redactBundleValue(deep))).toContain(REDACTION_MARKERS.depthLimit)
+	})
+
+	it("marks non-JSON containers rather than serializing them as empty objects", () => {
+		const redacted = redactBundleValue({
+			set: new Set([1, 2]),
+			map: new Map([["a", 1]]),
+			bytes: new Uint8Array([1, 2, 3]),
+		}) as Record<string, unknown>
+
+		expect(redacted.set).toBe(REDACTION_MARKERS.unsupported)
+		expect(redacted.map).toBe(REDACTION_MARKERS.unsupported)
+		expect(redacted.bytes).toBe(REDACTION_MARKERS.unsupported)
+	})
+})
+
+describe("buildDiagnosticBundle", () => {
+	it("writes the default entries in contract order", () => {
+		const bundle = buildDiagnosticBundle({
+			sessionId: "session-1",
+			createdAt: 1_700_000_000_000,
+			events: [event()],
+			diagnoses: [diagnosis()],
+			environment: ENVIRONMENT,
+		})
+
+		expect(bundle.entries.map((entry) => entry.name)).toEqual([...defaultBundleEntryNames()])
+	})
+
+	it("excludes raw artifacts unless the user selected them", () => {
+		const bundle = buildDiagnosticBundle({
+			sessionId: "session-1",
+			createdAt: 1,
+			events: [event()],
+			diagnoses: [],
+			environment: ENVIRONMENT,
+		})
+
+		expect(bundle.manifest.includesRawArtifacts).toBe(false)
+		expect(bundle.entries.some((entry) => entry.name.startsWith("raw/"))).toBe(false)
+	})
+
+	it("redacts consented raw artifacts instead of trusting the consent", () => {
+		const bundle = buildDiagnosticBundle({
+			sessionId: "session-1",
+			createdAt: 1,
+			events: [],
+			diagnoses: [],
+			environment: ENVIRONMENT,
+			rawArtifacts: [
+				{
+					name: "notes.json",
+					content: '{"outcome":"failed","apiKey":"CANARY-STRUCTURED-SECRET"}',
+				},
+				{
+					name: "session.log",
+					content: "connect ok\nAuthorization: Bearer CANARY-TEXT-SECRET-0123456789\nretry",
+				},
+			],
+		})
+
+		expect(bundle.manifest.includesRawArtifacts).toBe(true)
+
+		const json = bundle.entries.find((entry) => entry.name === "raw/notes.json")
+		expect(json?.content).toContain("failed")
+		expect(json?.content).not.toContain("CANARY-STRUCTURED-SECRET")
+		expect(json?.content).not.toContain("apiKey")
+
+		const log = bundle.entries.find((entry) => entry.name === "raw/session.log")
+		expect(log?.content).toContain("connect ok")
+		expect(log?.content).not.toContain("CANARY-TEXT-SECRET-0123456789")
+
+		// Checksums must cover the redacted content, not the original.
+		expect(verifyBundleChecksums(bundle)).toEqual([])
+	})
+
+	it("rejects artifact names that could escape the raw prefix or collide", () => {
+		const build = (name: string) =>
+			buildDiagnosticBundle({
+				sessionId: "session-1",
+				createdAt: 1,
+				events: [],
+				diagnoses: [],
+				environment: ENVIRONMENT,
+				rawArtifacts: [{ name, content: "ok" }],
+			})
+
+		for (const name of ["../manifest.json", "nested/notes.json", "C:\\keys.txt", "/etc/passwd", "..", "no\u0000tes"]) {
+			expect(() => build(name)).toThrow(UnsafeRawArtifact)
+		}
+
+		expect(() =>
+			buildDiagnosticBundle({
+				sessionId: "session-1",
+				createdAt: 1,
+				events: [],
+				diagnoses: [],
+				environment: ENVIRONMENT,
+				rawArtifacts: [
+					{ name: "notes.log", content: "a" },
+					{ name: "notes.log", content: "b" },
+				],
+			}),
+		).toThrow(UnsafeRawArtifact)
+	})
+
+	it("keeps content out of the serialized events", () => {
+		const bundle = buildDiagnosticBundle({
+			sessionId: "session-1",
+			createdAt: 1,
+			events: [
+				event({
+					attributes: {
+						component: "terminal",
+						operation: "execute",
+						// A producer that bypassed the attribute policy.
+						command: "cat ~/.ssh/id_rsa",
+					} as never,
+				}),
+			],
+			diagnoses: [],
+			environment: ENVIRONMENT,
+		})
+
+		const events = bundle.entries.find((entry) => entry.name === BUNDLE_ENTRIES.events)
+		expect(events?.content).toContain("terminal")
+		expect(events?.content).not.toContain("id_rsa")
+		expect(events?.content).not.toContain("command")
+	})
+
+	it("derives replay steps with offsets relative to the first event", () => {
+		const bundle = buildDiagnosticBundle({
+			sessionId: "session-1",
+			createdAt: 1,
+			events: [
+				event({ eventId: "evt-1", timestamp: 5_000 }),
+				event({ eventId: "evt-2", timestamp: 5_250, name: "provider.stream_failed" }),
+			],
+			diagnoses: [],
+			environment: ENVIRONMENT,
+		})
+
+		const scenario = JSON.parse(bundle.entries.find((entry) => entry.name === BUNDLE_ENTRIES.scenario)?.content ?? "{}")
+		expect(scenario.steps).toHaveLength(2)
+		expect(scenario.steps[0].offsetMs).toBe(0)
+		expect(scenario.steps[1].offsetMs).toBe(250)
+	})
+
+	it("checksums every entry except the checksum file", () => {
+		const bundle = buildDiagnosticBundle({
+			sessionId: "session-1",
+			createdAt: 1,
+			events: [event()],
+			diagnoses: [diagnosis()],
+			environment: ENVIRONMENT,
+		})
+
+		expect(bundle.checksums).not.toHaveProperty(BUNDLE_ENTRIES.checksums)
+		const manifestEntry = bundle.entries.find((entry) => entry.name === BUNDLE_ENTRIES.manifest)
+		expect(bundle.checksums[BUNDLE_ENTRIES.manifest]).toBe(
+			createHash("sha256")
+				.update(manifestEntry?.content ?? "", "utf8")
+				.digest("hex"),
+		)
+		expect(verifyBundleChecksums(bundle)).toEqual([])
+	})
+
+	it("reports entries whose content no longer matches the recorded checksum", () => {
+		const bundle = buildDiagnosticBundle({
+			sessionId: "session-1",
+			createdAt: 1,
+			events: [event()],
+			diagnoses: [],
+			environment: ENVIRONMENT,
+		})
+
+		const tampered = {
+			...bundle,
+			entries: bundle.entries.map((entry) =>
+				entry.name === BUNDLE_ENTRIES.environment ? { ...entry, content: "{}" } : entry,
+			),
+		}
+
+		expect(verifyBundleChecksums(tampered)).toEqual([BUNDLE_ENTRIES.environment])
+	})
+
+	it("reports removed, duplicated and unlisted entries", () => {
+		const bundle = buildDiagnosticBundle({
+			sessionId: "session-1",
+			createdAt: 1,
+			events: [event()],
+			diagnoses: [],
+			environment: ENVIRONMENT,
+		})
+
+		const removed = {
+			...bundle,
+			entries: bundle.entries.filter((entry) => entry.name !== BUNDLE_ENTRIES.environment),
+		}
+		expect(verifyBundleChecksums(removed)).toContain(BUNDLE_ENTRIES.environment)
+
+		const duplicated = { ...bundle, entries: [...bundle.entries, bundle.entries[0]] }
+		expect(verifyBundleChecksums(duplicated)).toContain(bundle.entries[0].name)
+
+		const smuggled = {
+			...bundle,
+			entries: [...bundle.entries, { name: "raw/extra.log", content: "added after the fact" }],
+		}
+		expect(verifyBundleChecksums(smuggled)).toContain("raw/extra.log")
+	})
+})
