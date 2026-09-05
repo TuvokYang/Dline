@@ -527,19 +527,16 @@ export async function prepareE2EState(options: PrepareE2EStateOptions): Promise<
 	const selectedProfileName = E2E_PROFILE_NAMES.mockOpenAi
 
 	await writeJson(profilesPath, profiles)
-	await writeJson(
-		path.join(settingsDir, "image_generation_profiles.json"),
-		[
-			{
-				id: mockImageProfile.id,
-				name: mockImageProfile.name,
-				provider: mockImageProfile.provider,
-				baseUrl: mockImageProfile.baseUrl,
-				enabled: true,
-				legacyNames: [],
-			},
-		],
-	)
+	await writeJson(path.join(settingsDir, "image_generation_profiles.json"), [
+		{
+			id: mockImageProfile.id,
+			name: mockImageProfile.name,
+			provider: mockImageProfile.provider,
+			baseUrl: mockImageProfile.baseUrl,
+			enabled: true,
+			legacyNames: [],
+		},
+	])
 	await writeJson(apiKeysPath, apiKeys, 0o600)
 	await writeJson(path.join(settingsDir, "settings.json"), {
 		__settingsMigrationVersion: 1,

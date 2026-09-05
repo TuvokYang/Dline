@@ -296,8 +296,12 @@ export class VscodeWebviewPanelProvider extends WebviewProvider {
 				break
 			}
 			default: {
-				// The message body can hold user text; only the discriminator identifies the defect.
-				Logger.error(`Received unhandled WebviewMessage type: ${message.type}`)
+				// Every known discriminator is handled above, so TypeScript narrows this
+				// branch to never. A malformed runtime payload can still reach it, so read
+				// the discriminator defensively. The message body can hold user text; only
+				// the discriminator identifies the defect.
+				const unhandled: { type?: unknown } = message
+				Logger.error(`Received unhandled WebviewMessage type: ${String(unhandled.type)}`)
 			}
 		}
 	}

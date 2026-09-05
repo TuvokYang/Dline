@@ -50,10 +50,7 @@ describe("PromptFreshnessProjection", () => {
 		[true, false],
 		[false, true],
 	] as const)("reports image tool availability changes from %s to %s", (frozenAvailable, currentAvailable) => {
-		const frozen = buildPromptFreshnessBaseline(
-			{ ...BASE_CONTEXT, imageGenerationAvailable: frozenAvailable },
-			CAPABILITIES,
-		)
+		const frozen = buildPromptFreshnessBaseline({ ...BASE_CONTEXT, imageGenerationAvailable: frozenAvailable }, CAPABILITIES)
 		const current = buildPromptFreshnessBaseline(
 			{ ...BASE_CONTEXT, imageGenerationAvailable: currentAvailable },
 			CAPABILITIES,
