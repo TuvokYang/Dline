@@ -1,6 +1,7 @@
 import { ApiFormat } from "@shared/proto/dline/models/metadata"
 import { getApiFormatLabel, resolveApiFormat } from "@shared/providers/api-format"
 import { useId } from "react"
+import { nativeSelectOptionStyle, nativeSelectStyle } from "@/components/ui/native-select-theme"
 import { ProfileField } from "../profile-ui"
 
 interface ApiFormatSelectorProps {
@@ -25,20 +26,10 @@ export function ApiFormatSelector({ apiFormats, selectedApiFormat, fallbackApiFo
 				className="min-h-7 w-full rounded-xs border px-2 text-sm"
 				id={inputId}
 				onChange={(event) => onChange(Number(event.target.value) as ApiFormat)}
-				style={{
-					backgroundColor: "var(--vscode-dropdown-background)",
-					borderColor: "var(--vscode-dropdown-border)",
-					color: "var(--vscode-dropdown-foreground)",
-				}}
+				style={nativeSelectStyle}
 				value={String(selected)}>
 				{apiFormats.map((apiFormat) => (
-					<option
-						key={apiFormat}
-						style={{
-							backgroundColor: "var(--vscode-dropdown-background)",
-							color: "var(--vscode-dropdown-foreground)",
-						}}
-						value={String(apiFormat)}>
+					<option key={apiFormat} style={nativeSelectOptionStyle} value={String(apiFormat)}>
 						{getApiFormatLabel(apiFormat)}
 					</option>
 				))}

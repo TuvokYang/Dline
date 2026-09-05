@@ -10,6 +10,7 @@ import type { ApiProfile } from "@shared/proto/dline/profile"
 import { ChevronDownIcon, ChevronRightIcon, PenIcon, Trash2Icon } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
+import { nativeSelectOptionStyle, nativeSelectStyle } from "@/components/ui/native-select-theme"
 import { Switch } from "@/components/ui/switch"
 import { FileServiceClient } from "@/services/grpc-client"
 
@@ -181,12 +182,15 @@ const SubagentRow: React.FC<SubagentRowProps> = ({ agent, isGlobal, onToggle, on
 							<div className="text-xs text-description">Loading available profiles...</div>
 						) : (
 							<select
-								className="w-full text-xs p-1 rounded bg-text-block-background border border-input-border"
+								className="w-full text-xs p-1 rounded border"
 								onChange={(e) => handleProfileChange(e.target.value)}
+								style={nativeSelectStyle}
 								value={selectedProfile}>
-								<option value="">Default (act profile)</option>
+								<option style={nativeSelectOptionStyle} value="">
+									Default (act profile)
+								</option>
 								{profiles.map((profile) => (
-									<option key={profile.id || profile.name} value={profile.name}>
+									<option key={profile.id || profile.name} style={nativeSelectOptionStyle} value={profile.name}>
 										{profile.name}
 									</option>
 								))}
