@@ -203,6 +203,8 @@ import {
 	StandaloneTerminalManager,
 } from "@/integrations/terminal"
 import { ClineErrorType, ErrorService } from "@/services/error"
+import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import { telemetryService } from "@/services/telemetry"
 import { ClineClient } from "@/shared/cline"
 import {
@@ -5560,9 +5562,18 @@ export class Task {
 		let stageStartedAt = terminateStartedAt
 		const logTerminateStage = (phase: string, details = "") => {
 			const now = performance.now()
-			Logger.debug(
-				`[TaskClosePerf] phase=${phase} taskId=${this.taskId} durationMs=${Math.round(now - stageStartedAt)} elapsedMs=${Math.round(now - terminateStartedAt)}${details ? ` ${details}` : ""}`,
+			recordPerfPhase(
+				PerfDomain.TaskClose,
+				"stage",
+				now - stageStartedAt,
+				{ stage: phase, elapsedMs: Math.round(now - terminateStartedAt) },
+				{ taskId: this.taskId },
 			)
+			if (Logger.isDebugEnabled()) {
+				Logger.debug(
+					`[TaskClosePerf] phase=${phase} taskId=${this.taskId} durationMs=${Math.round(now - stageStartedAt)} elapsedMs=${Math.round(now - terminateStartedAt)}${details ? ` ${details}` : ""}`,
+				)
+			}
 			stageStartedAt = now
 		}
 		this.stopContextWindowEnvironmentRefresh()
@@ -5912,9 +5923,18 @@ export class Task {
 		const buildMs = Math.round(performance.now() - startedAt)
 		const cacheStartedAt = performance.now()
 		await this.systemPromptCacheService.reevaluateFreshness({ promptContext })
-		Logger.debug(
-			`[PromptFreshnessPerf] phase=reevaluate taskId=${this.taskId} buildMs=${buildMs} cacheMs=${Math.round(performance.now() - cacheStartedAt)} totalMs=${Math.round(performance.now() - startedAt)}`,
+		recordPerfPhase(
+			PerfDomain.PromptFreshness,
+			"reevaluate",
+			performance.now() - startedAt,
+			{ buildMs, cacheMs: Math.round(performance.now() - cacheStartedAt) },
+			{ taskId: this.taskId },
 		)
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[PromptFreshnessPerf] phase=reevaluate taskId=${this.taskId} buildMs=${buildMs} cacheMs=${Math.round(performance.now() - cacheStartedAt)} totalMs=${Math.round(performance.now() - startedAt)}`,
+			)
+		}
 	}
 
 	private async initializePromptInputFileWatcher(): Promise<void> {
@@ -6661,9 +6681,34 @@ export class Task {
 		stageStartedAt = performance.now()
 		const availableSkills = await discoverAvailableSkills(this.cwd, capabilityToggleState)
 		const duplicateSkillsDiscoveryMs = Math.round(performance.now() - stageStartedAt)
-		Logger.debug(
-			`[PromptBuildPerf] phase=capability_context taskId=${this.taskId} hostMs=${hostMs} dlineRulesDiscoveryMs=${dlineRulesDiscoveryMs} externalRulesDiscoveryMs=${externalRulesDiscoveryMs} workflowsDiscoveryMs=${workflowsDiscoveryMs} skillsRefreshMs=${skillsRefreshMs} subagentsRefreshMs=${subagentsRefreshMs} evaluationContextMs=${evaluationContextMs} globalRulesLoadMs=${globalRulesLoadMs} localRulesLoadMs=${localRulesLoadMs} duplicateSkillsDiscoveryMs=${duplicateSkillsDiscoveryMs} totalMs=${Math.round(performance.now() - startedAt)} rules=${Object.keys(globalToggles).length + Object.keys(localToggles).length} workflows=${Object.keys(globalWorkflowToggles).length + Object.keys(localWorkflowToggles).length} skills=${refreshedSkills.globalSkills.length + refreshedSkills.localSkills.length} availableSkills=${availableSkills.length} subagents=${refreshedSubagents.globalSubagents.length + refreshedSubagents.localSubagents.length}`,
+		recordPerfPhase(
+			PerfDomain.PromptBuild,
+			"capability_context",
+			performance.now() - startedAt,
+			{
+				hostMs,
+				dlineRulesDiscoveryMs,
+				externalRulesDiscoveryMs,
+				workflowsDiscoveryMs,
+				skillsRefreshMs,
+				subagentsRefreshMs,
+				evaluationContextMs,
+				globalRulesLoadMs,
+				localRulesLoadMs,
+				duplicateSkillsDiscoveryMs,
+				rules: Object.keys(globalToggles).length + Object.keys(localToggles).length,
+				workflows: Object.keys(globalWorkflowToggles).length + Object.keys(localWorkflowToggles).length,
+				skills: refreshedSkills.globalSkills.length + refreshedSkills.localSkills.length,
+				availableSkills: availableSkills.length,
+				subagents: refreshedSubagents.globalSubagents.length + refreshedSubagents.localSubagents.length,
+			},
+			{ taskId: this.taskId },
 		)
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[PromptBuildPerf] phase=capability_context taskId=${this.taskId} hostMs=${hostMs} dlineRulesDiscoveryMs=${dlineRulesDiscoveryMs} externalRulesDiscoveryMs=${externalRulesDiscoveryMs} workflowsDiscoveryMs=${workflowsDiscoveryMs} skillsRefreshMs=${skillsRefreshMs} subagentsRefreshMs=${subagentsRefreshMs} evaluationContextMs=${evaluationContextMs} globalRulesLoadMs=${globalRulesLoadMs} localRulesLoadMs=${localRulesLoadMs} duplicateSkillsDiscoveryMs=${duplicateSkillsDiscoveryMs} totalMs=${Math.round(performance.now() - startedAt)} rules=${Object.keys(globalToggles).length + Object.keys(localToggles).length} workflows=${Object.keys(globalWorkflowToggles).length + Object.keys(localWorkflowToggles).length} skills=${refreshedSkills.globalSkills.length + refreshedSkills.localSkills.length} availableSkills=${availableSkills.length} subagents=${refreshedSubagents.globalSubagents.length + refreshedSubagents.localSubagents.length}`,
+			)
+		}
 
 		// Disable spawn_task for child tasks to prevent recursive spawn explosion.
 		// A spawned task inherits the parent's provider and should focus on its

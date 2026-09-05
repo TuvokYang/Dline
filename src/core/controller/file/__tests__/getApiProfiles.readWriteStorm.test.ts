@@ -107,20 +107,19 @@ describe("getApiProfiles read/write storm", () => {
 	})
 
 	it("does not let request normalization rewrite an already-clean Catalog", async () => {
+		// A registry-known model keeps registry drift out of this scenario, so the
+		// only rewrite trigger left to observe is request normalization.
 		const filePath = await writeCatalog([
-			{
-				id: "stable-profile",
-				name: "custom-provider:stable-model",
-				provider: "custom-provider",
-				modelId: "stable-model",
-				enabled: true,
-			},
+			{ id: "stable-profile", name: "openai:gpt-4o", provider: "openai", modelId: "gpt-4o", enabled: true },
 		])
 		const module = await import("../getApiProfiles")
 		const { Logger } = await import("@shared/services/Logger")
 		module.resetRegistryModelInfoRepairGateForTest()
-		const logSpy = vi.spyOn(Logger, "log")
 		const controller = createController()
+		// Settle the one-time registry repair before sampling the file identity.
+		await module.getApiProfiles(controller, EmptyRequest.create({}))
+		await new Promise((resolve) => setTimeout(resolve, 50))
+		const logSpy = vi.spyOn(Logger, "log")
 		const before = await fs.stat(filePath)
 
 		for (let index = 0; index < 3; index++) {
@@ -134,6 +133,7 @@ describe("getApiProfiles read/write storm", () => {
 			})
 			await module.getApiProfiles(controller, EmptyRequest.create({}))
 		}
+		await new Promise((resolve) => setTimeout(resolve, 50))
 
 		const after = await fs.stat(filePath)
 		const cleanRewriteLogs = logSpy.mock.calls.filter(([message]) =>

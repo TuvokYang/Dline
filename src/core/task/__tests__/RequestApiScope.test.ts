@@ -180,7 +180,7 @@ describe("createRequestApiScope", () => {
 		})
 	})
 
-	it("freezes hosted image generation independently from Web Search", () => {
+	it("keeps hosted image generation out of the main conversation request", () => {
 		const handler = createHandler("openai", "hosted-image-model")
 		handler.getModel = () => ({
 			id: "hosted-image-model",
@@ -196,11 +196,14 @@ describe("createRequestApiScope", () => {
 		const enabled = createRequestApiScope(handler, "act", undefined, false, undefined, true)
 		const disabled = createRequestApiScope(handler, "act", undefined, false, undefined, false)
 
-		expect(enabled.hostedImageGenerationPlan).toMatchObject({
-			route: "hosted",
-			serverTools: [ServerTool.IMAGE_GENERATION],
-		})
+		// Image generation is driven by the generate_image tool, so the main
+		// conversation request never projects the image server tool. The switch
+		// therefore must not change this request-scoped plan either way.
+		expect(enabled.hostedImageGenerationPlan).toMatchObject({ route: "disabled", serverTools: [] })
 		expect(disabled.hostedImageGenerationPlan).toMatchObject({ route: "disabled", serverTools: [] })
+		// The declared capability still reaches the plan so downstream consumers
+		// can tell "not projected" apart from "model cannot generate images".
+		expect(enabled.hostedImageGenerationPlan.serverToolPlan.declared).toContain(ServerTool.IMAGE_GENERATION)
 	})
 
 	it("lets the global Web Tools switch disable every route", () => {

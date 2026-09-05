@@ -1,4 +1,6 @@
 import fs from "node:fs/promises"
+import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import { Logger } from "@/shared/services/Logger"
 import type { TaskSnapshot } from "./TaskSnapshot"
 
@@ -121,7 +123,16 @@ export class TaskSnapshotPersistence {
 				this.pendingSnapshot = undefined
 			}
 			const writeMs = Math.round(performance.now() - writeStartedAt)
-			if (queueMs + writeMs >= 250) {
+			// Telemetry keeps the full distribution; the threshold only limits the
+			// human-readable mirror to snapshots slow enough to be worth reading.
+			recordPerfPhase(
+				PerfDomain.TaskSnapshot,
+				"flush_now",
+				performance.now() - requestedAt,
+				{ queueMs, writeMs },
+				{ taskId: snapshot.taskId },
+			)
+			if (queueMs + writeMs >= 250 && Logger.isDebugEnabled()) {
 				Logger.debug(
 					`[TaskSnapshotPerf] phase=flush_now taskId=${snapshot.taskId} queueMs=${queueMs} writeMs=${writeMs} totalMs=${Math.round(performance.now() - requestedAt)}`,
 				)

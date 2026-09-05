@@ -1,4 +1,4 @@
-import { resolveWebSearchRoutingPlan } from "@core/api/server-tools"
+import { resolveHostedImageGenerationPlan, resolveWebSearchRoutingPlan } from "@core/api/server-tools"
 import type { CanonicalMessageRange } from "@core/context/context-management/compaction-context-projection"
 import { ToolPromptGenerator } from "@core/prompts/generators/ToolPromptGenerator"
 import type { RequestApiScope } from "@core/task/RequestApiScope"
@@ -15,6 +15,15 @@ vi.mock("@core/storage/disk", async (importOriginal) => {
 		appendApiConversationEvent: vi.fn(async () => undefined),
 		ensureTaskDirectoryExists: vi.fn(async () => "test-task-directory"),
 	}
+})
+
+/** Hosted image generation stays out of the main conversation request for every fixture below. */
+const disabledHostedImageGenerationPlan = resolveHostedImageGenerationPlan({
+	enabled: false,
+	source: undefined,
+	modelInfo: undefined,
+	selectedApiFormat: undefined,
+	remoteAdapterAvailable: false,
 })
 
 describe("Task.attemptApiRequest first chunk state", () => {
@@ -50,6 +59,7 @@ describe("Task.attemptApiRequest first chunk state", () => {
 				localAvailable: true,
 				remoteAdapterAvailable: false,
 			}),
+			hostedImageGenerationPlan: disabledHostedImageGenerationPlan,
 			explicitInstructions: {
 				beginProviderAttempt: vi.fn(),
 				createConsumePort: vi.fn(() => ({})),
@@ -83,6 +93,7 @@ describe("Task.attemptApiRequest first chunk state", () => {
 		const toolExecutor = {
 			setAllowedNativeToolNames: vi.fn(),
 			setExplicitInstructionConsumePort: vi.fn(),
+			setHostedImageGenerationContext: vi.fn(),
 			setPromptRuntime: vi.fn(),
 			setWebSearchRoutingPlan: vi.fn(),
 		}
@@ -221,6 +232,7 @@ describe("Task.attemptApiRequest first chunk state", () => {
 				localAvailable: true,
 				remoteAdapterAvailable: false,
 			}),
+			hostedImageGenerationPlan: disabledHostedImageGenerationPlan,
 			explicitInstructions: {
 				beginProviderAttempt: vi.fn(),
 				createConsumePort: vi.fn(() => ({})),
@@ -277,6 +289,7 @@ describe("Task.attemptApiRequest first chunk state", () => {
 			toolExecutor: {
 				setAllowedNativeToolNames: vi.fn(),
 				setExplicitInstructionConsumePort: vi.fn(),
+				setHostedImageGenerationContext: vi.fn(),
 				setPromptRuntime: vi.fn(),
 				setWebSearchRoutingPlan: vi.fn(),
 			},
@@ -349,6 +362,7 @@ describe("Task.attemptApiRequest first chunk state", () => {
 				localAvailable: true,
 				remoteAdapterAvailable: false,
 			}),
+			hostedImageGenerationPlan: disabledHostedImageGenerationPlan,
 			explicitInstructions: {
 				beginProviderAttempt: vi.fn(),
 				createConsumePort: vi.fn(() => ({})),
@@ -396,6 +410,7 @@ describe("Task.attemptApiRequest first chunk state", () => {
 			toolExecutor: {
 				setAllowedNativeToolNames: vi.fn(),
 				setExplicitInstructionConsumePort: vi.fn(),
+				setHostedImageGenerationContext: vi.fn(),
 				setPromptRuntime: vi.fn(),
 				setWebSearchRoutingPlan: vi.fn(),
 			},
@@ -447,6 +462,7 @@ describe("Task.attemptApiRequest first chunk state", () => {
 				localAvailable: true,
 				remoteAdapterAvailable: false,
 			}),
+			hostedImageGenerationPlan: disabledHostedImageGenerationPlan,
 			explicitInstructions: { beginProviderAttempt: vi.fn(), createConsumePort: vi.fn(() => ({})) },
 		} as unknown as RequestApiScope
 		const projectCanonicalContext = vi.fn(() => [{ role: "user" as const, content: "repaired" }])
@@ -487,6 +503,7 @@ describe("Task.attemptApiRequest first chunk state", () => {
 			toolExecutor: {
 				setAllowedNativeToolNames: vi.fn(),
 				setExplicitInstructionConsumePort: vi.fn(),
+				setHostedImageGenerationContext: vi.fn(),
 				setPromptRuntime: vi.fn(),
 				setWebSearchRoutingPlan: vi.fn(),
 			},
@@ -522,6 +539,7 @@ describe("Task.attemptApiRequest first chunk state", () => {
 				localAvailable: true,
 				remoteAdapterAvailable: false,
 			}),
+			hostedImageGenerationPlan: disabledHostedImageGenerationPlan,
 			explicitInstructions: {
 				beginProviderAttempt: vi.fn(),
 				createConsumePort: vi.fn(() => ({})),
@@ -606,6 +624,7 @@ describe("Task.attemptApiRequest first chunk state", () => {
 			toolExecutor: {
 				setAllowedNativeToolNames: vi.fn(),
 				setExplicitInstructionConsumePort: vi.fn(),
+				setHostedImageGenerationContext: vi.fn(),
 				setPromptRuntime: vi.fn(),
 				setWebSearchRoutingPlan: vi.fn(),
 			},

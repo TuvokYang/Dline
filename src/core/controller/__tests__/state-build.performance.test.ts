@@ -84,6 +84,7 @@ function createFakeController(messages: ClineMessage[]): Record<string, unknown>
 			getApiConfiguration: () => ({}),
 			getGlobalStateKey: (key: string) => (key === "taskHistory" ? [] : undefined),
 			getGlobalSettingsKey: () => undefined,
+			getCanonicalSettingsKey: () => undefined,
 			getWorkspaceStateKey: () => undefined,
 			getRemoteConfigSettings: () => ({}),
 		},

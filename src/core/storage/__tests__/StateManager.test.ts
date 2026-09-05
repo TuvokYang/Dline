@@ -174,12 +174,29 @@ describe("StateManager — Per-Task Settings Isolation", () => {
 		})
 
 		it("returns the global image profile independently from plan and act profiles", () => {
+			// Separate plan/act models keep both bindings distinct; without it the
+			// unified binding collapses plan and act onto the same profile.
+			sm.setGlobalState("planActSeparateModelsSetting", true)
 			sm.setGlobalState("planModeProfile", "anthropic-plan")
 			sm.setGlobalState("actModeProfile", "openai-act")
 			sm.setGlobalState("imageProfile", "openai-images")
 
 			expect(sm.getApiConfiguration()).toMatchObject({
 				planModeProfile: "anthropic-plan",
+				actModeProfile: "openai-act",
+				imageProfile: "openai-images",
+			})
+		})
+
+		it("keeps the image profile while a unified binding collapses plan and act profiles", () => {
+			sm.setGlobalState("planActSeparateModelsSetting", false)
+			sm.setGlobalState("mode", "act")
+			sm.setGlobalState("planModeProfile", "anthropic-plan")
+			sm.setGlobalState("actModeProfile", "openai-act")
+			sm.setGlobalState("imageProfile", "openai-images")
+
+			expect(sm.getApiConfiguration()).toMatchObject({
+				planModeProfile: "openai-act",
 				actModeProfile: "openai-act",
 				imageProfile: "openai-images",
 			})

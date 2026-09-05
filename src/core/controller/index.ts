@@ -70,6 +70,8 @@ import { OcaAuthService } from "@/services/auth/oca/OcaAuthService"
 import { LogoutReason } from "@/services/auth/types"
 import { featureFlagsService } from "@/services/feature-flags"
 import { getDistinctId } from "@/services/logging/distinctId"
+import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import { telemetryService } from "@/services/telemetry"
 import { ClineExtensionContext } from "@/shared/cline"
 import { getAxiosSettings } from "@/shared/net"
@@ -446,16 +448,46 @@ export class Controller {
 				if (event.source === "settings" && this.task && settingsAffectPromptFreshness(event.commit.changedKeys)) {
 					const freshnessStartedAt = performance.now()
 					await this.task.flushPromptFreshnessInvalidation("settings")
-					Logger.debug(
-						`[SettingsPerf] phase=controller_callback taskId=${this.task.taskId} source=${event.source} keys=${changedKeys.join(",") || "none"} configureMs=${configureMs} freshnessMs=${Math.round(performance.now() - freshnessStartedAt)} totalMs=${Math.round(performance.now() - startedAt)} outcome=freshness_publish`,
+					recordPerfPhase(
+						PerfDomain.Settings,
+						"controller_callback",
+						performance.now() - startedAt,
+						{
+							source: event.source,
+							changedKeys: changedKeys.length,
+							configureMs,
+							freshnessMs: Math.round(performance.now() - freshnessStartedAt),
+							outcome: "freshness_publish",
+						},
+						{ taskId: this.task.taskId },
 					)
+					if (Logger.isDebugEnabled()) {
+						Logger.debug(
+							`[SettingsPerf] phase=controller_callback taskId=${this.task.taskId} source=${event.source} keys=${changedKeys.join(",") || "none"} configureMs=${configureMs} freshnessMs=${Math.round(performance.now() - freshnessStartedAt)} totalMs=${Math.round(performance.now() - startedAt)} outcome=freshness_publish`,
+						)
+					}
 					return
 				}
 				const publishStartedAt = performance.now()
 				await this.postStateToWebview()
-				Logger.debug(
-					`[SettingsPerf] phase=controller_callback taskId=${this.task?.taskId ?? "none"} source=${event.source} keys=${changedKeys.join(",") || "none"} configureMs=${configureMs} publishMs=${Math.round(performance.now() - publishStartedAt)} totalMs=${Math.round(performance.now() - startedAt)} outcome=state_publish`,
+				recordPerfPhase(
+					PerfDomain.Settings,
+					"controller_callback",
+					performance.now() - startedAt,
+					{
+						source: event.source,
+						changedKeys: changedKeys.length,
+						configureMs,
+						publishMs: Math.round(performance.now() - publishStartedAt),
+						outcome: "state_publish",
+					},
+					{ taskId: this.task?.taskId },
 				)
+				if (Logger.isDebugEnabled()) {
+					Logger.debug(
+						`[SettingsPerf] phase=controller_callback taskId=${this.task?.taskId ?? "none"} source=${event.source} keys=${changedKeys.join(",") || "none"} configureMs=${configureMs} publishMs=${Math.round(performance.now() - publishStartedAt)} totalMs=${Math.round(performance.now() - startedAt)} outcome=state_publish`,
+					)
+				}
 			},
 		})
 		this.authService = AuthService.getInstance(this)
@@ -718,9 +750,18 @@ export class Controller {
 		const initKind = historyItem ? "history" : task || images || files ? "new" : "empty"
 		const logInitStage = (phase: string, taskId = historyItem?.id ?? "pending", details = "") => {
 			const now = performance.now()
-			Logger.debug(
-				`[TaskInitPerf] phase=${phase} taskId=${taskId} kind=${initKind} durationMs=${Math.round(now - stageStartedAt)} elapsedMs=${Math.round(now - initStartedAt)}${details ? ` ${details}` : ""}`,
+			recordPerfPhase(
+				PerfDomain.TaskInit,
+				"stage",
+				now - stageStartedAt,
+				{ stage: phase, kind: initKind, elapsedMs: Math.round(now - initStartedAt) },
+				{ taskId },
 			)
+			if (Logger.isDebugEnabled()) {
+				Logger.debug(
+					`[TaskInitPerf] phase=${phase} taskId=${taskId} kind=${initKind} durationMs=${Math.round(now - stageStartedAt)} elapsedMs=${Math.round(now - initStartedAt)}${details ? ` ${details}` : ""}`,
+				)
+			}
 			stageStartedAt = now
 		}
 		// Fire-and-forget: We intentionally don't await fetchRemoteConfig here.
@@ -2304,9 +2345,18 @@ export class Controller {
 		const taskId = this.task?.taskId
 		const logCloseStage = (phase: string, details = "") => {
 			const now = performance.now()
-			Logger.debug(
-				`[ControllerClosePerf] phase=${phase} taskId=${taskId ?? "none"} durationMs=${Math.round(now - stageStartedAt)} elapsedMs=${Math.round(now - startedAt)}${details ? ` ${details}` : ""}`,
+			recordPerfPhase(
+				PerfDomain.ControllerClose,
+				"stage",
+				now - stageStartedAt,
+				{ stage: phase, elapsedMs: Math.round(now - startedAt) },
+				{ taskId },
 			)
+			if (Logger.isDebugEnabled()) {
+				Logger.debug(
+					`[ControllerClosePerf] phase=${phase} taskId=${taskId ?? "none"} durationMs=${Math.round(now - stageStartedAt)} elapsedMs=${Math.round(now - startedAt)}${details ? ` ${details}` : ""}`,
+				)
+			}
 			stageStartedAt = now
 		}
 		if (taskId && options?.clearPanelState) {

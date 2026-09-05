@@ -16,6 +16,8 @@ import { isLocalSearchEngineId } from "@shared/web-search"
 import { ClineEnv } from "@/config"
 import { fetchRemoteConfig } from "@/core/storage/remote-config/fetch"
 import { clearRemoteConfig } from "@/core/storage/remote-config/utils"
+import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
 import { isChatInputSendShortcut } from "@/shared/ChatInputSendShortcut"
 import { McpDisplayMode } from "@/shared/McpDisplayMode"
 import { Logger } from "@/shared/services/Logger"
@@ -527,16 +529,39 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		// Post updated state to webview
 		const publishStartedAt = performance.now()
 		await controller.postStateToWebview()
-		Logger.debug(
-			`[SettingsPerf] phase=rpc_complete taskId=${controller.task?.taskId ?? "none"} fields=${fields.join(",") || "none"} flushMs=${flushMs} configureMs=${configureMs} publishMs=${Math.round(performance.now() - publishStartedAt)} totalMs=${Math.round(performance.now() - startedAt)}`,
+		recordPerfPhase(
+			PerfDomain.Settings,
+			"rpc_complete",
+			performance.now() - startedAt,
+			{
+				fields: fields.length,
+				flushMs,
+				configureMs,
+				publishMs: Math.round(performance.now() - publishStartedAt),
+			},
+			{ taskId: controller.task?.taskId },
 		)
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[SettingsPerf] phase=rpc_complete taskId=${controller.task?.taskId ?? "none"} fields=${fields.join(",") || "none"} flushMs=${flushMs} configureMs=${configureMs} publishMs=${Math.round(performance.now() - publishStartedAt)} totalMs=${Math.round(performance.now() - startedAt)}`,
+			)
+		}
 
 		return Empty.create()
 	} catch (error) {
 		Logger.error("Failed to update settings:", error)
-		Logger.debug(
-			`[SettingsPerf] phase=rpc_error taskId=${controller.task?.taskId ?? "none"} fields=${fields.join(",") || "none"} totalMs=${Math.round(performance.now() - startedAt)}`,
+		recordPerfPhase(
+			PerfDomain.Settings,
+			"rpc_error",
+			performance.now() - startedAt,
+			{ fields: fields.length },
+			{ taskId: controller.task?.taskId },
 		)
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(
+				`[SettingsPerf] phase=rpc_error taskId=${controller.task?.taskId ?? "none"} fields=${fields.join(",") || "none"} totalMs=${Math.round(performance.now() - startedAt)}`,
+			)
+		}
 		throw error
 	}
 }

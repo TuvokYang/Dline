@@ -525,7 +525,9 @@ describe("Task request API boundary", () => {
 		const request = extractMethod(source, "async *attemptApiRequest(", "// Block identity is now assigned")
 
 		expect(builder).toContain("const runtime = resolveFrozenPromptRuntime(frozenPrompt, promptContext)")
-		expect(builder).toContain("const serverTools = runtime.webSearchRoutingPlan.serverTools")
+		expect(builder).toContain("const serverTools = Object.freeze([")
+		expect(builder).toContain("...runtime.webSearchRoutingPlan.serverTools")
+		expect(builder).toContain("...requestScope.hostedImageGenerationPlan.serverTools")
 		expect(builder).toContain("return { systemPrompt, messages, tools, serverTools, runtime, providerOutputCap: undefined }")
 		expect(request).toContain("api.createMessage(systemPrompt, apiConversationMessages, tools, {")
 		expect(request).toContain("serverTools,")
