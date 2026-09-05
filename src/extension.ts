@@ -58,6 +58,8 @@ import { ExtensionRegistryInfo } from "./registry"
 import { AuthService } from "./services/auth/AuthService"
 import { LogoutReason } from "./services/auth/types"
 import { DlineRuntimeFileManager } from "./services/runtime-files"
+import { recordPerfPhase } from "./services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "./services/runtime-telemetry/instrumentation/perf-domains"
 import { telemetryService } from "./services/telemetry"
 import { SharedUriHandler, TASK_URI_PATH } from "./services/uri/SharedUriHandler"
 import { ShowMessageType } from "./shared/proto/dline/host/window"
@@ -71,11 +73,23 @@ const RELOAD_WINDOW_PROMPT_VERSION_KEY = "dlineReloadWindowPromptVersion"
 // for all-platform should be registered in common.ts.
 export async function activate(context: vscode.ExtensionContext) {
 	const activationStartTime = performance.now()
+	// Each step records its own elapsed offset so a slow startup can be
+	// attributed to a stage without needing debug logging to be enabled.
+	const recordActivationStage = (stage: string): number => {
+		const elapsedMs = performance.now() - activationStartTime
+		recordPerfPhase(PerfDomain.Activation, "stage", elapsedMs, { stage, entry: "extension_activate" })
+		return elapsedMs
+	}
 	Logger.debug("[Dline] extension activate: start")
 
 	// 1. Set up HostProvider for VSCode
 	// IMPORTANT: This must be done before any service can be registered
-	Logger.debug(`[Dline] extension activate: setupHostProvider +${Math.round(performance.now() - activationStartTime)}ms`)
+	{
+		const elapsedMs = recordActivationStage("setupHostProvider")
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(`[Dline] extension activate: setupHostProvider +${Math.round(elapsedMs)}ms`)
+		}
+	}
 	setupHostProvider(context)
 	if (IS_DEV && !IS_E2E && DEV_WORKSPACE_FOLDER) {
 		registerExtensionReloadWatcher(context, DEV_WORKSPACE_FOLDER)
@@ -88,29 +102,70 @@ export async function activate(context: vscode.ExtensionContext) {
 	)
 
 	// 2. Migrate legacy Cline data before Dline cleanup can create target files.
-	Logger.debug(`[Dline] extension activate: before migrate +${Math.round(performance.now() - activationStartTime)}ms`)
+	{
+		const elapsedMs = recordActivationStage("beforeMigrate")
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(`[Dline] extension activate: before migrate +${Math.round(elapsedMs)}ms`)
+		}
+	}
 	await migrateFromClineWithProgress(context)
-	Logger.debug(`[Dline] extension activate: after migrate +${Math.round(performance.now() - activationStartTime)}ms`)
+	{
+		const elapsedMs = recordActivationStage("afterMigrate")
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(`[Dline] extension activate: after migrate +${Math.round(elapsedMs)}ms`)
+		}
+	}
 
 	// 3. Clean up legacy data patterns within VSCode's native storage.
 	// Must run BEFORE the file export so we copy clean state.
-	Logger.debug(`[Dline] extension activate: before cleanupLegacy +${Math.round(performance.now() - activationStartTime)}ms`)
+	{
+		const elapsedMs = recordActivationStage("beforeCleanupLegacy")
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(`[Dline] extension activate: before cleanupLegacy +${Math.round(elapsedMs)}ms`)
+		}
+	}
 	await cleanupLegacyVSCodeStorage(context)
-	Logger.debug(`[Dline] extension activate: after cleanupLegacy +${Math.round(performance.now() - activationStartTime)}ms`)
+	{
+		const elapsedMs = recordActivationStage("afterCleanupLegacy")
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(`[Dline] extension activate: after cleanupLegacy +${Math.round(elapsedMs)}ms`)
+		}
+	}
 
 	// 4. One-time export of VSCode's native storage to shared file-backed stores.
 	// After this, all platforms (VSCode, CLI, JetBrains) read from ~/.cline/data/.
 	const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
 	const storageContext = createStorageContext({ workspacePath })
-	Logger.debug(`[Dline] extension activate: before exportVSCode +${Math.round(performance.now() - activationStartTime)}ms`)
+	{
+		const elapsedMs = recordActivationStage("beforeExportVSCode")
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(`[Dline] extension activate: before exportVSCode +${Math.round(elapsedMs)}ms`)
+		}
+	}
 	await exportVSCodeStorageToSharedFiles(context, storageContext)
-	Logger.debug(`[Dline] extension activate: after exportVSCode +${Math.round(performance.now() - activationStartTime)}ms`)
+	{
+		const elapsedMs = recordActivationStage("afterExportVSCode")
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(`[Dline] extension activate: after exportVSCode +${Math.round(elapsedMs)}ms`)
+		}
+	}
 
 	// 4. Register services and perform common initialization
 	// IMPORTANT: Must be done after host provider is setup and migrations are complete
-	Logger.debug(`[Dline] extension activate: before initialize +${Math.round(performance.now() - activationStartTime)}ms`)
+	{
+		const elapsedMs = recordActivationStage("beforeInitialize")
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(`[Dline] extension activate: before initialize +${Math.round(elapsedMs)}ms`)
+		}
+	}
 	await initialize(storageContext)
-	Logger.debug(`[Dline] extension activate: after initialize +${Math.round(performance.now() - activationStartTime)}ms`)
+	{
+		const elapsedMs = performance.now() - activationStartTime
+		recordPerfPhase(PerfDomain.Activation, "extension_activate", elapsedMs, { stage: "afterInitialize" })
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(`[Dline] extension activate: after initialize +${Math.round(elapsedMs)}ms`)
+		}
+	}
 	if (!webview.hasController()) {
 		Logger.error("[Dline] Activation stopped because core storage initialization failed")
 		return

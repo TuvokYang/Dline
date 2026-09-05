@@ -482,8 +482,17 @@ export class GitOperations {
 					stageFiles.map((file) => file.relative),
 					taskId,
 				)
-				const durationMs = Math.round(performance.now() - startTime)
-				Logger.debug(`Checkpoint add operation completed in ${durationMs}ms`)
+				const durationMs = performance.now() - startTime
+				recordPerfPhase(
+					PerfDomain.Checkpoint,
+					"add",
+					durationMs,
+					{ mode, staged: staging.stagedCount, rejected: staging.rejectedPaths.length },
+					{ taskId },
+				)
+				if (Logger.isDebugEnabled()) {
+					Logger.debug(`Checkpoint add operation completed in ${Math.round(durationMs)}ms`)
+				}
 				return {
 					// Only a total staging failure is a failure: partial progress still
 					// produces a usable checkpoint once the bad paths are dropped.
@@ -498,9 +507,12 @@ export class GitOperations {
 				await git.raw(["read-tree", "--empty"])
 			}
 			await git.add([".", "--ignore-errors"])
-			Logger.debug(`[Task ${taskId}] Checkpoint add operation: staged workspace via ${mode}`)
-			const durationMs = Math.round(performance.now() - startTime)
-			Logger.debug(`Checkpoint add operation completed in ${durationMs}ms`)
+			const durationMs = performance.now() - startTime
+			recordPerfPhase(PerfDomain.Checkpoint, "add", durationMs, { mode, staged: 0, rejected: 0 }, { taskId })
+			if (Logger.isDebugEnabled()) {
+				Logger.debug(`[Task ${taskId}] Checkpoint add operation: staged workspace via ${mode}`)
+				Logger.debug(`Checkpoint add operation completed in ${Math.round(durationMs)}ms`)
+			}
 			return { success: true, stagedCount: 0, rejectedPaths: [] }
 		} catch (error) {
 			Logger.error(`[Task ${taskId}] Checkpoint add operation failed (${mode}):`, error)

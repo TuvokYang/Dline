@@ -24,7 +24,7 @@ const LEGACY_PHASES: Record<PerfDomain, readonly string[]> = {
 	// [TerminalPerf] warm-pool phases in VscodeTerminalPoolRuntime.ts
 	[PerfDomain.TerminalPool]: ["warm_process_started", "warm_shell_integration_ready", "prewarm_failed"],
 	// [CheckpointPerf] in CheckpointGitOperations.ts
-	[PerfDomain.Checkpoint]: ["existing_shadow_baseline", "commit", "restore"],
+	[PerfDomain.Checkpoint]: ["existing_shadow_baseline", "add", "commit", "restore"],
 	// [HookDiscoveryPerf] in hook-factory.ts and disk.ts
 	[PerfDomain.HookDiscovery]: ["file_check", "has_hook_scan", "global_directory", "directories", "workspace_directories"],
 	// [SettingsPerf] in controller/index.ts, StateManager.ts and updateSettings.ts
@@ -64,7 +64,7 @@ const LEGACY_PHASES: Record<PerfDomain, readonly string[]> = {
 	// [FileLockPerf] in FileLock.ts
 	[PerfDomain.FileLock]: ["acquire"],
 	// Activation timings previously logged without a [*Perf] prefix
-	[PerfDomain.Activation]: ["extension_activate", "host_bridge_ready", "controller_ready"],
+	[PerfDomain.Activation]: ["stage", "extension_activate", "common_initialize"],
 }
 
 describe("perf domain catalogue", () => {

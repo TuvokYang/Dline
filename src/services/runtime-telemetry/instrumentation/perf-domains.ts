@@ -52,7 +52,7 @@ export const PERF_PHASES = {
 		"shell_wait_complete",
 	],
 	[PerfDomain.TerminalPool]: ["warm_process_started", "warm_shell_integration_ready", "prewarm_failed"],
-	[PerfDomain.Checkpoint]: ["existing_shadow_baseline", "commit", "restore"],
+	[PerfDomain.Checkpoint]: ["existing_shadow_baseline", "add", "commit", "restore"],
 	[PerfDomain.HookDiscovery]: ["file_check", "has_hook_scan", "global_directory", "directories", "workspace_directories"],
 	[PerfDomain.Settings]: ["controller_callback", "sync_callback", "sync_broadcast", "state_flush", "rpc_complete", "rpc_error"],
 	[PerfDomain.SettingsRepository]: ["mutate_complete", "reconcile", "listener", "publish"],
@@ -77,7 +77,10 @@ export const PERF_PHASES = {
 	[PerfDomain.PromptFreshness]: ["drain_complete", "reevaluate"],
 	[PerfDomain.PromptBuild]: ["capability_context"],
 	[PerfDomain.FileLock]: ["acquire"],
-	[PerfDomain.Activation]: ["extension_activate", "host_bridge_ready", "controller_ready"],
+	// Activation reports each startup step as one `stage` sample carrying a
+	// `stage` dimension, plus one total per entry point. The per-step form
+	// mirrors `task_init` so both startup paths aggregate the same way.
+	[PerfDomain.Activation]: ["stage", "extension_activate", "common_initialize"],
 } as const satisfies Record<PerfDomain, readonly string[]>
 
 /** Phase names valid for `D`. */

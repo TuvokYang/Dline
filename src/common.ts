@@ -18,6 +18,8 @@ import { ErrorService } from "./services/error"
 import { featureFlagsService } from "./services/feature-flags"
 import { getDistinctId } from "./services/logging/distinctId"
 import { DlineRuntimeFileManager } from "./services/runtime-files"
+import { recordPerfPhase } from "./services/runtime-telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "./services/runtime-telemetry/instrumentation/perf-domains"
 import { telemetryService } from "./services/telemetry"
 import { PostHogClientProvider } from "./services/telemetry/providers/posthog/PostHogClientProvider"
 import { cleanupTestMode } from "./services/test/TestMode"
@@ -36,9 +38,21 @@ import { arePathsEqual } from "./utils/path"
  */
 export async function initialize(storageContext: StorageContext): Promise<WebviewProvider> {
 	const initStart = performance.now()
+	// Mirrors the extension activate path: every step publishes its elapsed
+	// offset so a slow initialization is attributable without debug logging.
+	const recordInitStage = (stage: string): number => {
+		const elapsedMs = performance.now() - initStart
+		recordPerfPhase(PerfDomain.Activation, "stage", elapsedMs, { stage, entry: "common_initialize" })
+		return elapsedMs
+	}
 	Logger.debug("[Dline] common.initialize: start")
 	// Configure the shared Logging class to use HostProvider's output channels and debug logger
-	Logger.debug(`[Dline] common.initialize: Logger configured +${Math.round(performance.now() - initStart)}ms`)
+	{
+		const elapsedMs = recordInitStage("loggerConfigured")
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(`[Dline] common.initialize: Logger configured +${Math.round(elapsedMs)}ms`)
+		}
+	}
 	Logger.subscribe((msg: string) => HostProvider.get().logToChannel(msg)) // File system logging
 	Logger.subscribe((msg: string) => {
 		HostProvider.env.debugLog({ value: msg }).catch((err: unknown) => {
@@ -57,14 +71,34 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 	// This must be done before any other code that calls ClineEnv.config()
 	// Throws ClineConfigurationError if config file exists but is invalid
 	const { ClineEndpoint } = await import("./config")
-	Logger.debug(`[Dline] common.initialize: before ClineEndpoint +${Math.round(performance.now() - initStart)}ms`)
+	{
+		const elapsedMs = recordInitStage("beforeClineEndpoint")
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(`[Dline] common.initialize: before ClineEndpoint +${Math.round(elapsedMs)}ms`)
+		}
+	}
 	await ClineEndpoint.initialize(HostProvider.get().extensionFsPath)
-	Logger.debug(`[Dline] common.initialize: after ClineEndpoint +${Math.round(performance.now() - initStart)}ms`)
+	{
+		const elapsedMs = recordInitStage("afterClineEndpoint")
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(`[Dline] common.initialize: after ClineEndpoint +${Math.round(elapsedMs)}ms`)
+		}
+	}
 
 	try {
-		Logger.debug(`[Dline] common.initialize: before StateManager +${Math.round(performance.now() - initStart)}ms`)
+		{
+			const elapsedMs = recordInitStage("beforeStateManager")
+			if (Logger.isDebugEnabled()) {
+				Logger.debug(`[Dline] common.initialize: before StateManager +${Math.round(elapsedMs)}ms`)
+			}
+		}
 		await StateManager.initialize(storageContext)
-		Logger.debug(`[Dline] common.initialize: after StateManager +${Math.round(performance.now() - initStart)}ms`)
+		{
+			const elapsedMs = recordInitStage("afterStateManager")
+			if (Logger.isDebugEnabled()) {
+				Logger.debug(`[Dline] common.initialize: after StateManager +${Math.round(elapsedMs)}ms`)
+			}
+		}
 	} catch (error) {
 		Logger.error("[Dline] CRITICAL: Failed to initialize StateManager:", error)
 		HostProvider.window.showMessage({
@@ -91,7 +125,12 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 	// PostHog client provider disabled - no telemetry data upload
 
 	// =============== Webview services ===============
-	Logger.debug(`[Dline] common.initialize: before createWebview +${Math.round(performance.now() - initStart)}ms`)
+	{
+		const elapsedMs = recordInitStage("beforeCreateWebview")
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(`[Dline] common.initialize: before createWebview +${Math.round(elapsedMs)}ms`)
+		}
+	}
 	const webview = HostProvider.get().createWebviewProvider()
 	webview.ensureController()
 
@@ -104,7 +143,12 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 		webview.controller?.postStateToWebview()
 	})
 
-	Logger.debug(`[Dline] common.initialize: after ensureController +${Math.round(performance.now() - initStart)}ms`)
+	{
+		const elapsedMs = recordInitStage("afterEnsureController")
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(`[Dline] common.initialize: after ensureController +${Math.round(elapsedMs)}ms`)
+		}
+	}
 
 	const stateManager = StateManager.get()
 	// Non-blocking announcement check and display
@@ -123,7 +167,13 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 
 	telemetryService.captureExtensionActivated()
 
-	Logger.debug(`[Dline] common.initialize: done +${Math.round(performance.now() - initStart)}ms`)
+	{
+		const elapsedMs = performance.now() - initStart
+		recordPerfPhase(PerfDomain.Activation, "common_initialize", elapsedMs, { stage: "done" })
+		if (Logger.isDebugEnabled()) {
+			Logger.debug(`[Dline] common.initialize: done +${Math.round(elapsedMs)}ms`)
+		}
+	}
 	return webview
 }
 
