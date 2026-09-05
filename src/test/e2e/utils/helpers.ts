@@ -687,6 +687,11 @@ export const e2e = test
 					env: {
 						...electronEnvironment,
 						E2E_TEST: "true",
+						// Perf and diagnostic call sites publish to telemetry unconditionally
+						// but mirror to Logger.debug only when debug logging is on. Several
+						// suites assert against those mirrored lines, so raise the level here
+						// rather than removing the guards and paying the cost in production.
+						DLINE_LOG_LEVEL: "debug",
 						...(devWebview ? { IS_DEV: "true", DLINE_E2E_DEV_WEBVIEW: "true" } : {}),
 						DLINE_ENVIRONMENT: "local",
 						DLINE_DIR: dlineDir,

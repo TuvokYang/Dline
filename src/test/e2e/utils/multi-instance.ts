@@ -130,6 +130,9 @@ export class MultiInstanceLauncher {
 				...createElectronEnvironment(),
 				...portableEnvironment(isolation),
 				E2E_TEST: "true",
+				// Match the single-instance launcher: perf and diagnostic mirrors
+				// are debug-gated, and multi-window suites assert on them.
+				DLINE_LOG_LEVEL: "debug",
 				DLINE_ENVIRONMENT: "local",
 				DLINE_DIR: this.options.dlineDir,
 				DLINE_HOME_DIR: this.options.dlineDir,
