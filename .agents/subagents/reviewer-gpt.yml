@@ -1,5 +1,5 @@
 ---
-name: reviewer
+name: reviewer-gpt
 description: Research and exploration subagent
 tools:
   - read_file
