@@ -4,6 +4,7 @@ import { memo, useCallback, useMemo, useState } from "react"
 import { TypewriterText } from "@/components/chat/TypewriterText"
 import { cleanPathPrefix } from "@/components/common/CodeAccordian"
 import { Button } from "@/components/ui/button"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { FileServiceClient } from "@/services/grpc-client"
 import { getIconByToolName, getToolsNotInCurrentActivities, isLowStakesTool } from "../../utils/messageUtils"
@@ -14,12 +15,23 @@ interface ToolGroupRendererProps {
 	isLastGroup: boolean
 }
 
+/**
+ * One tool entry rendered two ways: a compact line that fits the chat column,
+ * and the full text shown on hover.
+ */
+export interface ToolItemText {
+	/** Shortened for the row; paths keep their tail so the file name stays visible. */
+	displayText: string
+	/** Untruncated text for the tooltip, safe to select and copy. */
+	tooltipText: string
+}
+
 interface ToolWithReasoning {
 	tool: ClineMessage
 	parsedTool: ClineSayTool
 	reasoning?: string
 	isActive?: boolean
-	activityText?: string
+	activityText?: ToolItemText
 }
 
 const EXPANDABLE_TOOLS = new Set([
@@ -30,20 +42,103 @@ const EXPANDABLE_TOOLS = new Set([
 	"findReferences",
 ])
 
-// Helper to format activity text for active items (from RequestStartRow logic)
-const getActivityText = (tool: ClineSayTool): string | null => {
-	const cleanedPath = cleanPathPrefix(tool.path || "")
-	const formatSearchRegex = (regex: string, path: string, filePattern?: string): string => {
-		const cleanedPath = cleanPathPrefix(path)
-		const terms = regex
-			.split("|")
-			.map((t) => t.trim().replace(/\\b/g, "").replace(/\\s\?/g, " "))
-			.filter(Boolean)
-			.join(" | ")
-		return filePattern && filePattern !== "*"
-			? `"${terms}" in ${cleanedPath}/ (${filePattern})`
-			: `"${terms}" in ${cleanedPath}/`
+/** Path segments kept when shortening a path for the row. */
+const PATH_TAIL_SEGMENTS = 3
+/** Search terms shown before collapsing the rest into "+N". */
+const SEARCH_TERM_LIMIT = 3
+
+/**
+ * Shorten a path by keeping its trailing segments, so the file name stays readable.
+ * A dropped head is marked with a leading ellipsis; a trailing slash is preserved
+ * to keep directories distinguishable from files.
+ */
+export function truncatePathHead(path: string, maxSegments = PATH_TAIL_SEGMENTS): string {
+	const segments = path.split("/").filter(Boolean)
+	if (segments.length <= maxSegments) {
+		return path
 	}
+	const trailingSlash = path.endsWith("/") ? "/" : ""
+	return `…/${segments.slice(-maxSegments).join("/")}${trailingSlash}`
+}
+
+/**
+ * Split an alternation regex into readable terms.
+ * Returns both the full list and a shortened form, so the row and its tooltip
+ * stay derived from one source.
+ */
+export function formatSearchTerms(regex: string, limit = SEARCH_TERM_LIMIT): ToolItemText {
+	const terms = regex
+		.split("|")
+		.map((term) => term.trim().replace(/\\b/g, "").replace(/\\s\?/g, " "))
+		.filter(Boolean)
+
+	const full = `"${terms.join(" | ")}"`
+	const short = terms.length > limit ? `"${terms.slice(0, limit).join(" | ")} +${terms.length - limit}"` : full
+	return { displayText: short, tooltipText: full }
+}
+
+/** Plural form for the units used in scale suffixes. */
+const UNIT_PLURALS = { match: "matches", ref: "refs" } as const
+
+/**
+ * Build the "(N matches · M files)" suffix shown after a search or reference target.
+ * An unknown count yields an empty suffix so the row never claims a wrong number;
+ * a truncated result set marks the count as a lower bound.
+ */
+export function formatScale(
+	count: number | undefined,
+	files: number | undefined,
+	unit: keyof typeof UNIT_PLURALS,
+	truncated = false,
+): string {
+	if (count == null) {
+		return ""
+	}
+	const amount = truncated ? `${count}+` : String(count)
+	const unitLabel = count === 1 && !truncated ? unit : UNIT_PLURALS[unit]
+	if (!files) {
+		return ` (${amount} ${unitLabel})`
+	}
+	return ` (${amount} ${unitLabel} · ${files} file${files === 1 ? "" : "s"})`
+}
+
+/** Render a search as `"terms" in dir/ (pattern) (N matches · M files)`. */
+export function formatSearchDisplay(tool: ClineSayTool): ToolItemText {
+	const terms = formatSearchTerms(tool.regex || "")
+	const cleanedPath = cleanPathPrefix(tool.path || "")
+	const pattern = tool.filePattern && tool.filePattern !== "*" ? ` (${tool.filePattern})` : ""
+	const scale = formatScale(tool.count, tool.files, "match", tool.truncated)
+
+	return {
+		displayText: `${terms.displayText} in ${truncatePathHead(cleanedPath)}/${pattern}${scale}`,
+		tooltipText: `${terms.tooltipText} in ${cleanedPath}/${pattern}${scale}`,
+	}
+}
+
+/**
+ * Render a reference lookup as `"symbol" in file (N refs · M files)`.
+ * Falls back to a generic target when the symbol could not be resolved, so the
+ * row is never empty.
+ */
+export function formatReferencesDisplay(tool: ClineSayTool): ToolItemText {
+	const target = tool.symbolName ? `"${tool.symbolName}"` : "references"
+	const cleanedPath = cleanPathPrefix(tool.path || "")
+	const scale = formatScale(tool.count, tool.files, "ref")
+
+	return {
+		displayText: `${target} in ${truncatePathHead(cleanedPath)}${scale}`,
+		tooltipText: `${target} in ${cleanedPath}${scale}`,
+	}
+}
+
+/**
+ * Text for a tool that is still running.
+ * Shares the completed-state formatters so the same operation reads the same
+ * way before and after it finishes.
+ */
+export function getActivityText(tool: ClineSayTool): ToolItemText | null {
+	const cleanedPath = cleanPathPrefix(tool.path || "")
+	const shortPath = truncatePathHead(cleanedPath)
 
 	switch (tool.tool) {
 		case "readFile": {
@@ -52,17 +147,33 @@ const getActivityText = (tool: ClineSayTool): string | null => {
 			}
 			const lineHint =
 				tool.readLineStart != null && tool.readLineEnd != null ? ` (lines ${tool.readLineStart}-${tool.readLineEnd})` : ""
-			return `Reading ${cleanedPath}${lineHint}...`
+			return {
+				displayText: `Reading ${shortPath}${lineHint}...`,
+				tooltipText: `Reading ${cleanedPath}${lineHint}`,
+			}
 		}
 		case "listFilesTopLevel":
 		case "listFilesRecursive":
-			return tool.path ? `Exploring ${cleanedPath}/...` : null
-		case "searchFiles":
-			return tool.regex && tool.path ? `Searching ${formatSearchRegex(tool.regex, tool.path, tool.filePattern)}...` : null
+			return tool.path ? { displayText: `Exploring ${shortPath}/...`, tooltipText: `Exploring ${cleanedPath}/` } : null
+		case "searchFiles": {
+			if (!tool.regex || !tool.path) {
+				return null
+			}
+			const search = formatSearchDisplay(tool)
+			return {
+				displayText: `Searching ${search.displayText}...`,
+				tooltipText: `Searching ${search.tooltipText}`,
+			}
+		}
 		case "findReferences":
-			return tool.path ? "Finding references..." : null
+			return tool.path
+				? {
+						displayText: `Finding references in ${shortPath}...`,
+						tooltipText: `Finding references in ${cleanedPath}`,
+					}
+				: null
 		case "listCodeDefinitionNames":
-			return tool.path ? `Analyzing ${cleanedPath}/...` : null
+			return tool.path ? { displayText: `Analyzing ${shortPath}/...`, tooltipText: `Analyzing ${cleanedPath}/` } : null
 		default:
 			return null
 	}
@@ -190,66 +301,28 @@ export const ToolGroupRenderer = memo(({ messages, allMessages, isLastGroup }: T
 
 					const isExpandable = EXPANDABLE_TOOLS.has(parsedTool.tool)
 					const isItemExpanded = expandedItems[tool.ts] ?? false
-					const isReferencesTool = parsedTool.tool === "findReferences"
 					const content = parsedTool.content || null
 
-					// Active items render with "Reading..." TypewriterText (match completed item structure exactly)
 					if (isActive && activityText) {
-						return (
-							<div className="min-w-0" key={tool.ts}>
-								{/* ACTIVE "READING..." ITEM STYLING - Modify vertical spacing here via py-0 and -my-0.5 */}
-								<Button
-									aria-label={isReferencesTool ? "Finding references" : undefined}
-									className="flex items-center gap-[3px] text-[13px] text-description py-[1px] min-w-0 max-w-full px-0 leading-tight -my-0.5"
-									disabled
-									size="icon"
-									title={isReferencesTool ? "Finding references" : undefined}
-									variant={isReferencesTool ? "icon" : "text"}>
-									<info.icon className="opacity-70 shrink-0 size-[12px]" />
-									{!isReferencesTool && (
-										<span className="flex-1 min-w-0 whitespace-nowrap overflow-hidden text-ellipsis text-left text-[13px]">
-											<TypewriterText speed={15} text={activityText} />
-										</span>
-									)}
-								</Button>
-							</div>
-						)
+						return <ToolItemRow icon={info.icon} isActive key={tool.ts} text={activityText} />
 					}
 
-					// Completed items render normally (clickable)
 					return (
 						<div className="min-w-0" key={tool.ts}>
-							<Button
-								aria-expanded={isReferencesTool ? isItemExpanded : undefined}
-								aria-label={isReferencesTool ? `${isItemExpanded ? "Hide" : "Show"} references` : undefined}
-								className="flex items-center gap-[3px] cursor-pointer text-[13px] text-description py-[1px] hover:text-link min-w-0 max-w-full px-0 leading-tight -my-0.5"
-								onClick={() => {
+							<ToolItemRow
+								ariaExpanded={isExpandable ? isItemExpanded : undefined}
+								icon={info.icon}
+								onActivate={() => {
 									if (isExpandable) {
 										handleItemToggle(tool.ts)
-									} else {
-										const filePathWithLine =
-											parsedTool.readLineStart != null
-												? `${info.path}:${parsedTool.readLineStart}`
-												: info.path
-										handleOpenFile(filePathWithLine)
+										return
 									}
+									const filePathWithLine =
+										parsedTool.readLineStart != null ? `${info.path}:${parsedTool.readLineStart}` : info.path
+									handleOpenFile(filePathWithLine)
 								}}
-								size="icon"
-								title={isReferencesTool ? `${isItemExpanded ? "Hide" : "Show"} references` : undefined}
-								variant={isReferencesTool ? "icon" : "text"}>
-								<info.icon className="opacity-70 shrink-0 size-[12px]" />
-								{!isReferencesTool && (
-									<span
-										className={cn(
-											"flex-1 min-w-0 whitespace-nowrap overflow-hidden text-ellipsis text-left [direction:rtl] text-[13px]",
-											{
-												"[direction:ltr]": !!info.displayText,
-											},
-										)}>
-										{`${info.displayText || cleanPathPrefix(info.path)}\u200E`}
-									</span>
-								)}
-							</Button>
+								text={info}
+							/>
 							{/* Expanded content for matches/references/folders/search */}
 							{isExpandable && isItemExpanded && (
 								<ExpandedToolContent
@@ -265,6 +338,45 @@ export const ToolGroupRenderer = memo(({ messages, allMessages, isLastGroup }: T
 		</div>
 	)
 })
+
+interface ToolItemRowProps {
+	icon: React.ComponentType<{ className?: string }>
+	text: ToolItemText
+	isActive?: boolean
+	ariaExpanded?: boolean
+	onActivate?: () => void
+}
+
+/**
+ * One tool line: icon plus shortened text, with the full text on hover.
+ * Active and completed entries share this row so both read the same way.
+ */
+function ToolItemRow({ icon: Icon, text, isActive, ariaExpanded, onActivate }: ToolItemRowProps) {
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					aria-expanded={ariaExpanded}
+					className={cn(
+						"flex items-center gap-[3px] text-[13px] text-description py-[1px] min-w-0 max-w-full px-0 leading-tight -my-0.5",
+						isActive ? "" : "cursor-pointer hover:text-link",
+					)}
+					disabled={isActive}
+					onClick={onActivate}
+					size="icon"
+					variant="text">
+					<Icon className="opacity-70 shrink-0 size-[12px]" />
+					<span className="flex-1 min-w-0 whitespace-nowrap overflow-hidden text-ellipsis text-left text-[13px]">
+						{isActive ? <TypewriterText speed={15} text={text.displayText} /> : text.displayText}
+					</span>
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent align="start" side="bottom">
+				<span className="select-text break-all font-mono text-[11px]">{text.tooltipText}</span>
+			</TooltipContent>
+		</Tooltip>
+	)
+}
 
 /**
  * Build tool items WITHOUT reasoning.
@@ -328,10 +440,26 @@ function parseToolSafe(text: string | undefined): ClineSayTool {
 	}
 }
 
+/** Everything a tool row needs: its icon, the path to open, and both text forms. */
+export interface ToolDisplayInfo extends ToolItemText {
+	icon: React.ComponentType<{ className?: string }>
+	/** Target passed to the file-open handler; unrelated to what is displayed. */
+	path: string
+	label: string
+}
+
+/** Text for a path-only entry: shortened in the row, complete in the tooltip. */
+function pathOnlyText(path: string): ToolItemText {
+	const cleaned = cleanPathPrefix(path)
+	return { displayText: truncatePathHead(cleaned), tooltipText: cleaned }
+}
+
 /**
- * Get display info for a tool.
+ * Describe one completed tool entry.
+ * Every branch produces both text forms, so the row never has to decide how to
+ * fall back when a formatter yields nothing.
  */
-function getToolDisplayInfo(tool: ClineSayTool) {
+export function getToolDisplayInfo(tool: ClineSayTool): ToolDisplayInfo | null {
 	const icon = getIconByToolName(tool.tool)
 	const filePath = tool.path || ""
 	const folderPath = `${filePath}/`
@@ -339,83 +467,66 @@ function getToolDisplayInfo(tool: ClineSayTool) {
 	switch (tool.tool) {
 		case "readFile": {
 			const lineNote =
-				tool.readLineStart != null && tool.readLineEnd != null ? `lines ${tool.readLineStart}-${tool.readLineEnd}` : null
+				tool.readLineStart != null && tool.readLineEnd != null ? ` · lines ${tool.readLineStart}-${tool.readLineEnd}` : ""
+			const cleaned = cleanPathPrefix(filePath)
 			return {
 				icon,
 				path: filePath,
 				label: "read",
-				displayText: lineNote ? `${cleanPathPrefix(filePath)} · ${lineNote}` : undefined,
+				displayText: `${truncatePathHead(cleaned)}${lineNote}`,
+				tooltipText: `${cleaned}${lineNote}`,
 			}
 		}
 		case "listFilesTopLevel":
-			return { icon, path: folderPath, label: "listed" }
+			return { icon, path: folderPath, label: "listed", ...pathOnlyText(folderPath) }
 		case "listFilesRecursive":
-			return { icon, path: folderPath, label: "listed recursively" }
+			return { icon, path: folderPath, label: "listed recursively", ...pathOnlyText(folderPath) }
 		case "listCodeDefinitionNames":
-			return { icon, path: folderPath, label: "definitions" }
+			return { icon, path: folderPath, label: "definitions", ...pathOnlyText(folderPath) }
 		case "searchFiles":
 			return {
 				icon,
 				path: folderPath,
 				label: `search: ${tool.regex}`,
-				displayText: formatSearchDisplay(tool.regex || "", filePath, tool.filePattern),
+				...formatSearchDisplay(tool),
 			}
 		case "findReferences":
 			return {
 				icon,
 				path: filePath,
 				label: "references",
+				...formatReferencesDisplay(tool),
 			}
 		case "renameSymbol": {
-			const newName = (tool as any).regex as string | undefined
-			const cnt = (tool as any).count as number | undefined
-			const fc = (tool as any).files as number | undefined
-			const preview = (tool as any).dryRun ? " (preview)" : ""
-			const summary = newName ? `→ "${newName}"` : ""
+			const newName = tool.regex
+			const preview = tool.dryRun ? " (preview)" : ""
+			const summary = newName ? ` → "${newName}"` : ""
+			const change = `${tool.count ?? "?"} changes in ${tool.files ?? "?"} files${preview}${summary}`
 			return {
 				icon,
 				path: filePath,
 				label: "rename",
-				displayText: `${cnt ?? "?"} changes in ${fc ?? "?"} files${preview}${summary}`,
+				displayText: change,
+				tooltipText: `${cleanPathPrefix(filePath)}\n${change}`,
 			}
 		}
 		case "replaceText": {
-			const find = (tool as any).regex as string | undefined
-			const cnt = (tool as any).count as number | undefined
-			const fc = (tool as any).files as number | undefined
-			const preview = (tool as any).dryRun ? " (preview)" : ""
+			const find = tool.regex
+			const preview = tool.dryRun ? " (preview)" : ""
+			const change = find
+				? `"${find}" → (${tool.count ?? "?"} in ${tool.files ?? "?"} files)${preview}`
+				: `${tool.count ?? "?"} changes in ${tool.files ?? "?"} files`
 			return {
 				icon,
 				path: filePath,
 				label: "replace",
-				displayText: find
-					? `"${find}" → (${cnt ?? "?"} in ${fc ?? "?"} files)${preview}`
-					: `${cnt ?? "?"} changes in ${fc ?? "?"} files`,
+				displayText: change,
+				tooltipText: `${cleanPathPrefix(filePath)}\n${change}`,
 			}
 		}
 		default:
 			return null
 	}
-}
-
-/**
- * Format search regex for display - simplify complex patterns
- */
-function formatSearchDisplay(regex: string, path: string, filePattern?: string): string {
-	// Split by | and clean up regex syntax
-	const terms = regex
-		.split("|")
-		.map((t) => t.trim().replace(/\\b/g, "").replace(/\\s\?/g, " "))
-		.filter(Boolean)
-
-	const termDisplay = terms.length > 3 ? `${terms.length} patterns` : `"${terms.join(" | ")}"`
-	let result = `${termDisplay} in ${cleanPathPrefix(path)}/`
-
-	if (filePattern && filePattern !== "*") {
-		result += ` (${filePattern})`
-	}
-
-	return result
 }
 
 /**

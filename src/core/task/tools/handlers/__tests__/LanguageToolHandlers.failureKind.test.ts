@@ -280,5 +280,28 @@ describe("language tool failure reporting", () => {
 			assert.equal(payload?.files, 1)
 			assert.ok(Array.isArray(payload?.references))
 		})
+
+		it("names the symbol at the reference column, not the first word of the line", async () => {
+			findReferences.mockResolvedValue({
+				references: [
+					{
+						filePath: path.resolve(CWD, "src/app.ts"),
+						// "export class ToolExecutor {" — ToolExecutor starts at 1-based column 14.
+						startLine: 45,
+						startCharacter: 14,
+						endLine: 45,
+						endCharacter: 26,
+						contextLine: "export class ToolExecutor {",
+					},
+				],
+				hasLspSupport: true,
+				errorMessage: "",
+				failureKind: LanguageFailureKind.LANGUAGE_FAILURE_KIND_NONE,
+			})
+
+			await new FindReferencesHandler().execute(createMockConfig(recorder), findReferencesBlock("src/app.ts"))
+
+			assert.equal(recorder.payloads.at(-1)?.symbolName, "ToolExecutor")
+		})
 	})
 })

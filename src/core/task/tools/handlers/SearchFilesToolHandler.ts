@@ -20,6 +20,85 @@ import type { TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 import { ToolResultUtils } from "../utils/ToolResultUtils"
 
+/**
+ * Match and file counts parsed out of one formatted ripgrep result block.
+ *
+ * `matches` and `files` are undefined when the output does not follow the
+ * expected shape, so the UI can omit the scale suffix instead of showing a
+ * wrong number. `truncated` means the backend capped the result set, making
+ * `matches` a lower bound.
+ */
+export interface SearchStats {
+	matches?: number
+	files?: number
+	truncated: boolean
+}
+
+/** Header emitted by formatResults when the result set hit the cap. */
+const TRUNCATED_HEADER = /^Showing first (\d+) of \1\+ results\./
+/** Header emitted by formatResults for a complete result set. */
+const TOTAL_HEADER = /^Found ([\d,]+) results?\./
+/** A file path line in formatted output is always followed by this separator. */
+const FILE_SEPARATOR = "│----"
+
+/**
+ * Parse match and file counts from the formatted output of `regexSearchFiles`.
+ *
+ * The format is an internal contract of src/services/ripgrep: a count header,
+ * a blank line, then per file a path line followed by `│----`. The same
+ * separator also appears between and after result blocks, so a file is only
+ * counted when its path line is preceded by a blank line.
+ *
+ * Unrecognized output yields undefined counts rather than zero.
+ */
+export function parseSearchStats(output: string): SearchStats {
+	const lines = output.split("\n")
+	const header = lines[0] ?? ""
+
+	const truncatedMatch = header.match(TRUNCATED_HEADER)
+	const totalMatch = header.match(TOTAL_HEADER)
+	const countText = truncatedMatch?.[1] ?? totalMatch?.[1]
+	if (countText === undefined) {
+		return { truncated: false }
+	}
+
+	const matches = Number.parseInt(countText.replace(/,/g, ""), 10)
+
+	let files = 0
+	for (let i = 1; i < lines.length - 1; i++) {
+		const isPathLine = lines[i] !== "" && lines[i] !== FILE_SEPARATOR
+		if (isPathLine && lines[i - 1] === "" && lines[i + 1] === FILE_SEPARATOR) {
+			files++
+		}
+	}
+
+	return { matches, files, truncated: Boolean(truncatedMatch) }
+}
+
+/**
+ * Combine per-workspace stats into one payload-level summary.
+ *
+ * Counts stay undefined unless at least one workspace reported usable numbers,
+ * so a fully unparseable search does not render as "0 matches".
+ */
+function aggregateSearchStats(stats: SearchStats[]): SearchStats {
+	let matches: number | undefined
+	let files: number | undefined
+	let truncated = false
+
+	for (const stat of stats) {
+		if (stat.matches != null) {
+			matches = (matches ?? 0) + stat.matches
+		}
+		if (stat.files != null) {
+			files = (files ?? 0) + stat.files
+		}
+		truncated ||= stat.truncated
+	}
+
+	return { matches, files, truncated }
+}
+
 export class SearchFilesToolHandler implements IFullyManagedTool {
 	readonly name = ClineDefaultTool.SEARCH
 
@@ -97,15 +176,13 @@ export class SearchFilesToolHandler implements IFullyManagedTool {
 				config.services.ignoreController,
 			)
 
-			// Parse the result count from the first line
-			const firstLine = workspaceResults.split("\n")[0]
-			const resultMatch = firstLine.match(/Found (\d+) result/)
-			const resultCount = resultMatch ? Number.parseInt(resultMatch[1], 10) : 0
+			const stats = parseSearchStats(workspaceResults)
 
 			return {
 				workspaceName,
 				workspaceResults,
-				resultCount,
+				resultCount: stats.matches ?? 0,
+				stats,
 				success: true,
 			}
 		} catch (error) {
@@ -115,6 +192,7 @@ export class SearchFilesToolHandler implements IFullyManagedTool {
 				workspaceName,
 				workspaceResults: "",
 				resultCount: 0,
+				stats: { truncated: false } satisfies SearchStats,
 				success: false,
 			}
 		}
@@ -129,6 +207,7 @@ export class SearchFilesToolHandler implements IFullyManagedTool {
 			workspaceName?: string
 			workspaceResults: string
 			resultCount: number
+			stats: SearchStats
 			success: boolean
 		}>,
 		searchPaths: Array<{ absolutePath: string; workspaceName?: string }>,
@@ -306,6 +385,7 @@ export class SearchFilesToolHandler implements IFullyManagedTool {
 
 		// Format and combine results
 		const results = this.formatSearchResults(config, searchResults, searchPaths)
+		const stats = aggregateSearchStats(searchResults.filter((result) => result.success).map((result) => result.stats))
 
 		// Only reset after a successful operation so repeated failures
 		// accumulate toward the yolo-mode mistake limit.
@@ -339,6 +419,9 @@ export class SearchFilesToolHandler implements IFullyManagedTool {
 			content: results,
 			regex: regex,
 			filePattern: filePattern,
+			count: stats.matches,
+			files: stats.files,
+			truncated: stats.truncated,
 			operationIsLocatedInWorkspace: await isLocatedInWorkspace(parsedPath),
 		} satisfies ClineSayTool
 

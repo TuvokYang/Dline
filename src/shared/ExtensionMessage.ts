@@ -584,6 +584,8 @@ export interface ClineSayTool {
 	files?: number
 	/** Change/reference count for batch tools. */
 	count?: number
+	/** True when the backend capped the result set, so count is a lower bound. */
+	truncated?: boolean
 	/** Whether the operation is a dry-run preview. */
 	dryRun?: boolean
 	/** Structured payload for load_mcp/load_skill/load_workflow rendering. */

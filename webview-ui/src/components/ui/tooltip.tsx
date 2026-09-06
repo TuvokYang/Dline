@@ -39,7 +39,7 @@ function TooltipContent({
 				data-slot="tooltip-content"
 				sideOffset={sideOffset}
 				{...props}>
-				<span className="leading-tight text-ellipsis p-2">{children}</span>
+				<span className="leading-tight text-ellipsis p-2 select-text">{children}</span>
 				{showArrow && (
 					<TooltipPrimitive.Arrow
 						className={cn(

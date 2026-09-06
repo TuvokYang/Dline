@@ -89,8 +89,9 @@ export class FindReferencesHandler implements IFullyManagedTool {
 				context: ref.contextLine,
 			}))
 
-			// Infer symbol name from first reference's context line at the given character
-			const symbolName = extractSymbolAt(r.references[0].contextLine, 1)
+			// Infer the symbol from the first reference's own column, not the start of its line.
+			const firstRef = r.references[0]
+			const symbolName = extractSymbolAt(firstRef.contextLine, firstRef.startCharacter)
 
 			// Build human-readable content
 			const grouped = new Map<string, string[]>()
@@ -133,8 +134,11 @@ export class FindReferencesHandler implements IFullyManagedTool {
 /**
  * Extract a symbol name from a context line at the given 1-based character offset.
  * Returns the word starting at that position, or empty string if not found.
+ *
+ * The host reports 1-based columns (see hosts/vscode/hostbridge/language/findReferences.ts),
+ * so callers pass ReferenceLocation.startCharacter unchanged.
  */
-function extractSymbolAt(contextLine: string, character: number): string {
+export function extractSymbolAt(contextLine: string, character: number): string {
 	const idx = character - 1
 	if (idx < 0 || idx >= contextLine.length) return ""
 	const substr = contextLine.substring(idx)
