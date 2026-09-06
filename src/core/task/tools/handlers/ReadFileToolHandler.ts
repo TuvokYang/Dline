@@ -1,5 +1,6 @@
 import path from "node:path"
 import { resolveProvider } from "@core/api"
+import { isTaskReadScopePath } from "@core/artifacts/runtime"
 import type { ToolUse } from "@core/assistant-message"
 import { formatResponse } from "@core/prompts/responses"
 import { getWorkspaceBasename, resolveWorkspacePath } from "@core/workspace"
@@ -122,6 +123,13 @@ function buildReadResponse(block: ToolUse, fileContent: FileContentResult, prefi
 	return prefix ? `${prefix}\n${text}` : text
 }
 
+async function isProjectScopedRead(config: TaskConfig, requestedPath: string, absolutePath?: string): Promise<boolean> {
+	if (await isLocatedInWorkspace(requestedPath)) return true
+	const resolvedPath =
+		absolutePath ?? (path.isAbsolute(requestedPath) ? path.resolve(requestedPath) : path.resolve(config.cwd, requestedPath))
+	return isTaskReadScopePath(config.taskId, resolvedPath)
+}
+
 async function emitReadFileToolUiComplete(
 	config: TaskConfig,
 	sharedMessageProps: ClineSayTool,
@@ -171,7 +179,7 @@ export class ReadFileToolHandler implements IFullyManagedTool {
 			tool: "readFile",
 			path: getReadablePath(config.cwd, uiHelpers.removeClosingTag(block, "path", relPath)),
 			content: undefined,
-			operationIsLocatedInWorkspace: await isLocatedInWorkspace(relPath),
+			operationIsLocatedInWorkspace: relPath ? await isProjectScopedRead(config, relPath) : false,
 		}
 
 		const partialMessage = JSON.stringify(sharedMessageProps)
@@ -232,7 +240,7 @@ export class ReadFileToolHandler implements IFullyManagedTool {
 			tool: "readFile",
 			path: getReadablePath(config.cwd, displayPath),
 			content: absolutePath,
-			operationIsLocatedInWorkspace: await isLocatedInWorkspace(relPath!),
+			operationIsLocatedInWorkspace: await isProjectScopedRead(config, relPath!, absolutePath),
 		} satisfies ClineSayTool
 
 		const completeMessage = JSON.stringify(sharedMessageProps)

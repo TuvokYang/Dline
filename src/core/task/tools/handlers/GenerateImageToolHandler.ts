@@ -1,3 +1,4 @@
+import { resolveTaskArtifactPath } from "@core/artifacts/runtime"
 import type { ToolUse } from "@core/assistant-message"
 import type {
 	ImageBackground,
@@ -10,10 +11,7 @@ import { ImageGenerationError } from "@core/image-generation/contracts"
 import { DEFAULT_IMAGE_GENERATION_SIZE } from "@core/image-generation/ImageGenerationSizes"
 import { formatResponse } from "@core/prompts/responses"
 import type { ClineAsk, ClineSayTool } from "@shared/ExtensionMessage"
-import {
-	IMAGE_GENERATION_PRESENTATION_SCHEMA_VERSION,
-	type ImageGenerationPresentationV1,
-} from "@shared/image-generation"
+import { IMAGE_GENERATION_PRESENTATION_SCHEMA_VERSION, type ImageGenerationPresentationV1 } from "@shared/image-generation"
 import { ClineDefaultTool } from "@shared/tools"
 import type { ToolResponse } from "../../index"
 import type { IFullyManagedTool } from "../ToolExecutorCoordinator"
@@ -260,6 +258,7 @@ export class GenerateImageToolHandler implements IFullyManagedTool {
 					reference_artifact_ids: result.artifacts.map((artifact) => artifact.id),
 					artifacts: result.artifacts.map((artifact) => ({
 						id: artifact.id,
+						path: resolveTaskArtifactPath(config.taskId, artifact.relativePath),
 						mimeType: artifact.mimeType,
 						format: artifact.format,
 						byteLength: artifact.byteLength,

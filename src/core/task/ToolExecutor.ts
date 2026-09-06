@@ -3,6 +3,7 @@ import { ApiHandler, resolveProviderFromProfile } from "@core/api"
 import type { WebSearchRoutingPlan } from "@core/api/server-tools"
 import type { IdentityFactory } from "@core/api/transform/block-identity"
 import type { ApiStreamServerToolChunk } from "@core/api/transform/stream"
+import { isTaskReadScopePath } from "@core/artifacts/runtime"
 import { FileContextTracker } from "@core/context/context-tracking/FileContextTracker"
 import { getHookModelContext } from "@core/hooks/hook-model-context"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
@@ -61,10 +62,7 @@ import { TaskController } from "./TaskController"
 import { TaskState } from "./TaskState"
 import { canonicalizeAttemptCompletionParams } from "./tools/attempt-completion-params"
 import { AutoApprove } from "./tools/autoApprove"
-import {
-	type HostedImageGenerationContext,
-	HostedImageGenerationLifecycle,
-} from "./tools/HostedImageGenerationLifecycle"
+import { type HostedImageGenerationContext, HostedImageGenerationLifecycle } from "./tools/HostedImageGenerationLifecycle"
 import { isInternalNativeToolName, normalizeNativeToolName } from "./tools/NativeToolAdmission"
 import { type HostedServerToolUpdate, ServerToolLifecycle } from "./tools/ServerToolLifecycle"
 import { SubagentJobManager } from "./tools/subagent/SubagentJobManager"
@@ -116,6 +114,7 @@ interface BlockApproveOptions {
 	cwd: string
 	autoApproveResult: boolean | [boolean, boolean]
 	workspaceRoots?: string[]
+	taskId?: string
 }
 
 const PATH_AUTO_APPROVE_TOOLS = new Set<ClineDefaultTool>([
@@ -144,10 +143,22 @@ function getApprovePath(block: ToolUse): string | undefined {
  * @param workspaceRoots Optional workspace roots for multi-root workspaces.
  * @returns True when the resolved path is inside any workspace root.
  */
-function isLocalPath(cwd: string, toolPath: string, workspaceRoots?: string[]): boolean {
+function isLocalPath(
+	cwd: string,
+	toolName: ClineDefaultTool,
+	toolPath: string,
+	workspaceRoots?: string[],
+	taskId?: string,
+): boolean {
 	const absolutePath = path.isAbsolute(toolPath) ? path.resolve(toolPath) : path.resolve(cwd, toolPath)
 	const roots = workspaceRoots && workspaceRoots.length > 0 ? workspaceRoots : [cwd]
-	return DlineRuntimeFileManager.isManagedPath(absolutePath) || roots.some((root) => isLocatedInPath(root, absolutePath))
+	const isTaskScopedRead =
+		toolName === ClineDefaultTool.FILE_READ && taskId !== undefined && isTaskReadScopePath(taskId, absolutePath)
+	return (
+		DlineRuntimeFileManager.isManagedPath(absolutePath) ||
+		isTaskScopedRead ||
+		roots.some((root) => isLocatedInPath(root, absolutePath))
+	)
 }
 
 /**
@@ -167,7 +178,7 @@ export function isBlockAutoApproved(block: ToolUse, options: BlockApproveOptions
 	const [autoApproveLocal, autoApproveExternal] = Array.isArray(options.autoApproveResult)
 		? options.autoApproveResult
 		: [options.autoApproveResult, false]
-	const isLocal = isLocalPath(options.cwd, toolPath, options.workspaceRoots)
+	const isLocal = isLocalPath(options.cwd, block.name, toolPath, options.workspaceRoots, options.taskId)
 	return (isLocal && autoApproveLocal) || (!isLocal && autoApproveLocal && autoApproveExternal)
 }
 
@@ -278,6 +289,7 @@ export class ToolExecutor {
 			cwd: this.cwd,
 			autoApproveResult: result,
 			workspaceRoots,
+			taskId: this.taskId,
 		})
 	}
 
@@ -563,7 +575,7 @@ export class ToolExecutor {
 			updates: { text?: string; exitCode?: number; commandStatus?: CommandStatus },
 		) => Promise<void>,
 	) {
-		this.autoApprover = new AutoApprove(this.stateManager)
+		this.autoApprover = new AutoApprove(this.stateManager, this.taskId)
 		this.imageGenerationService = createImageGenerationRuntime({
 			taskId: this.taskId,
 			stateManager: this.stateManager,

@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert"
 import os from "node:os"
 import path from "node:path"
+import { getTaskArtifactDirectory } from "@core/artifacts/runtime"
 import { ClineDefaultTool } from "@shared/tools"
 import { describe, it } from "vitest"
 import type { ToolUse } from "../../assistant-message"
@@ -114,5 +115,22 @@ describe("isToolUseAutoApproved", () => {
 			}),
 			false,
 		)
+	})
+
+	it("treats only the current task artifacts and tmp as project-scoped read_file paths", () => {
+		const cwd = path.resolve("/workspace/project")
+		const taskId = "task-read-scope"
+		const taskDirectory = getTaskArtifactDirectory(taskId)
+		const options = { cwd, taskId, autoApproveResult: [true, false] as [boolean, boolean] }
+		const artifactPath = path.join(taskDirectory, "artifacts", "images", "generated.png")
+		const previewPath = path.join(taskDirectory, "tmp", "image-previews", "preview")
+		const taskHistoryPath = path.join(taskDirectory, "ui_messages.jsonl")
+		const otherTaskArtifactPath = path.join(getTaskArtifactDirectory("another-task"), "artifacts", "images", "generated.png")
+
+		assert.equal(isBlockAutoApproved(makeBlock(ClineDefaultTool.FILE_READ, { path: artifactPath }), options), true)
+		assert.equal(isBlockAutoApproved(makeBlock(ClineDefaultTool.FILE_READ, { path: previewPath }), options), true)
+		assert.equal(isBlockAutoApproved(makeBlock(ClineDefaultTool.FILE_READ, { path: taskHistoryPath }), options), false)
+		assert.equal(isBlockAutoApproved(makeBlock(ClineDefaultTool.FILE_READ, { path: otherTaskArtifactPath }), options), false)
+		assert.equal(isBlockAutoApproved(makeBlock(ClineDefaultTool.LIST_FILES, { path: artifactPath }), options), false)
 	})
 })

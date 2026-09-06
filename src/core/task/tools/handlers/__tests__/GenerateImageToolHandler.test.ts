@@ -1,3 +1,4 @@
+import { resolveTaskArtifactPath } from "@core/artifacts/runtime"
 import type { ImageArtifact } from "@core/artifacts/TaskArtifactStore"
 import type { ToolUse } from "@core/assistant-message"
 import { ImageGenerationError } from "@core/image-generation/contracts"
@@ -50,14 +51,16 @@ const block: ToolUse = {
 function createConfig(autoApprove: boolean) {
 	const say = vi.fn<TaskConfig["callbacks"]["say"]>(async () => undefined)
 	const operationController = new AbortController()
-	const generate = vi.fn(async (_request?: unknown, _context?: { signal: AbortSignal; onProgress?: (event: unknown) => Promise<void> }) => ({
-		requestId: "image-request-1",
-		profileId: "profile-1",
-		providerId: "openai",
-		modelId: "gpt-image-2",
-		artifacts: [artifact],
-		usage: { imageCount: 1, totalOutputBytes: 64 },
-	}))
+	const generate = vi.fn(
+		async (_request?: unknown, _context?: { signal: AbortSignal; onProgress?: (event: unknown) => Promise<void> }) => ({
+			requestId: "image-request-1",
+			profileId: "profile-1",
+			providerId: "openai",
+			modelId: "gpt-image-2",
+			artifacts: [artifact],
+			usage: { imageCount: 1, totalOutputBytes: 64 },
+		}),
+	)
 	const resolveProfile = vi.fn(() => ({
 		profile: { id: "profile-1", provider: "openai", imageModelId: "gpt-image-2" },
 		model: { id: "gpt-image-2", capabilities: { supportsGeneration: true } },
@@ -119,9 +122,16 @@ describe("GenerateImageToolHandler", () => {
 			}),
 			expect.objectContaining({ signal: config.taskState.operationSignal }),
 		)
-		expect(JSON.stringify(result)).toContain(artifact.id)
-		expect(JSON.stringify(result)).toContain("reference_artifact_ids")
-		expect(JSON.stringify(result)).not.toContain("base64")
+		expect(typeof result).toBe("string")
+		const resultPayload = JSON.parse(result as string)
+		expect(resultPayload.artifacts).toEqual([
+			expect.objectContaining({
+				id: artifact.id,
+				path: resolveTaskArtifactPath(config.taskId, artifact.relativePath),
+			}),
+		])
+		expect(resultPayload.reference_artifact_ids).toEqual([artifact.id])
+		expect(JSON.stringify(resultPayload)).not.toContain("base64")
 
 		const completedMessage = JSON.parse(say.mock.calls.at(-1)?.[1] as string)
 		expect(completedMessage).toMatchObject({
@@ -182,7 +192,9 @@ describe("GenerateImageToolHandler", () => {
 			.find((message) => message.imageGeneration?.status === "preview")
 		expect(previewMessage.imageGeneration).toMatchObject({ status: "preview", requestId: "image-request-1" })
 		const completedMessage = JSON.parse(say.mock.calls.at(-1)?.[1] as string)
-		expect(completedMessage.imageGeneration.previews.map((preview: { sequence: number }) => preview.sequence)).toEqual([0, 1, 2])
+		expect(completedMessage.imageGeneration.previews.map((preview: { sequence: number }) => preview.sequence)).toEqual([
+			0, 1, 2,
+		])
 		expect(JSON.stringify(previewMessage)).not.toContain("base64")
 		expect(JSON.stringify(previewMessage)).not.toContain("data:")
 	})

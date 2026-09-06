@@ -1,3 +1,4 @@
+import { isTaskReadScopePath } from "@core/artifacts/runtime"
 import { resolveWorkspacePath } from "@core/workspace"
 import { isMultiRootEnabled } from "@core/workspace/multi-root-utils"
 import { ClineDefaultTool, CONVERSATIONAL_TOOL_NAMES } from "@shared/tools"
@@ -8,13 +9,15 @@ import { getDesktopDir, isLocatedInPath, isLocatedInWorkspace } from "@/utils/pa
 
 export class AutoApprove {
 	private stateManager: StateManager
+	private readonly taskId?: string
 	// Cache for workspace paths - populated on first access and reused for the task lifetime
 	// NOTE: This assumes that the task has a fixed set of workspace roots(which is currently true).
 	private workspacePathsCache: { paths: string[] } | null = null
 	private isMultiRootScenarioCache: boolean | null = null
 
-	constructor(stateManager: StateManager) {
+	constructor(stateManager: StateManager, taskId?: string) {
 		this.stateManager = stateManager
+		this.taskId = taskId
 	}
 
 	/**
@@ -153,7 +156,12 @@ export class AutoApprove {
 				"AutoApprove.shouldAutoApproveToolWithPath",
 			) as string
 
-			if (DlineRuntimeFileManager.isManagedPath(absolutePath)) {
+			if (
+				DlineRuntimeFileManager.isManagedPath(absolutePath) ||
+				(blockname === ClineDefaultTool.FILE_READ &&
+					this.taskId !== undefined &&
+					isTaskReadScopePath(this.taskId, absolutePath))
+			) {
 				isLocalRead = true
 			} else if (isMultiRootScenario) {
 				// Multi-root: check if file is in ANY workspace
