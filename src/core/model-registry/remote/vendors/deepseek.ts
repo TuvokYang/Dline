@@ -9,6 +9,7 @@
 import type { ModelCapabilities } from "@shared/providers/types"
 import type { ProviderModelReconciliationMode } from "../../provider-model-reconciliation"
 import { ModelListingSource } from "../model-listing-source"
+import type { ProviderRemoteContext } from "../model-source"
 
 /** Documented platform defaults; the listing endpoint reports neither value. */
 const DEEPSEEK_CONTEXT_WINDOW = 1_000_000
@@ -21,6 +22,20 @@ export class DeepSeekModelSource extends ModelListingSource {
 	/** The listing carries no metadata, so stored capabilities and pricing must survive. */
 	override readonly reconciliation: ProviderModelReconciliationMode = "overlay-remote"
 	protected override readonly defaultBaseUrl = "https://api.deepseek.com"
+
+	/**
+	 * DeepSeek documents the listing as `GET /models`, unlike the OpenAI-style
+	 * `/v1/models` the base class assumes. A base URL that already ends in a
+	 * version segment is left alone so the compatibility path keeps working.
+	 */
+	protected override buildListingUrl(context: ProviderRemoteContext): string {
+		const url = new URL(context.baseUrl || this.defaultBaseUrl)
+		const pathName = url.pathname.replace(/\/+$/, "")
+		url.pathname = /\/models$/i.test(pathName) ? pathName : `${pathName}/models`
+		url.search = ""
+		url.hash = ""
+		return url.toString()
+	}
 
 	protected override readCapabilities(raw: unknown): ModelCapabilities {
 		return {
