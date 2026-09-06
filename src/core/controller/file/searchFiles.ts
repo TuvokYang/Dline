@@ -1,6 +1,7 @@
 import {
 	type FileSearchSource,
 	RipgrepError,
+	type ScanRulesProvider,
 	type SearchWorkspaceFilesResult,
 	searchWorkspaceFiles,
 	searchWorkspaceFilesMultiroot,
@@ -55,6 +56,13 @@ export async function searchFiles(controller: Controller, request: FileSearchReq
 	// to "the root that mattered" is impossible without per-root events.
 	let fsContextPath: string | undefined
 
+	// The picker must see the same workspace rules the search tool obeys, so the
+	// enumeration walk is handed the controller's IgnoreController rather than
+	// letting ripgrep fall back to whatever it can read on its own. `.agentignore`
+	// (including its `!include` targets and permission attributes) only reaches
+	// ripgrep through this instance.
+	const scanRulesProvider: ScanRulesProvider = (root) => controller.ensureIgnoreController(root)
+
 	try {
 		// Map enum to string for the search service
 		let selectedTypeString: "file" | "folder" | undefined
@@ -87,6 +95,7 @@ export async function searchFiles(controller: Controller, request: FileSearchReq
 				request.limit || 20,
 				selectedTypeString,
 				workspaceHint,
+				scanRulesProvider,
 			)
 		} else {
 			// Legacy single workspace search
@@ -110,6 +119,8 @@ export async function searchFiles(controller: Controller, request: FileSearchReq
 				workspacePath,
 				request.limit || 20, // Use default limit of 20 if not specified
 				selectedTypeString,
+				undefined,
+				scanRulesProvider,
 			)
 		}
 

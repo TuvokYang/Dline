@@ -2,6 +2,7 @@ import { resolveProvider } from "@core/api"
 import type { ToolUse } from "@core/assistant-message"
 import { getPrompt } from "@core/prompts/i18n"
 import { regexSearchFiles } from "@services/ripgrep"
+import { taskRipgrepScope } from "@services/ripgrep/cpu-budget"
 import { arePathsEqual, getReadablePath, isLocatedInWorkspace } from "@utils/path"
 import * as path from "path"
 import { formatResponse } from "@/core/prompts/responses"
@@ -174,6 +175,9 @@ export class SearchFilesToolHandler implements IFullyManagedTool {
 				regex,
 				filePattern,
 				config.services.ignoreController,
+				// Charge the walk to this task so one task cannot spend the whole
+				// workspace ripgrep allowance on its own.
+				taskRipgrepScope(config.taskId),
 			)
 
 			const stats = parseSearchStats(workspaceResults)

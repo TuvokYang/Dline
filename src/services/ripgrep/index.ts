@@ -1,11 +1,11 @@
-import fs from "node:fs/promises"
-import * as os from "node:os"
 import type { IgnoreController } from "@core/ignore/IgnoreController"
 import * as childProcess from "child_process"
 import * as path from "path"
 import * as readline from "readline"
 import { Logger } from "@/shared/services/Logger"
 import { getBinaryLocation } from "@/utils/fs"
+import { AMBIENT_RIPGREP_SCOPE, type RipgrepBudgetScope, ripgrepThreadArgs, withRipgrepSlot } from "./cpu-budget"
+import { createRipgrepIgnoreFile } from "./ignore-file"
 
 /*
 This file provides functionality to perform regex searches on files using ripgrep.
@@ -59,9 +59,15 @@ interface SearchResult {
 
 const MAX_RESULTS = 300
 
-async function execRipgrep(args: string[]): Promise<string> {
+async function execRipgrep(args: string[], scope: RipgrepBudgetScope): Promise<string> {
 	const binPath: string = await getBinaryLocation("rg")
 
+	// Held until the search settles so the shared CPU budget covers the whole
+	// lifetime of the process, not just its creation.
+	return withRipgrepSlot(scope, () => runRipgrep(binPath, args))
+}
+
+function runRipgrep(binPath: string, args: string[]): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const rgProcess = childProcess.spawn(binPath, args)
 		// cross-platform alternative to head, which is ripgrep author's recommendation for limiting output.
@@ -107,42 +113,34 @@ export async function regexSearchFiles(
 	regex: string,
 	filePattern?: string,
 	ignoreController?: IgnoreController,
+	/** Task the CPU cost is charged to; omitted callers share the ambient scope. */
+	budgetScope: RipgrepBudgetScope = AMBIENT_RIPGREP_SCOPE,
 ): Promise<string> {
-	const args = ["--json", "-e", regex, "--glob", filePattern || "*", "--context", "1"]
+	const args = [
+		"--json",
+		// Match the picker's budget: without an explicit cap ripgrep opens one
+		// worker per logical CPU and a single tool call saturates the machine.
+		...ripgrepThreadArgs(),
+		"-e",
+		regex,
+		"--glob",
+		filePattern || "*",
+		"--context",
+		"1",
+	]
 
-	// Searching walks the tree, so it follows the scan rules rather than the read
-	// rules. Handing them to rg as an ignore file prunes during the search instead
-	// of only filtering the results afterwards.
-	const agentIgnoreContent = ignoreController?.getIgnoreContent("scan")
-	let ignoreFilePath: string | undefined
-	if (agentIgnoreContent) {
-		try {
-			const tempDir = os.tmpdir()
-			const tempName = `.agentignore-search-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-			ignoreFilePath = path.join(tempDir, tempName)
-			await fs.writeFile(ignoreFilePath, agentIgnoreContent, "utf8")
-			args.push("--ignore-file", ignoreFilePath)
-		} catch (error) {
-			Logger.error("Failed to write the agent ignore file for rg:", error)
-		}
-	}
+	const ignoreFile = await createRipgrepIgnoreFile(ignoreController)
+	args.push(...ignoreFile.args)
 
 	args.push(directoryPath)
 
 	let output: string
 	try {
-		output = await execRipgrep(args)
+		output = await execRipgrep(args, budgetScope)
 	} catch (error) {
 		throw Error("Error calling ripgrep", { cause: error })
 	} finally {
-		// Clean up temp ignore file
-		if (ignoreFilePath) {
-			try {
-				await fs.unlink(ignoreFilePath)
-			} catch {
-				// Ignore cleanup errors
-			}
-		}
+		await ignoreFile.dispose()
 	}
 	const results: SearchResult[] = []
 	let currentResult: Partial<SearchResult> | null = null

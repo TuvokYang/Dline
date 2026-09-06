@@ -7,6 +7,7 @@ import should from "should"
 import { EventEmitter, Readable } from "stream"
 import { afterEach, beforeEach, describe, it, vi } from "vitest"
 import { HostProvider } from "@/hosts/host-provider"
+import { getRipgrepCpuBudget, resetRipgrepCpuBudgetForTesting, resetRipgrepSlotsForTesting } from "@/services/ripgrep/cpu-budget"
 import { SearchWorkspaceItemsRequest_SearchItemType, SearchWorkspaceItemsResponse } from "@/shared/proto/dline/host/workspace"
 import { setVscodeHostProviderMock } from "@/test/host-provider-test-utils"
 
@@ -42,6 +43,8 @@ describe("File Search", () => {
 	})
 
 	afterEach(() => {
+		resetRipgrepCpuBudgetForTesting()
+		resetRipgrepSlotsForTesting()
 		vi.restoreAllMocks()
 	})
 
@@ -74,6 +77,34 @@ describe("File Search", () => {
 				expect.objectContaining({ cwd: workspacePath }),
 			)
 			expect(result).toContainEqual({ path: "README.md", type: "file", label: "README.md" })
+		})
+
+		it("caps ripgrep worker threads so a walk cannot saturate the machine", async () => {
+			resetRipgrepCpuBudgetForTesting(16)
+			const mockStdout = new Readable({ read() {} })
+			const mockStderr = new Readable({ read() {} })
+			const mockProcess = Object.assign(new EventEmitter(), {
+				stdout: mockStdout,
+				stderr: mockStderr,
+				kill: vi.fn(),
+			}) as unknown as childProcess.ChildProcess
+
+			spawnStub.mockImplementation(() => {
+				setImmediate(() => {
+					mockStdout.push("README.md\n")
+					mockStdout.push(null)
+					mockStderr.push(null)
+					mockProcess.emit("exit", 0)
+				})
+				return mockProcess
+			})
+
+			await fileSearch.executeRipgrepForFiles("/workspace", 5000)
+
+			const args = spawnStub.mock.calls[0][1] as string[]
+			const threadsIndex = args.indexOf("--threads")
+			expect(threadsIndex).toBeGreaterThanOrEqual(0)
+			expect(Number(args[threadsIndex + 1])).toBe(getRipgrepCpuBudget().threadsPerProcess)
 		})
 
 		it("should correctly process and return file and folder results", async () => {

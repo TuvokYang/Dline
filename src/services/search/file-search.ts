@@ -1,3 +1,4 @@
+import { builtinIgnoreGlobPatterns } from "@core/ignore/IgnoreController"
 import type { WorkspaceRoot } from "@shared/multi-root/types"
 import * as childProcess from "child_process"
 import * as fs from "fs"
@@ -6,6 +7,13 @@ import * as path from "path"
 import * as readline from "readline"
 import { WorkspaceRootManager } from "@/core/workspace"
 import { HostProvider } from "@/hosts/host-provider"
+import { AMBIENT_RIPGREP_SCOPE, ripgrepThreadArgs, withRipgrepSlot } from "@/services/ripgrep/cpu-budget"
+import { createRipgrepIgnoreFile, type RipgrepScanRules } from "@/services/ripgrep/ignore-file"
+import {
+	ensureWorkspaceWatched,
+	resetWorkspaceWatchersForTesting,
+	stopWatchingWorkspace,
+} from "@/services/search/workspace-enumeration-invalidator"
 import { GetOpenTabsRequest } from "@/shared/proto/dline/host/window"
 import { SearchWorkspaceItemsRequest, SearchWorkspaceItemsRequest_SearchItemType } from "@/shared/proto/dline/host/workspace"
 import { Logger } from "@/shared/services/Logger"
@@ -37,17 +45,56 @@ export class RipgrepError extends Error {
 	}
 }
 
-export async function executeRipgrepForFiles(workspacePath: string, limit = 5000): Promise<WorkspaceItem[]> {
+export async function executeRipgrepForFiles(
+	workspacePath: string,
+	limit = 5000,
+	/** Workspace scan rules; omitted callers fall back to the built-in floor. */
+	scanRules?: RipgrepScanRules,
+): Promise<WorkspaceItem[]> {
 	const rgPath = await getBinaryLocation("rg")
 
+	const ignoreFile = await createRipgrepIgnoreFile(scanRules)
+	try {
+		// The picker runs before any task exists, so its cost is charged to the
+		// ambient scope. The slot is held until the walk settles, so the budget
+		// accounts for the process for as long as it can actually burn cycles.
+		return await withRipgrepSlot(AMBIENT_RIPGREP_SCOPE, () =>
+			runRipgrepForFiles(rgPath, workspacePath, limit, ignoreFile.args),
+		)
+	} finally {
+		await ignoreFile.dispose()
+	}
+}
+
+/**
+ * Exclusion globs used when no workspace scan rules are available.
+ *
+ * The rules from {@link createRipgrepIgnoreFile} already carry this floor, so
+ * these only cover the case where the caller passed none — without them an
+ * unconfigured workspace would walk `node_modules` on every keystroke.
+ */
+function fallbackExcludeArgs(): string[] {
+	return builtinIgnoreGlobPatterns().flatMap((pattern) => ["-g", `!${pattern}`])
+}
+
+function runRipgrepForFiles(
+	rgPath: string,
+	workspacePath: string,
+	limit: number,
+	ignoreFileArgs: readonly string[],
+): Promise<WorkspaceItem[]> {
 	return new Promise((resolve, reject) => {
-		// Arguments for ripgrep to list files, follow symlinks, include hidden, and exclude common directories
 		const args = [
 			"--files",
-			"--follow",
+			// Without this ripgrep opens one worker per logical CPU and a single
+			// keystroke-triggered walk saturates the machine.
+			...ripgrepThreadArgs(),
+			// Hidden entries stay visible because dotfiles are ordinary mention
+			// targets; the ignore rules still prune `.git` and friends. Symlinks
+			// are deliberately not followed: `--follow` can walk out of the
+			// workspace and turns junction-heavy trees into a traversal explosion.
 			"--hidden",
-			"-g",
-			"!**/{node_modules,.git,.github,out,dist,__pycache__,.venv,.env,venv,env,.cache,tmp,temp}/**",
+			...(ignoreFileArgs.length > 0 ? ignoreFileArgs : fallbackExcludeArgs()),
 		]
 
 		// Spawn the ripgrep process with the specified arguments
@@ -161,10 +208,15 @@ type WorkspaceEnumerationEntry = {
  *
  * The `@`-mention picker debounces at 200ms and re-queries on every keystroke,
  * so without reuse a short word costs one full-workspace walk per character.
- * Five seconds covers a typing burst while keeping newly created files visible
- * well inside a single editing session.
+ *
+ * A minute is safe only because the TTL is not what keeps the cache correct:
+ * {@link ensureWorkspaceWatched} drops the entry as soon as the workspace gains
+ * or loses a path, which is the only kind of change that can invalidate a list
+ * of file names. The TTL remains as the backstop for the cases a watcher cannot
+ * cover — it failed to start, or the change happened on a network mount that
+ * emits no events.
  */
-export const WORKSPACE_ENUMERATION_CACHE_TTL_MS = 5_000
+export const WORKSPACE_ENUMERATION_CACHE_TTL_MS = 60_000
 
 /**
  * Upper bound on cached workspaces. Multi-root setups stay small, so this only
@@ -177,6 +229,22 @@ const workspaceEnumerationCache = new Map<string, WorkspaceEnumerationEntry>()
 /** Test seam: drop all cached enumerations so a case starts from a cold cache. */
 export function clearWorkspaceEnumerationCache(): void {
 	workspaceEnumerationCache.clear()
+	resetWorkspaceWatchersForTesting()
+}
+
+/**
+ * Drop a root's cached walk after its file set changed.
+ *
+ * Only completed entries are dropped. An in-flight walk is left alone: it was
+ * started before the event and its callers are already awaiting it, so killing
+ * the entry would spawn a duplicate `rg` for a walk still running and would not
+ * make the result any fresher.
+ */
+function invalidateEnumeration(workspacePath: string): void {
+	const entry = workspaceEnumerationCache.get(workspacePath)
+	if (entry?.completedAt !== undefined) {
+		workspaceEnumerationCache.delete(workspacePath)
+	}
 }
 
 function evictExpiredEnumerations(now: number): void {
@@ -202,6 +270,9 @@ function evictOldestWhenOverCapacity(): void {
 			return
 		}
 		workspaceEnumerationCache.delete(oldestCompletedKey)
+		// The root is no longer cached, so its watcher has nothing left to
+		// invalidate and would otherwise leak for the life of the host.
+		void stopWatchingWorkspace(oldestCompletedKey)
 	}
 }
 
@@ -221,16 +292,20 @@ function findOldestCompletedKey(): string | undefined {
  * of spawning another `rg` process. Failures are never cached, so the next call
  * retries from scratch.
  */
-async function enumerateWorkspaceFiles(workspacePath: string): Promise<readonly WorkspaceItem[]> {
+async function enumerateWorkspaceFiles(workspacePath: string, scanRules?: RipgrepScanRules): Promise<readonly WorkspaceItem[]> {
 	const now = Date.now()
 	evictExpiredEnumerations(now)
+
+	// Start watching before the first walk so a file created while it runs is
+	// still observed. Repeat calls for an already-watched root are a no-op.
+	ensureWorkspaceWatched(workspacePath, () => invalidateEnumeration(workspacePath))
 
 	const cached = workspaceEnumerationCache.get(workspacePath)
 	if (cached) {
 		return cached.pending
 	}
 
-	const pending = executeRipgrepForFiles(workspacePath, 5000)
+	const pending = executeRipgrepForFiles(workspacePath, 5000, scanRules)
 	const entry: WorkspaceEnumerationEntry = { pending }
 	workspaceEnumerationCache.set(workspacePath, entry)
 	evictOldestWhenOverCapacity()
@@ -338,12 +413,43 @@ export type SearchWorkspaceFilesResult = {
 	source: FileSearchSource
 }
 
+/**
+ * Resolves the workspace ignore rules for one root.
+ *
+ * Injected by the caller because the rules are owned by the controller, while
+ * this module stays a stateless service. Returning undefined means the rules
+ * are unavailable, not that everything is allowed.
+ */
+export type ScanRulesProvider = (workspacePath: string) => Promise<RipgrepScanRules | undefined>
+
+/**
+ * Resolve the rules for one root, treating a provider failure as "no rules".
+ *
+ * The picker must keep working when the rules cannot be loaded; ripgrep still
+ * honours the repository's own ignore files on its own.
+ */
+async function resolveScanRules(
+	workspacePath: string,
+	provider: ScanRulesProvider | undefined,
+): Promise<RipgrepScanRules | undefined> {
+	if (!provider) {
+		return undefined
+	}
+	try {
+		return await provider(workspacePath)
+	} catch (error) {
+		Logger.warn(`[file-search] failed to resolve ignore rules for ${workspacePath}: ${error}`)
+		return undefined
+	}
+}
+
 export async function searchWorkspaceFiles(
 	query: string,
 	workspacePath: string,
 	limit = 20,
 	selectedType?: "file" | "folder",
 	workspaceName?: string,
+	scanRulesProvider?: ScanRulesProvider,
 ): Promise<SearchWorkspaceFilesResult> {
 	try {
 		// Get currently active files and convert to search format
@@ -364,7 +470,9 @@ export async function searchWorkspaceFiles(
 
 		const hostItems = await executeHostIndexForFiles(query, workspacePath, selectedType)
 
-		const allItems = hostItems ?? (await enumerateWorkspaceFiles(workspacePath))
+		// Only the ripgrep walk needs the rules; the host index applies its own.
+		const scanRules = hostItems ? undefined : await resolveScanRules(workspacePath, scanRulesProvider)
+		const allItems = hostItems ?? (await enumerateWorkspaceFiles(workspacePath, scanRules))
 		const source: FileSearchSource = hostItems ? "host_index" : "ripgrep"
 
 		// Combine active files with all items, removing duplicates (like the old WorkspaceTracker)
@@ -457,6 +565,7 @@ export async function searchWorkspaceFilesMultiroot(
 	limit = 20,
 	selectedType?: "file" | "folder",
 	workspaceHint?: string,
+	scanRulesProvider?: ScanRulesProvider,
 ): Promise<SearchWorkspaceFilesResult> {
 	try {
 		const workspaceRoots = workspaceManager?.getRoots?.() || []
@@ -486,7 +595,7 @@ export async function searchWorkspaceFilesMultiroot(
 		let firstError: unknown
 		const searchPromises = workspacesToSearch.map(async (workspace): Promise<SearchWorkspaceFilesResult> => {
 			try {
-				return await searchWorkspaceFiles(query, workspace.path, limit, selectedType, workspace.name)
+				return await searchWorkspaceFiles(query, workspace.path, limit, selectedType, workspace.name, scanRulesProvider)
 			} catch (error) {
 				if (!firstError) {
 					firstError = error
