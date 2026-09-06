@@ -28,6 +28,7 @@ import { Controller } from "@/core/controller"
 import { setVscodeHostProviderMock } from "@/test/host-provider-test-utils"
 import type { FileMetadataEntry, TaskMetadata } from "./ContextTrackerTypes"
 import { FileContextTracker } from "./FileContextTracker"
+import { WorkspaceFileContextRegistry } from "./WorkspaceFileContextRegistry"
 
 describe("FileContextTracker", () => {
 	const filePath = "src/test-file.ts"
@@ -38,6 +39,7 @@ describe("FileContextTracker", () => {
 	let mockFileSystemWatcher: any
 	let chokidarWatchStub: any /* sinon.SinonStub → vitest */
 	let tracker: FileContextTracker
+	let registry: WorkspaceFileContextRegistry
 	let mockTaskMetadata: TaskMetadata
 	let getTaskMetadataStub: any /* sinon.SinonStub → vitest */
 	let saveTaskMetadataStub: any /* sinon.SinonStub → vitest */
@@ -74,8 +76,9 @@ describe("FileContextTracker", () => {
 
 		setVscodeHostProviderMock()
 
-		// Create tracker instance
-		tracker = new FileContextTracker({} as Controller, taskId)
+		// Each test gets its own registry so shared watchers never leak between cases
+		registry = new WorkspaceFileContextRegistry()
+		tracker = new FileContextTracker({} as Controller, taskId, registry)
 	})
 
 	afterEach(() => {
@@ -299,6 +302,142 @@ describe("FileContextTracker", () => {
 
 		// Verify the watcher was closed
 		expect(mockFileSystemWatcher.close.mock.calls.length > 0).to.be.true
+	})
+
+	describe("multiple tasks tracking the same workspace file", () => {
+		const otherTaskId = "other-task-id"
+
+		/** Fires the shared watcher's change handler once. */
+		const emitWatcherChange = () => {
+			const changeHandler = mockFileSystemWatcher.on.mock.calls.find(([event]: [string]) => event === "change")?.[1]
+			expect(changeHandler, "expected a change handler to be registered").to.exist
+			changeHandler()
+		}
+
+		let otherTracker: FileContextTracker
+
+		beforeEach(async () => {
+			otherTracker = new FileContextTracker({} as Controller, otherTaskId, registry)
+			await tracker.trackFileContext(filePath, "read_tool")
+			await otherTracker.trackFileContext(filePath, "read_tool")
+			getTaskMetadataStub.mockClear()
+			saveTaskMetadataStub.mockClear()
+		})
+
+		it("shares a single watcher across both trackers", () => {
+			expect(chokidarWatchStub.mock.calls.length).to.equal(1)
+		})
+
+		it("makes an external edit visible to both trackers", () => {
+			emitWatcherChange()
+
+			expect(tracker.peekRecentlyModifiedFiles().files).to.deep.equal([filePath])
+			expect(otherTracker.peekRecentlyModifiedFiles().files).to.deep.equal([filePath])
+		})
+
+		it("keeps the edit visible to the other tracker after one acknowledges it", () => {
+			emitWatcherChange()
+
+			expect(tracker.getAndClearRecentlyModifiedFiles()).to.deep.equal([filePath])
+
+			expect(tracker.peekRecentlyModifiedFiles().files).to.be.empty
+			expect(otherTracker.peekRecentlyModifiedFiles().files).to.deep.equal([filePath])
+		})
+
+		it("records the external edit in task metadata exactly once", async () => {
+			emitWatcherChange()
+			await vi.waitFor(() => {
+				vitestExpect(saveTaskMetadataStub).toHaveBeenCalled()
+			})
+
+			const userEditedSaves = saveTaskMetadataStub.mock.calls.filter(([, metadata]: [string, TaskMetadata]) =>
+				metadata.files_in_context.some(
+					(entry: FileMetadataEntry) => entry.record_source === "user_edited" && entry.path === filePath,
+				),
+			)
+			expect(userEditedSaves.length).to.equal(1)
+		})
+
+		it("keeps notifying the remaining tracker after the other disposes", async () => {
+			await otherTracker.dispose()
+			emitWatcherChange()
+
+			expect(tracker.peekRecentlyModifiedFiles().files).to.deep.equal([filePath])
+			expect(mockFileSystemWatcher.close.mock.calls.length).to.equal(0)
+		})
+
+		it("hides a Dline-authored edit from every tracker", () => {
+			tracker.markFileAsEditedByCline(filePath)
+			emitWatcherChange()
+
+			expect(tracker.peekRecentlyModifiedFiles().files).to.be.empty
+			expect(otherTracker.peekRecentlyModifiedFiles().files).to.be.empty
+		})
+
+		it("advances only one revision per observed change", async () => {
+			emitWatcherChange()
+
+			// The author callback records metadata asynchronously; a second publish
+			// would only appear after that chain settles.
+			await vi.waitFor(() => {
+				vitestExpect(saveTaskMetadataStub).toHaveBeenCalled()
+			})
+			await vi.waitFor(() => {
+				vitestExpect(registry.getRevision("/mock/workspace", filePath)).toBe(1)
+			})
+
+			const snapshot = tracker.peekRecentlyModifiedFiles()
+			expect(snapshot.revisions[filePath]).to.equal(1)
+			expect(otherTracker.peekRecentlyModifiedFiles().revisions[filePath]).to.equal(1)
+		})
+	})
+
+	it("hides a first write from a task that has not tracked anything yet", async () => {
+		// Another task already watches the file through the shared registry.
+		const otherTracker = new FileContextTracker({} as Controller, "other-task-id", registry)
+		await otherTracker.trackFileContext(filePath, "read_tool")
+
+		// A brand new task writes that file as its very first action.
+		const writer = new FileContextTracker({} as Controller, "writer-task-id", registry)
+		await vi.waitFor(() => {
+			vitestExpect(mockGetCwd).toHaveBeenCalled()
+		})
+		writer.markFileAsEditedByCline(filePath)
+
+		const changeHandler = mockFileSystemWatcher.on.mock.calls.find(([event]: [string]) => event === "change")?.[1]
+		expect(changeHandler, "expected a change handler to be registered").to.exist
+		changeHandler()
+
+		expect(otherTracker.peekRecentlyModifiedFiles().files).to.be.empty
+	})
+
+	it("keeps a later real edit visible after restoring a snapshot before any subscription", async () => {
+		tracker.restoreRecentlyModifiedFiles({ files: [filePath], revisions: { [filePath]: 7 } })
+		expect(tracker.getAndClearRecentlyModifiedFiles()).to.deep.equal([filePath])
+
+		await tracker.trackFileContext(filePath, "read_tool")
+		const changeHandler = mockFileSystemWatcher.on.mock.calls.find(([event]: [string]) => event === "change")?.[1]
+		expect(changeHandler, "expected a change handler to be registered").to.exist
+		changeHandler()
+
+		expect(tracker.peekRecentlyModifiedFiles().files).to.deep.equal([filePath])
+	})
+
+	it("does not swallow a real edit when a Dline write happened before any watcher existed", async () => {
+		// Track an unrelated file first so the workspace root is known and the mark
+		// reaches the registry, which must ignore it because no watcher exists yet.
+		await tracker.trackFileContext("src/other-file.ts", "read_tool")
+
+		tracker.markFileAsEditedByCline(filePath)
+		await tracker.trackFileContext(filePath, "cline_edited")
+
+		// The shared mock watcher is reused for every path, so take the handler
+		// registered for the file under test rather than the first one.
+		const changeHandlers = mockFileSystemWatcher.on.mock.calls.filter(([event]: [string]) => event === "change")
+		expect(changeHandlers.length, "expected a change handler per watched path").to.equal(2)
+		changeHandlers[changeHandlers.length - 1][1]()
+
+		expect(tracker.peekRecentlyModifiedFiles().files).to.deep.equal([filePath])
 	})
 
 	it("should clean orphaned warnings from the initialized task history", async () => {

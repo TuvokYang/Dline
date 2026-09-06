@@ -1,12 +1,15 @@
 import { getTaskMetadata, saveTaskMetadata } from "@core/storage/disk"
 import type { ClineMessage } from "@shared/ExtensionMessage"
-import chokidar, { FSWatcher } from "chokidar"
-import * as path from "path"
 import { Controller } from "@/core/controller"
 import { StateManager } from "@/core/storage/StateManager"
 import { Logger } from "@/shared/services/Logger"
 import { getCwd } from "@/utils/path"
 import type { FileMetadataEntry } from "./ContextTrackerTypes"
+import {
+	getWorkspaceFileContextRegistry,
+	type WorkspaceFileContextRegistry,
+	type WorkspaceFileSubscription,
+} from "./WorkspaceFileContextRegistry"
 
 export interface RecentlyModifiedFilesSnapshot {
 	files: string[]
@@ -31,57 +34,76 @@ export class FileContextTracker {
 	private controller: Controller
 	readonly taskId: string
 
-	// File tracking and watching
-	private fileWatchers = new Map<string, FSWatcher>()
-	private recentlyModifiedFiles = new Map<string, number>()
-	private recentlyModifiedRevision = 0
-	private recentlyEditedByCline = new Set<string>()
+	// Workspace-shared watching; per-task acknowledgement state stays local.
+	private readonly registry: WorkspaceFileContextRegistry
+	private readonly subscriptions = new Map<string, WorkspaceFileSubscription>()
+	private readonly acknowledgedRevisions = new Map<string, number>()
+	private readonly restoredRevisions = new Map<string, number>()
+	/** Paths whose current external edit was already published by the shared watcher. */
+	private readonly watcherPublishedPaths = new Set<string>()
+	/** Most recently resolved workspace root; used to key registry lookups. */
+	private workspaceRoot?: string
 
-	constructor(controller: Controller, taskId: string) {
+	constructor(
+		controller: Controller,
+		taskId: string,
+		registry: WorkspaceFileContextRegistry = getWorkspaceFileContextRegistry(),
+	) {
 		this.controller = controller
 		this.taskId = taskId
+		this.registry = registry
+		// Resolve eagerly so the synchronous markFileAsEditedByCline can reach the
+		// registry even when this task writes a file before tracking anything.
+		void this.resolveWorkspaceRoot()
+	}
+
+	/** Cache the workspace root, tolerating hosts without an open folder. */
+	private async resolveWorkspaceRoot(): Promise<string | undefined> {
+		try {
+			const cwd = await getCwd()
+			if (cwd) {
+				this.workspaceRoot = cwd
+			}
+			return this.workspaceRoot
+		} catch (error) {
+			Logger.error("Failed to resolve workspace root:", error)
+			return this.workspaceRoot
+		}
 	}
 
 	/**
-	 * File watchers are set up for each file that is tracked in the task metadata.
+	 * Subscribes this task to the workspace-shared watcher for the given file.
+	 * The registry keeps a single underlying watcher per path across all tasks.
 	 */
 	async setupFileWatcher(filePath: string) {
-		// Only setup watcher if it doesn't already exist for this file
-		if (this.fileWatchers.has(filePath)) {
+		// Only subscribe once per file for this task
+		if (this.subscriptions.has(filePath)) {
 			return
 		}
 
-		const cwd = await getCwd()
+		const cwd = await this.resolveWorkspaceRoot()
 		if (!cwd) {
 			Logger.info("No workspace folder available - cannot determine current working directory")
 			return
 		}
 
-		// Create a chokidar file watcher for this specific file
-		const resolvedFilePath = path.resolve(cwd, filePath)
-		const watcher = chokidar.watch(resolvedFilePath, {
-			persistent: true, // Keep process alive while watching
-			ignoreInitial: true, // Don't emit events for existing files on startup
-			atomic: true, // Handle atomic writes (editors that use temp files)
-			awaitWriteFinish: {
-				// Wait for writes to finish before emitting events
-				stabilityThreshold: 100, // Wait 100ms for file size to stabilize
-				pollInterval: 100, // Check every 100ms while waiting
-			},
-		})
-
-		// Track file changes
-		watcher.on("change", () => {
-			if (this.recentlyEditedByCline.has(filePath)) {
-				this.recentlyEditedByCline.delete(filePath) // This was an edit by Cline, no need to inform Cline
-			} else {
-				this.markRecentlyModified(filePath) // This was a user edit, we will inform Cline
-				this.trackFileContext(filePath, "user_edited") // Update the task metadata with file tracking
+		const subscription = this.registry.subscribe(cwd, filePath, (change) => {
+			if (change.isMetadataAuthor) {
+				// Exactly one subscriber records the external edit in task metadata.
+				// The registry already published this revision, so do not publish it again.
+				this.watcherPublishedPaths.add(change.filePath)
+				this.trackFileContext(change.filePath, "user_edited")
 			}
 		})
 
-		// Store the watcher so we can dispose it later
-		this.fileWatchers.set(filePath, watcher)
+		this.subscriptions.set(filePath, subscription)
+
+		// A snapshot restored before this subscription existed could not reach the
+		// registry yet; publish it now so later real edits still outrank it.
+		const restoredRevision = this.restoredRevisions.get(filePath)
+		if (restoredRevision !== undefined) {
+			this.registry.adoptRevision(cwd, filePath, restoredRevision)
+		}
 	}
 
 	/**
@@ -89,8 +111,10 @@ export class FileContextTracker {
 	 * This is the main entry point for FileContextTracker and is called when a file is passed to Cline via a tool, mention, or edit.
 	 */
 	async trackFileContext(filePath: string, operation: "read_tool" | "user_edited" | "cline_edited" | "file_mentioned") {
+		// Consume the marker before any await so a concurrent explicit call still publishes.
+		const alreadyPublished = this.watcherPublishedPaths.delete(filePath)
 		try {
-			const cwd = await getCwd()
+			const cwd = await this.resolveWorkspaceRoot()
 			if (!cwd) {
 				Logger.info("No workspace folder available - cannot determine current working directory")
 				return
@@ -101,6 +125,11 @@ export class FileContextTracker {
 
 			// Set up file watcher for this file
 			await this.setupFileWatcher(filePath)
+
+			if (operation === "user_edited" && !alreadyPublished) {
+				// Publish the edit so every task watching this path can see it.
+				this.registry.recordExternalEdit(cwd, filePath)
+			}
 		} catch (error) {
 			Logger.error("Failed to track file operation:", error)
 		}
@@ -145,7 +174,6 @@ export class FileContextTracker {
 				// user_edited: The user has edited the file
 				case "user_edited":
 					newEntry.user_edit_date = now
-					this.markRecentlyModified(filePath)
 					break
 
 				// cline_edited: Cline has edited the file
@@ -168,12 +196,17 @@ export class FileContextTracker {
 		}
 	}
 
-	/** Return a non-destructive snapshot of recently modified files. */
+	/** Return a non-destructive snapshot of files this task has not acknowledged yet. */
 	peekRecentlyModifiedFiles(): RecentlyModifiedFilesSnapshot {
-		return {
-			files: Array.from(this.recentlyModifiedFiles.keys()),
-			revisions: Object.fromEntries(this.recentlyModifiedFiles),
+		const files: string[] = []
+		const revisions: Record<string, number> = {}
+		for (const [filePath, revision] of this.currentRevisions()) {
+			if (revision > (this.acknowledgedRevisions.get(filePath) ?? 0)) {
+				files.push(filePath)
+				revisions[filePath] = revision
+			}
 		}
+		return { files, revisions }
 	}
 
 	/** Merge a durable snapshot without replacing file edits recorded after that snapshot. */
@@ -181,20 +214,28 @@ export class FileContextTracker {
 		for (const filePath of snapshot.files) {
 			const restoredRevision = snapshot.revisions[filePath]
 			if (!Number.isSafeInteger(restoredRevision) || restoredRevision <= 0) continue
-			const currentRevision = this.recentlyModifiedFiles.get(filePath) ?? 0
-			if (restoredRevision > currentRevision) {
-				this.recentlyModifiedFiles.set(filePath, restoredRevision)
+			if (this.workspaceRoot) {
+				this.registry.adoptRevision(this.workspaceRoot, filePath, restoredRevision)
 			}
-			this.recentlyModifiedRevision = Math.max(this.recentlyModifiedRevision, restoredRevision, currentRevision)
+			const currentRestored = this.restoredRevisions.get(filePath) ?? 0
+			if (restoredRevision > currentRestored) {
+				this.restoredRevisions.set(filePath, restoredRevision)
+			}
+			const acknowledged = this.acknowledgedRevisions.get(filePath) ?? 0
+			if (acknowledged >= restoredRevision) {
+				// Re-expose a restored edit that this task had already acknowledged.
+				this.acknowledgedRevisions.delete(filePath)
+			}
 		}
 	}
 
-	/** Remove only entries that still match the acknowledged snapshot revision. */
+	/** Advance the acknowledgement cursor only for entries that still match the snapshot. */
 	acknowledgeRecentlyModifiedFiles(snapshot: RecentlyModifiedFilesSnapshot): void {
 		for (const filePath of snapshot.files) {
-			if (this.recentlyModifiedFiles.get(filePath) === snapshot.revisions[filePath]) {
-				this.recentlyModifiedFiles.delete(filePath)
-			}
+			const snapshotRevision = snapshot.revisions[filePath]
+			if (snapshotRevision === undefined) continue
+			if (this.currentRevisionFor(filePath) !== snapshotRevision) continue
+			this.acknowledgedRevisions.set(filePath, snapshotRevision)
 		}
 	}
 
@@ -205,25 +246,43 @@ export class FileContextTracker {
 		return snapshot.files
 	}
 
-	private markRecentlyModified(filePath: string): void {
-		this.recentlyModifiedRevision += 1
-		this.recentlyModifiedFiles.set(filePath, this.recentlyModifiedRevision)
+	/** Latest known revision per tracked path, combining live watches and restored snapshots. */
+	private currentRevisions(): Map<string, number> {
+		const revisions = new Map(this.restoredRevisions)
+		for (const filePath of this.subscriptions.keys()) {
+			const revision = this.registryRevisionFor(filePath)
+			if (revision > (revisions.get(filePath) ?? 0)) {
+				revisions.set(filePath, revision)
+			}
+		}
+		return revisions
+	}
+
+	private currentRevisionFor(filePath: string): number {
+		return Math.max(this.restoredRevisions.get(filePath) ?? 0, this.registryRevisionFor(filePath))
+	}
+
+	private registryRevisionFor(filePath: string): number {
+		return this.workspaceRoot ? this.registry.getRevision(this.workspaceRoot, filePath) : 0
 	}
 
 	/**
-	 * Marks a file as edited by Cline to prevent false positives in file watchers
+	 * Marks a file as edited by Cline to prevent false positives in file watchers.
+	 * The registry ignores paths without a live watcher, so a task that has not
+	 * resolved a workspace root yet cannot leave a stale marker behind.
 	 */
 	markFileAsEditedByCline(filePath: string): void {
-		this.recentlyEditedByCline.add(filePath)
+		if (!this.workspaceRoot) return
+		this.registry.markSelfEdit(this.workspaceRoot, filePath)
 	}
 
 	/**
-	 * Disposes all file watchers
+	 * Releases this task's watch subscriptions; shared watchers stay alive for other tasks.
 	 */
 	async dispose(): Promise<void> {
-		const closePromises = Array.from(this.fileWatchers.values()).map((watcher) => watcher.close())
-		await Promise.all(closePromises)
-		this.fileWatchers.clear()
+		const subscriptions = Array.from(this.subscriptions.values())
+		this.subscriptions.clear()
+		await Promise.all(subscriptions.map((subscription) => subscription.dispose()))
 	}
 
 	/**
