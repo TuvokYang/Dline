@@ -14,7 +14,7 @@ export function OpenAiCodexCredentialJsonImport({ busy, onImport }: OpenAiCodexC
 		const submitted = oauthJson.trim()
 		setOauthJson("")
 		if (!submitted) {
-			setError("请粘贴完整的 OAuth credential JSON。")
+			setError("Paste the full OAuth credential JSON.")
 			return
 		}
 		setError(undefined)
@@ -35,12 +35,12 @@ export function OpenAiCodexCredentialJsonImport({ busy, onImport }: OpenAiCodexC
 					}
 				}}
 				type="button">
-				{open ? "▾" : "▸"} 高级：导入 OAuth credential JSON
+				{open ? "▾" : "▸"} Advanced: import OAuth credential JSON
 			</button>
 			{open ? (
 				<div className="mt-2 flex flex-col gap-2">
 					<p className="m-0 text-xs text-description">
-						仅在无法完成常规OAUTH认证时使用，内容只写入当前Profile的secret文件。
+						Use this only when the normal sign-in cannot complete. The JSON is written to this profile's secret file.
 					</p>
 					<textarea
 						aria-label="OpenAI Codex OAuth JSON"
@@ -63,7 +63,7 @@ export function OpenAiCodexCredentialJsonImport({ busy, onImport }: OpenAiCodexC
 							disabled={busy || oauthJson.trim().length === 0}
 							onClick={() => void importCredential()}
 							type="button">
-							导入凭据
+							Import credential
 						</button>
 					</div>
 				</div>

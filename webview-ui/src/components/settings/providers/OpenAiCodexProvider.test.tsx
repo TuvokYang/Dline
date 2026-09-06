@@ -92,7 +92,7 @@ describe("OpenAiCodexProvider OAUTH control", () => {
 	it("keeps the Provider card compact and free of manual credential inputs", async () => {
 		renderProvider()
 		await waitFor(() => expect(mocks.getStatus).toHaveBeenCalledWith({ profileId: "profile-a" }))
-		expect(screen.getByRole("button", { name: "开始 OAUTH 认证" })).toBeInTheDocument()
+		expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument()
 		expect(screen.queryByText(/Manual input/i)).not.toBeInTheDocument()
 		expect(screen.queryByLabelText(/api key|access token|refresh token|oauth json/i)).not.toBeInTheDocument()
 	})
@@ -101,27 +101,27 @@ describe("OpenAiCodexProvider OAUTH control", () => {
 		let resolveFlow!: (flow: OpenAiCodexAuthFlow) => void
 		mocks.signIn.mockReturnValue(new Promise((resolve) => (resolveFlow = resolve)))
 		renderProvider()
-		fireEvent.click(await screen.findByRole("button", { name: "开始 OAUTH 认证" }))
+		fireEvent.click(await screen.findByRole("button", { name: "Sign in" }))
 
-		expect(screen.getByRole("dialog", { name: "OpenAI Codex OAUTH 认证" })).toBeInTheDocument()
-		expect(screen.getByText("正在生成认证 URI…")).toBeInTheDocument()
+		expect(screen.getByRole("dialog", { name: "Sign in to ChatGPT" })).toBeInTheDocument()
+		expect(screen.getByText("Generating the sign-in URL…")).toBeInTheDocument()
 		await act(async () => resolveFlow(activeFlow))
-		expect(await screen.findByLabelText("OpenAI Codex 认证 URI")).toHaveValue(activeFlow.authorizationUrl)
+		expect(await screen.findByLabelText("ChatGPT sign-in URL")).toHaveValue(activeFlow.authorizationUrl)
 		expect(screen.queryByText(/callback listener/i)).not.toBeInTheDocument()
-		expect(screen.getByRole("button", { name: "取消" })).toBeInTheDocument()
-		expect(screen.getByRole("button", { name: "完成认证" })).toBeInTheDocument()
+		expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument()
+		expect(screen.getByRole("button", { name: "Finish sign-in" })).toBeInTheDocument()
 	})
 
 	it("copies and reopens the displayed authorization URI through host RPCs", async () => {
 		renderProvider()
-		fireEvent.click(await screen.findByRole("button", { name: "开始 OAUTH 认证" }))
-		await screen.findByLabelText("OpenAI Codex 认证 URI")
+		fireEvent.click(await screen.findByRole("button", { name: "Sign in" }))
+		await screen.findByLabelText("ChatGPT sign-in URL")
 
-		fireEvent.click(screen.getByRole("button", { name: "复制认证 URI" }))
+		fireEvent.click(screen.getByRole("button", { name: "Copy sign-in URL" }))
 		await waitFor(() =>
 			expect(mocks.copyToClipboard).toHaveBeenCalledWith(expect.objectContaining({ value: activeFlow.authorizationUrl })),
 		)
-		fireEvent.click(screen.getByRole("button", { name: "重新在浏览器中打开" }))
+		fireEvent.click(screen.getByRole("button", { name: "Open in browser again" }))
 		await waitFor(() =>
 			expect(mocks.openInBrowser).toHaveBeenCalledWith(expect.objectContaining({ value: activeFlow.authorizationUrl })),
 		)
@@ -132,11 +132,11 @@ describe("OpenAiCodexProvider OAUTH control", () => {
 		const completion = new Promise((resolve) => (resolveCompletion = resolve))
 		mocks.complete.mockReturnValue(completion)
 		renderProvider()
-		fireEvent.click(await screen.findByRole("button", { name: "开始 OAUTH 认证" }))
-		const input = await screen.findByRole("textbox", { name: "完整回调 URI" })
+		fireEvent.click(await screen.findByRole("button", { name: "Sign in" }))
+		const input = await screen.findByRole("textbox", { name: "Full callback URL" })
 		const callbackUri = "http://localhost:1455/auth/callback?code=secret-code&state=secret-state"
 		fireEvent.change(input, { target: { value: callbackUri } })
-		fireEvent.click(screen.getByRole("button", { name: "完成认证" }))
+		fireEvent.click(screen.getByRole("button", { name: "Finish sign-in" }))
 
 		expect(mocks.complete).toHaveBeenCalledWith({ profileId: "profile-a", flowId: "flow-a", callbackUri })
 		expect(input).toHaveValue("")
@@ -152,16 +152,16 @@ describe("OpenAiCodexProvider OAUTH control", () => {
 		const request = new Promise((resolve) => (resolveImport = resolve))
 		mocks.importOAuthJson.mockReturnValue(request)
 		renderProvider()
-		fireEvent.click(await screen.findByRole("button", { name: "开始 OAUTH 认证" }))
-		await screen.findByLabelText("OpenAI Codex 认证 URI")
+		fireEvent.click(await screen.findByRole("button", { name: "Sign in" }))
+		await screen.findByLabelText("ChatGPT sign-in URL")
 		expect(screen.queryByRole("textbox", { name: "OpenAI Codex OAuth JSON" })).not.toBeInTheDocument()
 
-		fireEvent.click(screen.getByRole("button", { name: /高级：导入 OAuth credential JSON/ }))
+		fireEvent.click(screen.getByRole("button", { name: /Advanced: import OAuth credential JSON/ }))
 		const input = screen.getByRole("textbox", { name: "OpenAI Codex OAuth JSON" })
 		expect(input).toHaveClass("h-24", "max-h-24")
 		const oauthJson = JSON.stringify({ access_token: "manual-secret", expires: 1_900_000_000_000 })
 		fireEvent.change(input, { target: { value: oauthJson } })
-		fireEvent.click(screen.getByRole("button", { name: "导入凭据" }))
+		fireEvent.click(screen.getByRole("button", { name: "Import credential" }))
 		expect(mocks.importOAuthJson).toHaveBeenCalledWith({ profileId: "profile-a", oauthJson })
 		expect(input).toHaveValue("")
 
@@ -185,9 +185,9 @@ describe("OpenAiCodexProvider OAUTH control", () => {
 			},
 		})
 		renderProvider()
-		expect(await screen.findByText("本次认证已超时，请重新开始。")).toBeInTheDocument()
-		expect(screen.getByRole("textbox", { name: "完整回调 URI" })).toBeDisabled()
-		expect(screen.getByRole("button", { name: "重新认证" })).toBeInTheDocument()
+		expect(await screen.findByText("This sign-in timed out. Start again.")).toBeInTheDocument()
+		expect(screen.getByRole("textbox", { name: "Full callback URL" })).toBeDisabled()
+		expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument()
 	})
 
 	it("explains lazy automatic refresh without exposing a Refresh button", async () => {
@@ -196,16 +196,15 @@ describe("OpenAiCodexProvider OAUTH control", () => {
 			status: OpenAiCodexAuthStatus.OPEN_AI_CODEX_AUTH_STATUS_REFRESHABLE_EXPIRED,
 		})
 		renderProvider()
-		expect(await screen.findByText("等待自动刷新")).toBeInTheDocument()
-		expect(screen.getByText("将在下一次请求前自动刷新当前Profile凭据。")).toBeInTheDocument()
+		expect(await screen.findByText("ChatGPT: Signed in · refreshing")).toBeInTheDocument()
 		expect(screen.queryByRole("button", { name: /^refresh$/i })).not.toBeInTheDocument()
 	})
 
 	it("cancels only the active Profile flow and signs out only the authenticated Profile", async () => {
 		renderProvider()
-		fireEvent.click(await screen.findByRole("button", { name: "开始 OAUTH 认证" }))
-		await screen.findByLabelText("OpenAI Codex 认证 URI")
-		fireEvent.click(screen.getByRole("button", { name: "取消" }))
+		fireEvent.click(await screen.findByRole("button", { name: "Sign in" }))
+		await screen.findByLabelText("ChatGPT sign-in URL")
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
 		await waitFor(() => expect(mocks.cancel).toHaveBeenCalledWith({ profileId: "profile-a", flowId: "flow-a" }))
 
 		mocks.getStatus.mockResolvedValue({
@@ -213,7 +212,7 @@ describe("OpenAiCodexProvider OAUTH control", () => {
 			status: OpenAiCodexAuthStatus.OPEN_AI_CODEX_AUTH_STATUS_AUTHENTICATED,
 		})
 		renderProvider()
-		fireEvent.click(await screen.findByRole("button", { name: "退出认证" }))
+		fireEvent.click(await screen.findByRole("button", { name: "Sign out" }))
 		await waitFor(() => expect(mocks.signOut).toHaveBeenCalledWith({ profileId: "profile-a" }))
 	})
 
@@ -223,8 +222,8 @@ describe("OpenAiCodexProvider OAUTH control", () => {
 			status: OpenAiCodexAuthStatus.OPEN_AI_CODEX_AUTH_STATUS_AUTHENTICATED,
 		})
 		renderProvider()
-		fireEvent.click(await screen.findByRole("button", { name: "重新进行 OAUTH 认证" }))
-		await screen.findByLabelText("OpenAI Codex 认证 URI")
+		fireEvent.click(await screen.findByRole("button", { name: "Sign in again" }))
+		await screen.findByLabelText("ChatGPT sign-in URL")
 
 		mocks.getStatus.mockResolvedValue({
 			profileId: profile.id,
@@ -233,8 +232,8 @@ describe("OpenAiCodexProvider OAUTH control", () => {
 		})
 		await waitFor(() => expect(mocks.getStatus.mock.calls.length).toBeGreaterThan(1), { timeout: 2_500 })
 
-		expect(screen.getByRole("dialog", { name: "OpenAI Codex OAUTH 认证" })).toBeInTheDocument()
-		expect(screen.getByLabelText("OpenAI Codex 认证 URI")).toHaveValue(activeFlow.authorizationUrl)
+		expect(screen.getByRole("dialog", { name: "Sign in to ChatGPT" })).toBeInTheDocument()
+		expect(screen.getByLabelText("ChatGPT sign-in URL")).toHaveValue(activeFlow.authorizationUrl)
 	})
 
 	it("cancels a late start response with its original owner after the Profile changes", async () => {
@@ -244,7 +243,7 @@ describe("OpenAiCodexProvider OAUTH control", () => {
 			Promise.resolve({ profileId, status: OpenAiCodexAuthStatus.OPEN_AI_CODEX_AUTH_STATUS_MISSING }),
 		)
 		const view = renderProvider()
-		fireEvent.click(await screen.findByRole("button", { name: "开始 OAUTH 认证" }))
+		fireEvent.click(await screen.findByRole("button", { name: "Sign in" }))
 
 		view.rerender(<OpenAiCodexProvider onUpdate={vi.fn()} profile={profileB} showModelOptions={false} />)
 		await act(async () => resolveFlow(activeFlow))
@@ -257,7 +256,7 @@ describe("OpenAiCodexProvider OAUTH control", () => {
 		let resolveFlow!: (flow: OpenAiCodexAuthFlow) => void
 		mocks.signIn.mockReturnValue(new Promise((resolve) => (resolveFlow = resolve)))
 		const view = renderProvider()
-		fireEvent.click(await screen.findByRole("button", { name: "开始 OAUTH 认证" }))
+		fireEvent.click(await screen.findByRole("button", { name: "Sign in" }))
 		view.unmount()
 
 		await act(async () => resolveFlow(activeFlow))
@@ -277,22 +276,22 @@ describe("OpenAiCodexProvider OAUTH control", () => {
 			},
 		})
 		renderProvider()
-		fireEvent.click(await screen.findByRole("button", { name: "开始 OAUTH 认证" }))
-		const input = await screen.findByRole("textbox", { name: "完整回调 URI" })
+		fireEvent.click(await screen.findByRole("button", { name: "Sign in" }))
+		const input = await screen.findByRole("textbox", { name: "Full callback URL" })
 		fireEvent.change(input, { target: { value: "http://localhost:1455/auth/callback?code=denied&state=state" } })
-		fireEvent.click(screen.getByRole("button", { name: "完成认证" }))
+		fireEvent.click(screen.getByRole("button", { name: "Finish sign-in" }))
 
-		expect(await screen.findByText("本次 OAUTH 认证已失败，请重新认证。")).toBeInTheDocument()
-		expect(screen.queryByLabelText("OpenAI Codex 认证 URI")).not.toBeInTheDocument()
-		expect(screen.getByRole("button", { name: "重新认证" })).toBeInTheDocument()
+		expect(await screen.findByText("Sign-in failed. Try again.")).toBeInTheDocument()
+		expect(screen.queryByLabelText("ChatGPT sign-in URL")).not.toBeInTheDocument()
+		expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument()
 	})
 
 	it("never renders raw start or import error payloads", async () => {
 		const secret = "access_token=secret-token&code=secret-code"
 		mocks.signIn.mockRejectedValue(new Error(secret))
 		renderProvider()
-		fireEvent.click(await screen.findByRole("button", { name: "开始 OAUTH 认证" }))
-		await screen.findByText("无法启动 OpenAI Codex OAUTH 认证，请重试。")
+		fireEvent.click(await screen.findByRole("button", { name: "Sign in" }))
+		await screen.findByText("Cannot start the ChatGPT sign-in. Try again.")
 		expect(document.body.textContent).not.toContain(secret)
 	})
 })

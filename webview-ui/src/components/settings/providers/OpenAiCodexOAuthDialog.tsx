@@ -84,7 +84,7 @@ export function OpenAiCodexOAuthDialog({
 		try {
 			await WebServiceClient.openInBrowser(StringRequest.create({ value: flow.authorizationUrl }))
 		} catch {
-			setBrowserActionError("无法打开浏览器，请复制认证 URI 后手工打开。")
+			setBrowserActionError("Could not open the browser. Copy the sign-in URL and open it manually.")
 		}
 	}
 
@@ -98,34 +98,34 @@ export function OpenAiCodexOAuthDialog({
 				className="!top-1/2 flex max-h-[calc(100vh-2rem)] w-[calc(100%-1.5rem)] max-w-[440px] !translate-y-[-50%] flex-col gap-0 p-0"
 				onInteractOutside={(event) => event.preventDefault()}>
 				<DialogHeader className="shrink-0 px-4 pb-3 pt-4 pr-10 text-left">
-					<DialogTitle>OpenAI Codex OAUTH 认证</DialogTitle>
+					<DialogTitle>Sign in to ChatGPT</DialogTitle>
 					<DialogDescription>
 						{phase === "starting"
-							? "正在准备安全的本地认证回调…"
+							? "Preparing a secure local callback…"
 							: timedOut
-								? "本次认证已超时，请重新开始。"
-								: "请在浏览器中完成授权；无法自动返回时可粘贴完整回调 URI。"}
+								? "This sign-in timed out. Start again."
+								: "Authorize in the browser. If it cannot return automatically, paste the full callback URL."}
 					</DialogDescription>
 				</DialogHeader>
 
 				<div className="min-h-0 flex-1 overflow-y-auto border-y border-input-border/60 px-4 py-3">
 					<div className="flex flex-col gap-4">
-						{phase === "starting" ? <div className="text-sm">正在生成认证 URI…</div> : null}
+						{phase === "starting" ? <div className="text-sm">Generating the sign-in URL…</div> : null}
 						{phase === "failed" ? (
-							<div className="text-sm text-error-foreground">本次 OAUTH 认证已失败，请重新认证。</div>
+							<div className="text-sm text-error-foreground">This sign-in failed. Try again.</div>
 						) : null}
 						{flow ? (
 							<>
 								<div className="flex items-center justify-between gap-2 text-sm">
 									<span>
 										{timedOut
-											? "认证已超时"
+											? "Sign-in timed out"
 											: phase === "completing"
-												? "正在完成认证…"
-												: "正在等待浏览器授权"}
+												? "Completing sign-in…"
+												: "Waiting for browser authorization"}
 									</span>
 									<span className="shrink-0 tabular-nums text-description">
-										{timedOut ? "00:00" : `剩余 ${formatRemaining(flow.expiresAtMs, nowMs)}`}
+										{timedOut ? "00:00" : `${formatRemaining(flow.expiresAtMs, nowMs)} left`}
 									</span>
 								</div>
 
@@ -134,18 +134,18 @@ export function OpenAiCodexOAuthDialog({
 										<label
 											className="text-sm font-medium"
 											htmlFor={`openai-codex-authorization-uri-${flow.profileId}`}>
-											认证 URI
+											Sign-in URL
 										</label>
 										<div className="flex min-w-0 items-center gap-1">
 											<input
-												aria-label="OpenAI Codex 认证 URI"
+												aria-label="ChatGPT sign-in URL"
 												className="min-h-7 min-w-0 flex-1 truncate rounded-xs border border-input-border bg-input-background px-2 text-sm"
 												id={`openai-codex-authorization-uri-${flow.profileId}`}
 												readOnly
 												value={flow.authorizationUrl}
 											/>
 											<CopyButton
-												ariaLabel="复制认证 URI"
+												ariaLabel="Copy sign-in URL"
 												textToCopy={flow.authorizationUrl}
 												writeText={(value) =>
 													FileServiceClient.copyToClipboard(StringRequest.create({ value }))
@@ -156,12 +156,12 @@ export function OpenAiCodexOAuthDialog({
 											className="self-start text-sm text-link underline"
 											onClick={() => void openInBrowser()}
 											type="button">
-											重新在浏览器中打开
+											Open in browser again
 										</button>
 										{flow.browserOpenStatus ===
 										OpenAiCodexBrowserOpenStatus.OPEN_AI_CODEX_BROWSER_OPEN_STATUS_FAILED ? (
 											<div className="text-sm text-warning-foreground" role="status">
-												浏览器未能自动打开，请复制认证 URI 后手工打开。
+												The browser did not open automatically. Copy the sign-in URL and open it manually.
 											</div>
 										) : null}
 										{browserActionError ? (
@@ -174,10 +174,10 @@ export function OpenAiCodexOAuthDialog({
 
 								<div className="flex flex-col gap-2">
 									<label className="text-sm font-medium" htmlFor={`openai-codex-callback-${flow.profileId}`}>
-										粘贴完整回调 URI
+										Paste the full callback URL
 									</label>
 									<textarea
-										aria-label="完整回调 URI"
+										aria-label="Full callback URL"
 										autoComplete="off"
 										className="h-14 w-full resize-none overflow-y-auto rounded-xs border border-input-border bg-input-background p-2 text-sm"
 										disabled={busy || timedOut}
@@ -206,14 +206,14 @@ export function OpenAiCodexOAuthDialog({
 						disabled={busy}
 						onClick={() => void cancel()}
 						type="button">
-						取消
+						Cancel
 					</button>
 					<button
 						className="min-h-7 rounded-xs bg-button px-3 text-sm text-button-foreground disabled:opacity-50"
 						disabled={busy || (active && callbackUri.trim().length === 0)}
 						onClick={() => void (timedOut || phase === "failed" ? onRestart() : complete())}
 						type="button">
-						{timedOut || phase === "failed" ? "重新认证" : "完成认证"}
+						{timedOut || phase === "failed" ? "Try again" : "Finish sign-in"}
 					</button>
 				</DialogFooter>
 			</DialogContent>

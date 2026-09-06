@@ -9,6 +9,15 @@ import { AccountServiceClient } from "@/services/grpc-client"
 
 export type OpenAiCodexOAuthDialogPhase = "closed" | "starting" | "active" | "completing" | "timed-out" | "failed"
 
+/**
+ * Consecutive status probe failures tolerated before the UI surfaces an error.
+ *
+ * The status endpoint is polled on a timer and is also queried immediately on mount, so a single
+ * transient failure is expected noise rather than an actionable condition. Only a sustained
+ * failure means the user cannot read the credential state.
+ */
+const STATUS_FAILURE_TOLERANCE = 3
+
 export interface OpenAiCodexOAuthDialogState {
 	phase: OpenAiCodexOAuthDialogPhase
 	flow?: OpenAiCodexAuthFlow
@@ -27,6 +36,7 @@ export function useOpenAiCodexOAuthFlow(profileId: string) {
 	const [statusError, setStatusError] = useState<string>()
 	const [actionError, setActionError] = useState<string>()
 	const [busy, setBusy] = useState(false)
+	const statusFailureCountRef = useRef(0)
 	const flowRef = useRef<OpenAiCodexAuthFlow>()
 	const ignoredFlowIdsRef = useRef(new Set<string>())
 	const mountedRef = useRef(false)
@@ -71,19 +81,20 @@ export function useOpenAiCodexOAuthFlow(profileId: string) {
 	const applyStatus = useCallback(
 		(response: OpenAiCodexAuthStatusResponse) => {
 			if (response.profileId !== profileId) return
+			statusFailureCountRef.current = 0
 			setStatus(response.status)
 			setStatusError(undefined)
 			const currentFlow = flowRef.current
 			const outcome = response.lastFlowOutcome
 			if (currentFlow && outcome?.flowId === currentFlow.flowId) {
 				if (outcome.status === OpenAiCodexFlowStatus.OPEN_AI_CODEX_FLOW_STATUS_TIMED_OUT) {
-					setActionError("OAUTH 认证已超时，请重新认证。")
+					setActionError("Sign-in timed out. Try again.")
 					setDialog({ phase: "timed-out", flow: currentFlow })
 					return
 				}
 				if (outcome.status === OpenAiCodexFlowStatus.OPEN_AI_CODEX_FLOW_STATUS_FAILED) {
 					flowRef.current = undefined
-					setActionError("本次 OAUTH 认证失败，请重新认证。")
+					setActionError("Sign-in failed. Try again.")
 					setDialog({ phase: "failed" })
 					return
 				}
@@ -115,14 +126,17 @@ export function useOpenAiCodexOAuthFlow(profileId: string) {
 			const response = await AccountServiceClient.getOpenAiCodexAuthStatus({ profileId: targetProfileId })
 			if (isCurrent(targetProfileId, epoch) && statusSequenceRef.current === sequence) applyStatus(response)
 		} catch {
-			if (isCurrent(targetProfileId, epoch) && statusSequenceRef.current === sequence) {
-				setStatusError("无法读取 OpenAI Codex 认证状态，请重试。")
+			if (!isCurrent(targetProfileId, epoch) || statusSequenceRef.current !== sequence) return
+			statusFailureCountRef.current += 1
+			if (statusFailureCountRef.current >= STATUS_FAILURE_TOLERANCE) {
+				setStatusError("Cannot read the sign-in status.")
 			}
 		}
 	}, [applyStatus, isCurrent, profileId])
 
 	useEffect(() => {
 		ignoredFlowIdsRef.current.clear()
+		statusFailureCountRef.current = 0
 		setBusy(false)
 		setStatus(OpenAiCodexAuthStatus.OPEN_AI_CODEX_AUTH_STATUS_UNSPECIFIED)
 		setClosed()
@@ -162,7 +176,7 @@ export function useOpenAiCodexOAuthFlow(profileId: string) {
 		} catch {
 			if (!isCurrent(targetProfileId, epoch)) return
 			flowRef.current = undefined
-			setActionError("无法启动 OpenAI Codex OAUTH 认证，请重试。")
+			setActionError("Cannot start the ChatGPT sign-in. Try again.")
 			setDialog({ phase: "failed" })
 		} finally {
 			if (isCurrent(targetProfileId, epoch)) setBusy(false)
@@ -174,7 +188,7 @@ export function useOpenAiCodexOAuthFlow(profileId: string) {
 			const flow = flowRef.current
 			if (!flow || Date.now() >= flow.expiresAtMs) {
 				setDialog({ phase: "timed-out", flow })
-				setActionError("OAUTH 认证已超时，请重新认证。")
+				setActionError("Sign-in timed out. Try again.")
 				return
 			}
 			const targetProfileId = flow.profileId
@@ -193,10 +207,10 @@ export function useOpenAiCodexOAuthFlow(profileId: string) {
 				if (!isCurrent(targetProfileId, epoch)) return
 				if (Date.now() >= flow.expiresAtMs) {
 					setDialog({ phase: "timed-out", flow })
-					setActionError("OAUTH 认证已超时，请重新认证。")
+					setActionError("Sign-in timed out. Try again.")
 				} else {
 					setDialog({ phase: "active", flow })
-					setActionError("无法完成 OAUTH 认证，请检查完整回调 URI 后重试。")
+					setActionError("Cannot finish the sign-in. Check the full callback URL and try again.")
 				}
 			} finally {
 				if (isCurrent(targetProfileId, epoch)) setBusy(false)
@@ -219,7 +233,7 @@ export function useOpenAiCodexOAuthFlow(profileId: string) {
 				if (isCurrent(targetProfileId, epoch)) applyStatus(response)
 			} catch {
 				if (isCurrent(targetProfileId, epoch)) {
-					setActionError("无法导入 OpenAI Codex OAuth credential，请检查 JSON 后重试。")
+					setActionError("Cannot import the credential. Check the JSON and try again.")
 				}
 			} finally {
 				if (isCurrent(targetProfileId, epoch)) setBusy(false)
@@ -241,7 +255,7 @@ export function useOpenAiCodexOAuthFlow(profileId: string) {
 		} catch {
 			if (!isCurrent(targetProfileId, epoch)) return
 			ignoredFlowIdsRef.current.delete(flow.flowId)
-			setActionError("无法取消 OpenAI Codex OAUTH 认证，请重试。")
+			setActionError("Cannot cancel the sign-in. Try again.")
 			await refreshStatus()
 		}
 	}, [invalidatePendingResponses, isCurrent, profileId, refreshStatus, setClosed])
@@ -257,7 +271,7 @@ export function useOpenAiCodexOAuthFlow(profileId: string) {
 			setClosed()
 			setStatus(OpenAiCodexAuthStatus.OPEN_AI_CODEX_AUTH_STATUS_MISSING)
 		} catch {
-			if (isCurrent(targetProfileId, epoch)) setActionError("无法退出当前 OpenAI Codex Profile，请重试。")
+			if (isCurrent(targetProfileId, epoch)) setActionError("Cannot sign out of this profile. Try again.")
 		} finally {
 			if (isCurrent(targetProfileId, epoch)) setBusy(false)
 		}
@@ -267,7 +281,7 @@ export function useOpenAiCodexOAuthFlow(profileId: string) {
 		const flow = flowRef.current
 		if (!flow) return
 		invalidatePendingResponses()
-		setActionError("OAUTH 认证已超时，请重新认证。")
+		setActionError("Sign-in timed out. Try again.")
 		setDialog({ phase: "timed-out", flow })
 	}, [invalidatePendingResponses])
 

@@ -5,10 +5,26 @@ export interface ParsedOAuthCallback {
 	code: string
 }
 
+/** Loopback names that address the same local callback server. */
+const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]", "::1"])
+
 function safeEqual(left: string, right: string): boolean {
 	const leftBytes = Buffer.from(left)
 	const rightBytes = Buffer.from(right)
 	return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes)
+}
+
+/**
+ * Compares callback origins, treating equivalent loopback hostnames as one origin.
+ *
+ * The published `redirect_uri` may use `localhost` to satisfy a provider allow-list while the
+ * server binds `127.0.0.1`, so the browser can deliver the callback under either name. Scheme
+ * and port still have to match exactly.
+ */
+function isSameCallbackOrigin(callback: URL, expected: URL): boolean {
+	if (callback.protocol !== expected.protocol || callback.port !== expected.port) return false
+	if (callback.hostname === expected.hostname) return true
+	return LOOPBACK_HOSTNAMES.has(callback.hostname) && LOOPBACK_HOSTNAMES.has(expected.hostname)
 }
 
 export function parseOAuthCallbackUri(
@@ -25,7 +41,7 @@ export function parseOAuthCallbackUri(
 		throw new OAuthFlowError("CALLBACK_URI_INVALID", "The OAuth callback URI is invalid.")
 	}
 
-	if (callback.origin !== expected.origin || callback.pathname !== expected.pathname) {
+	if (!isSameCallbackOrigin(callback, expected) || callback.pathname !== expected.pathname) {
 		throw new OAuthFlowError("CALLBACK_URI_MISMATCH", "The OAuth callback URI does not match the active flow.")
 	}
 

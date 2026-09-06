@@ -2,7 +2,15 @@ import http from "node:http"
 import { OAuthFlowError } from "./types"
 
 export interface LocalOAuthCallbackServerOptions {
+	/** Loopback address the server binds to. */
 	host?: string
+	/**
+	 * Host published in {@link LocalOAuthCallbackServer.redirectUri}.
+	 *
+	 * Defaults to the bind host. Providers whose redirect allow-list registers `localhost`
+	 * require this because `redirect_uri` is matched as an exact string, not resolved.
+	 */
+	redirectHost?: string
 	port: number
 	callbackPath: string
 	onCallback: (callbackUri: string) => Promise<void>
@@ -25,6 +33,7 @@ export class LocalOAuthCallbackServer {
 
 	static async listen(options: LocalOAuthCallbackServerOptions): Promise<LocalOAuthCallbackServer> {
 		const host = options.host ?? "127.0.0.1"
+		const redirectHost = options.redirectHost ?? host
 		let baseUrl = `http://${host}:${options.port}`
 		const server = http.createServer(async (request, response) => {
 			const callback = new URL(request.url ?? "/", baseUrl)
@@ -64,7 +73,8 @@ export class LocalOAuthCallbackServer {
 			throw new OAuthFlowError("CALLBACK_SERVER_FAILED", "The OAuth callback server did not expose a TCP address.")
 		}
 		baseUrl = `http://${host}:${address.port}`
-		return new LocalOAuthCallbackServer(server, new URL(options.callbackPath, baseUrl).toString())
+		const redirectBaseUrl = `http://${redirectHost}:${address.port}`
+		return new LocalOAuthCallbackServer(server, new URL(options.callbackPath, redirectBaseUrl).toString())
 	}
 
 	async close(): Promise<void> {

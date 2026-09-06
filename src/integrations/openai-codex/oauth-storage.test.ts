@@ -140,19 +140,26 @@ describe("OpenAI Codex OAuth strategy and Profile storage", () => {
 		)
 		const strategy = new OpenAiCodexOAuthStrategy({ fetchImpl: fetchImpl as unknown as typeof fetch, now: () => NOW })
 		const authorizationUrl = strategy.buildAuthorizationUrl({
-			redirectUri: "http://127.0.0.1:1455/auth/callback",
+			redirectUri: "http://localhost:1455/auth/callback",
 			codeChallenge: "challenge",
 			state: "csrf-state",
 		})
 
 		expect(authorizationUrl.searchParams.get("code_challenge_method")).toBe("S256")
 		expect(authorizationUrl.searchParams.get("codex_cli_simplified_flow")).toBe("true")
+		expect(authorizationUrl.searchParams.get("id_token_add_organizations")).toBe("true")
+		expect(authorizationUrl.searchParams.get("originator")).toBe("codex_cli_rs")
+		expect(authorizationUrl.searchParams.get("redirect_uri")).toBe("http://localhost:1455/auth/callback")
+		expect(authorizationUrl.searchParams.get("scope")).toBe(
+			"openid profile email offline_access api.connectors.read api.connectors.invoke",
+		)
 		expect(authorizationUrl.searchParams.get("state")).toBe("csrf-state")
+		expect(strategy.callbackRedirectHost).toBe("localhost")
 		await expect(
 			strategy.exchangeAuthorizationCode({
 				code: "authorization-code",
 				codeVerifier: "verifier",
-				redirectUri: "http://127.0.0.1:1455/auth/callback",
+				redirectUri: "http://localhost:1455/auth/callback",
 			}),
 		).resolves.toEqual({
 			type: "openai-codex",

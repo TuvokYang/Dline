@@ -44,6 +44,13 @@ export interface OAuthAuthorizationStrategy<TCredential> {
 	readonly callbackPort: number
 	readonly callbackPorts?: readonly number[]
 	readonly callbackPath: string
+	/**
+	 * Host published in `redirect_uri` when it must differ from the loopback bind address.
+	 *
+	 * Authorization servers compare `redirect_uri` as an exact string, so a provider whose
+	 * allow-list registers `localhost` rejects an otherwise equivalent `127.0.0.1` callback.
+	 */
+	readonly callbackRedirectHost?: string
 	buildAuthorizationUrl(input: OAuthAuthorizationInput): URL
 	exchangeAuthorizationCode(input: OAuthCodeExchangeInput): Promise<TCredential>
 	refreshCredential?(credential: TCredential): Promise<TCredential>

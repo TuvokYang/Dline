@@ -2,12 +2,23 @@ import { type OpenAiOAuthCredentials, parseOpenAiOAuthCredentials } from "@/core
 import type { OAuthAuthorizationInput, OAuthAuthorizationStrategy, OAuthCodeExchangeInput } from "@/services/oauth"
 import { fetch as proxyFetch } from "@/shared/net"
 
+/**
+ * Authorization parameters mirror the current Codex CLI login flow.
+ *
+ * The provider matches `redirect_uri` as an exact string against its allow-list, so the published
+ * host must be `localhost`; an otherwise equivalent `127.0.0.1` callback is rejected with
+ * `invalid_authorize_request`. The connector scopes and `codex_cli_rs` originator track upstream
+ * `codex-rs` so newly gated capabilities stay available.
+ */
 export const OPENAI_CODEX_OAUTH_CONFIG = {
 	authorizationEndpoint: "https://auth.openai.com/oauth/authorize",
 	tokenEndpoint: "https://auth.openai.com/oauth/token",
 	clientId: "app_EMoamEEZ73f0CkXaXp7hrann",
-	scopes: "openid profile email offline_access",
+	scopes: "openid profile email offline_access api.connectors.read api.connectors.invoke",
+	originator: "codex_cli_rs",
 	callbackPort: 1455,
+	callbackPorts: [1455, 1457] as readonly number[],
+	callbackRedirectHost: "localhost",
 	callbackPath: "/auth/callback",
 } as const
 
@@ -38,8 +49,10 @@ export interface OpenAiCodexOAuthConfiguration {
 	tokenEndpoint: string
 	clientId: string
 	scopes: string
+	originator: string
 	callbackPort: number
 	callbackPorts?: readonly number[]
+	callbackRedirectHost?: string
 	callbackPath: string
 }
 
@@ -131,6 +144,7 @@ export class OpenAiCodexOAuthStrategy implements OAuthAuthorizationStrategy<Open
 	readonly strategyId = "openai-codex"
 	readonly callbackPort: number
 	readonly callbackPorts: readonly number[]
+	readonly callbackRedirectHost: string | undefined
 	readonly callbackPath: string
 	private readonly configuration: OpenAiCodexOAuthConfiguration
 	private readonly fetchImpl: typeof proxyFetch
@@ -140,6 +154,7 @@ export class OpenAiCodexOAuthStrategy implements OAuthAuthorizationStrategy<Open
 		this.configuration = { ...OPENAI_CODEX_OAUTH_CONFIG, ...options.configuration }
 		this.callbackPort = this.configuration.callbackPort
 		this.callbackPorts = this.configuration.callbackPorts ?? [this.configuration.callbackPort]
+		this.callbackRedirectHost = this.configuration.callbackRedirectHost
 		this.callbackPath = this.configuration.callbackPath
 		this.fetchImpl = options.fetchImpl ?? proxyFetch
 		this.now = options.now ?? Date.now
@@ -154,9 +169,10 @@ export class OpenAiCodexOAuthStrategy implements OAuthAuthorizationStrategy<Open
 			code_challenge: input.codeChallenge,
 			code_challenge_method: "S256",
 			response_type: "code",
+			id_token_add_organizations: "true",
 			state: input.state,
 			codex_cli_simplified_flow: "true",
-			originator: "cline",
+			originator: this.configuration.originator,
 		}).toString()
 		return url
 	}

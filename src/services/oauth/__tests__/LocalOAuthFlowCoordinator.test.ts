@@ -18,6 +18,7 @@ class TestStrategy implements OAuthAuthorizationStrategy<TestCredential> {
 
 	readonly callbackPort: number
 	readonly callbackPorts: readonly number[]
+	readonly callbackRedirectHost: string | undefined
 
 	constructor(
 		callbackPorts: number | readonly number[] = 0,
@@ -25,9 +26,11 @@ class TestStrategy implements OAuthAuthorizationStrategy<TestCredential> {
 			code,
 			verifier,
 		}),
+		callbackRedirectHost?: string,
 	) {
 		this.callbackPorts = typeof callbackPorts === "number" ? [callbackPorts] : callbackPorts
 		this.callbackPort = this.callbackPorts[0] ?? 0
+		this.callbackRedirectHost = callbackRedirectHost
 	}
 
 	buildAuthorizationUrl(input: { redirectUri: string; codeChallenge: string; state: string }): URL {
@@ -142,6 +145,23 @@ describe("LocalOAuthFlowCoordinator", () => {
 		const response = await fetch(`${redirectUri}?code=browser-code&state=${state}`)
 		expect(response.status).toBe(200)
 		await expect(flow.result).resolves.toMatchObject({ code: "browser-code" })
+	})
+
+	it("publishes the strategy redirect host while still binding the loopback address", async () => {
+		const port = await getAvailablePort()
+		const coordinator = await createCoordinator({
+			strategy: new TestStrategy(port, undefined, "localhost"),
+		})
+		const flow = await coordinator.startFlow({ profileId: "profile-a" })
+		const authorization = lastAuthorizationUrl()
+		const state = authorization.searchParams.get("state")!
+
+		expect(flow.redirectUri).toBe(`http://localhost:${port}/oauth/callback`)
+		expect(authorization.searchParams.get("redirect_uri")).toBe(`http://localhost:${port}/oauth/callback`)
+
+		const response = await fetch(`http://127.0.0.1:${port}/oauth/callback?code=loopback-code&state=${state}`)
+		expect(response.status).toBe(200)
+		await expect(flow.result).resolves.toMatchObject({ code: "loopback-code" })
 	})
 
 	it("closes a fixed-port callback connection before the next flow starts", async () => {
