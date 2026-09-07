@@ -42,6 +42,7 @@ import {
 	TaskServiceClient,
 	UiServiceClient,
 } from "../services/grpc-client"
+import { isMessageWindowOverfull, reconcileMessageWindow } from "./messageWindowSync"
 
 const getTaskViewKey = (taskId?: string, taskTitleMessageTs?: number) =>
 	taskId ?? (taskTitleMessageTs != null ? `task-title:${taskTitleMessageTs}` : undefined)
@@ -78,15 +79,32 @@ const mergeClineMessagesByTs = (existing: ClineMessage[], incoming: ClineMessage
 	return merged.sort((left, right) => left.ts - right.ts)
 }
 
-const mergeFetchedClineMessagesByTs = (existing: ClineMessage[], fetched: ClineMessage[]): ClineMessage[] => {
-	const fetchedByTs = new Map(fetched.map((message) => [message.ts, message]))
-	for (const message of existing) {
-		const fetchedMessage = fetchedByTs.get(message.ts)
-		if (message.partial !== true && fetchedMessage?.partial !== true) {
-			fetchedByTs.set(message.ts, message)
-		}
-	}
-	return mergeClineMessagesByTs(existing, [...fetchedByTs.values()])
+/**
+ * Merge a fetched window into the local one without losing backend deletions.
+ *
+ * A plain timestamp union can only add or replace, so a message the backend
+ * removed stayed on screen forever. Reconciliation treats the fetched span as
+ * authoritative and leaves everything outside it untouched.
+ *
+ * @param existing Currently rendered window.
+ * @param existingStartIndex Absolute index of the first rendered message.
+ * @param fetched Window returned by the backend.
+ * @param fetchedStartIndex Absolute index of the first fetched message.
+ * @param total Total messages the backend reports, when known.
+ * @returns Reconciled window and its absolute start index.
+ */
+const applyFetchedMessageWindow = (
+	existing: ClineMessage[],
+	existingStartIndex: number,
+	fetched: ClineMessage[],
+	fetchedStartIndex: number,
+	total?: number,
+): { messages: ClineMessage[]; startIndex: number } => {
+	const reconciled = reconcileMessageWindow(
+		{ messages: existing, startIndex: existingStartIndex },
+		{ messages: fetched, startIndex: fetchedStartIndex, total },
+	)
+	return { messages: reconciled.messages, startIndex: reconciled.startIndex }
 }
 
 const hasExactInteractionAnchor = (messages: readonly ClineMessage[], interaction: ActiveInteractionView): boolean =>
@@ -423,8 +441,12 @@ export const ExtensionStateContextProvider: React.FC<{
 	const [clineMessages, setClineMessages] = useState<ClineMessage[]>([])
 	const [firstItemIndex, setFirstItemIndex] = useState(0)
 	const clineMessagesRef = useRef<ClineMessage[]>([])
+	// Fetch callbacks resolve after their scheduling render, so reconciliation
+	// has to read the window start from a ref rather than the captured value.
+	const firstItemIndexRef = useRef(0)
 	const bootstrapResolvedRef = useRef(false)
 	clineMessagesRef.current = clineMessages
+	firstItemIndexRef.current = firstItemIndex
 	if (clineMessages.length > 0) bootstrapResolvedRef.current = true
 
 	const prevTotalRef = useRef(0)
@@ -495,9 +517,21 @@ export const ExtensionStateContextProvider: React.FC<{
 						return
 					}
 					if (converted.length > 0) bootstrapResolvedRef.current = true
-					setClineMessages((prev) => mergeFetchedClineMessagesByTs(prev, converted))
 					const startIndex = Math.max(0, resp.startIndex)
-					setFirstItemIndex((current) => (referenceIndex === -1 ? startIndex : Math.min(current, startIndex)))
+					let reconciledStartIndex = startIndex
+					setClineMessages((prev) => {
+						const reconciled = applyFetchedMessageWindow(
+							prev,
+							firstItemIndexRef.current,
+							converted,
+							startIndex,
+							responseTotal,
+						)
+						reconciledStartIndex = reconciled.startIndex
+						return reconciled.messages
+					})
+					firstItemIndexRef.current = reconciledStartIndex
+					setFirstItemIndex(reconciledStartIndex)
 					if (expectedInteraction && !hasExactInteractionAnchor(converted, expectedInteraction)) {
 						if (startIndex > 0) {
 							await fetchAttempt(Math.max(0, startIndex - 200), false)
@@ -531,6 +565,7 @@ export const ExtensionStateContextProvider: React.FC<{
 			refetchLockRef.current = false
 			lastInteractionFetchKeyRef.current = undefined
 			bootstrapResolvedRef.current = false
+			firstItemIndexRef.current = 0
 			setClineMessages([])
 			setFirstItemIndex(0)
 			prevTotalRef.current = total
@@ -546,6 +581,7 @@ export const ExtensionStateContextProvider: React.FC<{
 				clearTimeout(cancelStabilizeTimerRef.current)
 				cancelStabilizeTimerRef.current = null
 			}
+			firstItemIndexRef.current = 0
 			setClineMessages([])
 			setFirstItemIndex(0)
 			prevTotalRef.current = 0
@@ -571,8 +607,10 @@ export const ExtensionStateContextProvider: React.FC<{
 						return
 					}
 					const converted = resp.messages.map((message) => convertProtoToClineMessage(message))
+					const startIndex = Math.max(0, resp.startIndex)
+					firstItemIndexRef.current = startIndex
 					setClineMessages(converted)
-					setFirstItemIndex(Math.max(0, resp.startIndex))
+					setFirstItemIndex(startIndex)
 				})
 				.catch(() => {})
 				.finally(() => {
@@ -587,19 +625,36 @@ export const ExtensionStateContextProvider: React.FC<{
 						return
 					}
 					const converted = resp.messages.map((message) => convertProtoToClineMessage(message))
-					setClineMessages((prev) => mergeFetchedClineMessagesByTs(prev, converted))
+					const startIndex = Math.max(0, resp.startIndex)
+					let reconciledStartIndex = startIndex
+					setClineMessages((prev) => {
+						const reconciled = applyFetchedMessageWindow(
+							prev,
+							firstItemIndexRef.current,
+							converted,
+							startIndex,
+							Number(resp.totalCount ?? 0),
+						)
+						reconciledStartIndex = reconciled.startIndex
+						return reconciled.messages
+					})
+					firstItemIndexRef.current = reconciledStartIndex
+					setFirstItemIndex(reconciledStartIndex)
 				})
 				.catch(() => {})
 				.finally(() => {
 					refetchLockRef.current = false
 				})
 		}
-		// Refetch when totalMessageCount shrinks and we already have messages.
-		// This syncs the sliding window after cancel removes partial messages.
+		// Refetch when the local window can no longer be reconciled from state
+		// alone: the total shrank, or it claims more messages than exist because
+		// a restore truncated the tail and appended replacements.
 		// Delayed by 200ms via cancelStabilizeTimerRef so rapid state changes
 		// (remove partials, postState, total update) settle before triggering
 		// a Virtuoso data swap that causes layout jitter.
-		if (prevTotalRef.current !== 0 && total < prevTotalRef.current && clineMessages.length > 0 && !refetchLockRef.current) {
+		const windowContradictsTotal =
+			total < prevTotalRef.current || isMessageWindowOverfull(clineMessages.length, firstItemIndex, total)
+		if (prevTotalRef.current !== 0 && windowContradictsTotal && clineMessages.length > 0 && !refetchLockRef.current) {
 			if (cancelStabilizeTimerRef.current) {
 				clearTimeout(cancelStabilizeTimerRef.current)
 			}
@@ -616,8 +671,10 @@ export const ExtensionStateContextProvider: React.FC<{
 							return
 						}
 						const converted = resp.messages.map((m) => convertProtoToClineMessage(m))
+						const startIndex = Math.max(0, resp.startIndex)
+						firstItemIndexRef.current = startIndex
 						setClineMessages(converted)
-						setFirstItemIndex(Math.max(0, resp.startIndex))
+						setFirstItemIndex(startIndex)
 					})
 					.catch(() => {})
 					.finally(() => {

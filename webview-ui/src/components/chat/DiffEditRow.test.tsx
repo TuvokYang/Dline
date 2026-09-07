@@ -111,6 +111,73 @@ describe("DiffEditRow", () => {
 		expect(screen.getByText("gamma")).toHaveClass("text-green-400")
 	})
 
+	it("keeps a user collapse while the stream keeps sending frames", async () => {
+		const { container, rerender } = render(
+			<DiffEditRow fileAction="Update" isLoading={true} patch={buildPatch(6)} path="src/example.ts" />,
+		)
+		expect(container.querySelector(".max-h-80.overflow-y-auto")).not.toBeNull()
+
+		fireEvent.click(screen.getByRole("button", { name: /src\/example\.ts/ }))
+		expect(container.querySelector(".max-h-80.overflow-y-auto")).toBeNull()
+
+		await act(async () => {
+			rerender(<DiffEditRow fileAction="Update" isLoading={true} patch={buildPatch(12)} path="src/example.ts" />)
+		})
+
+		// Auto-expansion used to reassert itself on every streamed frame, which
+		// reopened the card the user had just closed.
+		expect(container.querySelector(".max-h-80.overflow-y-auto")).toBeNull()
+	})
+
+	it("keeps the expansion state while a block error appears and clears", async () => {
+		const patch = "- old line\n+ new line"
+		const { container, rerender } = render(
+			<DiffEditRow
+				blockErrors={[undefined]}
+				fileAction="Update"
+				isLoading={false}
+				patch={patch}
+				path="src/example.ts"
+				startLineNumbers={[1]}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: /src\/example\.ts/ }))
+		expect(container.querySelector(".max-h-80.overflow-y-auto")).not.toBeNull()
+
+		await act(async () => {
+			rerender(
+				<DiffEditRow
+					blockErrors={["SEARCH not found in file"]}
+					fileAction="Update"
+					isLoading={false}
+					patch={patch}
+					path="src/example.ts"
+					startLineNumbers={[0]}
+				/>,
+			)
+		})
+
+		expect(screen.getByText("SEARCH not found in file")).toBeInTheDocument()
+
+		await act(async () => {
+			rerender(
+				<DiffEditRow
+					blockErrors={[undefined]}
+					fileAction="Update"
+					isLoading={false}
+					patch={patch}
+					path="src/example.ts"
+					startLineNumbers={[1]}
+				/>,
+			)
+		})
+
+		// The card must stay open across the error transition; toggling it shut
+		// and open again is the flicker this guards against.
+		expect(container.querySelector(".max-h-80.overflow-y-auto")).not.toBeNull()
+	})
+
 	it("stays expanded when streaming completes instead of collapsing", async () => {
 		const { container, rerender } = render(
 			<DiffEditRow fileAction="Update" isLoading={true} patch={buildPatch(6)} path="src/example.ts" />,

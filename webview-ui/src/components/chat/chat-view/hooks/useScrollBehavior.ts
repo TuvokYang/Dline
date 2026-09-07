@@ -5,6 +5,7 @@ import { useEvent } from "react-use"
 import { ListRange, VirtuosoHandle } from "react-virtuoso"
 import { ScrollBehavior } from "../types/chatTypes"
 import { resolveMessageRowExpanded, toggleMessageRowExpansion } from "../utils/messageUtils"
+import { createScrollArbiter, LAYOUT_SETTLE_RETRY_MS, type ScrollRequest } from "../utils/scrollArbiter"
 
 // Height of the sticky user message header (padding + content)
 const STICKY_HEADER_HEIGHT = 32
@@ -39,7 +40,15 @@ export function useScrollBehavior(
 	// Throttle timestamp for handleRowHeightChange to prevent scroll jitter
 	const lastRowHeightChangeRef = useRef(0)
 	const pendingAutoScrollRef = useRef(false)
-	const autoScrollRetryTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
+	// Every programmatic scroll started here goes through one arbiter, so a new
+	// intent always cancels the previous chain instead of fighting it.
+	const scrollArbiterRef = useRef(createScrollArbiter())
+	const requestProgrammaticScroll = useCallback((request: ScrollRequest) => {
+		scrollArbiterRef.current.request(request)
+	}, [])
+	const cancelProgrammaticScroll = useCallback(() => {
+		scrollArbiterRef.current.cancel()
+	}, [])
 
 	// State
 	const [showScrollToBottom, setShowScrollToBottom] = useState(false)
@@ -152,47 +161,47 @@ export function useScrollBehavior(
 		return len - 1
 	}, [])
 
+	const performScrollToBottom = useCallback(
+		(behavior: "auto" | "smooth") => {
+			const lastIdx = getLastRenderedRowIndex()
+			if (lastIdx >= 0) {
+				virtuosoRef.current?.scrollToIndex({
+					index: lastIdx,
+					align: "end",
+					behavior,
+				})
+			}
+		},
+		[getLastRenderedRowIndex],
+	)
+
 	// User-initiated smooth scroll (e.g., to-bottom button). Automatic
 	// streaming scrolls use instant behavior to avoid competing animations.
 	const scrollToBottomSmooth = useMemo(
 		() =>
 			debounce(() => {
-				const lastIdx = getLastRenderedRowIndex()
-				if (lastIdx >= 0) {
-					virtuosoRef.current?.scrollToIndex({
-						index: lastIdx,
-						align: "end",
-						behavior: "smooth",
-					})
-				}
+				requestProgrammaticScroll({
+					run: () => performScrollToBottom("smooth"),
+				})
 			}, 30),
-		[getLastRenderedRowIndex],
+		[performScrollToBottom, requestProgrammaticScroll],
 	)
 
 	// Programmatic instant scroll to bottom (auto-scroll, focus restore).
 	const scrollToBottomAuto = useCallback(() => {
-		const lastIdx = getLastRenderedRowIndex()
-		if (lastIdx >= 0) {
-			virtuosoRef.current?.scrollToIndex({
-				index: lastIdx,
-				align: "end",
-				behavior: "auto",
-			})
-		}
-	}, [getLastRenderedRowIndex])
+		requestProgrammaticScroll({
+			run: () => performScrollToBottom("auto"),
+			isStillWanted: () => !disableAutoScrollRef.current && document.visibilityState !== "hidden",
+		})
+	}, [performScrollToBottom, requestProgrammaticScroll])
 
-	const clearAutoScrollRetryTimers = useCallback(() => {
-		for (const timer of autoScrollRetryTimersRef.current) {
-			clearTimeout(timer)
-		}
-		autoScrollRetryTimersRef.current = []
-	}, [])
+	const clearAutoScrollRetryTimers = cancelProgrammaticScroll
 
 	const queueAutoScrollToBottom = useCallback(
 		(retryAfterLayout = false) => {
 			if (disableAutoScrollRef.current) {
 				pendingAutoScrollRef.current = false
-				clearAutoScrollRetryTimers()
+				cancelProgrammaticScroll()
 				return
 			}
 
@@ -202,25 +211,18 @@ export function useScrollBehavior(
 			}
 
 			pendingAutoScrollRef.current = false
-			clearAutoScrollRetryTimers()
 
-			const scroll = () => {
-				if (!disableAutoScrollRef.current && document.visibilityState !== "hidden") {
-					scrollToBottomAuto()
-				}
-			}
+			requestProgrammaticScroll({
+				run: () => performScrollToBottom("auto"),
+				retryDelaysMs: retryAfterLayout ? LAYOUT_SETTLE_RETRY_MS : undefined,
+				// The user can grab the scrollbar between two attempts; re-checking
+				// here is what stops a queued retry from yanking the view back.
+				isStillWanted: () => !disableAutoScrollRef.current && document.visibilityState !== "hidden",
+			})
 
-			const rafId = requestAnimationFrame(scroll)
-
-			if (retryAfterLayout) {
-				autoScrollRetryTimersRef.current = [50, 250, 750].map((delay) => setTimeout(scroll, delay))
-			}
-
-			return () => {
-				cancelAnimationFrame(rafId)
-			}
+			return cancelProgrammaticScroll
 		},
-		[clearAutoScrollRetryTimers, scrollToBottomAuto],
+		[cancelProgrammaticScroll, performScrollToBottom, requestProgrammaticScroll],
 	)
 
 	const scrollToMessage = useCallback(
@@ -267,18 +269,20 @@ export function useScrollBehavior(
 
 				const stickyHeaderOffset = isFirstUserMessage ? 0 : STICKY_HEADER_HEIGHT
 
-				// Use scrollToIndex with offset - Virtuoso handles this more reliably than manual scrollTo
-				requestAnimationFrame(() => {
-					virtuosoRef.current?.scrollToIndex({
-						index: groupIndex,
-						align: "start",
-						behavior: "smooth",
-						offset: -stickyHeaderOffset,
-					})
+				// Use the shared arbiter so this user intent cancels any pending auto-scroll retry.
+				requestProgrammaticScroll({
+					run: () => {
+						virtuosoRef.current?.scrollToIndex({
+							index: groupIndex,
+							align: "start",
+							behavior: "smooth",
+							offset: -stickyHeaderOffset,
+						})
+					},
 				})
 			}
 		},
-		[messages, visibleMessages, groupedMessages],
+		[messages, visibleMessages, groupedMessages, requestProgrammaticScroll],
 	)
 
 	// scroll when user toggles certain rows
@@ -330,37 +334,29 @@ export function useScrollBehavior(
 	// Handle row height changes during streaming.
 	// Throttled to max once per 120ms so rapid height changes (e.g. during
 	// streaming or cancel) don't trigger cascading scrolls that cause jitter.
-	// The wider window reduces overlap with the groupedMessages.length
-	// useEffect auto-scroll, lowering the chance of dual-path scroll conflicts.
+	// A row that shrank cannot push the bottom away, so following it would only
+	// add a scroll command that competes with the one the growth already
+	// scheduled.
 	const handleRowHeightChange = useCallback(
 		(isTaller: boolean) => {
-			if (!disableAutoScrollRef.current) {
-				const now = Date.now()
-				if (now - lastRowHeightChangeRef.current < 120) {
-					return
-				}
-				lastRowHeightChangeRef.current = now
-
-				if (isTaller) {
-					queueAutoScrollToBottom()
-				} else {
-					setTimeout(() => {
-						queueAutoScrollToBottom()
-					}, 0)
-				}
+			if (disableAutoScrollRef.current || !isTaller) {
+				return
 			}
+
+			const now = Date.now()
+			if (now - lastRowHeightChangeRef.current < 120) {
+				return
+			}
+			lastRowHeightChangeRef.current = now
+
+			queueAutoScrollToBottom()
 		},
 		[queueAutoScrollToBottom],
 	)
 
-	// When rendered rows arrive, scroll to the bottom if auto-scroll is enabled.
-	// totalMessageCount changes alone should not issue a scroll command; the
-	// partial-message stream owns row updates during active conversations.
-	useEffect(() => {
-		if (!disableAutoScrollRef.current) {
-			return queueAutoScrollToBottom()
-		}
-	}, [queueAutoScrollToBottom])
+	// Drop any pending scroll when the hook goes away; a retry firing against an
+	// unmounted Virtuoso is what left the list stuck after a task switch.
+	useEffect(() => cancelProgrammaticScroll, [cancelProgrammaticScroll])
 
 	useEffect(() => {
 		if (pendingScrollToMessage !== null) {
@@ -417,6 +413,8 @@ export function useScrollBehavior(
 		scrollContainerRef,
 		disableAutoScrollRef,
 		isAtBottomRef,
+		requestProgrammaticScroll,
+		cancelProgrammaticScroll,
 		scrollToBottomSmooth,
 		scrollToBottomAuto,
 		scrollToMessage,

@@ -13,19 +13,25 @@ import { isApiReqActive } from "@/utils/streaming"
 import type { ChatState, MessageHandlers, ScrollBehavior } from "../../types/chatTypes"
 import { isToolGroup } from "../../utils/messageUtils"
 import {
-	buildMessageRowKey,
-	getBottomFollowIntent,
-	mergeMessageWindow,
-	shouldRestoreBottom,
-} from "../../utils/messageWindowUtils"
+	DEFAULT_MESSAGE_WINDOW_LIMITS,
+	isWholeConversationLoaded,
+	type MessageWindow,
+	planWindowExtensions,
+	planWindowTrim,
+	type VisibleMessageRange,
+} from "../../utils/messageWindowPlan"
+import { buildMessageRowKey, getBottomFollowIntent, mergeMessageWindow } from "../../utils/messageWindowUtils"
+import { LAYOUT_SETTLE_RETRY_MS } from "../../utils/scrollArbiter"
 import { createMessageRenderer } from "../messages/MessageRenderer"
 
-const LOAD_THRESHOLD = 100
-const LOAD_COUNT = 200
+const LOAD_COUNT = DEFAULT_MESSAGE_WINDOW_LIMITS.loadCount
+/**
+ * Rendered rows left beyond the viewport before a fetch is requested.
+ *
+ * Grouping collapses many messages into one row, so a window that still holds
+ * plenty of messages can be only a few rows away from its edge.
+ */
 const ROW_LOAD_THRESHOLD = 8
-
-const MAX_SIDE_BUFFER = 300
-const TRIM_SIDE_TARGET = 180
 
 /** Sentinel value to prevent Virtuoso zero-sized-element warnings when data is empty */
 // @ts-expect-error — Virtuoso sentinel; only ts/type needed, full ClineMessage shape not required
@@ -72,15 +78,13 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 	const inflightRef = useRef<Set<string>>(new Set())
 	const pendingAnchorRef = useRef<PendingAnchor | null>(null)
 	const pendingEdgeScrollRef = useRef<ScrollEdge | null>(null)
-	const prevRangeRef = useRef<{ start: number; end: number } | null>(null)
-	const lastRangeProcessedRef = useRef(0)
+	const latestVisibleMessageRangeRef = useRef<VisibleMessageRange | null>(null)
+	const latestExtensionRangeRef = useRef<VisibleMessageRange | null>(null)
+	const latestVisibleAnchorTsRef = useRef<number | null>(null)
 	const isUserScrollingRef = useRef(false)
 	const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-	const mergeLockRef = useRef(false)
 	const windowVersionRef = useRef(0)
 	const edgeJumpInFlightRef = useRef<ScrollEdge | null>(null)
-	const edgeScrollRafRef = useRef<number | null>(null)
-	const edgeScrollTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
 
 	// Floating scroll-to-bottom/top button state
 	const [floatingBtnVisible, setFloatingBtnVisible] = useState(false)
@@ -90,7 +94,6 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 	const showScrollToBottomRef = useRef(false)
 	// Track webview visibility so we can pause Virtuoso updates when hidden
 	const isWebviewHiddenRef = useRef(false)
-	const wasAtBottomBeforeHiddenRef = useRef(false)
 	const lastMessageSignatureRef = useRef("")
 	// Cache the last visible messages snapshot so Virtuoso data stays stable while hidden
 	const cachedVisibleMessagesRef = useRef<(ClineMessage | ClineMessage[])[]>([])
@@ -123,6 +126,8 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		setIsAtBottom,
 		setShowScrollToBottom,
 		disableAutoScrollRef,
+		requestProgrammaticScroll,
+		cancelProgrammaticScroll,
 		scrolledPastUserMessage,
 		isAtBottom,
 		isAtBottomRef,
@@ -133,45 +138,18 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		showScrollToBottomRef.current = showScrollToBottom
 	}, [showScrollToBottom])
 
-	// Listen for webview visibility changes.
-	// When the user switches to a different editor tab the webview's
-	// document.visibilityState flips to "hidden". We pause Virtuoso data
-	// updates in that state and request a scroll-to-bottom on restore.
+	// Pause range processing while the webview is hidden. Restoring the bottom
+	// is owned by useScrollBehavior so only one visibility listener can issue a
+	// programmatic scroll through the shared arbiter.
 	useEffect(() => {
 		const handleVisibility = () => {
-			const wasHidden = isWebviewHiddenRef.current
-			const isHidden = document.visibilityState === "hidden"
-			if (!wasHidden && isHidden) {
-				wasAtBottomBeforeHiddenRef.current = isAtBottomRef.current
-			}
-			isWebviewHiddenRef.current = isHidden
-
-			const shouldRestore = shouldRestoreBottom({
-				wasHidden,
-				isVisible: document.visibilityState === "visible",
-				disableAutoScroll: disableAutoScrollRef.current,
-				wasAtBottom: wasAtBottomBeforeHiddenRef.current || isAtBottomRef.current,
-			})
-
-			if (!shouldRestore) return
-
-			const scrollToLast = () => {
-				virtuosoRef.current?.scrollToIndex({
-					index: "LAST",
-					align: "end",
-					behavior: "auto",
-				})
-			}
-
-			requestAnimationFrame(scrollToLast)
-			setTimeout(scrollToLast, 50)
-			setTimeout(scrollToLast, 200)
-			setTimeout(scrollToLast, 500)
+			isWebviewHiddenRef.current = document.visibilityState === "hidden"
 		}
 
+		handleVisibility()
 		document.addEventListener("visibilitychange", handleVisibility)
 		return () => document.removeEventListener("visibilitychange", handleVisibility)
-	}, [disableAutoScrollRef, isAtBottomRef, virtuosoRef])
+	}, [])
 
 	const messageIndexByTs = useMemo(() => {
 		const map = new Map<number, number>()
@@ -258,16 +236,34 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		[virtuosoRef],
 	)
 
-	const clearEdgeScrollTimers = useCallback(() => {
-		if (edgeScrollRafRef.current != null) {
-			cancelAnimationFrame(edgeScrollRafRef.current)
-			edgeScrollRafRef.current = null
-		}
-		for (const timer of edgeScrollTimersRef.current) {
-			clearTimeout(timer)
-		}
-		edgeScrollTimersRef.current = []
-	}, [])
+	const clearEdgeScrollTimers = cancelProgrammaticScroll
+
+	/**
+	 * Read the absolute bounds of the currently loaded message window.
+	 *
+	 * @returns Window bounds derived from the live refs and the backend total.
+	 */
+	const currentMessageWindow = useCallback((): MessageWindow => {
+		const start = firstItemIndexRef.current
+		const length = clineMessagesLengthRef.current
+		return { start, length, total: totalMessageCount ?? length }
+	}, [totalMessageCount])
+
+	/**
+	 * Report whether the loaded window already covers the requested edge.
+	 *
+	 * @param edge Conversation edge the pending jump targets.
+	 * @returns True when scrolling now lands on the real first or last message.
+	 */
+	const isEdgeWindowReady = useCallback(
+		(edge: ScrollEdge) => {
+			if (renderRows.length === 0) return false
+
+			const window = currentMessageWindow()
+			return edge === "top" ? window.start <= 0 : window.start + window.length >= window.total
+		},
+		[currentMessageWindow, renderRows.length],
+	)
 
 	const scrollToBottomLast = useCallback(
 		(behavior: "auto" | "smooth" = "auto") => {
@@ -281,43 +277,43 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 	)
 
 	const scrollToLoadedEdge = useCallback(
-		(edge: ScrollEdge, behavior: "auto" | "smooth" = "auto") => {
+		(edge: ScrollEdge, behavior: "auto" | "smooth" = "auto", retryAfterLayout = false) => {
 			if (renderRows.length === 0) return
-
-			clearEdgeScrollTimers()
 
 			const index = edge === "top" ? 0 : renderRows.length - 1
 			const align = edge === "top" ? "start" : "end"
-			const scroll = () => {
-				if (edge === "bottom") {
-					scrollToBottomLast(behavior)
-					return
-				}
-				scrollToRowOffset(index, align, behavior)
-			}
-			edgeScrollRafRef.current = requestAnimationFrame(() => {
-				edgeScrollRafRef.current = null
-				scroll()
-			})
 
-			edgeScrollTimersRef.current = [50, 200, 500].map((delay) =>
-				setTimeout(() => {
+			requestProgrammaticScroll({
+				run: () => {
 					if (edge === "bottom") {
-						scrollToBottomLast("auto")
+						scrollToBottomLast(behavior)
 						return
 					}
-					scrollToRowOffset(index, align, "auto")
-				}, delay),
-			)
+					scrollToRowOffset(index, align, behavior)
+				},
+				// Streaming issues this on nearly every chunk. Retrying each of them
+				// stacked hundreds of deferred scrolls and produced the bounce, so
+				// only an explicit jump asks for the settle chain.
+				retryDelaysMs: retryAfterLayout ? LAYOUT_SETTLE_RETRY_MS : undefined,
+				isStillWanted: () => edge === "top" || !disableAutoScrollRef.current,
+			})
 		},
-		[clearEdgeScrollTimers, renderRows.length, scrollToBottomLast, scrollToRowOffset],
+		[disableAutoScrollRef, renderRows.length, requestProgrammaticScroll, scrollToBottomLast, scrollToRowOffset],
 	)
 
 	useLayoutEffect(() => {
 		const pendingEdge = pendingEdgeScrollRef.current
-		if (pendingEdge && renderRows.length > 0) {
+		if (pendingEdge) {
+			// The jump replaced the whole window, but React can run this effect
+			// against the previous rows. Landing on a stale window is what made
+			// "to top" and "to bottom" stop short of the real edge, so wait until
+			// the window that the jump requested is the one being rendered.
+			if (!isEdgeWindowReady(pendingEdge)) {
+				return
+			}
 			pendingEdgeScrollRef.current = null
-			scrollToLoadedEdge(pendingEdge)
+			// Row heights are unknown until Virtuoso measures the new window.
+			scrollToLoadedEdge(pendingEdge, "auto", true)
 			return
 		}
 
@@ -330,13 +326,13 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 
 		pendingAnchorRef.current = null
 		scrollToRowOffset(rowOffset, pendingAnchor.align, "auto")
-	}, [renderRows.length, findRowOffsetByMessageTs, scrollToLoadedEdge, scrollToRowOffset])
+	}, [renderRows.length, findRowOffsetByMessageTs, isEdgeWindowReady, scrollToLoadedEdge, scrollToRowOffset])
 
 	useEffect(() => clearEdgeScrollTimers, [clearEdgeScrollTimers])
 
 	useLayoutEffect(() => {
-		const total = totalMessageCount ?? clineMessagesLengthRef.current
-		const absoluteBottomLoaded = firstItemIndexRef.current + clineMessagesLengthRef.current >= total
+		const window = currentMessageWindow()
+		const absoluteBottomLoaded = window.start + window.length >= window.total
 		const previousSignature = lastMessageSignatureRef.current
 		const lastMessageTsChanged = previousSignature.split(":", 1)[0] !== String(lastRawMessage?.ts ?? "")
 		const lastMessageContentChanged = previousSignature !== "" && previousSignature !== lastMessageSignature
@@ -352,7 +348,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		if (intent === "follow") {
 			scrollToLoadedEdge("bottom", "auto")
 		}
-	}, [disableAutoScrollRef, isAtBottomRef, lastRawMessage?.ts, lastMessageSignature, scrollToLoadedEdge, totalMessageCount])
+	}, [currentMessageWindow, disableAutoScrollRef, lastRawMessage?.ts, lastMessageSignature, scrollToLoadedEdge])
 
 	const scrolledPastUserMessageRowOffset = useMemo(() => {
 		if (!scrolledPastUserMessage) return -1
@@ -482,7 +478,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 
 			try {
 				const resp = await TaskServiceClient.fetchMessage(FetchMessageRequest.create({ referenceIndex: start, count }))
-				const msgs = (resp.messages as any[]).map((m) => convertProtoToClineMessage(m)) as ClineMessage[]
+				const msgs = resp.messages.map((message) => convertProtoToClineMessage(message))
 				const si = resp.startIndex
 
 				if (requestVersion !== windowVersionRef.current) {
@@ -514,7 +510,6 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 					clineMessagesLengthRef.current = result.messages.length
 
 					if (result.firstItemIndex !== fi) {
-						mergeLockRef.current = true
 						firstItemIndexRef.current = result.firstItemIndex
 						setFirstItemIndex(result.firstItemIndex)
 					}
@@ -538,6 +533,28 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		[setClineMessages, setFirstItemIndex],
 	)
 
+	const requestWindowExtensions = useCallback(
+		(visible: VisibleMessageRange, anchorTs: number | null) => {
+			if (isWebviewHiddenRef.current) return
+
+			const window = currentMessageWindow()
+			if (isWholeConversationLoaded(window)) return
+
+			for (const extension of planWindowExtensions(window, visible)) {
+				if (extension.side === "leading") {
+					if (anchorTs == null) continue
+					void fetchAndMerge(extension.startIndex, extension.count, {
+						ts: anchorTs,
+						align: "start",
+					})
+					continue
+				}
+				void fetchAndMerge(extension.startIndex, extension.count)
+			}
+		},
+		[currentMessageWindow, fetchAndMerge],
+	)
+
 	const jumpToEdge = useCallback(
 		async (edge: ScrollEdge) => {
 			if (edgeJumpInFlightRef.current === edge) return
@@ -547,6 +564,9 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 			const requestVersion = windowVersionRef.current
 			inflightRef.current.clear()
 			pendingAnchorRef.current = null
+			latestVisibleMessageRangeRef.current = null
+			latestExtensionRangeRef.current = null
+			latestVisibleAnchorTsRef.current = null
 			pendingEdgeScrollRef.current = edge
 
 			try {
@@ -558,13 +578,11 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 				const resp = await TaskServiceClient.fetchMessage(request)
 				if (requestVersion !== windowVersionRef.current) return
 
-				const converted = (resp.messages as any[]).map((m) => convertProtoToClineMessage(m)) as ClineMessage[]
+				const converted = resp.messages.map((message) => convertProtoToClineMessage(message))
 				const nextFirstItemIndex = Math.max(0, resp.startIndex)
 
 				firstItemIndexRef.current = nextFirstItemIndex
 				clineMessagesLengthRef.current = converted.length
-				mergeLockRef.current = true
-				prevRangeRef.current = null
 				setClineMessages(converted)
 				setFirstItemIndex(nextFirstItemIndex)
 
@@ -589,32 +607,8 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 			// Virtuoso layout runs invisibly and wastes CPU across multiple panels.
 			if (isWebviewHiddenRef.current) return
 
-			const dataLen = clineMessagesLengthRef.current
-			const fi = firstItemIndexRef.current
-			const total = totalMessageCount ?? dataLen
-
-			if (dataLen === 0) return
+			if (clineMessagesLengthRef.current === 0) return
 			if (renderRows.length === 0) return
-
-			const now = Date.now()
-
-			// Skip first rangeChanged after fetchAndMerge to prevent Virtuoso re-layout bounce
-			if (mergeLockRef.current) {
-				mergeLockRef.current = false
-				return
-			}
-
-			if (now - lastRangeProcessedRef.current < 200) return
-			lastRangeProcessedRef.current = now
-
-			// Filter out rangeChanged calls not caused by actual scroll (e.g. subscribeToState push).
-			if (
-				prevRangeRef.current &&
-				prevRangeRef.current.start === range.startIndex &&
-				prevRangeRef.current.end === range.endIndex
-			)
-				return
-			prevRangeRef.current = { start: range.startIndex, end: range.endIndex }
 
 			const localStart = range.startIndex
 			const localEnd = range.endIndex
@@ -623,43 +617,81 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 
 			if (!firstVisibleRow || !lastVisibleRow) return
 
-			const firstVisibleMessageIndex = firstVisibleRow.startMessageIndex
-			const lastVisibleMessageIndex = lastVisibleRow.endMessageIndex
-			const firstVisibleMessageTs = firstVisibleRow.startMessageTs
+			const window = currentMessageWindow()
+			const visible: VisibleMessageRange = {
+				firstMessageIndex: firstVisibleRow.startMessageIndex,
+				lastMessageIndex: lastVisibleRow.endMessageIndex,
+			}
+			latestVisibleMessageRangeRef.current = visible
+			latestVisibleAnchorTsRef.current = firstVisibleRow.startMessageTs ?? null
+			const allLoaded = isWholeConversationLoaded(window)
 
-			const topRowDistance = Math.max(0, localStart)
-			const bottomRowDistance = Math.max(0, renderRows.length - 1 - localEnd)
+			// The button state describes what the user can currently reach, so it
+			// has to follow every range report. Throttling it together with the
+			// fetch scheduling left the control stale mid-scroll.
+			setShowScrollToBottom(disableAutoScrollRef.current || !allLoaded || visible.lastMessageIndex < window.total - 1)
 
-			const isAllLoaded = fi <= 0 && fi + dataLen >= total
-			if (isAllLoaded) return
-
-			const aheadCount = Math.max(0, firstVisibleMessageIndex - fi)
-			const behindCount = Math.max(0, fi + dataLen - 1 - lastVisibleMessageIndex)
-
-			setShowScrollToBottom(disableAutoScrollRef.current || !isAllLoaded || lastVisibleMessageIndex < total - 1)
-
-			if ((topRowDistance <= ROW_LOAD_THRESHOLD || aheadCount < LOAD_THRESHOLD) && fi > 0) {
-				const start = Math.max(fi - LOAD_COUNT, 0)
-				const take = fi - start
-
-				if (take > 0 && firstVisibleMessageTs != null) {
-					void fetchAndMerge(start, take, {
-						ts: firstVisibleMessageTs,
-						align: "start",
-					})
-				}
+			if (allLoaded) {
+				latestExtensionRangeRef.current = null
+				return
 			}
 
-			if ((bottomRowDistance <= ROW_LOAD_THRESHOLD || behindCount < LOAD_THRESHOLD) && fi + dataLen < total) {
-				const take = Math.min(LOAD_COUNT, total - (fi + dataLen))
-
-				if (take > 0) {
-					void fetchAndMerge(fi + dataLen, take)
-				}
+			// Grouping means a window with plenty of messages can still be a
+			// couple of rows from its edge, so the row distance widens the
+			// message-count rule rather than replacing it.
+			const nearTopRow = localStart <= ROW_LOAD_THRESHOLD
+			const nearBottomRow = renderRows.length - 1 - localEnd <= ROW_LOAD_THRESHOLD
+			const rowUrgency: VisibleMessageRange = {
+				firstMessageIndex: nearTopRow ? window.start : visible.firstMessageIndex,
+				lastMessageIndex: nearBottomRow ? window.start + window.length - 1 : visible.lastMessageIndex,
 			}
+
+			latestExtensionRangeRef.current = rowUrgency
+			requestWindowExtensions(rowUrgency, latestVisibleAnchorTsRef.current)
 		},
-		[totalMessageCount, renderRows, disableAutoScrollRef, setShowScrollToBottom, fetchAndMerge],
+		[currentMessageWindow, renderRows, disableAutoScrollRef, setShowScrollToBottom, requestWindowExtensions],
 	)
+
+	// A merge can leave the viewport inside the load threshold. Re-plan from the
+	// last reported absolute range instead of waiting for Virtuoso to emit a new
+	// range event, which it is not required to do after a state-only update.
+	useEffect(() => {
+		if (firstItemIndexRef.current !== firstItemIndex || clineMessagesLengthRef.current !== clineMessages.length) return
+
+		const visible = latestExtensionRangeRef.current
+		if (!visible) return
+		requestWindowExtensions(visible, latestVisibleAnchorTsRef.current)
+	}, [clineMessages.length, firstItemIndex, requestWindowExtensions])
+
+	const applyIdleTrim = useCallback(() => {
+		if (isUserScrollingRef.current) return
+		if (clineMessagesLengthRef.current === 0) return
+
+		const visible = latestVisibleMessageRangeRef.current
+		if (!visible) return
+
+		const window = currentMessageWindow()
+		if (isWholeConversationLoaded(window)) return
+
+		const trim = planWindowTrim(window, visible)
+		if (!trim) return
+
+		if (trim.side === "leading") {
+			const anchorTs = latestVisibleAnchorTsRef.current
+			if (anchorTs != null) {
+				pendingAnchorRef.current = { ts: anchorTs, align: "start" }
+			}
+
+			firstItemIndexRef.current = trim.nextStart
+			clineMessagesLengthRef.current = trim.nextLength
+			setFirstItemIndex(trim.nextStart)
+			setClineMessages((prev) => prev.slice(Math.min(trim.count, prev.length)))
+			return
+		}
+
+		clineMessagesLengthRef.current = trim.nextLength
+		setClineMessages((prev) => prev.slice(0, Math.min(trim.nextLength, prev.length)))
+	}, [currentMessageWindow, setClineMessages, setFirstItemIndex])
 
 	// Floating button: scroll listener for visibility + wheel listener for direction.
 	// Attached to Virtuoso inner scroller, not the outer scrollContainerRef.
@@ -683,6 +715,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 			if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current)
 			scrollTimerRef.current = setTimeout(() => {
 				isUserScrollingRef.current = false
+				applyIdleTrim()
 			}, 300)
 
 			showButton()
@@ -713,55 +746,14 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 			if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current)
 			if (hideBtnTimerRef.current) clearTimeout(hideBtnTimerRef.current)
 		}
-	}, [scrollContainerRef, isAtBottomRef])
+	}, [applyIdleTrim, scrollContainerRef, isAtBottomRef])
 
-	// Idle trim: only when user is NOT actively scrolling.
+	// Re-evaluate trim after a merge or window replacement. If that render
+	// happened during scrolling, the idle timer above performs the deferred run.
 	useEffect(() => {
-		if (isUserScrollingRef.current) return
-		const fi = firstItemIndexRef.current
-		const dataLen = clineMessagesLengthRef.current
-		if (dataLen === 0) return
-
-		const total = totalMessageCount ?? dataLen
-		if (fi <= 0 && fi + dataLen >= total) return // all loaded, no trim needed
-
-		if (renderRows.length === 0) return
-
-		const firstRow = renderRows[0]
-		const lastRow = renderRows[renderRows.length - 1]
-		if (!firstRow || !lastRow) return
-
-		const aheadCount = Math.max(0, firstRow.startMessageIndex - fi)
-		const behindCount = Math.max(0, fi + dataLen - 1 - lastRow.endMessageIndex)
-
-		if (aheadCount > MAX_SIDE_BUFFER) {
-			const remove = Math.max(0, Math.min(aheadCount - TRIM_SIDE_TARGET, dataLen))
-			if (remove > 0) {
-				setClineMessages((prev) => {
-					const next = prev.slice(remove)
-					clineMessagesLengthRef.current = next.length
-					return next
-				})
-				setFirstItemIndex((prev) => {
-					const next = prev + remove
-					firstItemIndexRef.current = next
-					return next
-				})
-			}
-			return
-		}
-
-		if (behindCount > MAX_SIDE_BUFFER) {
-			const keep = Math.max(0, Math.min(dataLen, dataLen - (behindCount - TRIM_SIDE_TARGET)))
-			if (keep < dataLen) {
-				setClineMessages((prev) => {
-					const next = prev.slice(0, keep)
-					clineMessagesLengthRef.current = next.length
-					return next
-				})
-			}
-		}
-	}, [totalMessageCount, renderRows, setClineMessages, setFirstItemIndex])
+		if (firstItemIndexRef.current !== firstItemIndex || clineMessagesLengthRef.current !== clineMessages.length) return
+		applyIdleTrim()
+	}, [applyIdleTrim, clineMessages.length, firstItemIndex])
 
 	return (
 		<div className="overflow-hidden flex flex-col h-full relative">

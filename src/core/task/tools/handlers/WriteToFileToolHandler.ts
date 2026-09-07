@@ -107,16 +107,8 @@ export class WriteToFileToolHandler implements IFullyManagedTool {
 					]
 				: []
 		const webviewStartLines = diffParser ? partialBlocks.map((b) => b.startLine) : [1]
-		// During streaming, only show delimiter errors (DELIMITER_*) to avoid
-		// webview flickering from incomplete-diff false positives like
-		// SEARCH_NOT_FOUND, BLOCK_OVERLAP, UNCLOSED_SEARCH, etc.
-		const STREAMING_DELIMITER_ERRORS = new Set(["DELIMITER_TOO_SHORT", "DELIMITER_MISMATCH", "DELIMITER_CONFLICT"])
 		const blockErrors: (string | undefined)[] | undefined = diffParser
-			? partialBlocks.map((b) =>
-					b.hasError && b.errorCode && STREAMING_DELIMITER_ERRORS.has(b.errorCode)
-						? diffCodeToBrief(b.errorCode)
-						: undefined,
-				)
+			? partialBlocks.map((b) => streamingBlockError(b))
 			: undefined
 
 		const shellMessage: ClineSayTool = {
@@ -128,13 +120,15 @@ export class WriteToFileToolHandler implements IFullyManagedTool {
 			operationIsLocatedInWorkspace: await isLocatedInWorkspace(relPath),
 		}
 		const shellJson = JSON.stringify(shellMessage)
-
-		if (blockErrors?.some((e) => e !== undefined)) {
-			await uiHelpers.say("tool", shellJson, undefined, undefined, true, existingTs)
-			return
-		}
+		const hasStreamingError = blockErrors?.some((error) => error !== undefined) === true
 
 		await uiHelpers.say("tool", shellJson, undefined, undefined, true, existingTs)
+
+		// A delimiter error is already conclusive, so building the diff would only
+		// fail again and overwrite the card with a second, noisier message.
+		if (hasStreamingError) {
+			return
+		}
 
 		// Only try diff construction if both path and diff/content are available.
 		const hasContent = block.name === "replace_in_file" ? !!rawDiff : rawContent != null
@@ -159,14 +153,15 @@ export class WriteToFileToolHandler implements IFullyManagedTool {
 						? b.rawText
 						: `- ${b.searchText.replace(/\n/g, "\n- ")}\n+ ${b.replaceText.replace(/\n/g, "\n+ ")}`,
 				)
-				const finalBlockErrors = validBlocks.map((b) =>
-					b.hasError ? (b.errorCode ? diffCodeToBrief(b.errorCode) : "SEARCH/REPLACE error") : undefined,
-				)
+				// Still streaming: the same filter as the first partial say above.
+				// Reporting the full error set here and the filtered set on the next
+				// chunk made SEARCH_NOT_FOUND appear and disappear repeatedly, which
+				// the webview renders as a diff card collapsing and expanding.
 				const updatedMessage: ClineSayTool = {
 					...shellMessage,
 					content: blockContents,
 					startLineNumbers: validBlocks.map((b) => b.startLine),
-					blockErrors: finalBlockErrors,
+					blockErrors: validBlocks.map((b) => streamingBlockError(b)),
 				}
 				const updatedJson = JSON.stringify(updatedMessage)
 				if (await uiHelpers.shouldAutoApproveToolWithPath(block.name, relPath)) {
@@ -854,6 +849,31 @@ function countDiffLines(
 		added += replace.split("\n").filter((l) => l !== "").length
 	}
 	return { deletedLines: deleted, addedLines: added }
+}
+
+/**
+ * Diff errors that a partially received SEARCH/REPLACE block can prove.
+ *
+ * Every other code depends on content the stream has not delivered yet, so
+ * reporting it mid-stream produces an error that a later chunk withdraws.
+ */
+const STREAMING_DELIMITER_ERRORS: ReadonlySet<string> = new Set([
+	"DELIMITER_TOO_SHORT",
+	"DELIMITER_MISMATCH",
+	"DELIMITER_CONFLICT",
+])
+
+/**
+ * Resolve the error a streaming diff block may report to the webview.
+ *
+ * @param block Parsed diff block from an in-flight tool argument stream.
+ * @returns Brief error message, or undefined while the verdict is not final.
+ */
+function streamingBlockError(block: { hasError: boolean; errorCode?: string }): string | undefined {
+	if (!block.hasError || !block.errorCode) {
+		return undefined
+	}
+	return STREAMING_DELIMITER_ERRORS.has(block.errorCode) ? diffCodeToBrief(block.errorCode) : undefined
 }
 
 /** Map DiffErrorCode (from DIFF_ERROR_CODE in diff.ts) to a brief one-line message for webview display. */

@@ -1,6 +1,6 @@
 import { StringRequest } from "@shared/proto/dline/common"
 import { FilePlus, FileText, FileX, SquareArrowOutUpRightIcon } from "lucide-react"
-import { memo, useEffect, useMemo, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import CodeAccordian from "@/components/common/CodeAccordian"
 import { cn } from "@/lib/utils"
 import { FileServiceClient } from "@/services/grpc-client"
@@ -37,13 +37,10 @@ interface DiffEditRowProps {
 }
 
 export const DiffEditRow = memo<DiffEditRowProps>(({ patch, path, isLoading, startLineNumbers, blockErrors, fileAction }) => {
-	const { parsedFiles, isStreaming, matchFailed } = useMemo(() => {
+	const { parsedFiles, isStreaming } = useMemo(() => {
 		const parsed = parsePatch(patch, path, fileAction)
-		const patchStr = Array.isArray(patch) ? patch.join("\n") : patch
-		const searchCount = (patchStr.match(/-{7,} SEARCH/g) || []).length
-		const matchFailed = !isLoading && searchCount > 0 && (!startLineNumbers || startLineNumbers.length === 0)
-		return { parsedFiles: parsed.parsedFiles, isStreaming: isLoading || parsed.isStreaming, matchFailed }
-	}, [patch, path, isLoading, fileAction, startLineNumbers?.length ?? 0, startLineNumbers])
+		return { parsedFiles: parsed.parsedFiles, isStreaming: isLoading || parsed.isStreaming }
+	}, [patch, path, isLoading, fileAction])
 
 	if (!path) return null
 
@@ -56,7 +53,6 @@ export const DiffEditRow = memo<DiffEditRowProps>(({ patch, path, isLoading, sta
 					isPartial={isLoading}
 					isStreaming={isStreaming}
 					key={`${file.path}-${index}`}
-					matchFailed={matchFailed}
 					startLineNumber={startLineNumbers?.[index]}
 				/>
 			))}
@@ -72,17 +68,25 @@ const FileBlock = memo<{
 	file: Patch
 	isStreaming: boolean
 	isPartial?: boolean
-	matchFailed?: boolean
 	startLineNumber?: number
 	/** Per-block error message rendered at the bottom of the file block */
 	blockError?: string
 }>(
-	({ file, isStreaming, isPartial, matchFailed, startLineNumber, blockError }) => {
+	({ file, isStreaming, isPartial, startLineNumber, blockError }) => {
 		const hasError = !!blockError
 		const [isExpanded, setIsExpanded] = useState(!!isPartial)
 		const scrollContainerRef = useRef<HTMLDivElement>(null)
 		const shouldFollowRef = useRef(true)
 		const isProgrammaticScrollRef = useRef(false)
+		// Once the user has decided, no stream update may override the choice.
+		// Auto-expansion previously reasserted itself on every partial frame and
+		// fought the collapse the user had just performed.
+		const expansionOwnedByUserRef = useRef(false)
+
+		const toggleExpanded = useCallback(() => {
+			expansionOwnedByUserRef.current = true
+			setIsExpanded((previous) => !previous)
+		}, [])
 
 		const streamingContentKey = useMemo(() => buildStreamingKey(file.lines), [file.lines])
 
@@ -100,7 +104,7 @@ const FileBlock = memo<{
 			// Auto-expand while streaming, but never force-close on completion:
 			// collapsing the moment a batch of parallel replace_in_file cards
 			// finishes caused visible layout jumps in the message list.
-			if (isPartial) {
+			if (isPartial && !expansionOwnedByUserRef.current) {
 				setIsExpanded(true)
 			}
 		}, [isPartial])
@@ -147,7 +151,7 @@ const FileBlock = memo<{
 			<div className="bg-code rounded-sm border border-editor-group-border overflow-hidden">
 				<button
 					className="w-full flex items-center gap-2 p-2 bg-code transition-colors justify-between cursor-pointer"
-					onClick={() => setIsExpanded((prev) => !prev)}
+					onClick={toggleExpanded}
 					type="button">
 					<div className="flex items-center gap-3 flex-1 w-full overflow-hidden">
 						<div className={cn("flex items-center gap-2 w-full", actionStyle.borderClass)}>
@@ -176,11 +180,7 @@ const FileBlock = memo<{
 				</button>
 				{isExpanded &&
 					(hasError ? (
-						<CodeAccordian
-							code={file.lines.join("\n")}
-							isExpanded={isExpanded}
-							onToggleExpand={() => setIsExpanded((prev) => !prev)}
-						/>
+						<CodeAccordian code={file.lines.join("\n")} isExpanded={isExpanded} onToggleExpand={toggleExpanded} />
 					) : (
 						<div
 							className="border-t border-code-block-background max-h-80 overflow-y-auto overflow-x-auto"
@@ -208,7 +208,6 @@ const FileBlock = memo<{
 	(prev, next) =>
 		prev.isStreaming === next.isStreaming &&
 		prev.isPartial === next.isPartial &&
-		prev.matchFailed === next.matchFailed &&
 		prev.startLineNumber === next.startLineNumber &&
 		prev.blockError === next.blockError &&
 		prev.file.path === next.file.path &&

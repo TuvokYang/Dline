@@ -5,6 +5,7 @@
 import { ClineAsk, ClineMessage } from "@shared/ExtensionMessage"
 import { ListRange, VirtuosoHandle } from "react-virtuoso"
 import type { InteractionDraft } from "../../../../task-interaction/types"
+import type { ScrollRequest } from "../utils/scrollArbiter"
 
 /**
  * Main ChatView component props
@@ -81,6 +82,8 @@ export interface ScrollBehavior {
 	scrollContainerRef: React.RefObject<HTMLDivElement>
 	disableAutoScrollRef: React.MutableRefObject<boolean>
 	isAtBottomRef: React.MutableRefObject<boolean>
+	requestProgrammaticScroll: (request: ScrollRequest) => void
+	cancelProgrammaticScroll: () => void
 	scrollToBottomSmooth: () => void
 	scrollToBottomAuto: () => void
 	scrollToMessage: (messageIndex: number) => void
