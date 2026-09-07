@@ -1,15 +1,27 @@
 import type { ModelInfo } from "@shared/api"
 import { VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
-import Fuse from "fuse.js"
-import { KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from "react"
+import Fuse, { type FuseResultMatch } from "fuse.js"
+import { ChevronDownIcon, ChevronUpIcon } from "lucide-react"
+import { type KeyboardEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import styled from "styled-components"
-import { highlight } from "../../history/HistoryView"
 import { ProfileField } from "../profile-ui"
+import type { ModelOptionOrigin } from "../providers/useProviderModelOptions"
+import { type MatchSegment, toMatchSegments } from "./modelMatchSegments"
 
 interface ModelAutocompleteProps {
 	models: Record<string, ModelInfo>
 	selectedModelId: string | undefined
 	onChange: (modelId: string, modelInfo: ModelInfo | undefined) => void
+	/**
+	 * Origin per model id. Ids marked `remote` come from the provider's
+	 * listing rather than the local catalog and are badged as new.
+	 */
+	optionOrigins?: Record<string, ModelOptionOrigin>
+	/**
+	 * Allows committing an id that is in neither source. When false the picker
+	 * only accepts listed models and reverts a partial query on close.
+	 */
+	allowCustomModelId?: boolean
 	zIndex?: number
 	label?: string
 	placeholder?: string
@@ -18,36 +30,125 @@ interface ModelAutocompleteProps {
 
 const AUTOCOMPLETE_Z_INDEX = 1_000
 
+/** A row in the open listbox: either a known model or the free-form fallback. */
+interface Suggestion {
+	id: string
+	segments: MatchSegment[]
+	badge?: "new" | "custom"
+}
+
+const NEW_BADGE_TITLE = "Listed by the provider but missing from the local model catalog"
+const CUSTOM_BADGE_TITLE = "Not listed by the provider; sent as a custom model id"
+
+/**
+ * Searchable model picker over the merged catalog and provider listing.
+ *
+ * Opening the picker clears the query so the full list is visible, and the
+ * previous selection is restored unless a row is committed. Free-form ids are
+ * offered as an explicit row instead of being inferred from a blur, so leaving
+ * the field never rewrites the profile with a half-typed id.
+ */
 export const ModelAutocomplete = ({
 	models,
 	selectedModelId,
 	onChange,
+	optionOrigins,
+	allowCustomModelId = true,
 	zIndex = AUTOCOMPLETE_Z_INDEX,
 	label = "Model",
 	placeholder = "Search and select a model...",
 	onOpen,
 }: ModelAutocompleteProps) => {
-	const [searchTerm, setSearchTerm] = useState(selectedModelId || "")
+	const [searchTerm, setSearchTerm] = useState("")
 	const [isDropdownVisible, setIsDropdownVisible] = useState(false)
 	const [selectedIndex, setSelectedIndex] = useState(-1)
 	const dropdownRef = useRef<HTMLDivElement>(null)
 	const itemRefs = useRef<(HTMLDivElement | null)[]>([])
 	const dropdownListRef = useRef<HTMLDivElement>(null)
-	const isSelectingRef = useRef(false) // Track if user is clicking a dropdown item
 
-	// Generate unique IDs for accessibility
 	const uniqueId = useId()
 	const inputId = `model-autocomplete-${uniqueId}`
 	const listboxId = `model-listbox-${uniqueId}`
 
-	useEffect(() => {
-		setSearchTerm(selectedModelId || "")
-	}, [selectedModelId])
+	// The field mirrors the committed selection while closed and the live
+	// query while open, so the visible text is derived rather than stored.
+	const displayValue = isDropdownVisible ? searchTerm : (selectedModelId ?? "")
+
+	const modelIds = useMemo(() => Object.keys(models).sort((a, b) => a.localeCompare(b)), [models])
+
+	const searchableItems = useMemo(() => modelIds.map((id) => ({ id })), [modelIds])
+
+	const fuse = useMemo(
+		() =>
+			new Fuse(searchableItems, {
+				keys: ["id"],
+				threshold: 0.6,
+				shouldSort: true,
+				isCaseSensitive: false,
+				ignoreLocation: false,
+				includeMatches: true,
+				minMatchCharLength: 1,
+			}),
+		[searchableItems],
+	)
+
+	const suggestions = useMemo<Suggestion[]>(() => {
+		const badgeFor = (id: string): Suggestion["badge"] =>
+			optionOrigins?.[id] === "remote" ? "new" : optionOrigins?.[id] === "catalog" ? undefined : "custom"
+
+		const listed: Suggestion[] = searchTerm
+			? fuse.search(searchTerm).map((result) => ({
+					id: result.item.id,
+					segments: toMatchSegments(result.item.id, result.matches as readonly FuseResultMatch[] | undefined),
+					badge: badgeFor(result.item.id),
+				}))
+			: modelIds.map((id) => ({
+					id,
+					segments: [{ text: id, matched: false, start: 0 }],
+					badge: badgeFor(id),
+				}))
+
+		const query = searchTerm.trim()
+		const alreadyListed = query.length > 0 && modelIds.includes(query)
+		if (!allowCustomModelId || query.length === 0 || alreadyListed) {
+			return listed
+		}
+		// The free-form id is an explicit row so committing it stays a choice.
+		return [...listed, { id: query, segments: [{ text: query, matched: false, start: 0 }], badge: "custom" }]
+	}, [allowCustomModelId, fuse, modelIds, optionOrigins, searchTerm])
+
+	const closeDropdown = useCallback(() => {
+		setIsDropdownVisible(false)
+		setSelectedIndex(-1)
+		setSearchTerm("")
+	}, [])
+
+	const openDropdown = useCallback(() => {
+		// An empty query lists every candidate instead of filtering by the
+		// current selection, which would hide the rest of the catalog.
+		setSearchTerm("")
+		setSelectedIndex(-1)
+		setIsDropdownVisible(true)
+		// Refreshing on every open, not only on the transition from closed,
+		// lets a listing that ran before the credentials were saved be retried
+		// by clicking the field again.
+		onOpen?.()
+	}, [onOpen])
+
+	const commitModel = useCallback(
+		(newModelId: string) => {
+			closeDropdown()
+			if (newModelId !== selectedModelId) {
+				onChange(newModelId, models[newModelId])
+			}
+		},
+		[closeDropdown, models, onChange, selectedModelId],
+	)
 
 	useEffect(() => {
 		const handleClickOutside = (event: MouseEvent) => {
 			if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-				setIsDropdownVisible(false)
+				closeDropdown()
 			}
 		}
 
@@ -55,182 +156,134 @@ export const ModelAutocomplete = ({
 		return () => {
 			document.removeEventListener("mousedown", handleClickOutside)
 		}
-	}, [])
+	}, [closeDropdown])
 
-	const modelIds = useMemo(() => {
-		return Object.keys(models).sort((a, b) => a.localeCompare(b))
-	}, [models])
+	// A shorter result list can leave the highlight past the last row.
+	useEffect(() => {
+		setSelectedIndex((previous) => (previous >= suggestions.length ? suggestions.length - 1 : previous))
+	}, [suggestions.length])
 
-	const searchableItems = useMemo(() => {
-		return modelIds.map((id) => ({
-			id,
-			html: id,
-		}))
-	}, [modelIds])
-
-	const fuse = useMemo(() => {
-		return new Fuse(searchableItems, {
-			keys: ["html"],
-			threshold: 0.6,
-			shouldSort: true,
-			isCaseSensitive: false,
-			ignoreLocation: false,
-			includeMatches: true,
-			minMatchCharLength: 1,
-		})
-	}, [searchableItems])
-
-	const modelSearchResults = useMemo(() => {
-		if (!searchTerm) {
-			return searchableItems
+	useEffect(() => {
+		if (selectedIndex >= 0) {
+			itemRefs.current[selectedIndex]?.scrollIntoView({ block: "nearest" })
 		}
-		return highlight(fuse.search(searchTerm), "model-item-highlight")
-	}, [searchableItems, searchTerm, fuse])
-
-	const handleModelChange = (newModelId: string) => {
-		setSearchTerm(newModelId)
-		const modelInfo = models[newModelId]
-		onChange(newModelId, modelInfo)
-	}
+	}, [selectedIndex])
 
 	const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
 		if (!isDropdownVisible) {
+			if (event.key === "ArrowDown" || event.key === "Enter") {
+				event.preventDefault()
+				openDropdown()
+			}
 			return
 		}
 
 		switch (event.key) {
 			case "ArrowDown":
 				event.preventDefault()
-				setSelectedIndex((prev) => (prev < modelSearchResults.length - 1 ? prev + 1 : prev))
+				setSelectedIndex((previous) => (previous < suggestions.length - 1 ? previous + 1 : previous))
 				break
 			case "ArrowUp":
 				event.preventDefault()
-				setSelectedIndex((prev) => (prev > 0 ? prev - 1 : prev))
+				setSelectedIndex((previous) => (previous > 0 ? previous - 1 : previous))
 				break
-			case "Enter":
+			case "Enter": {
 				event.preventDefault()
-				if (selectedIndex >= 0 && selectedIndex < modelSearchResults.length) {
-					handleModelChange(modelSearchResults[selectedIndex].id)
-					setIsDropdownVisible(false)
-				} else {
-					// User typed a custom model ID
-					handleModelChange(searchTerm)
-					setIsDropdownVisible(false)
+				const target = selectedIndex >= 0 ? suggestions[selectedIndex] : suggestions[0]
+				if (target) {
+					commitModel(target.id)
 				}
 				break
+			}
 			case "Escape":
-				setIsDropdownVisible(false)
-				setSelectedIndex(-1)
+				event.preventDefault()
+				closeDropdown()
 				break
 		}
 	}
-
-	// Reset selection when search term changes
-	useEffect(() => {
-		setSelectedIndex(-1)
-		if (dropdownListRef.current) {
-			dropdownListRef.current.scrollTop = 0
-		}
-	}, [])
-
-	// Scroll selected item into view
-	useEffect(() => {
-		if (selectedIndex >= 0 && itemRefs.current[selectedIndex]) {
-			itemRefs.current[selectedIndex]?.scrollIntoView({
-				block: "nearest",
-				behavior: "smooth",
-			})
-		}
-	}, [selectedIndex])
 
 	const activeDescendantId = selectedIndex >= 0 ? `${listboxId}-option-${selectedIndex}` : undefined
 
 	return (
 		<ProfileField htmlFor={inputId} label={label}>
-			<style>
-				{`
-				.model-item-highlight {
-					background-color: var(--vscode-editor-findMatchHighlightBackground);
-					color: inherit;
-				}
-				`}
-			</style>
 			<DropdownWrapper ref={dropdownRef}>
 				<VSCodeTextField
 					aria-activedescendant={activeDescendantId}
-					aria-label={label}
 					aria-autocomplete="list"
 					aria-controls={isDropdownVisible ? listboxId : undefined}
 					aria-expanded={isDropdownVisible}
-					id={inputId}
-					onBlur={() => {
-							// Delay to allow click events on dropdown items to fire first
-							setTimeout(() => {
-								if (!isSelectingRef.current && searchTerm !== selectedModelId) {
-									handleModelChange(searchTerm)
-								}
-								isSelectingRef.current = false
-							}, 150)
-						}}
-					onFocus={() => {
-							setIsDropdownVisible(true)
-							onOpen?.()
-						}}
-					onInput={(e) => {
-							setSearchTerm((e.target as HTMLInputElement)?.value || "")
-							setIsDropdownVisible(true)
-						}}
-					onKeyDown={handleKeyDown}
+					aria-label={label}
 					className="min-h-7 w-full"
+					id={inputId}
+					onClick={openDropdown}
+					onFocus={openDropdown}
+					onInput={(event) => {
+						setSearchTerm((event.target as HTMLInputElement)?.value ?? "")
+						setSelectedIndex(-1)
+						setIsDropdownVisible(true)
+					}}
+					onKeyDown={handleKeyDown}
 					placeholder={placeholder}
 					role="combobox"
 					style={{ zIndex, position: "relative" }}
-					value={searchTerm}>
-					{searchTerm && (
-							<div
-								aria-label="Clear search"
-								className="input-icon-button codicon codicon-close"
-								onClick={() => {
-									setSearchTerm("")
-									setIsDropdownVisible(true)
-								}}
-								slot="end"
-								style={{
-									display: "flex",
-									justifyContent: "center",
-									alignItems: "center",
-									height: "100%",
-								}}
-							/>
-					)}
+					value={displayValue}>
+					<button
+						aria-label={isDropdownVisible ? `Close ${label} options` : `Open ${label} options`}
+						className="flex h-full cursor-pointer items-center justify-center border-0 bg-transparent p-0 text-description hover:text-foreground"
+						onMouseDown={(event) => {
+							// Keeping focus on the field means the toggle reads the
+							// current open state instead of the state a focus-driven
+							// open would have just produced.
+							event.preventDefault()
+							if (isDropdownVisible) {
+								closeDropdown()
+							} else {
+								openDropdown()
+							}
+						}}
+						slot="end"
+						tabIndex={-1}
+						type="button">
+						{isDropdownVisible ? <ChevronUpIcon className="size-4" /> : <ChevronDownIcon className="size-4" />}
+					</button>
 				</VSCodeTextField>
-				{isDropdownVisible && (
-						<DropdownList
-							aria-label="Model suggestions"
-							id={listboxId}
-							ref={dropdownListRef}
-							role="listbox"
-							style={{ zIndex: zIndex - 1 }}>
-							{modelSearchResults.map((item, index) => (
-								<DropdownItem
-									$isSelected={index === selectedIndex}
-									aria-selected={index === selectedIndex}
-									id={`${listboxId}-option-${index}`}
-									key={item.id}
-									onClick={() => {
-										handleModelChange(item.id)
-										setIsDropdownVisible(false)
-									}}
-									onMouseDown={() => {
-										isSelectingRef.current = true
-									}}
-									onMouseEnter={() => setSelectedIndex(index)}
-									ref={(el) => (itemRefs.current[index] = el)}
-									role="option">
-									<span dangerouslySetInnerHTML={{ __html: item.html }} />
-								</DropdownItem>
-							))}
-						</DropdownList>
+				{isDropdownVisible && suggestions.length > 0 && (
+					<DropdownList
+						aria-label={`${label} suggestions`}
+						id={listboxId}
+						ref={dropdownListRef}
+						role="listbox"
+						style={{ zIndex: zIndex - 1 }}>
+						{suggestions.map((item, index) => (
+							<DropdownItem
+								$isSelected={index === selectedIndex}
+								aria-selected={index === selectedIndex}
+								id={`${listboxId}-option-${index}`}
+								key={`${item.id}-${item.badge ?? "listed"}`}
+								onClick={() => commitModel(item.id)}
+								onMouseDown={(event) => event.preventDefault()}
+								onMouseEnter={() => setSelectedIndex(index)}
+								ref={(element) => {
+									itemRefs.current[index] = element
+								}}
+								role="option">
+								<span className="min-w-0 break-all">
+									{item.segments.map((segment) =>
+										segment.matched ? (
+											<MatchText key={`${item.id}-match-${segment.start}`}>{segment.text}</MatchText>
+										) : (
+											<span key={`${item.id}-plain-${segment.start}`}>{segment.text}</span>
+										),
+									)}
+								</span>
+								{item.badge ? (
+									<Badge title={item.badge === "new" ? NEW_BADGE_TITLE : CUSTOM_BADGE_TITLE}>
+										{item.badge === "new" ? "New" : "Custom"}
+									</Badge>
+								) : null}
+							</DropdownItem>
+						))}
+					</DropdownList>
 				)}
 			</DropdownWrapper>
 		</ProfileField>
@@ -256,6 +309,10 @@ const DropdownList = styled.div`
 `
 
 const DropdownItem = styled.div<{ $isSelected: boolean }>`
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
 	padding: 5px 10px;
 	cursor: pointer;
 	word-break: break-all;
@@ -266,4 +323,21 @@ const DropdownItem = styled.div<{ $isSelected: boolean }>`
 	&:hover {
 		background-color: var(--vscode-list-activeSelectionBackground);
 	}
+`
+
+// A foreground accent keeps the matched run readable; a filled background
+// reads as a text selection and hides the surrounding id.
+const MatchText = styled.span`
+	color: var(--vscode-list-highlightForeground);
+	font-weight: 600;
+`
+
+const Badge = styled.span`
+	flex-shrink: 0;
+	border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+	border-radius: 999px;
+	padding: 0 6px;
+	font-size: 10px;
+	line-height: 16px;
+	color: var(--vscode-descriptionForeground);
 `

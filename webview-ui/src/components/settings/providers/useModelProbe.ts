@@ -5,12 +5,19 @@ export interface ModelProbeOptions {
 	/**
 	 * Fetches the model IDs the configured endpoint currently exposes.
 	 *
-	 * Must be memoized by the caller (useCallback over the credentials it
-	 * reads). The hook treats a new function identity as a credential change
-	 * and drops previously discovered IDs, so an unstable callback would clear
-	 * the dropdown on every render.
+	 * The hook always calls the newest function it received, so the callback
+	 * does not need a stable identity; `credentialsKey` decides when previously
+	 * discovered IDs stop describing the configured endpoint.
 	 */
 	probe: () => Promise<string[]>
+	/**
+	 * Identifies the endpoint the probe reads.
+	 *
+	 * Discovered IDs are dropped when this changes. Deriving it from the
+	 * credentials rather than the callback identity keeps a probe issued in the
+	 * same render as a credential edit from being discarded as stale.
+	 */
+	credentialsKey?: string
 	/** Skips probing while the endpoint credentials are incomplete. */
 	enabled: boolean
 	/** Kept in the list so the current selection stays visible before a probe returns. */
@@ -37,6 +44,7 @@ export interface ModelProbeResult {
  */
 export function useModelProbe({
 	probe,
+	credentialsKey,
 	enabled,
 	selectedModelId,
 	template = openAiModelInfoSaneDefaults,
@@ -46,17 +54,31 @@ export function useModelProbe({
 	const [error, setError] = useState<Error | undefined>(undefined)
 	const requestId = useRef(0)
 	const pending = useRef(false)
+	// The caller rebuilds the callback whenever the credentials change, so
+	// reading it through a ref lets `refresh` stay stable and always issue the
+	// request against the newest endpoint.
+	const probeRef = useRef(probe)
+	probeRef.current = probe
+	// Effects run after the render that issued a probe, so an unconditional
+	// reset would discard a request started during the very first paint.
+	// Tracking the key here limits the reset to a real endpoint change.
+	const lastCredentialsKey = useRef(credentialsKey)
 
-	// A new probe identity means different credentials, so previously
-	// discovered IDs no longer describe the configured endpoint. Bumping the
-	// request id also discards responses still in flight for the old one.
+	// Different credentials mean previously discovered IDs no longer describe
+	// the configured endpoint. Bumping the request id also discards responses
+	// still in flight for the old one.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: resetting is keyed by the endpoint identity, not by the callback.
 	useEffect(() => {
+		if (lastCredentialsKey.current === credentialsKey) {
+			return
+		}
+		lastCredentialsKey.current = credentialsKey
 		requestId.current += 1
 		pending.current = false
 		setDiscoveredIds([])
 		setError(undefined)
 		setLoading(false)
-	}, [probe])
+	}, [credentialsKey])
 
 	const refresh = useCallback(() => {
 		if (!enabled || pending.current) {
@@ -65,7 +87,8 @@ export function useModelProbe({
 		pending.current = true
 		const currentRequest = ++requestId.current
 		setLoading(true)
-		probe()
+		probeRef
+			.current()
 			.then((ids) => {
 				if (currentRequest !== requestId.current) {
 					return
@@ -86,7 +109,7 @@ export function useModelProbe({
 				pending.current = false
 				setLoading(false)
 			})
-	}, [enabled, probe])
+	}, [enabled])
 
 	const models = useMemo<Record<string, ModelInfo>>(() => {
 		const ids = new Set(discoveredIds)

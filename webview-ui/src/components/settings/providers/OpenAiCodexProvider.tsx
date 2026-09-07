@@ -33,9 +33,11 @@ export const OpenAiCodexProvider = ({ showModelOptions, isPopup, profile, onUpda
 		defaultModelId,
 		modelInfoSaneDefaults,
 		options: modelOptions,
+		optionOrigins,
 		refreshRemoteModels,
 	} = useProviderModelOptions({
 		providerId: "openai-codex",
+		profileId: profile.id,
 		baseUrl: profile.baseUrl,
 		apiKey: profile.apiKey,
 		selectedModelId: profile.modelId,
@@ -56,7 +58,8 @@ export const OpenAiCodexProvider = ({ showModelOptions, isPopup, profile, onUpda
 						models={modelOptions}
 						onChange={(value) => onUpdate({ modelId: value })}
 						onOpen={refreshRemoteModels}
-						placeholder="Search and select a model..."
+						optionOrigins={optionOrigins}
+						placeholder="Search, select, or enter a model ID..."
 						selectedModelId={modelId}
 					/>
 					{/* Store reasoning under the existing proto-generated openaiCodex field. */}

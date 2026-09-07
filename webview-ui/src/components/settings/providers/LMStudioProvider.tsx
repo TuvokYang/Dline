@@ -27,6 +27,7 @@ export const LMStudioProvider = ({ showModelOptions, isPopup: _isPopup, profile,
 	}, [profile.baseUrl])
 
 	const { models: probedModels, refresh: refreshLmStudioModels } = useModelProbe({
+		credentialsKey: profile.baseUrl ?? "",
 		enabled: true,
 		probe: probeLmStudioModels,
 		selectedModelId: profile.modelId || undefined,

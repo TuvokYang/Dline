@@ -1,10 +1,11 @@
 import { geminiModels, ModelInfo } from "@shared/api"
 import type { PricingTier } from "@shared/providers/types"
 import { VSCodeDropdown, VSCodeOption } from "@vscode/webview-ui-toolkit/react"
+import { CheckIcon, MinusIcon } from "lucide-react"
 import { useId } from "react"
 import styled from "styled-components"
 import { ModelDescriptionMarkdown } from "../ModelDescriptionMarkdown"
-import { ProfileDisclosure, ProfileField } from "../profile-ui"
+import { ProfileField } from "../profile-ui"
 import { formatPrice, hasThinkingBudget, supportsBrowserUse, supportsImages, supportsPromptCache } from "../utils/pricingUtils"
 
 // ========== Styled Components ==========
@@ -45,9 +46,33 @@ const AdvancedRow = styled.div`
 const AdvancedLabel = styled.span``
 
 const AdvancedValue = styled.span`
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
 	color: var(--vscode-foreground);
 `
 
+const SupportedIcon = styled(CheckIcon)`
+	width: 14px;
+	height: 14px;
+	color: var(--vscode-charts-green, var(--vscode-testing-iconPassed, var(--vscode-foreground)));
+`
+
+const UnsupportedIcon = styled(MinusIcon)`
+	width: 14px;
+	height: 14px;
+	color: var(--vscode-descriptionForeground);
+`
+
+/** One capability row: an icon carries the state, the text names it. */
+function CapabilityValue({ supported }: { supported: boolean }) {
+	return (
+		<AdvancedValue>
+			{supported ? <SupportedIcon aria-hidden="true" /> : <UnsupportedIcon aria-hidden="true" />}
+			{supported ? "Yes" : "No"}
+		</AdvancedValue>
+	)
+}
 
 // ========== Helper Functions ==========
 
@@ -196,118 +221,110 @@ export const ModelInfoView = ({
 				)}
 			</InfoRow>
 
-			<ProfileDisclosure title="Advanced">
-				<AdvancedSection>
-					{/* Capabilities */}
+			{/* Capabilities, tiers and routing stay visible; hiding them behind a
+			    disclosure made the model's actual limits easy to miss. */}
+			<AdvancedSection>
+				<AdvancedRow>
+					<AdvancedLabel>Images</AdvancedLabel>
+					<CapabilityValue supported={hasImages} />
+				</AdvancedRow>
+				<AdvancedRow>
+					<AdvancedLabel>Browser</AdvancedLabel>
+					<CapabilityValue supported={hasBrowser} />
+				</AdvancedRow>
+				{!isGemini && (
 					<AdvancedRow>
-						<AdvancedLabel>Images</AdvancedLabel>
-						<AdvancedValue>{hasImages ? "Yes" : "No"}</AdvancedValue>
+						<AdvancedLabel>Prompt Caching</AdvancedLabel>
+						<CapabilityValue supported={hasCaching} />
 					</AdvancedRow>
-					<AdvancedRow>
-						<AdvancedLabel>Browser</AdvancedLabel>
-						<AdvancedValue>{hasBrowser ? "Yes" : "No"}</AdvancedValue>
-					</AdvancedRow>
-					{!isGemini && (
+				)}
+
+				{contextTiers.length > 0 && (
+					<div style={{ marginTop: 8 }}>
+						<div style={{ fontWeight: 500, marginBottom: 4 }}>Context Window Tiers:</div>
+						{contextTiers.map((tier) => (
+							<AdvancedRow key={tier.id}>
+								<AdvancedLabel>{tier.label || tier.id}</AdvancedLabel>
+								<AdvancedValue>{formatCompactContext(tier.contextWindow)}</AdvancedValue>
+							</AdvancedRow>
+						))}
+					</div>
+				)}
+
+				{/* Cache Pricing */}
+				{hasCachePricing && (
+					<>
+						{modelInfo.pricing?.cacheReadsPrice !== undefined && (
+							<AdvancedRow>
+								<AdvancedLabel>Cache Reads</AdvancedLabel>
+								<AdvancedValue>{formatCompactPrice(modelInfo.pricing?.cacheReadsPrice)}</AdvancedValue>
+							</AdvancedRow>
+						)}
+						{modelInfo.pricing?.cacheWritesPrice !== undefined && (
+							<AdvancedRow>
+								<AdvancedLabel>Cache Writes</AdvancedLabel>
+								<AdvancedValue>{formatCompactPrice(modelInfo.pricing?.cacheWritesPrice)}</AdvancedValue>
+							</AdvancedRow>
+						)}
+					</>
+				)}
+
+				{/* Tiered Pricing */}
+				{hasTiers && modelInfo.pricing?.tiers && (
+					<div style={{ marginTop: 8 }}>
+						<div style={{ fontWeight: 500, marginBottom: 4 }}>Tiered Pricing:</div>
 						<AdvancedRow>
-							<AdvancedLabel>Prompt Caching</AdvancedLabel>
-							<AdvancedValue>{hasCaching ? "Yes" : "No"}</AdvancedValue>
+							<AdvancedLabel>Input</AdvancedLabel>
+							<AdvancedValue>{formatTiers(modelInfo.pricing.tiers, "inputPrice")}</AdvancedValue>
 						</AdvancedRow>
-					)}
-
-					{contextTiers.length > 0 && (
-						<div style={{ marginTop: 8 }}>
-							<div style={{ fontWeight: 500, marginBottom: 4 }}>Context Window Tiers:</div>
-							{contextTiers.map((tier) => (
-								<div key={tier.id}>
-									{tier.label || tier.id}: {formatCompactContext(tier.contextWindow)}
-								</div>
-							))}
-						</div>
-					)}
-
-					{/* Cache Pricing */}
-					{hasCachePricing && (
-						<>
-							{modelInfo.pricing?.cacheReadsPrice !== undefined && (
-								<AdvancedRow>
-									<AdvancedLabel>Cache Reads</AdvancedLabel>
-									<AdvancedValue>{formatCompactPrice(modelInfo.pricing?.cacheReadsPrice)}</AdvancedValue>
-								</AdvancedRow>
-							)}
-							{modelInfo.pricing?.cacheWritesPrice !== undefined && (
+						<AdvancedRow>
+							<AdvancedLabel>Output</AdvancedLabel>
+							<AdvancedValue>{formatTiers(modelInfo.pricing.tiers, "outputPrice")}</AdvancedValue>
+						</AdvancedRow>
+						{modelInfo.capabilities?.supportsPromptCache && (
+							<>
 								<AdvancedRow>
 									<AdvancedLabel>Cache Writes</AdvancedLabel>
-									<AdvancedValue>{formatCompactPrice(modelInfo.pricing?.cacheWritesPrice)}</AdvancedValue>
+									<AdvancedValue>{formatTiers(modelInfo.pricing.tiers, "cacheWritesPrice")}</AdvancedValue>
 								</AdvancedRow>
-							)}
-						</>
-					)}
+								<AdvancedRow>
+									<AdvancedLabel>Cache Reads</AdvancedLabel>
+									<AdvancedValue>{formatTiers(modelInfo.pricing.tiers, "cacheReadsPrice")}</AdvancedValue>
+								</AdvancedRow>
+							</>
+						)}
+					</div>
+				)}
 
-					{/* Tiered Pricing */}
-					{hasTiers && (
-						<div style={{ marginTop: 8 }}>
-							<div style={{ fontWeight: 500, marginBottom: 4 }}>Tiered Pricing:</div>
-							{modelInfo.pricing?.tiers && (
-								<>
-									<div>
-										<span style={{ fontWeight: 500 }}>Input:</span>
-										<br />
-										{formatTiers(modelInfo.pricing?.tiers, "inputPrice")}
-									</div>
-									<div style={{ marginTop: 4 }}>
-										<span style={{ fontWeight: 500 }}>Output:</span>
-										<br />
-										{formatTiers(modelInfo.pricing?.tiers, "outputPrice")}
-									</div>
-									{modelInfo.capabilities?.supportsPromptCache && (
-										<>
-											<div style={{ marginTop: 4 }}>
-												<span style={{ fontWeight: 500 }}>Cache Writes:</span>
-												<br />
-												{formatTiers(modelInfo.pricing?.tiers, "cacheWritesPrice")}
-											</div>
-											<div style={{ marginTop: 4 }}>
-												<span style={{ fontWeight: 500 }}>Cache Reads:</span>
-												<br />
-												{formatTiers(modelInfo.pricing?.tiers, "cacheReadsPrice")}
-											</div>
-										</>
-									)}
-								</>
-							)}
-						</div>
-					)}
-
-					{/* Provider Routing */}
-					{showProviderRouting && onProviderSortingChange ? (
-						<ProfileField
-							description={
-								<>
-									{!providerSorting &&
-										"Load balance across providers (AWS, Google Vertex, etc.), prioritizing price while considering uptime"}
-									{providerSorting === "price" && "Sort by price, prioritizing the lowest cost provider"}
-									{providerSorting === "throughput" &&
-										"Sort by throughput, prioritizing highest throughput (may increase cost)"}
-									{providerSorting === "latency" && "Sort by response time, prioritizing lowest latency"}
-								</>
-							}
-							htmlFor={providerRoutingId}
-							label="Provider Routing">
-							<VSCodeDropdown
-								aria-label="Provider Routing"
-								className="min-h-7 w-full"
-								id={providerRoutingId}
-								onChange={(e: any) => onProviderSortingChange(e.target.value)}
-								value={providerSorting || ""}>
-								<VSCodeOption value="">Default</VSCodeOption>
-								<VSCodeOption value="price">Price</VSCodeOption>
-								<VSCodeOption value="throughput">Throughput</VSCodeOption>
-								<VSCodeOption value="latency">Latency</VSCodeOption>
-							</VSCodeDropdown>
-						</ProfileField>
-					) : null}
-				</AdvancedSection>
-			</ProfileDisclosure>
+				{/* Provider Routing */}
+				{showProviderRouting && onProviderSortingChange ? (
+					<ProfileField
+						description={
+							<>
+								{!providerSorting &&
+									"Load balance across providers (AWS, Google Vertex, etc.), prioritizing price while considering uptime"}
+								{providerSorting === "price" && "Sort by price, prioritizing the lowest cost provider"}
+								{providerSorting === "throughput" &&
+									"Sort by throughput, prioritizing highest throughput (may increase cost)"}
+								{providerSorting === "latency" && "Sort by response time, prioritizing lowest latency"}
+							</>
+						}
+						htmlFor={providerRoutingId}
+						label="Provider Routing">
+						<VSCodeDropdown
+							aria-label="Provider Routing"
+							className="min-h-7 w-full"
+							id={providerRoutingId}
+							onChange={(e: any) => onProviderSortingChange(e.target.value)}
+							value={providerSorting || ""}>
+							<VSCodeOption value="">Default</VSCodeOption>
+							<VSCodeOption value="price">Price</VSCodeOption>
+							<VSCodeOption value="throughput">Throughput</VSCodeOption>
+							<VSCodeOption value="latency">Latency</VSCodeOption>
+						</VSCodeDropdown>
+					</ProfileField>
+				) : null}
+			</AdvancedSection>
 		</div>
 	)
 }

@@ -203,13 +203,15 @@ message OpenAiModelsRequest {
 }
 
 // Request for previewing the models a provider currently exposes.
-// base_url and api_key are optional; when empty the saved profile
-// credentials for the provider are used.
+// base_url and api_key are optional; when empty the credentials saved for
+// profile_id are used, falling back to any enabled profile of the provider.
 message ProviderModelsRequest {
   Metadata metadata = 1;
   string provider_id = 2;
   string base_url = 3;
   string api_key = 4;
+  // Identifies which profile's stored secret to read; the form never holds it.
+  string profile_id = 5;
 }
 
 // Request for fetching SAP AI Core models

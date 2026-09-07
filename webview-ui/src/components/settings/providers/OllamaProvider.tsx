@@ -44,6 +44,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup: _isPopup, profile, o
 	}, [baseUrl])
 
 	const { models: probedModels, refresh: refreshOllamaModels } = useModelProbe({
+		credentialsKey: baseUrl,
 		enabled: true,
 		probe: probeOllamaModels,
 		selectedModelId: profile.modelId || undefined,
