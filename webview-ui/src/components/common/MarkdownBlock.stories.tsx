@@ -174,6 +174,45 @@ This flow shows how requests are processed through the system.`,
 	},
 }
 
+export const WithWideMermaidDiagram: Story = {
+	args: {
+		markdown: `This wide diagram exercises the SVG export path used by architecture and workflow diagrams:
+
+\`\`\`mermaid
+flowchart LR
+    A[CaseSpaceSr] --> B[Deterministic Comparison]
+    C[SubjectSpec + Provenance] --> D[Acquire Public Observations]
+    B --> D
+    E[ComparisonSpec + Strict Policy] --> F[Strict Comparison Result]
+    D --> F
+    G[Narrow Waiver] --> H[Waiver Policy Assessment]
+    F --> H
+    H --> I[Disposition]
+    I --> J[(SQLite)]
+    F --> J
+    J --> K[Report / Status / Results]
+    K --> L[Archive Evidence Bundle]
+    L --> M[Notify Reviewers]
+    M --> N{Release Gate}
+    N -->|Pass| O[Publish Artifacts]
+    N -->|Fail| P[Open Remediation Task]
+    Q[Runtime Policy Snapshot] --> N
+    R[Audit Trail] --> J
+    O --> S[Downstream Consumers]
+\`\`\``,
+		compact: false,
+		showCursor: false,
+	},
+	parameters: {
+		layout: "fullscreen",
+		docs: {
+			description: {
+				story: "Exercises wide Mermaid labels and the click-to-open SVG export path without clipping text.",
+			},
+		},
+	},
+}
+
 export const WithDiffSyntax: Story = {
 	args: {
 		markdown: `Here are the changes I made to config.ts:

@@ -8,24 +8,18 @@ const config: StorybookConfig = {
 		// Define environment variables for Storybook
 		config.define = {
 			...config.define,
-			"process.platform": JSON.stringify(process?.platform),
-			"process.env": {
-				...process.env,
-				IS_DEV: JSON.stringify(true),
-				IS_TEST: JSON.stringify(true),
-				TEMP_PROFILE: JSON.stringify(true),
-			},
+			"process.platform": JSON.stringify(process.platform),
+			"process.env.IS_DEV": JSON.stringify("true"),
+			"process.env.IS_TEST": JSON.stringify("true"),
+			"process.env.TEMP_PROFILE": JSON.stringify("true"),
 		}
 
 		return config
 	},
 	typescript: {
 		check: true,
-		reactDocgen: "react-docgen-typescript",
-		reactDocgenTypescriptOptions: {
-			shouldExtractLiteralValuesFromEnum: true,
-			propFilter: (prop) => (prop.parent ? !/node_modules/.test(prop.parent.fileName) : true),
-		},
+		// react-docgen-typescript depends on compiler APIs removed by TypeScript 7.
+		reactDocgen: "react-docgen",
 	},
 }
 export default config
