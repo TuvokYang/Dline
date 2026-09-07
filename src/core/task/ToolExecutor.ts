@@ -29,7 +29,7 @@ import {
 import { ClineAsk, ClineSay, ClineSayTool, type CommandStatus } from "@shared/ExtensionMessage"
 import { ClineContent, type ClineToolResponseContent, type ClineUserToolResultContentBlock } from "@shared/messages/content"
 import { ServerTool } from "@shared/proto/dline/models/metadata"
-import { WebSearchMode } from "@shared/proto/dline/provider/common"
+import { WebToolsMode } from "@shared/proto/dline/provider/common"
 import { Logger } from "@shared/services/Logger"
 import type { Mode } from "@shared/storage/types"
 import type { TaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
@@ -423,7 +423,7 @@ export class ToolExecutor {
 		const plan = config.webSearchRoutingPlan
 		return (
 			config.webToolsEnabled === true &&
-			plan?.mode === WebSearchMode.WEB_SEARCH_MODE_AUTO &&
+			plan?.mode === WebToolsMode.WEB_TOOLS_MODE_AUTO &&
 			plan.route === "hosted" &&
 			plan.localFallbackAvailable &&
 			this.coordinator.has(ClineDefaultTool.WEB_SEARCH)
@@ -444,14 +444,14 @@ export class ToolExecutor {
 		}
 	}
 
-	private async presentUnadvertisedHostedWebSearch(block: ToolUse, fallback: boolean, mode: WebSearchMode): Promise<string> {
+	private async presentUnadvertisedHostedWebSearch(block: ToolUse, fallback: boolean, mode: WebToolsMode): Promise<string> {
 		const providerId = this.api.getProviderId?.() ?? "provider"
 		const providerLabel = providerId === "openai" ? "OpenAI" : providerId === "deepseek" ? "DeepSeek" : providerId
 		const query =
 			typeof block.params?.query === "string" && block.params.query.trim() ? block.params.query.trim() : "Web search"
 		const message = fallback
 			? `${providerLabel} hosted Web Search returned a local web_search function call instead of a hosted search event; falling back to Dline local Web Search.`
-			: mode === WebSearchMode.WEB_SEARCH_MODE_FORCE_REMOTE
+			: mode === WebToolsMode.WEB_TOOLS_MODE_FORCE_REMOTE
 				? `${providerLabel} hosted Web Search returned a local web_search function call, but the request is configured for Force Remote. The local call was rejected.`
 				: `${providerLabel} hosted Web Search returned a local web_search function call, but Auto mode has no Dline local Web Search fallback for the current prompt profile. The local call was rejected.`
 		const presentation: ClineSayTool = {

@@ -1,9 +1,10 @@
 import { findEnabledProfileByName } from "@core/controller/file/getApiProfiles"
 import { ApiConfiguration, ModelInfo } from "@shared/api"
 import type { AccountUsageData, AccountUsageQuotaData } from "@shared/ExtensionMessage"
-import type { ServerTool } from "@shared/proto/dline/models/metadata"
+import type { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import type { ApiProfile, ImageGenerationSource } from "@shared/proto/dline/profile"
-import type { WebSearchMode } from "@shared/proto/dline/provider/common"
+import type { WebToolsMode } from "@shared/proto/dline/provider/common"
+import { resolveProfileDisabledServerTools } from "@shared/providers/profile-model-info"
 import { Mode } from "@shared/storage/types"
 import { ClineError } from "@/services/error"
 import { ClineStorageMessage } from "@/shared/messages/content"
@@ -134,8 +135,18 @@ export interface ApiHandler {
 	parseError?(error: any, modelId?: string): ClineError
 	/** Return the provider ID this handler was built for (from profile.provider). */
 	getProviderId?(): string
-	/** Return the web-search mode captured by this handler's profile. */
-	getWebSearchMode?(): WebSearchMode | undefined
+	/** Return the web-tools routing mode captured by this handler's profile. */
+	getWebToolsMode?(): WebToolsMode | undefined
+	/**
+	 * Return the wire protocol this handler will actually use.
+	 *
+	 * Routing has to judge hosted transport against the same format the request
+	 * is sent with. A model's declared formats are only a fallback, and a profile
+	 * running a free-form model id declares none at all.
+	 */
+	getSelectedApiFormat?(): ApiFormat | undefined
+	/** Return the hosted server tools this handler's profile switched off. */
+	getDisabledServerTools?(): readonly ServerTool[] | undefined
 	/** Return the image source captured by this handler's profile when Image use is enabled. */
 	getImageGenerationSource?(): ImageGenerationSource | undefined
 }
@@ -295,7 +306,8 @@ function createHandlerForProvider(ctx: ApiHandlerContext): ApiHandler {
 	// Inject provider ID so callers can get it without going through global StateManager
 	return Object.assign(handler, {
 		getProviderId: () => providerId,
-		getWebSearchMode: () => profile.webSearchMode,
+		getWebToolsMode: () => profile.webToolsMode,
+		getDisabledServerTools: () => resolveProfileDisabledServerTools(profile),
 	})
 }
 

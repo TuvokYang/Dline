@@ -6,7 +6,7 @@ import { E2ETestHelper, e2e } from "./utils/helpers"
 
 interface StoredProfile {
 	name: string
-	webSearchMode?: string
+	webToolsMode?: string
 	openai?: {
 		capabilities?: {
 			contextWindow?: number
@@ -28,7 +28,7 @@ async function configureProfile(dlineDir: string): Promise<void> {
 	const profiles = JSON.parse(await readFile(profilesPath(dlineDir), "utf8")) as StoredProfile[]
 	const profile = profiles.find((candidate) => candidate.name === E2E_PROFILE_NAMES.mockOpenAiResponses)
 	if (!profile?.openai?.capabilities) throw new Error("Durable lifecycle E2E profile is missing")
-	profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	profile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	profile.openai.capabilities.contextWindow = 131_072
 	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 

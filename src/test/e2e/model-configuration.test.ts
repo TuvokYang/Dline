@@ -13,7 +13,7 @@ interface StoredProfile {
 	provider: string
 	modelId: string
 	baseUrl?: string
-	webSearchMode?: string
+	webToolsMode?: string
 	openai?: {
 		apiFormat?: string
 		customModelEnabled?: boolean
@@ -183,11 +183,9 @@ async function selectLabeledOption(card: Locator, sidebar: Frame, label: string,
 	await sidebar.getByRole("option", { name: option, exact: true }).click()
 }
 
+/** Capability rows are always visible; they are no longer behind a disclosure. */
 async function expectAdvancedValue(card: Locator, label: string, value: string): Promise<void> {
 	const row = card.getByText(label, { exact: true }).locator("..")
-	if (!(await row.isVisible())) {
-		await card.getByText("Advanced", { exact: true }).last().click()
-	}
 	await expect(row).toBeVisible()
 	await expect(row).toContainText(value)
 }
@@ -216,12 +214,20 @@ e2e(
 		await setPlaceholderField(card, "Enter API Key...", modelDiscoveryApiKey)
 		await waitForApiKey(dlineDir, profile.id, modelDiscoveryApiKey)
 
+		// The picker lists against the credentials the profile carried when it
+		// last rendered, so a listing issued while the key was still being
+		// saved sees the previous endpoint. Reopening re-runs discovery, which
+		// is also what a user does after finishing the form.
 		server.resetOpenAiMock()
-		const modelInput = card.locator('vscode-text-field[placeholder="Enter Model ID..."] input')
-		await modelInput.click()
-		await modelInput.fill("")
-		await expect(sidebar.getByRole("option", { name: "dline-e2e-discovered-model", exact: true })).toBeVisible()
-		await expect.poll(() => server.getModelListRequests().length).toBeGreaterThan(0)
+		await expect
+			.poll(
+				async () => {
+					await openModelPicker(card)
+					return sidebar.getByRole("option", { name: modelOptionName("dline-e2e-discovered-model") }).count()
+				},
+				{ timeout: 30_000 },
+			)
+			.toBeGreaterThan(0)
 		expect(server.getModelListRequests().at(-1)).toMatchObject({
 			path: "/mock/openai-compatible/chat/v1/models",
 			authorization: `Bearer ${modelDiscoveryApiKey}`,
@@ -253,9 +259,7 @@ e2e(
 			await openApiSettings(firstPage, firstSidebar)
 
 			const officialCard = await openModelConfiguration(firstSidebar, E2E_PROFILE_NAMES.mockOpenAiOfficialResponses)
-			await expect(
-				officialCard.locator('vscode-text-field[placeholder="Search and select a model..."] input'),
-			).toHaveValue("gpt-5.4-mini")
+			await expect(modelPickerInput(officialCard)).toHaveValue("gpt-5.4-mini")
 			const officialApiFormat = officialCard.getByRole("combobox", { name: "API Format" })
 			await expect(officialApiFormat).toHaveValue(String(ApiFormat.OPENAI_RESPONSES))
 			expect(await officialApiFormat.evaluate((element) => (element as HTMLElement).style.backgroundColor)).toBe(
@@ -277,13 +281,8 @@ e2e(
 			const card = await openModelConfiguration(firstSidebar, profileName)
 			await setPlaceholderField(card, "Enter base URL...", modelDiscoveryBaseUrl)
 			await waitForProfile(dlineDir, profileName, (profile) => profile.baseUrl === modelDiscoveryBaseUrl)
-			const modelInput = card.locator('vscode-text-field[placeholder="Enter Model ID..."] input')
-			await modelInput.click()
-			await modelInput.fill("")
-			const discoveredModel = firstSidebar.getByRole("option", {
-				name: "dline-e2e-discovered-model",
-				exact: true,
-			})
+			const modelInput = await openModelPicker(card)
+			const discoveredModel = firstSidebar.getByRole("option", { name: modelOptionName("dline-e2e-discovered-model") })
 			await expect(discoveredModel).toBeVisible()
 			await discoveredModel.click()
 			await expect(modelInput).toHaveValue("dline-e2e-discovered-model")
@@ -409,9 +408,7 @@ e2e(
 			await expect(reopenedCard.locator('vscode-text-field[placeholder="Enter base URL..."] input')).toHaveValue(
 				modelDiscoveryBaseUrl,
 			)
-			await expect(reopenedCard.locator('vscode-text-field[placeholder="Enter Model ID..."] input')).toHaveValue(
-				"dline-e2e-discovered-model",
-			)
+			await expect(modelPickerInput(reopenedCard)).toHaveValue("dline-e2e-discovered-model")
 			await expect(reopenedCard.getByRole("combobox", { name: "API Format" })).toHaveValue(
 				String(ApiFormat.OPENAI_RESPONSES),
 			)
@@ -610,13 +607,13 @@ e2e(
 		)
 
 		const anthropicCard = await openProfileEditor(sidebar, E2E_PROFILE_NAMES.mockAnthropic)
-		const anthropicWebSearchMode = anthropicCard.getByRole("combobox", { name: "Web Search mode" })
-		await anthropicWebSearchMode.selectOption({ label: "Off" })
-		await expect(anthropicWebSearchMode).toHaveValue("2")
+		const anthropicWebToolsMode = anthropicCard.getByRole("combobox", { name: "Web Tools mode" })
+		await anthropicWebToolsMode.selectOption({ label: "Off" })
+		await expect(anthropicWebToolsMode).toHaveValue("2")
 		await waitForProfile(
 			dlineDir,
 			E2E_PROFILE_NAMES.mockAnthropic,
-			(profile) => profile.webSearchMode === "WEB_SEARCH_MODE_FORCE_OFF",
+			(profile) => profile.webToolsMode === "WEB_TOOLS_MODE_FORCE_OFF",
 		)
 		await selectOfficialModel(anthropicCard, sidebar, "claude-opus-4-8")
 		await waitForProfile(
@@ -768,25 +765,46 @@ e2e(
 )
 
 /**
- * The official model picker is a combobox whose listbox only mounts while open.
- * Focusing it also triggers the provider's remote discovery, so the assertion
- * below covers both the local catalog and the freshly listed remote models.
+ * The picker merges catalog and listed models. Its placeholder differs per
+ * provider, and the toolkit field renders its input inside a shadow root, so
+ * the field is matched on the shared `role="combobox"` the picker sets.
  */
-async function openOfficialModelPicker(card: Locator): Promise<Locator> {
-	const input = card.locator('vscode-text-field[placeholder="Search and select a model..."] input')
+function modelPickerInput(card: Locator): Locator {
+	return card.locator('vscode-text-field[role="combobox"] input')
+}
+
+/**
+ * Opens the picker's listbox, which only mounts while open. Opening also clears
+ * the query and triggers remote discovery, so the assertions that follow cover
+ * both the local catalog and the freshly listed remote models.
+ */
+async function openModelPicker(card: Locator): Promise<Locator> {
+	const input = modelPickerInput(card)
 	await expect(input).toHaveCount(1)
 	await input.click()
-	// An empty query lists every candidate instead of filtering by the current selection.
-	await input.fill("")
 	return input
 }
 
-/** Picks an official model through the searchable picker's own listbox. */
+/**
+ * Picks a model through the picker's own listbox.
+ *
+ * A row's accessible name is the model id plus an optional origin badge, and
+ * ids can be prefixes of one another, so the name is anchored on both ends.
+ */
 async function selectOfficialModel(card: Locator, sidebar: Frame, modelId: string): Promise<void> {
-	const input = await openOfficialModelPicker(card)
+	const input = await openModelPicker(card)
 	await input.fill(modelId)
-	await sidebar.getByRole("option", { name: modelId, exact: true }).click()
+	await sidebar.getByRole("option", { name: modelOptionName(modelId) }).click()
 	await expect(input).toHaveValue(modelId)
+}
+
+/** Matches exactly one picker row: the model id, optionally followed by a badge. */
+function modelOptionName(modelId: string): RegExp {
+	return new RegExp(`^${escapeRegExp(modelId)}( (New|Custom))?$`)
+}
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
 e2e(
@@ -798,21 +816,25 @@ e2e(
 		await openApiSettings(page, sidebar)
 		server.resetOpenAiMock()
 
-		// OpenAI official profile: custom model ID stays off for the whole check.
+		// OpenAI official profile: one picker covers catalog and remote models while
+		// the custom model ID switch stays available for ids no listing returns.
 		const openAiCard = await openModelConfiguration(sidebar, E2E_PROFILE_NAMES.mockOpenAiOfficialResponses)
-		await expect(openAiCard.locator("vscode-checkbox").filter({ hasText: "Use custom model ID" })).not.toBeChecked()
-		await openOfficialModelPicker(openAiCard)
-		await expect(sidebar.getByRole("option", { name: "gpt-5.4-mini", exact: true })).toBeVisible()
-		await expect(sidebar.getByRole("option", { name: "dline-e2e-discovered-model", exact: true })).toBeVisible()
+		await expect(openAiCard.locator("vscode-checkbox").filter({ hasText: "Use custom model ID" })).toHaveCount(1)
+		await openModelPicker(openAiCard)
+		await expect(sidebar.getByRole("option", { name: modelOptionName("gpt-5.4-mini") })).toBeVisible()
+		// Models only the provider lists are badged as newly discovered.
+		const discoveredOption = sidebar.getByRole("option", { name: modelOptionName("dline-e2e-discovered-model") })
+		await expect(discoveredOption).toBeVisible()
+		await expect(discoveredOption).toContainText("New")
 		await expect
 			.poll(() => server.getModelListRequests().filter((request) => request.target === "openai-official-responses").length)
 			.toBeGreaterThan(0)
 
 		// Anthropic profile: same merged contract, listed with x-api-key.
 		const anthropicCard = await openModelConfiguration(sidebar, E2E_PROFILE_NAMES.mockAnthropic)
-		await openOfficialModelPicker(anthropicCard)
-		await expect(sidebar.getByRole("option", { name: "claude-sonnet-4-6", exact: true })).toBeVisible()
-		await expect(sidebar.getByRole("option", { name: "dline-e2e-discovered-model", exact: true })).toBeVisible()
+		await openModelPicker(anthropicCard)
+		await expect(sidebar.getByRole("option", { name: modelOptionName("claude-sonnet-4-6") })).toBeVisible()
+		await expect(sidebar.getByRole("option", { name: modelOptionName("dline-e2e-discovered-model") })).toBeVisible()
 		await expect
 			.poll(() => server.getModelListRequests().filter((request) => request.target === "anthropic-messages").length)
 			.toBeGreaterThan(0)
@@ -824,9 +846,9 @@ e2e(
 		// DeepSeek profile: the vendor listing is an OpenAI-style `GET /models`.
 		// This provider has no Model Configuration disclosure, so expanding the card is enough.
 		const deepSeekCard = await openProfileEditor(sidebar, E2E_PROFILE_NAMES.mockDeepSeek)
-		await openOfficialModelPicker(deepSeekCard)
-		await expect(sidebar.getByRole("option", { name: "deepseek-v4-flash", exact: true })).toBeVisible()
-		await expect(sidebar.getByRole("option", { name: "dline-e2e-discovered-model", exact: true })).toBeVisible()
+		await openModelPicker(deepSeekCard)
+		await expect(sidebar.getByRole("option", { name: modelOptionName("deepseek-v4-flash") })).toBeVisible()
+		await expect(sidebar.getByRole("option", { name: modelOptionName("dline-e2e-discovered-model") })).toBeVisible()
 		await expect
 			.poll(() => server.getModelListRequests().filter((request) => request.target === "deepseek-chat").length)
 			.toBeGreaterThan(0)
@@ -844,9 +866,9 @@ e2e(
 		await helper.signin(sidebar)
 		await openApiSettings(page, sidebar)
 		const card = await openModelConfiguration(sidebar, profileName)
-		const webSearchMode = card.getByRole("combobox", { name: "Web Search mode" })
-		await webSearchMode.selectOption({ label: "Off" })
-		await waitForProfile(dlineDir, profileName, (profile) => profile.webSearchMode === "WEB_SEARCH_MODE_FORCE_OFF")
+		const webToolsMode = card.getByRole("combobox", { name: "Web Tools mode" })
+		await webToolsMode.selectOption({ label: "Off" })
+		await waitForProfile(dlineDir, profileName, (profile) => profile.webToolsMode === "WEB_TOOLS_MODE_FORCE_OFF")
 		await expect(card.locator("vscode-checkbox").filter({ hasText: "Enable Long Context" })).toHaveCount(0)
 		await expect(card.getByRole("button", { name: "Add Context Tier" })).toHaveCount(0)
 		const contextWindow = card.getByRole("textbox", { name: "Context Window Size" })

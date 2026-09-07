@@ -1,5 +1,6 @@
 import type { ModelInfo } from "@shared/proto/dline/models"
 import { type ModelCapabilities, type ModelPricing, ServerTool } from "@shared/proto/dline/models/metadata"
+import { declaredServerTools, isServerToolEnabled, withServerToolSwitch } from "@shared/providers/server-tool-switches"
 import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
 import { useEffect, useId, useState } from "react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -14,7 +15,7 @@ type CapabilityCheckField =
 	| "supportsImages"
 	| "supportsPromptCache"
 	| "supportsTools"
-	| "supportsWebSearch"
+	| "hostedWebSearchEnabled"
 	| "supportsBrowserAction"
 
 const fieldControlClass = "min-h-7 w-full"
@@ -35,6 +36,14 @@ interface ModelConfigurationProps {
 	// Update callback for provider pricing.
 	onPricingUpdate: (updates: Partial<ModelPricing>) => void
 
+	// Hosted server tools the user switched off for this profile. Absent means
+	// "follow the model declaration", which is why an empty list is meaningful here
+	// and would not be meaningful inside the declaration itself.
+	disabledServerTools?: readonly ServerTool[]
+
+	// Update callback for the hosted server tool switches.
+	onDisabledServerToolsUpdate?: (disabledServerTools: ServerTool[]) => void
+
 	// Which fields to display (data-driven)
 	fields: {
 		// Capabilities related fields
@@ -45,7 +54,7 @@ interface ModelConfigurationProps {
 			| "supportsImages"
 			| "supportsPromptCache"
 			| "supportsTools"
-			| "supportsWebSearch"
+			| "hostedWebSearch"
 			| "supportsBrowserAction"
 			| "temperature"
 		>
@@ -77,6 +86,8 @@ export const ModelConfiguration = ({
 	pricing: pricingOverrides,
 	onCapabilitiesUpdate,
 	onPricingUpdate,
+	disabledServerTools,
+	onDisabledServerToolsUpdate,
 	fields,
 	defaults,
 	tiersEditable = false,
@@ -117,7 +128,7 @@ export const ModelConfiguration = ({
 				"supportsImages",
 				"supportsPromptCache",
 				"supportsTools",
-				"supportsWebSearch",
+				"hostedWebSearchEnabled",
 				"supportsBrowserAction",
 			] as const) {
 				const expected = pending[field]
@@ -129,10 +140,8 @@ export const ModelConfiguration = ({
 							return capabilities.supportsPromptCache ?? true
 						case "supportsTools":
 							return capabilities.supportsTools ?? defaults?.capabilities?.supportsTools ?? false
-						case "supportsWebSearch":
-							return (capabilityOverrides?.tools ?? defaults?.capabilities?.tools ?? []).includes(
-								ServerTool.WEB_SEARCH,
-							)
+						case "hostedWebSearchEnabled":
+							return isServerToolEnabled(ServerTool.WEB_SEARCH, disabledServerTools)
 						case "supportsBrowserAction":
 							return capabilities.supportsBrowserAction ?? defaults?.capabilities?.supportsBrowserAction ?? false
 					}
@@ -153,10 +162,9 @@ export const ModelConfiguration = ({
 		capabilities.supportsPromptCache,
 		capabilities.supportsTools,
 		capabilities.supportsBrowserAction,
-		capabilityOverrides?.tools,
+		disabledServerTools,
 		defaults?.capabilities?.supportsTools,
 		defaults?.capabilities?.supportsBrowserAction,
-		defaults?.capabilities?.tools,
 		draftChecks,
 	])
 
@@ -197,17 +205,15 @@ export const ModelConfiguration = ({
 		updateCapability(field, value)
 	}
 
-	/** Map the Web Search checkbox to the ServerTool list without discarding other server tools. */
-	const updateWebSearchCheck = (value: boolean) => {
-		setDraftChecks((draft) => ({ ...draft, supportsWebSearch: value }))
-		setPendingChecks((pending) => ({ ...pending, supportsWebSearch: value }))
-		const currentTools = capabilityOverrides?.tools ?? defaults?.capabilities?.tools ?? []
-		const tools = value
-			? currentTools.includes(ServerTool.WEB_SEARCH)
-				? currentTools
-				: [...currentTools, ServerTool.WEB_SEARCH]
-			: currentTools.filter((tool) => tool !== ServerTool.WEB_SEARCH)
-		updateCapability("tools", tools)
+	/**
+	 * Toggle the hosted Web Search switch. This writes the profile-owned disable
+	 * list and never the model's capability declaration, so turning the switch off
+	 * and on again cannot erase what the model is actually able to do.
+	 */
+	const updateHostedWebSearchCheck = (value: boolean) => {
+		setDraftChecks((draft) => ({ ...draft, hostedWebSearchEnabled: value }))
+		setPendingChecks((pending) => ({ ...pending, hostedWebSearchEnabled: value }))
+		onDisabledServerToolsUpdate?.(withServerToolSwitch(disabledServerTools, ServerTool.WEB_SEARCH, value))
 	}
 
 	/** Persist context tier changes while keeping the editor responsive before profile echo. */
@@ -251,9 +257,9 @@ export const ModelConfiguration = ({
 	const supportsPromptCache = draftChecks.supportsPromptCache ?? capabilities.supportsPromptCache ?? true
 	const supportsTools =
 		draftChecks.supportsTools ?? capabilities.supportsTools ?? defaults?.capabilities?.supportsTools ?? false
-	const supportsWebSearch =
-		draftChecks.supportsWebSearch ??
-		(capabilityOverrides?.tools ?? defaults?.capabilities?.tools ?? []).includes(ServerTool.WEB_SEARCH)
+	const modelDeclaresHostedWebSearch = declaredServerTools(defaults?.capabilities).includes(ServerTool.WEB_SEARCH)
+	const hostedWebSearchEnabled =
+		draftChecks.hostedWebSearchEnabled ?? isServerToolEnabled(ServerTool.WEB_SEARCH, disabledServerTools)
 	const supportsBrowserAction =
 		draftChecks.supportsBrowserAction ??
 		capabilities.supportsBrowserAction ??
@@ -263,7 +269,7 @@ export const ModelConfiguration = ({
 		capabilityFields.includes("supportsImages") ||
 		capabilityFields.includes("supportsPromptCache") ||
 		capabilityFields.includes("supportsTools") ||
-		capabilityFields.includes("supportsWebSearch") ||
+		capabilityFields.includes("hostedWebSearch") ||
 		capabilityFields.includes("supportsBrowserAction") ||
 		capabilityFields.includes("temperature")
 	const hasCapabilityFields =
@@ -285,7 +291,9 @@ export const ModelConfiguration = ({
 		<ProfileDisclosure title="Model Configuration">
 			{hasOptionsFields ? (
 				<ProfileSection>
-					<ProfileSectionTitle className="text-xs uppercase tracking-wide text-description">Options</ProfileSectionTitle>
+					<ProfileSectionTitle className="text-xs uppercase tracking-wide text-description">
+						Options
+					</ProfileSectionTitle>
 					<div className="flex flex-col gap-1.5 text-sm">
 						{capabilityFields.includes("supportsImages") ? (
 							<VSCodeCheckbox
@@ -296,23 +304,23 @@ export const ModelConfiguration = ({
 								Supports Images
 							</VSCodeCheckbox>
 						) : null}
-						{capabilityFields.includes("supportsWebSearch") ? (
+						{capabilityFields.includes("hostedWebSearch") ? (
 							<VSCodeCheckbox
-								checked={supportsWebSearch}
+								checked={modelDeclaresHostedWebSearch && hostedWebSearchEnabled}
+								disabled={!modelDeclaresHostedWebSearch}
 								onChange={(e: Event | React.FormEvent<HTMLElement>) =>
-									updateWebSearchCheck((e.target as HTMLInputElement | null)?.checked === true)
+									updateHostedWebSearchCheck((e.target as HTMLInputElement | null)?.checked === true)
 								}>
-								Supports Web Search
+								{modelDeclaresHostedWebSearch
+									? "Use hosted Web Search"
+									: "Use hosted Web Search (not offered by this model)"}
 							</VSCodeCheckbox>
 						) : null}
 						{capabilityFields.includes("supportsBrowserAction") ? (
 							<VSCodeCheckbox
 								checked={supportsBrowserAction}
 								onChange={(e: Event | React.FormEvent<HTMLElement>) =>
-									updateCheck(
-										"supportsBrowserAction",
-										(e.target as HTMLInputElement | null)?.checked === true,
-									)
+									updateCheck("supportsBrowserAction", (e.target as HTMLInputElement | null)?.checked === true)
 								}>
 								Supports Browser Actions
 							</VSCodeCheckbox>
@@ -321,10 +329,7 @@ export const ModelConfiguration = ({
 							<VSCodeCheckbox
 								checked={supportsPromptCache}
 								onChange={(e: Event | React.FormEvent<HTMLElement>) =>
-									updateCheck(
-										"supportsPromptCache",
-										(e.target as HTMLInputElement | null)?.checked === true,
-									)
+									updateCheck("supportsPromptCache", (e.target as HTMLInputElement | null)?.checked === true)
 								}>
 								Supports Prompt Cache
 							</VSCodeCheckbox>
@@ -362,7 +367,9 @@ export const ModelConfiguration = ({
 
 			{hasCapabilityFields ? (
 				<ProfileSection>
-					<ProfileSectionTitle className="text-xs uppercase tracking-wide text-description">Capabilities</ProfileSectionTitle>
+					<ProfileSectionTitle className="text-xs uppercase tracking-wide text-description">
+						Capabilities
+					</ProfileSectionTitle>
 					<ProfileInlineGrid>
 						{capabilityFields.includes("contextWindow") ? (
 							<ProfileField htmlFor={contextWindowId} label="Context Window Size">
@@ -401,7 +408,9 @@ export const ModelConfiguration = ({
 
 			{hasPricingFields ? (
 				<ProfileSection>
-					<ProfileSectionTitle className="text-xs uppercase tracking-wide text-description">Pricing</ProfileSectionTitle>
+					<ProfileSectionTitle className="text-xs uppercase tracking-wide text-description">
+						Pricing
+					</ProfileSectionTitle>
 					<ProfileField htmlFor={currencyId} label="Currency">
 						<Select onValueChange={updateCurrency} value={pricing.currency || "USD"}>
 							<SelectTrigger className={fieldControlClass} id={currencyId}>
@@ -457,9 +466,7 @@ export const ModelConfiguration = ({
 										ariaLabel={`Cache Writes (${currencySymbol}/M)`}
 										className={fieldControlClass}
 										id={cacheWritesPriceId}
-										initialValue={
-											pricing.cacheWritesPrice != null ? String(pricing.cacheWritesPrice) : ""
-										}
+										initialValue={pricing.cacheWritesPrice != null ? String(pricing.cacheWritesPrice) : ""}
 										onChange={(value) => updatePricing("cacheWritesPrice", parsePrice(value, 0))}
 										placeholder={
 											defaults?.pricing?.cacheWritesPrice != null

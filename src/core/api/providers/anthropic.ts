@@ -56,6 +56,11 @@ export class AnthropicHandler implements ApiHandler {
 		return this.config?.reasoning?.thinkingBudget ?? 0
 	}
 
+	/** This handler always speaks the Anthropic Messages protocol. */
+	getSelectedApiFormat(): ApiFormat {
+		return ApiFormat.ANTHROPIC_CHAT
+	}
+
 	supportsServerTool(tool: ServerTool): boolean {
 		return tool === ServerTool.WEB_SEARCH || tool === ServerTool.CODE_EXECUTION
 	}

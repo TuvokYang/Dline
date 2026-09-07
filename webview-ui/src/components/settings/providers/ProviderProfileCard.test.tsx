@@ -1,5 +1,5 @@
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
-import { ApiProfile, ImageGenerationSource, type ImageGenerationProfile } from "@shared/proto/dline/profile"
+import { ApiProfile, type ImageGenerationProfile, ImageGenerationSource } from "@shared/proto/dline/profile"
 import { AnthropicProviderConfig } from "@shared/proto/dline/provider/anthropic"
 import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
 import { fireEvent, render, screen } from "@testing-library/react"
@@ -275,7 +275,7 @@ describe("ProviderProfileCard", () => {
 			/>,
 		)
 
-		expect(screen.queryByRole("combobox", { name: "Web Search mode" })).not.toBeInTheDocument()
+		expect(screen.queryByRole("combobox", { name: "Web Tools mode" })).not.toBeInTheDocument()
 	})
 
 	it("shows image configuration only when the global feature is enabled", () => {
@@ -405,8 +405,8 @@ describe("ProviderProfileCard", () => {
 			<ProviderProfileCard
 				currentMode="act"
 				editMode={false}
-				imageProfiles={imageProfiles}
 				imageGenerationEnabled={true}
+				imageProfiles={imageProfiles}
 				isExpanded={true}
 				onDelete={vi.fn()}
 				onToggleExpand={vi.fn()}

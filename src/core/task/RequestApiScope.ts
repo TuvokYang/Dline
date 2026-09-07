@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto"
 import type { ApiHandler, ApiProviderInfo } from "@core/api"
 import {
+	type HostedImageGenerationPlan,
 	resolveHostedImageGenerationPlan,
 	resolveWebSearchRoutingPlan,
-	type HostedImageGenerationPlan,
 	type WebSearchRoutingPlan,
 } from "@core/api/server-tools"
 import { PromptProfile } from "@core/prompts/profiles/types"
@@ -30,9 +30,12 @@ export function resolveRequestWebSearchRoutingPlan(api: ApiHandler, enabled: boo
 	})
 	return resolveWebSearchRoutingPlan({
 		enabled,
-		mode: api.getWebSearchMode?.(),
+		mode: api.getWebToolsMode?.(),
 		modelInfo: model.info,
-		selectedApiFormat: model.info.apiFormats?.[0],
+		disabledServerTools: api.getDisabledServerTools?.(),
+		// The handler knows the protocol the request will actually use. A model's
+		// declared formats are only a fallback, and a free-form model id declares none.
+		selectedApiFormat: api.getSelectedApiFormat?.() ?? model.info.apiFormats?.[0],
 		localAvailable: promptProfile === PromptProfile.Standard,
 		remoteAdapterAvailable: api.supportsServerTool?.(ServerTool.WEB_SEARCH) === true,
 	})
@@ -45,7 +48,7 @@ export function resolveRequestHostedImageGenerationPlan(api: ApiHandler, enabled
 		enabled,
 		source: api.getImageGenerationSource?.(),
 		modelInfo: model.info,
-		selectedApiFormat: model.info.apiFormats?.[0],
+		selectedApiFormat: api.getSelectedApiFormat?.() ?? model.info.apiFormats?.[0],
 		remoteAdapterAvailable: api.supportsServerTool?.(ServerTool.IMAGE_GENERATION) === true,
 	})
 }

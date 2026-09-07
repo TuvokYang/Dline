@@ -61,7 +61,7 @@ function buildContext(taskId: string): TaskContextCache {
 				runtime: {
 					parallelToolsEnabled: true,
 					webToolsEnabled: true,
-					webSearchMode: 0,
+					webToolsMode: 0,
 					webSearchRoute: "hosted",
 					webSearchLocalFallbackAvailable: true,
 					serverTools: [ServerTool.WEB_SEARCH],

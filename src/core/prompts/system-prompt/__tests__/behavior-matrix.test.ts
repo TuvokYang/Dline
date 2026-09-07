@@ -152,7 +152,9 @@ describe("Standard/Lite transport and capability behavior matrix", () => {
 		expect(hosted.systemPrompt).not.toContain("provider-hosted")
 		expect(hosted.systemPrompt).not.toContain("local executor")
 
-		expect(exposes(disabled, transport, "web_fetch")).toBe(true)
+		// Web Tools is one switch over both web tools, so turning it off for a
+		// profile withdraws Web Fetch alongside Web Search.
+		expect(exposes(disabled, transport, "web_fetch")).toBe(false)
 		expect(exposes(disabled, transport, "web_search")).toBe(false)
 		expect(disabled.systemPrompt).not.toContain("Use web search only when")
 		expect(disabled.systemPrompt).not.toContain("local executor")

@@ -55,7 +55,7 @@ async function configureDefaultProfile(
 	const profiles = JSON.parse(await readFile(profilesPath(dlineDir), "utf8")) as StoredProfile[]
 	const profile = profiles.find((candidate) => candidate.name === profileName)
 	if (!profile) throw new Error(`Missing E2E Profile: ${profileName}`)
-	profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	profile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	mutate?.(profile)
 
 	const settings = JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>

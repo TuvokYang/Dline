@@ -3,7 +3,7 @@ import { PreToolUseHookCancellationError } from "@core/hooks/PreToolUseHookCance
 import { InteractionCancellationError } from "@core/task/interaction/InteractionCancellationError"
 import { ToolExecutor } from "@core/task/ToolExecutor"
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
-import { WebSearchMode } from "@shared/proto/dline/provider/common"
+import { WebToolsMode } from "@shared/proto/dline/provider/common"
 import { ClineDefaultTool } from "@shared/tools"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { AuthService } from "@/services/auth/AuthService"
@@ -20,7 +20,7 @@ import { WebSearchToolHandler } from "./WebSearchToolHandler"
 function routingPlan(route: "disabled" | "local" | "hosted") {
 	return resolveWebSearchRoutingPlan({
 		enabled: true,
-		mode: route === "disabled" ? WebSearchMode.WEB_SEARCH_MODE_FORCE_OFF : WebSearchMode.WEB_SEARCH_MODE_AUTO,
+		mode: route === "disabled" ? WebToolsMode.WEB_TOOLS_MODE_FORCE_OFF : WebToolsMode.WEB_TOOLS_MODE_AUTO,
 		modelInfo: { capabilities: { tools: [ServerTool.WEB_SEARCH] } },
 		selectedApiFormat: route === "hosted" ? ApiFormat.OPENAI_RESPONSES : ApiFormat.OPENAI_CHAT,
 		localAvailable: true,

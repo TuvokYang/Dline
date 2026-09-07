@@ -32,7 +32,7 @@ const testPromptBuilderInfo = {
 	serverTools: LOCAL_WEB_SEARCH_ROUTING_PLAN.serverTools,
 	webToolsEnabled: true,
 	webSearchRoute: LOCAL_WEB_SEARCH_ROUTING_PLAN.route,
-	webSearchMode: LOCAL_WEB_SEARCH_ROUTING_PLAN.mode,
+	webToolsMode: LOCAL_WEB_SEARCH_ROUTING_PLAN.mode,
 	webSearchLocalFallbackAvailable: LOCAL_WEB_SEARCH_ROUTING_PLAN.localFallbackAvailable,
 }
 

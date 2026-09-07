@@ -1,13 +1,9 @@
 import type { ModelInfo } from "@shared/proto/dline/models"
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import { ImageGenerationSource } from "@shared/proto/dline/profile"
-import { WebSearchMode } from "@shared/proto/dline/provider/common"
+import { WebToolsMode } from "@shared/proto/dline/provider/common"
 
-const KNOWN_SERVER_TOOLS = new Set<ServerTool>([
-	ServerTool.WEB_SEARCH,
-	ServerTool.CODE_EXECUTION,
-	ServerTool.IMAGE_GENERATION,
-])
+const KNOWN_SERVER_TOOLS = new Set<ServerTool>([ServerTool.WEB_SEARCH, ServerTool.CODE_EXECUTION, ServerTool.IMAGE_GENERATION])
 
 const SUPPORTED_TOOLS_BY_API_FORMAT: Readonly<Partial<Record<ApiFormat, ReadonlySet<ServerTool>>>> = {
 	[ApiFormat.ANTHROPIC_CHAT]: new Set([ServerTool.WEB_SEARCH, ServerTool.CODE_EXECUTION]),
@@ -27,7 +23,11 @@ export interface ServerToolProjection {
 
 export interface ServerToolPlan {
 	readonly apiFormat?: ApiFormat
+	/** Hosted tools the model itself declares. Owned by the registry. */
 	readonly declared: readonly ServerTool[]
+	/** Declared tools the profile switched off. Owned by the user. */
+	readonly disabled: readonly ServerTool[]
+	/** Declared, enabled, and carried by the selected wire protocol. */
 	readonly active: readonly ServerTool[]
 	readonly unsupported: readonly ServerTool[]
 	readonly unrecognized: readonly number[]
@@ -38,11 +38,12 @@ export type WebSearchRoute = "disabled" | "local" | "hosted" | "unavailable"
 export type WebSearchUnavailableReason =
 	| "local_web_search_unavailable"
 	| "server_tool_not_declared"
+	| "server_tool_disabled_by_profile"
 	| "server_tool_transport_unsupported"
 	| "server_tool_adapter_unavailable"
 
 export interface WebSearchRoutingPlan {
-	readonly mode: WebSearchMode
+	readonly mode: WebToolsMode
 	readonly route: WebSearchRoute
 	readonly serverToolPlan: ServerToolPlan
 	readonly localToolEnabled: boolean
@@ -53,8 +54,13 @@ export interface WebSearchRoutingPlan {
 
 export interface WebSearchRoutingInput {
 	readonly enabled: boolean
-	readonly mode?: WebSearchMode
+	readonly mode?: WebToolsMode
 	readonly modelInfo: Pick<ModelInfo, "capabilities"> | undefined
+	/**
+	 * Hosted tools the profile switched off. Absent means the profile follows the
+	 * model declaration, which is the state every profile starts in.
+	 */
+	readonly disabledServerTools?: readonly ServerTool[]
 	readonly selectedApiFormat: ApiFormat | undefined
 	readonly localAvailable: boolean
 	readonly remoteAdapterAvailable: boolean
@@ -82,10 +88,19 @@ export interface HostedImageGenerationInput {
 	readonly remoteAdapterAvailable: boolean
 }
 
-/** Resolve provider-hosted tools solely from model metadata and the selected wire protocol. */
+/**
+ * Resolve provider-hosted tools from the model declaration, the profile's switches,
+ * and the selected wire protocol.
+ *
+ * The declaration and the switches are deliberately separate inputs: the model
+ * states what it can do, the profile states what the user turned off. Folding the
+ * switch back into the declaration would make "turned off" and "not supported"
+ * indistinguishable, which silently strips a hosted-capable model of its route.
+ */
 export function resolveServerToolPlan(
 	modelInfo: Pick<ModelInfo, "capabilities"> | undefined,
 	selectedApiFormat: ApiFormat | undefined,
+	disabledServerTools?: readonly ServerTool[],
 ): ServerToolPlan {
 	const declared: ServerTool[] = []
 	const unrecognized: number[] = []
@@ -106,12 +121,15 @@ export function resolveServerToolPlan(
 	declared.sort((left, right) => left - right)
 	unrecognized.sort((left, right) => left - right)
 	const supported = selectedApiFormat === undefined ? undefined : SUPPORTED_TOOLS_BY_API_FORMAT[selectedApiFormat]
-	const active = declared.filter((tool) => supported?.has(tool) === true)
-	const unsupported = declared.filter((tool) => supported?.has(tool) !== true)
+	const disabled = declared.filter((tool) => disabledServerTools?.includes(tool) === true)
+	const enabled = declared.filter((tool) => disabledServerTools?.includes(tool) !== true)
+	const active = enabled.filter((tool) => supported?.has(tool) === true)
+	const unsupported = enabled.filter((tool) => supported?.has(tool) !== true)
 
 	return Object.freeze({
 		...(selectedApiFormat === undefined ? {} : { apiFormat: selectedApiFormat }),
 		declared: Object.freeze(declared),
+		disabled: Object.freeze(disabled),
 		active: Object.freeze(active),
 		unsupported: Object.freeze(unsupported),
 		unrecognized: Object.freeze(unrecognized),
@@ -136,7 +154,7 @@ export function disableWebSearchRoutingPlan(plan: WebSearchRoutingPlan): WebSear
 }
 
 function createWebSearchRoutingPlan(
-	mode: WebSearchMode,
+	mode: WebToolsMode,
 	route: WebSearchRoute,
 	serverToolPlan: ServerToolPlan,
 	localAvailable: boolean,
@@ -163,26 +181,30 @@ function createWebSearchRoutingPlan(
 
 /** Resolve exactly one web-search execution route for the current request. */
 export function resolveWebSearchRoutingPlan(input: WebSearchRoutingInput): WebSearchRoutingPlan {
-	const mode = input.mode ?? WebSearchMode.WEB_SEARCH_MODE_AUTO
-	const serverToolPlan = resolveServerToolPlan(input.modelInfo, input.selectedApiFormat)
+	const mode = input.mode ?? WebToolsMode.WEB_TOOLS_MODE_AUTO
+	const serverToolPlan = resolveServerToolPlan(input.modelInfo, input.selectedApiFormat, input.disabledServerTools)
 
-	if (!input.enabled || mode === WebSearchMode.WEB_SEARCH_MODE_FORCE_OFF) {
+	if (!input.enabled || mode === WebToolsMode.WEB_TOOLS_MODE_FORCE_OFF) {
 		return createWebSearchRoutingPlan(mode, "disabled", serverToolPlan, false)
 	}
 
-	if (mode === WebSearchMode.WEB_SEARCH_MODE_FORCE_LOCAL) {
+	if (mode === WebToolsMode.WEB_TOOLS_MODE_FORCE_LOCAL) {
 		return input.localAvailable
 			? createWebSearchRoutingPlan(mode, "local", serverToolPlan, true)
 			: createWebSearchRoutingPlan(mode, "unavailable", serverToolPlan, false, "local_web_search_unavailable")
 	}
 
 	const declared = serverToolPlan.declared.includes(ServerTool.WEB_SEARCH)
+	const disabledByProfile = serverToolPlan.disabled.includes(ServerTool.WEB_SEARCH)
 	const transportSupported = serverToolPlan.active.includes(ServerTool.WEB_SEARCH)
-	const hostedAvailable = declared && transportSupported && input.remoteAdapterAvailable
+	const hostedAvailable = declared && !disabledByProfile && transportSupported && input.remoteAdapterAvailable
 
-	if (mode === WebSearchMode.WEB_SEARCH_MODE_FORCE_REMOTE) {
+	if (mode === WebToolsMode.WEB_TOOLS_MODE_FORCE_REMOTE) {
 		if (!declared) {
 			return createWebSearchRoutingPlan(mode, "unavailable", serverToolPlan, false, "server_tool_not_declared")
+		}
+		if (disabledByProfile) {
+			return createWebSearchRoutingPlan(mode, "unavailable", serverToolPlan, false, "server_tool_disabled_by_profile")
 		}
 		if (!transportSupported) {
 			return createWebSearchRoutingPlan(mode, "unavailable", serverToolPlan, false, "server_tool_transport_unsupported")
@@ -204,9 +226,11 @@ export function resolveWebSearchRoutingPlan(input: WebSearchRoutingInput): WebSe
 				false,
 				!declared
 					? "server_tool_not_declared"
-					: !transportSupported
-						? "server_tool_transport_unsupported"
-						: "server_tool_adapter_unavailable",
+					: disabledByProfile
+						? "server_tool_disabled_by_profile"
+						: !transportSupported
+							? "server_tool_transport_unsupported"
+							: "server_tool_adapter_unavailable",
 			)
 }
 

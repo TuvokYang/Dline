@@ -68,7 +68,10 @@ const WebToolsSettings = ({ localWebSearchEngine, searxngSearchUrl }: WebToolsSe
 						</option>
 					))}
 				</select>
-				<p className="text-xs text-description">Choose the Dline engine used when Web Search runs locally.</p>
+				<p className="text-xs text-description">
+					Choose the Dline engine used when Web Search runs locally. Each API Profile decides between hosted and local
+					Web Tools under Web Tools mode.
+				</p>
 			</div>
 
 			{engine === "searxng" && (

@@ -8,7 +8,7 @@ import { E2ETestHelper, e2e } from "./utils/helpers"
 interface StoredProfile {
 	id: string
 	name: string
-	webSearchMode?: "WEB_SEARCH_MODE_FORCE_OFF"
+	webToolsMode?: "WEB_TOOLS_MODE_FORCE_OFF"
 	modelInfo?: {
 		capabilities?: {
 			supportsReasoning?: boolean
@@ -99,7 +99,7 @@ async function configureProfileSwitchDefaults(dlineDir: string): Promise<StoredP
 		effortLevels: ["none", "low", "medium", "high"],
 	}
 	for (const profile of [sourceProfile, targetProfile]) {
-		profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+		profile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 		profile.openai.capabilities.supportsReasoning = true
 		profile.modelInfo = {
 			...(profile.modelInfo ?? {}),

@@ -68,11 +68,11 @@ async function disableWebSearch(dlineDir: string, profileName: string): Promise<
 	const profilesPath = path.join(dlineDir, "data", "settings", "api_profiles.json")
 	const profiles = JSON.parse(await readFile(profilesPath, "utf8")) as Array<{
 		name: string
-		webSearchMode?: string
+		webToolsMode?: string
 	}>
 	const profile = profiles.find((candidate) => candidate.name === profileName)
 	if (!profile) throw new Error(`Missing E2E profile: ${profileName}`)
-	profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	profile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	await writeFile(profilesPath, `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 }
 

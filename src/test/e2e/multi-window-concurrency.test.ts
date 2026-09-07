@@ -134,7 +134,7 @@ async function configureStressRuntime(dlineDir: string): Promise<void> {
 	const profile = profiles.find((candidate) => candidate.name === E2E_PROFILE_NAMES.mockOpenAi)
 	if (!profile?.openai?.capabilities) throw new Error("Missing configurable OpenAI Chat E2E profile")
 	profile.modelId = "gpt-5.4-mini"
-	profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	profile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	profile.openai.capabilities.contextWindow = STRESS_CONTEXT_WINDOW
 	await writeFile(profilePath, `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 
@@ -185,7 +185,7 @@ interface StressTask {
 interface StoredStressProfile {
 	name: string
 	modelId?: string
-	webSearchMode?: "WEB_SEARCH_MODE_FORCE_OFF"
+	webToolsMode?: "WEB_TOOLS_MODE_FORCE_OFF"
 	openai?: { capabilities?: { contextWindow?: number } }
 }
 

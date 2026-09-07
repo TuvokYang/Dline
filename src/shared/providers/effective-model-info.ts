@@ -104,6 +104,23 @@ export function updateSelectedContextWindow(
 }
 
 /**
+ * Drop a `tools` entry carried by provider overrides.
+ *
+ * `capabilities.tools` states what a model can do and is owned by the registry.
+ * A profile only records the user's on/off switch, so letting an override reach
+ * this merge would turn "switched off" into "this model has no such capability"
+ * and delete the hosted route for good. Every consumer builds effective model
+ * metadata here, so stripping once keeps handlers and UI on the same rule.
+ */
+function withoutServerToolDeclaration(capabilities: ModelCapabilities): ModelCapabilities {
+	if (capabilities.tools === undefined) {
+		return capabilities
+	}
+	const { tools: _profileSwitch, ...declarationFree } = capabilities
+	return declarationFree as ModelCapabilities
+}
+
+/**
  * Build effective model metadata from registry metadata and provider overrides.
  *
  * @param modelId Selected model id, if any.
@@ -117,14 +134,15 @@ export function buildEffectiveModelInfo(
 	overrides: ProviderModelOverrides,
 ): ModelInfo {
 	const base: ModelInfo = registryModel ?? ({ id: modelId ?? "" } as ModelInfo)
-	const mergedCapabilitiesValue = overrides.capabilities
-		? (mergeDefined(base.capabilities, overrides.capabilities) as ModelCapabilities)
+	const capabilityOverrides = overrides.capabilities ? withoutServerToolDeclaration(overrides.capabilities) : undefined
+	const mergedCapabilitiesValue = capabilityOverrides
+		? (mergeDefined(base.capabilities, capabilityOverrides) as ModelCapabilities)
 		: base.capabilities
 	const mergedCapabilities =
 		overrides.contextWindowTiersEnabled === false && mergedCapabilitiesValue
 			? ({ ...mergedCapabilitiesValue, contextWindowTiers: undefined } as ModelCapabilities)
 			: mergedCapabilitiesValue
-	const explicitContextWindow = overrides.capabilities?.contextWindow
+	const explicitContextWindow = capabilityOverrides?.contextWindow
 	const contextTier =
 		overrides.preferContextWindowTier === true || explicitContextWindow === undefined
 			? selectContextTier(mergedCapabilities, overrides.enableLongContext)

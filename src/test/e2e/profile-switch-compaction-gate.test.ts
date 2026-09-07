@@ -8,7 +8,7 @@ interface StoredProfile {
 	id: string
 	name: string
 	modelId?: string
-	webSearchMode?: "WEB_SEARCH_MODE_FORCE_OFF"
+	webToolsMode?: "WEB_TOOLS_MODE_FORCE_OFF"
 	openai?: {
 		capabilities?: {
 			contextWindow?: number
@@ -32,10 +32,10 @@ async function configureProfileGateScenario(
 
 	sourceProfile.modelId = "gpt-5.6-sol"
 	sourceProfile.openai.capabilities.contextWindow = 1_000_000
-	sourceProfile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	sourceProfile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	targetProfile.modelId = "gpt-5.6-sol"
 	targetProfile.openai.capabilities.contextWindow = 372_000
-	targetProfile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	targetProfile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 
 	const settings = JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>

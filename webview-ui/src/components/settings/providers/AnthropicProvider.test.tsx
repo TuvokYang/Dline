@@ -91,13 +91,19 @@ const catalogModels = {
 	"claude-fable-5": requiredAdaptiveModel,
 }
 
+const listingOnlyModel: ModelInfo = { id: "claude-listing-only", name: "claude-listing-only" }
+
 vi.mock("./useProviderModelOptions", () => ({
 	useProviderModelOptions: () => ({
 		models: catalogModels,
 		defaultModelId: "claude-custom",
 		modelInfoSaneDefaults: registryModel,
 		loading: false,
-		options: catalogModels,
+		options: { "claude-listing-only": listingOnlyModel, ...catalogModels },
+		optionOrigins: {
+			"claude-listing-only": "remote",
+			...Object.fromEntries(Object.keys(catalogModels).map((id) => [id, "catalog"])),
+		},
 		refreshRemoteModels: vi.fn(),
 	}),
 }))
@@ -149,8 +155,37 @@ vi.mock("../common/ModelInfoView", () => ({
 vi.mock("../common/ApiKeyField", () => ({ ApiKeyField: () => <div /> }))
 vi.mock("../common/BaseUrlField", () => ({ BaseUrlField: () => <div /> }))
 vi.mock("../common/ContextWindowSwitcher", () => ({ ContextWindowSwitcher: () => <div /> }))
-vi.mock("../common/DebouncedTextField", () => ({ DebouncedTextField: () => <div /> }))
-vi.mock("../common/ModelAutocomplete", () => ({ ModelAutocomplete: () => <div /> }))
+// The custom-model branch renders its id through this field, so the mock has to
+// stay a real input or the branch becomes unobservable in jsdom.
+vi.mock("../common/DebouncedTextField", () => ({
+	DebouncedTextField: ({
+		id,
+		initialValue,
+		onChange,
+		placeholder,
+	}: {
+		id?: string
+		initialValue?: string
+		onChange?: (value: string) => void
+		placeholder?: string
+	}) => (
+		<input
+			defaultValue={initialValue ?? ""}
+			id={id}
+			onChange={(event) => onChange?.(event.target.value)}
+			placeholder={placeholder}
+		/>
+	),
+}))
+vi.mock("../common/ModelAutocomplete", () => ({
+	ModelAutocomplete: ({ models, onChange, selectedModelId }: any) => (
+		<input
+			aria-label="Model"
+			onChange={(event) => onChange(event.target.value, models[event.target.value])}
+			value={selectedModelId ?? ""}
+		/>
+	),
+}))
 vi.mock("../common/RemotelyConfiguredInputWrapper", () => ({
 	RemotelyConfiguredInputWrapper: ({ children }: { children: ReactNode }) => <>{children}</>,
 }))
@@ -192,6 +227,46 @@ vi.mock("@vscode/webview-ui-toolkit/react", () => ({
 }))
 
 describe("AnthropicProvider", () => {
+	it("marks a model outside the catalog as custom when it is committed", () => {
+		const onUpdate = vi.fn()
+		const profile = {
+			id: "profile-origin",
+			provider: "anthropic",
+			modelId: "claude-native",
+			anthropic: AnthropicProviderConfig.create({}),
+		} as unknown as ApiProfile
+
+		render(<AnthropicProvider onUpdate={onUpdate} profile={profile} showModelOptions={true} />)
+
+		// A single picker covers both catalog and listing-only models, and the
+		// custom-model switch stays available for ids no listing returns.
+		expect(screen.getByRole("checkbox", { name: "Use custom model ID" })).not.toBeChecked()
+		fireEvent.change(screen.getByRole("textbox", { name: "Model" }), { target: { value: "claude-listing-only" } })
+
+		// The switch belongs to the user. Deriving it from catalog membership would
+		// let listing-only ids mask the catalog's own hosted capabilities.
+		expect(onUpdate).toHaveBeenCalledWith({ modelId: "claude-listing-only" })
+	})
+
+	it("keeps the custom-model switch on when a catalog model is committed", () => {
+		const onUpdate = vi.fn()
+		const profile = {
+			id: "profile-origin-catalog",
+			provider: "anthropic",
+			modelId: "claude-native",
+			anthropic: AnthropicProviderConfig.create({ customModelEnabled: true }),
+		} as unknown as ApiProfile
+
+		render(<AnthropicProvider onUpdate={onUpdate} profile={profile} showModelOptions={true} />)
+
+		// With the switch on, the picker is replaced by a free-form id field, so the
+		// merged picker must be absent and the id must commit on its own.
+		expect(screen.queryByRole("button", { name: "Open Model" })).not.toBeInTheDocument()
+		fireEvent.input(screen.getByLabelText("Model ID"), { target: { value: "claude-sonnet-4-6" } })
+
+		expect(onUpdate).toHaveBeenCalledWith({ modelId: "claude-sonnet-4-6" })
+	})
+
 	it("uses provider capabilities for custom model updates and merged display", () => {
 		const onUpdate = vi.fn()
 		const profile = {
@@ -210,7 +285,7 @@ describe("AnthropicProvider", () => {
 		expect(screen.getByText("max:64000")).toBeInTheDocument()
 		expect(screen.getByText("input:0.5")).toBeInTheDocument()
 		expect(screen.getByTestId("capability-fields")).toHaveTextContent(
-			"supportsImages,supportsWebSearch,supportsBrowserAction,supportsPromptCache",
+			"supportsImages,hostedWebSearch,supportsBrowserAction,supportsPromptCache",
 		)
 
 		fireEvent.click(screen.getByText("Update Cache"))

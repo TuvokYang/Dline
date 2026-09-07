@@ -97,7 +97,8 @@ export class DeepSeekHandler implements ApiHandler {
 		return this.anthropicClient
 	}
 
-	private getSelectedApiFormat(): ApiFormat {
+	/** Expose the negotiated protocol so routing judges the same wire format. */
+	getSelectedApiFormat(): ApiFormat {
 		return resolveApiFormat(this.config?.apiFormat, this.getBaseModel().info, ApiFormat.OPENAI_CHAT)
 	}
 

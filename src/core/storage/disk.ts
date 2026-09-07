@@ -6,7 +6,7 @@ import { envFlagEnabled } from "@shared/env"
 import { HistoryItem } from "@shared/HistoryItem"
 import { requiresLegacyConversationMigration } from "@shared/messages/legacy-identity-migration"
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
-import { WebSearchMode } from "@shared/proto/dline/provider/common"
+import { WebToolsMode } from "@shared/proto/dline/provider/common"
 import { RemoteConfig } from "@shared/remote-config/schema"
 import { GlobalState, Settings } from "@shared/storage/state-keys"
 import { fileExistsAtPath, isDirectory } from "@utils/fs"
@@ -629,7 +629,7 @@ function isPromptRuntime(value: unknown): boolean {
 	return (
 		(value.parallelToolsEnabled === undefined || typeof value.parallelToolsEnabled === "boolean") &&
 		typeof value.webToolsEnabled === "boolean" &&
-		isKnownWebSearchMode(value.webSearchMode) &&
+		isKnownWebToolsMode(value.webToolsMode) &&
 		(value.webSearchRoute === "disabled" ||
 			value.webSearchRoute === "local" ||
 			value.webSearchRoute === "hosted" ||
@@ -664,7 +664,7 @@ function isPromptBuilderInfo(value: unknown): value is FrozenPromptBuilderInfo {
 		(value.serverTools === undefined ||
 			(Array.isArray(value.serverTools) && value.serverTools.every((tool) => isKnownServerTool(tool)))) &&
 		(value.webToolsEnabled === undefined || typeof value.webToolsEnabled === "boolean") &&
-		(value.webSearchMode === undefined || isKnownWebSearchMode(value.webSearchMode)) &&
+		(value.webToolsMode === undefined || isKnownWebToolsMode(value.webToolsMode)) &&
 		(value.webSearchLocalFallbackAvailable === undefined || typeof value.webSearchLocalFallbackAvailable === "boolean") &&
 		(value.webSearchRoute === undefined ||
 			value.webSearchRoute === "disabled" ||
@@ -674,12 +674,12 @@ function isPromptBuilderInfo(value: unknown): value is FrozenPromptBuilderInfo {
 	)
 }
 
-function isKnownWebSearchMode(value: unknown): value is WebSearchMode {
+function isKnownWebToolsMode(value: unknown): value is WebToolsMode {
 	return (
-		value === WebSearchMode.WEB_SEARCH_MODE_AUTO ||
-		value === WebSearchMode.WEB_SEARCH_MODE_FORCE_LOCAL ||
-		value === WebSearchMode.WEB_SEARCH_MODE_FORCE_OFF ||
-		value === WebSearchMode.WEB_SEARCH_MODE_FORCE_REMOTE
+		value === WebToolsMode.WEB_TOOLS_MODE_AUTO ||
+		value === WebToolsMode.WEB_TOOLS_MODE_FORCE_LOCAL ||
+		value === WebToolsMode.WEB_TOOLS_MODE_FORCE_OFF ||
+		value === WebToolsMode.WEB_TOOLS_MODE_FORCE_REMOTE
 	)
 }
 

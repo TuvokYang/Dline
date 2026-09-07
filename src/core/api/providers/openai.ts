@@ -19,7 +19,6 @@ import { ClineStorageMessage } from "@/shared/messages/content"
 import { isO1Model } from "@/shared/resolve-prompt-profile"
 import { Logger } from "@/shared/services/Logger"
 import { ApiHandler, ApiHandlerContext, type ApiRequestOptions } from "../index"
-import { createOpenAIClientForProfile } from "./openai-client-factory"
 import { withRetry } from "../retry"
 import { getOpenAIChatOutputLimitError } from "../stream/OutputLimitExceededError"
 import { OpenAIResponsesStreamMonitor } from "../stream/openai-responses-stream-monitor"
@@ -35,6 +34,7 @@ import { convertToR1Format } from "../transform/r1-format"
 import { ApiStream } from "../transform/stream"
 import { getOpenAIToolParams, ToolCallProcessor } from "../transform/tool-call-processor"
 import { handleResponsesApiStreamResponse } from "../utils/responses_api_support"
+import { createOpenAIClientForProfile } from "./openai-client-factory"
 
 type OpenAICompatibleCompletionUsage = NonNullable<ChatCompletionChunk["usage"]> & {
 	cache_creation_input_tokens?: number
@@ -138,6 +138,10 @@ export class OpenAiHandler implements ApiHandler {
 			Logger.warn("[OpenAI] Explicit prompt cache controls were rejected; retrying with automatic caching")
 			return await create("automatic")
 		}
+	}
+
+	getSelectedApiFormat(): ApiFormat {
+		return this.apiFormat
 	}
 
 	supportsServerTool(tool: ServerTool): boolean {

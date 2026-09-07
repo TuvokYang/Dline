@@ -4,6 +4,7 @@
  * Reads ApiProfile configurations from ~/.dline/data/settings/api_profiles.json.
  */
 
+import { allProviderModels } from "@core/api/providers/models"
 import { anthropicModels } from "@core/api/providers/models/anthropic"
 import { ModelRegistry } from "@core/model-registry/ModelRegistry"
 import { recordProfileCatalogBaseline } from "@core/profiles/profile-catalog-state"
@@ -19,6 +20,7 @@ import {
 	setProviderSecretsBatch,
 } from "@core/storage/secrets"
 import { EmptyRequest } from "@shared/proto/dline/common"
+import type { ModelCapabilities, ServerTool } from "@shared/proto/dline/models/metadata"
 import { ApiProfile, ApiProfilesResponse, ImageGenerationSource } from "@shared/proto/dline/profile"
 import { AnthropicProviderConfig } from "@shared/proto/dline/provider/anthropic"
 import { BedrockProviderConfig } from "@shared/proto/dline/provider/bedrock"
@@ -34,6 +36,8 @@ import {
 	modelInfoToStorageJson,
 	pickModelInfoOverride,
 } from "@shared/providers/model-info-overrides"
+import { PROFILE_PROVIDER_KEYS } from "@shared/providers/profile-model-info"
+import { declaredServerTools } from "@shared/providers/server-tool-switches"
 import { Logger } from "@shared/services/Logger"
 import { ProviderToApiKeyMap } from "@shared/storage/provider-keys"
 import fsSync from "fs"
@@ -207,6 +211,40 @@ function clearImageBindings(profile: ApiProfile): boolean {
 	return true
 }
 
+/**
+ * Move a legacy `capabilities.tools` override onto the profile's disable list.
+ *
+ * Older builds stored the user's hosted-tool switch inside the model's capability
+ * declaration, so a switched-off tool became "this model has no such capability"
+ * and the hosted route disappeared for good. The declaration belongs to the
+ * registry, so the stored list is reinterpreted as "these were left on" and the
+ * complement against the registry declaration becomes the disable list.
+ */
+function migrateLegacyServerToolOverride(profile: ApiProfile): boolean {
+	const providerKey = PROFILE_PROVIDER_KEYS[profile.provider]
+	if (!providerKey) return false
+
+	const config = profile[providerKey] as { capabilities?: ModelCapabilities; disabledServerTools?: ServerTool[] } | undefined
+	const storedTools = config?.capabilities?.tools
+	if (!config?.capabilities || storedTools === undefined) return false
+
+	const { tools: _legacyDeclaration, ...capabilities } = config.capabilities
+	// The registry may not be loaded yet on some startup paths, so fall back to the
+	// static catalog. Without a declaration to compare against, nothing can be
+	// proven disabled and the profile keeps whatever the model offers.
+	const declaration = resolveRegistryModelInfo(profile)?.capabilities ?? resolveSeedModelCapabilities(profile)
+	const declared = declaredServerTools(declaration)
+	const enabled = new Set(storedTools)
+	const disabledServerTools = declared.filter((tool) => !enabled.has(tool))
+
+	Object.assign(config, {
+		capabilities,
+		// An already-migrated profile keeps whatever the user chose more recently.
+		disabledServerTools: config.disabledServerTools?.length ? config.disabledServerTools : disabledServerTools,
+	})
+	return true
+}
+
 function normalizeApiProfileWithMigration(profile: unknown): { profile: ApiProfile; migrated: boolean } {
 	const normalized = ApiProfile.fromJSON(profile ?? {})
 	let migrated = false
@@ -292,6 +330,7 @@ function normalizeApiProfileWithMigration(profile: unknown): { profile: ApiProfi
 		migrated = true
 	}
 	if (clearImageBindings(normalized)) migrated = true
+	if (migrateLegacyServerToolOverride(normalized)) migrated = true
 	const openai = normalized.openai
 	if (openai && openai.apiFormat === undefined) {
 		const legacyApiFormat = openAiEndpointToApiFormat(openai.apiEndpoint)
@@ -311,6 +350,12 @@ function normalizeApiProfileWithMigration(profile: unknown): { profile: ApiProfi
 /** Normalize one request or in-memory Profile without scheduling a disk rewrite. */
 export function normalizeApiProfile(profile: unknown): ApiProfile {
 	return normalizeApiProfileWithMigration(profile).profile
+}
+
+/** Read a model's built-in capability declaration without depending on registry startup. */
+function resolveSeedModelCapabilities(profile: ApiProfile): ModelCapabilities | undefined {
+	if (!profile.provider || !profile.modelId) return undefined
+	return allProviderModels[profile.provider]?.models?.[profile.modelId]?.capabilities
 }
 
 function resolveRegistryModelInfo(profile: ApiProfile) {

@@ -14,4 +14,7 @@ message OpenAiCodexProviderConfig {
   optional string service_tier = 5;
   // Whether this endpoint supports Service Tier controls. Missing values remain enabled for compatibility.
   optional bool service_tier_enabled = 6;
+  // Hosted server tools the user turned off for this profile. See
+  // BaseProviderConfig.disabled_server_tools for the subtraction semantics.
+  repeated dline.models.ServerTool disabled_server_tools = 7;
 }

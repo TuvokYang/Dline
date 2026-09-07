@@ -63,8 +63,8 @@ e2e("Profile Catalog - captures compact profile settings across widths and theme
 	// Expanding replaces the summary line with the editable name field, so the
 	// summary stays in the DOM as the card's accessible description.
 	await expect(thinkingCard.getByText(/deepseek · .* · Thinking:/i)).toBeAttached()
-	const webSearchMode = thinkingCard.getByRole("combobox", { name: "Web Search mode" })
-	await expect(webSearchMode.getByRole("option")).toHaveText(["Auto", "Force Local", "Off", "Force Remote"])
+	const webToolsMode = thinkingCard.getByRole("combobox", { name: "Web Tools mode" })
+	await expect(webToolsMode.getByRole("option")).toHaveText(["Auto", "Local only", "Off", "Hosted only"])
 	await captureProfileSettings(sidebar, "profile-settings-expanded-thinking-700")
 	await thinkingCard.getByRole("button", { name: /^Collapse / }).click()
 

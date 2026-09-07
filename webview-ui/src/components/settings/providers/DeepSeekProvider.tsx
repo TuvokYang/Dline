@@ -13,7 +13,7 @@ import { ModelAutocomplete } from "../common/ModelAutocomplete"
 import { ModelInfoView } from "../common/ModelInfoView"
 import ReasoningEffortSelector from "../ReasoningEffortSelector"
 import type { ApiProfile } from "./ProviderProfile"
-import { ProviderWebSearchSettings } from "./ProviderWebSearchSettings"
+import { ProviderWebToolsSettings } from "./ProviderWebToolsSettings"
 import { useProviderModelOptions } from "./useProviderModelOptions"
 
 /**
@@ -36,9 +36,11 @@ export const DeepSeekProvider = ({ showModelOptions, isPopup, profile, onUpdate 
 		models: deepSeekModels,
 		defaultModelId: deepSeekDefaultModelId,
 		options: deepSeekModelOptions,
+		optionOrigins,
 		refreshRemoteModels,
 	} = useProviderModelOptions({
 		providerId: "deepseek",
+		profileId: profile.id,
 		baseUrl: profile.baseUrl,
 		apiKey: profile.apiKey,
 		selectedModelId: profile.modelId,
@@ -113,7 +115,8 @@ export const DeepSeekProvider = ({ showModelOptions, isPopup, profile, onUpdate 
 							})
 						}}
 						onOpen={refreshRemoteModels}
-						placeholder="Search and select a model..."
+						optionOrigins={optionOrigins}
+						placeholder="Search, select, or enter a model ID..."
 						selectedModelId={modelId}
 					/>
 
@@ -124,10 +127,10 @@ export const DeepSeekProvider = ({ showModelOptions, isPopup, profile, onUpdate 
 						selectedApiFormat={selectedApiFormat}
 					/>
 
-					<ProviderWebSearchSettings
+					<ProviderWebToolsSettings
 						hostedAvailable={hostedWebSearchAvailable}
-						onChange={(webSearchMode) => onUpdate({ webSearchMode })}
-						value={profile.webSearchMode}
+						onChange={(webToolsMode) => onUpdate({ webToolsMode })}
+						value={profile.webToolsMode}
 					/>
 
 					{supportsThinking ? (

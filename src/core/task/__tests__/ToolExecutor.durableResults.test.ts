@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert"
 import { resolveWebSearchRoutingPlan, type WebSearchRoutingPlan } from "@core/api/server-tools"
 import type { ToolUse } from "@core/assistant-message"
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
-import { WebSearchMode } from "@shared/proto/dline/provider/common"
+import { WebToolsMode } from "@shared/proto/dline/provider/common"
 import { ClineDefaultTool } from "@shared/tools"
 import { describe, expect, it, vi } from "vitest"
 import { InteractionCancellationError } from "../interaction/InteractionCancellationError"
@@ -112,7 +112,7 @@ function partialResultRows(say: ReturnType<typeof vi.fn>): string[] {
 		.filter((text): text is string => typeof text === "string")
 }
 
-function hostedWebSearchPlan(mode: WebSearchMode, localAvailable = true): WebSearchRoutingPlan {
+function hostedWebSearchPlan(mode: WebToolsMode, localAvailable = true): WebSearchRoutingPlan {
 	return resolveWebSearchRoutingPlan({
 		enabled: true,
 		mode,
@@ -229,7 +229,7 @@ describe("ToolExecutor durable tool results", () => {
 	})
 
 	it("renders a hosted Web Search error before rejecting an unadvertised Force Remote function call", async () => {
-		const plan = hostedWebSearchPlan(WebSearchMode.WEB_SEARCH_MODE_FORCE_REMOTE)
+		const plan = hostedWebSearchPlan(WebToolsMode.WEB_TOOLS_MODE_FORCE_REMOTE)
 		const { coordinator, executor, say } = createHarness({
 			allowedNativeToolNames: [],
 			providerId: "openai",
@@ -263,7 +263,7 @@ describe("ToolExecutor durable tool results", () => {
 	})
 
 	it("renders an actionable error when Auto has no local Web Search fallback", async () => {
-		const plan = hostedWebSearchPlan(WebSearchMode.WEB_SEARCH_MODE_AUTO, false)
+		const plan = hostedWebSearchPlan(WebToolsMode.WEB_TOOLS_MODE_AUTO, false)
 		const { coordinator, executor, say } = createHarness({
 			allowedNativeToolNames: [],
 			providerId: "openai",
@@ -289,7 +289,7 @@ describe("ToolExecutor durable tool results", () => {
 	})
 
 	it("falls back to the registered local Web Search handler for an unadvertised Auto function call", async () => {
-		const plan = hostedWebSearchPlan(WebSearchMode.WEB_SEARCH_MODE_AUTO)
+		const plan = hostedWebSearchPlan(WebToolsMode.WEB_TOOLS_MODE_AUTO)
 		const { coordinator, executor, say } = createHarness({
 			allowedNativeToolNames: [],
 			providerId: "openai",
@@ -306,7 +306,7 @@ describe("ToolExecutor durable tool results", () => {
 		expect(coordinator.execute).toHaveBeenCalledOnce()
 		const fallbackConfig = coordinator.execute.mock.calls[0]?.[0]
 		expect(fallbackConfig?.webSearchRoutingPlan).toMatchObject({
-			mode: WebSearchMode.WEB_SEARCH_MODE_AUTO,
+			mode: WebToolsMode.WEB_TOOLS_MODE_AUTO,
 			route: "local",
 			localToolEnabled: true,
 			serverTools: [],

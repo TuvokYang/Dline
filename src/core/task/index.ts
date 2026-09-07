@@ -1557,7 +1557,7 @@ export class Task {
 			providerId: api.getProviderId?.(),
 			modelId: model.id,
 			modelInfo: model.info,
-			webSearchMode: api.getWebSearchMode?.(),
+			webToolsMode: api.getWebToolsMode?.(),
 			mode: this.taskSm.mode,
 		})
 	}

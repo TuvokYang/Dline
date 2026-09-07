@@ -21,7 +21,7 @@ interface StoredProfile {
 	modelId?: string
 	usedFor?: string[]
 	enabled?: boolean
-	webSearchMode?: string
+	webToolsMode?: string
 	openai?: {
 		apiFormat?: string
 		customModelEnabled?: boolean
@@ -162,7 +162,7 @@ async function configureProfiles(dlineDir: string, maxOutputTokens = 60_000): Pr
 	const target = profiles.find((profile) => profile.name === E2E_PROFILE_NAMES.mockOpenAiResponses)
 	if (!target?.openai?.capabilities) throw new Error("Missing OpenAI Responses target profile")
 	target.modelId = "gpt-5.6-sol"
-	target.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	target.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	target.openai.capabilities.contextWindow = PROVIDER_CONTEXT_WINDOW
 	target.openai.capabilities.maxTokens = maxOutputTokens
 	target.openai.reasoning = { enableThinking: true, effort: "high", thinkingBudget: 0 }

@@ -21,7 +21,7 @@ const STREAM_CHUNK_DELAY_MS = 1_500
 interface StoredProfile {
 	name: string
 	modelId?: string
-	webSearchMode?: "WEB_SEARCH_MODE_FORCE_OFF"
+	webToolsMode?: "WEB_TOOLS_MODE_FORCE_OFF"
 	openai?: {
 		capabilities?: {
 			contextWindow?: number
@@ -45,7 +45,7 @@ async function configureResponsesAutoCompaction(dlineDir: string): Promise<void>
 	if (!profile?.openai?.capabilities) throw new Error("Missing configurable OpenAI Responses E2E profile")
 	profile.modelId = "gpt-5.6-sol"
 	profile.openai.capabilities.contextWindow = 131_072
-	profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	profile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 
 	const settings = JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>

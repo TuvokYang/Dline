@@ -169,7 +169,18 @@ describe("AnthropicHandler", () => {
 			})
 
 			expect(handler.getModel().info.apiFormats?.[0]).to.equal(ApiFormat.ANTHROPIC_CHAT)
-			expect(handler.getModel().info.capabilities?.tools).to.deep.equal([ServerTool.WEB_SEARCH])
+			// A profile records switches, not capabilities. A free-form model id has
+			// no registry entry, so it cannot gain a hosted declaration this way.
+			expect(handler.getModel().info.capabilities?.tools).to.equal(undefined)
+		})
+
+		it("reports the transport it will speak so routing does not guess from metadata", () => {
+			const handler = new AnthropicHandler({
+				profile: ApiProfile.create({ provider: "anthropic", modelId: "custom-anthropic-model" }),
+				mode: "act",
+			})
+
+			expect(handler.getSelectedApiFormat()).to.equal(ApiFormat.ANTHROPIC_CHAT)
 		})
 	})
 

@@ -57,7 +57,7 @@ describe("resolveFrozenPromptRuntime", () => {
 				runtime: {
 					parallelToolsEnabled: true,
 					webToolsEnabled: true,
-					webSearchMode: HOSTED_WEB_SEARCH_ROUTING_PLAN.mode,
+					webToolsMode: HOSTED_WEB_SEARCH_ROUTING_PLAN.mode,
 					webSearchRoute: "hosted",
 					webSearchLocalFallbackAvailable: true,
 					serverTools: [ServerTool.WEB_SEARCH],
@@ -101,7 +101,7 @@ describe("resolveFrozenPromptRuntime", () => {
 					profile: "standard",
 					nativeTools: false,
 					webToolsEnabled: true,
-					webSearchMode: HOSTED_WEB_SEARCH_ROUTING_PLAN.mode,
+					webToolsMode: HOSTED_WEB_SEARCH_ROUTING_PLAN.mode,
 					webSearchRoute: "hosted",
 					webSearchLocalFallbackAvailable: true,
 					serverTools: [ServerTool.WEB_SEARCH],

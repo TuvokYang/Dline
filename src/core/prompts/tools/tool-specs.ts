@@ -50,9 +50,17 @@ function isInteractive(context: SystemPromptContext): boolean {
 	return context.yoloModeToggled !== true
 }
 
-/** Reports whether the local Dline Web Fetch tool is enabled. */
+/**
+ * Reports whether the local Dline Web Fetch tool is exposed.
+ *
+ * Web Fetch has no hosted counterpart today, so every route other than an
+ * explicit "off" resolves to the local executor. Reading the same routing plan as
+ * Web Search keeps one Web Tools switch governing both tools.
+ */
 function hasWebFetch(context: SystemPromptContext): boolean {
-	return context.clineWebToolsEnabled === true
+	if (context.clineWebToolsEnabled !== true) return false
+	const route = context.webSearchRoutingPlan?.route
+	return route !== "disabled"
 }
 
 /** Reports whether this request selected the local Web Search executor. */

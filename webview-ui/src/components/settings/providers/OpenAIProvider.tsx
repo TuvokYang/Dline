@@ -1,5 +1,4 @@
 import { type ModelInfo, openAiModelInfoSaneDefaults } from "@shared/api"
-import { OpenAiModelsRequest } from "@shared/proto/dline/models"
 import { ApiFormat, type ModelCapabilities, type ModelPricing, ServerTool } from "@shared/proto/dline/models/metadata"
 import { OpenAiPromptCacheMode, OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
 import { openAiEndpointToApiFormat, resolveApiFormat } from "@shared/providers/api-format"
@@ -8,7 +7,6 @@ import { DEFAULT_OPENAI_RESPONSES_STREAM_IDLE_TIMEOUT_SECONDS } from "@shared/pr
 import { OPENAI_COMPATIBLE_REASONING_EFFORT_OPTIONS, OPENAI_REASONING_EFFORT_OPTIONS } from "@shared/storage/types"
 import { VSCodeButton, VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
 import { useCallback, useId, useMemo } from "react"
-import { ModelsServiceClient } from "@/services/grpc-client"
 import { ApiFormatSelector } from "../common/ApiFormatSelector"
 import { ApiKeyField } from "../common/ApiKeyField"
 import { BaseUrlField } from "../common/BaseUrlField"
@@ -21,8 +19,7 @@ import { ProfileActionRow, ProfileField, ProfileNotice, ProfileSection, ProfileS
 import ThinkingControl from "../ThinkingControl"
 import { getModelCompatibilityNotice } from "./modelCompatibilityNotice"
 import type { ApiProfile } from "./ProviderProfile"
-import { ProviderWebSearchSettings } from "./ProviderWebSearchSettings"
-import { useModelProbe } from "./useModelProbe"
+import { ProviderWebToolsSettings } from "./ProviderWebToolsSettings"
 import { usePendingProviderConfig } from "./usePendingProviderConfig"
 import { useProviderModelOptions } from "./useProviderModelOptions"
 
@@ -67,23 +64,26 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate: o
 	const configToUpdate = useCallback(() => latest(), [latest])
 	const fieldId = useId()
 	const streamIdleTimeoutId = `${fieldId}-stream-idle-timeout`
+	const customModelFieldId = `${fieldId}-custom-model-id`
 	const {
 		models,
 		defaultModelId,
 		modelInfoSaneDefaults,
-		options: officialModelOptions,
+		options: modelOptions,
+		optionOrigins,
 		refreshRemoteModels,
 	} = useProviderModelOptions({
 		providerId: "openai",
+		profileId: profile.id,
 		baseUrl: profile.baseUrl,
 		apiKey: profile.apiKey,
 		selectedModelId: profile.modelId,
 	})
-	// Profiles created by the former OpenAI Compatible provider have no
-	// customModelEnabled flag. Preserve their free-form model ID after the
-	// provider consolidation instead of forcing an unknown ID into the
-	// official model selector.
-	const customModelEnabled = pc.customModelEnabled === true || (!!profile.modelId && models[profile.modelId] === undefined)
+	// The user owns this switch. Deriving it from catalog membership would flip
+	// it on for any id that only the provider's listing returned, and the
+	// resulting custom-model metadata would then mask the catalog's own
+	// capabilities, including its hosted server tools.
+	const customModelEnabled = pc.customModelEnabled === true
 	const modelId = profile.modelId || (customModelEnabled ? "" : defaultModelId)
 	const registryModel = customModelEnabled ? undefined : models[modelId]
 	const baseModel = customModelEnabled
@@ -115,19 +115,6 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate: o
 	const hostedWebSearchAvailable =
 		modelInfo.capabilities?.tools?.includes(ServerTool.WEB_SEARCH) === true &&
 		(selectedApiFormat === ApiFormat.OPENAI_RESPONSES || selectedApiFormat === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE)
-	const probeOpenAiModels = useCallback(async () => {
-		const response = await ModelsServiceClient.refreshOpenAiModels(
-			OpenAiModelsRequest.create({ baseUrl: profile.baseUrl, apiKey: profile.apiKey }),
-		)
-		return response.values
-	}, [profile.apiKey, profile.baseUrl])
-	const { models: customModels, refresh: refreshCustomModels } = useModelProbe({
-		probe: probeOpenAiModels,
-		enabled: Boolean(profile.baseUrl && profile.apiKey),
-		selectedModelId: modelId,
-		template: openAiModelInfoSaneDefaults,
-	})
-
 	const openAiHeaders = pc.openAiHeaders ?? {}
 	const headerEntries: [string, string][] = Object.entries(openAiHeaders)
 
@@ -170,42 +157,44 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate: o
 		})
 	}
 
+	// Record the hosted tools this profile turns off. The model's own declaration
+	// stays in the registry so the switch can never erase a real capability.
+	const handleDisabledServerToolsUpdate = (disabledServerTools: ServerTool[]) => {
+		onUpdate({ openai: { ...configToUpdate(), disabledServerTools } })
+	}
+
 	const handleStreamIdleTimeoutChange = (value: string) => {
 		const seconds = Number.parseInt(value, 10)
 		if (!Number.isSafeInteger(seconds) || seconds <= 0) return
 		onUpdate({ openai: { ...configToUpdate(), streamIdleTimeoutSeconds: seconds } })
 	}
 
-	const handleCustomModelToggle = (checked: boolean) => {
-		const nextModelId = checked
-			? models[modelId]
-				? "custom-model"
-				: modelId || "custom-model"
-			: defaultModelId || Object.keys(models)[0] || modelId
-		const nextFormats = checked
-			? CUSTOM_OPENAI_API_FORMATS
-			: (models[nextModelId]?.apiFormats ?? modelInfoSaneDefaults.apiFormats ?? CUSTOM_OPENAI_API_FORMATS)
+	/**
+	 * Commits a model id from the merged picker.
+	 *
+	 * A listed model keeps its catalog-driven formats; an id that only the
+	 * provider's listing returned falls back to the formats a custom
+	 * OpenAI-compatible endpoint supports.
+	 */
+	const handleModelChange = (nextModelId: string) => {
+		const nextModel = models[nextModelId]
+		const nextFormats = nextModel?.apiFormats ?? CUSTOM_OPENAI_API_FORMATS
 		onUpdate({
 			modelId: nextModelId,
 			openai: {
 				...configToUpdate(),
 				apiEndpoint: undefined,
 				apiFormat: resolveApiFormat(selectedApiFormat, { apiFormats: nextFormats }, ApiFormat.OPENAI_CHAT),
-				customModelEnabled: checked,
 			},
 		})
 	}
 
-	const handleOfficialModelChange = (nextModelId: string) => {
-		const nextModel = models[nextModelId]
-		onUpdate({
-			modelId: nextModelId,
-			openai: {
-				...configToUpdate(),
-				apiEndpoint: undefined,
-				apiFormat: resolveApiFormat(selectedApiFormat, nextModel, ApiFormat.OPENAI_CHAT),
-			},
-		})
+	/**
+	 * Turning the switch on replaces the picker with a free-form id field.
+	 * The id is kept so toggling back and forth does not discard the selection.
+	 */
+	const handleToggleCustomModel = (enabled: boolean) => {
+		onUpdate({ openai: { ...configToUpdate(), customModelEnabled: enabled } })
 	}
 
 	return (
@@ -229,27 +218,29 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate: o
 					<VSCodeCheckbox
 						checked={customModelEnabled}
 						onChange={(event: Event | React.FormEvent<HTMLElement>) =>
-							handleCustomModelToggle((event.target as HTMLInputElement | null)?.checked === true)
+							handleToggleCustomModel((event.target as HTMLInputElement | null)?.checked === true)
 						}>
 						Use custom model ID
 					</VSCodeCheckbox>
 
 					{customModelEnabled ? (
-						<ModelAutocomplete
-							label="Model ID"
-							models={customModels}
-							onChange={(value) => onUpdate({ modelId: value })}
-							onOpen={refreshCustomModels}
-							placeholder="Enter Model ID..."
-							selectedModelId={modelId}
-						/>
+						<ProfileField htmlFor={customModelFieldId} label="Model ID">
+							<DebouncedTextField
+								className="w-full"
+								id={customModelFieldId}
+								initialValue={profile.modelId ?? ""}
+								onChange={(value) => onUpdate({ modelId: value })}
+								placeholder="Enter Model ID..."
+							/>
+						</ProfileField>
 					) : (
 						<ModelAutocomplete
 							label="Model"
-							models={officialModelOptions}
-							onChange={handleOfficialModelChange}
+							models={modelOptions}
+							onChange={handleModelChange}
 							onOpen={refreshRemoteModels}
-							placeholder="Search and select a model..."
+							optionOrigins={optionOrigins}
+							placeholder="Search or select a model..."
 							selectedModelId={modelId}
 						/>
 					)}
@@ -280,10 +271,10 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate: o
 						automatic caching for the current task.
 					</p>
 
-					<ProviderWebSearchSettings
+					<ProviderWebToolsSettings
 						hostedAvailable={hostedWebSearchAvailable}
-						onChange={(webSearchMode) => onUpdate({ webSearchMode })}
-						value={profile.webSearchMode}
+						onChange={(webToolsMode) => onUpdate({ webToolsMode })}
+						value={profile.webToolsMode}
 					/>
 
 					<ThinkingControl
@@ -314,6 +305,7 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate: o
 					<ModelConfiguration
 						capabilities={pc.capabilities}
 						defaults={baseModel}
+						disabledServerTools={pc.disabledServerTools}
 						fields={{
 							// OpenAI models are controlled directly by context size; they have no
 							// context-window tiers. Pricing tiers are usage-based tiered pricing.
@@ -321,7 +313,7 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate: o
 								"maxTokens",
 								"contextWindow",
 								"supportsImages",
-								"supportsWebSearch",
+								"hostedWebSearch",
 								...(customModelEnabled ? (["supportsBrowserAction"] as const) : []),
 								"supportsPromptCache",
 								"supportsTools",
@@ -330,6 +322,7 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate: o
 							pricing: ["inputPrice", "outputPrice", "cacheWritesPrice", "cacheReadsPrice", "pricingTiers"],
 						}}
 						onCapabilitiesUpdate={handleCapabilitiesUpdate}
+						onDisabledServerToolsUpdate={handleDisabledServerToolsUpdate}
 						onPricingUpdate={handlePricingUpdate}
 						pricing={pc.pricing}
 						pricingTiersEnabled={pc.pricingTiersEnabled === true}

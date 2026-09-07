@@ -11,7 +11,7 @@ interface StoredProfile {
 	id: string
 	name: string
 	modelId?: string
-	webSearchMode?: "WEB_SEARCH_MODE_FORCE_OFF"
+	webToolsMode?: "WEB_TOOLS_MODE_FORCE_OFF"
 	openai?: {
 		capabilities?: {
 			contextWindow?: number
@@ -54,7 +54,7 @@ async function configureModeProfiles(
 		const profile = profiles.find((candidate) => candidate.name === name)
 		if (!profile?.openai?.capabilities) throw new Error(`Missing configurable E2E profile: ${name}`)
 		profile.openai.capabilities.contextWindow = contextWindow
-		profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+		profile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	}
 	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 
@@ -86,7 +86,7 @@ async function configureAutoCompact(dlineDir: string, enabled: boolean): Promise
 	if (!profile?.openai?.capabilities) throw new Error("Missing configurable OpenAI Responses E2E profile")
 	profile.modelId = "gpt-5.4-mini"
 	profile.openai.capabilities.contextWindow = 131_072
-	profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	profile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 
 	const settings = JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>
@@ -112,7 +112,7 @@ async function configureDeepSeekAutoCompact(dlineDir: string, useAutoCondense = 
 	const profiles = JSON.parse(await readFile(profilesPath(dlineDir), "utf8")) as StoredProfile[]
 	const profile = profiles.find((candidate) => candidate.name === E2E_PROFILE_NAMES.mockDeepSeek)
 	if (!profile) throw new Error("Missing configurable DeepSeek E2E profile")
-	profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	profile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 
 	const settings = JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>
@@ -144,10 +144,10 @@ async function configureTaskProfileSwitch(dlineDir: string): Promise<void> {
 	if (!targetProfile?.openai?.capabilities) throw new Error("Missing configurable OpenAI Responses E2E profile")
 	targetProfile.modelId = "gpt-5.6-sol"
 	targetProfile.openai.capabilities.contextWindow = 372_000
-	targetProfile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	targetProfile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	const sourceProfile = profiles.find((profile) => profile.name === E2E_PROFILE_NAMES.mockDeepSeek)
 	if (!sourceProfile) throw new Error("Missing configurable DeepSeek E2E profile")
-	sourceProfile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	sourceProfile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 
 	const settings = JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>
@@ -181,10 +181,10 @@ async function configureProfileCompactionSwitch(dlineDir: string): Promise<void>
 	}
 	sourceProfile.modelId = "gpt-5.6-sol"
 	sourceProfile.openai.capabilities.contextWindow = 272_000
-	sourceProfile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	sourceProfile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	targetProfile.modelId = "gpt-5.6-sol"
 	targetProfile.openai.capabilities.contextWindow = 131_072
-	targetProfile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	targetProfile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 
 	const settings = JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>

@@ -1,7 +1,7 @@
 import type { ApiHandler } from "@core/api"
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import { ImageGenerationSource } from "@shared/proto/dline/profile"
-import { WebSearchMode } from "@shared/proto/dline/provider/common"
+import { WebToolsMode } from "@shared/proto/dline/provider/common"
 import { describe, expect, it, vi } from "vitest"
 import { createRequestApiScope } from "../RequestApiScope"
 
@@ -169,7 +169,7 @@ describe("createRequestApiScope", () => {
 				capabilities: { tools: [ServerTool.WEB_SEARCH] },
 			},
 		})
-		handler.getWebSearchMode = () => WebSearchMode.WEB_SEARCH_MODE_FORCE_REMOTE
+		handler.getWebToolsMode = () => WebToolsMode.WEB_TOOLS_MODE_FORCE_REMOTE
 		handler.supportsServerTool = () => false
 
 		expect(createRequestApiScope(handler, "act", undefined, true).webSearchRoutingPlan).toMatchObject({
@@ -177,6 +177,67 @@ describe("createRequestApiScope", () => {
 			localToolEnabled: false,
 			serverTools: [],
 			unavailableReason: "server_tool_transport_unsupported",
+		})
+	})
+
+	it("routes a hosted-capable model to hosted search when the profile disables nothing", () => {
+		const handler = createHandler("anthropic", "claude-opus-5")
+		handler.getModel = () => ({
+			id: "claude-opus-5",
+			info: {
+				id: "claude-opus-5",
+				apiFormats: [ApiFormat.ANTHROPIC_CHAT],
+				capabilities: { tools: [ServerTool.WEB_SEARCH] },
+			},
+		})
+		handler.supportsServerTool = (tool) => tool === ServerTool.WEB_SEARCH
+		handler.getDisabledServerTools = () => undefined
+
+		expect(createRequestApiScope(handler, "act", undefined, true).webSearchRoutingPlan).toMatchObject({
+			route: "hosted",
+			serverTools: [ServerTool.WEB_SEARCH],
+		})
+	})
+
+	it("falls back to local search when the profile switched hosted search off", () => {
+		const handler = createHandler("anthropic", "claude-opus-5")
+		handler.getModel = () => ({
+			id: "claude-opus-5",
+			info: {
+				id: "claude-opus-5",
+				apiFormats: [ApiFormat.ANTHROPIC_CHAT],
+				capabilities: { tools: [ServerTool.WEB_SEARCH] },
+			},
+		})
+		handler.supportsServerTool = (tool) => tool === ServerTool.WEB_SEARCH
+		handler.getDisabledServerTools = () => [ServerTool.WEB_SEARCH]
+
+		const plan = createRequestApiScope(handler, "act", undefined, true).webSearchRoutingPlan
+
+		// The declaration survives the switch, so re-enabling restores the hosted route.
+		expect(plan).toMatchObject({ route: "local", serverTools: [] })
+		expect(plan.serverToolPlan.declared).toEqual([ServerTool.WEB_SEARCH])
+		expect(plan.serverToolPlan.disabled).toEqual([ServerTool.WEB_SEARCH])
+	})
+
+	it("judges hosted transport by the protocol the handler will actually use", () => {
+		// A profile running a free-form model id carries no declared formats, so
+		// routing has to ask the handler instead of guessing from model metadata.
+		const handler = createHandler("openai", "custom-responses-model")
+		handler.getModel = () => ({
+			id: "custom-responses-model",
+			info: {
+				id: "custom-responses-model",
+				capabilities: { tools: [ServerTool.WEB_SEARCH] },
+			},
+		})
+		handler.supportsServerTool = (tool) => tool === ServerTool.WEB_SEARCH
+		handler.getSelectedApiFormat = () => ApiFormat.OPENAI_RESPONSES
+		handler.getDisabledServerTools = () => []
+
+		expect(createRequestApiScope(handler, "act", undefined, true).webSearchRoutingPlan).toMatchObject({
+			route: "hosted",
+			serverTools: [ServerTool.WEB_SEARCH],
 		})
 	})
 

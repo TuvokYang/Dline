@@ -228,7 +228,7 @@ export class SystemPromptCacheService {
 		return {
 			parallelToolsEnabled: context.enableParallelToolCalling === true,
 			webToolsEnabled: context.clineWebToolsEnabled === true,
-			webSearchMode: context.webSearchRoutingPlan.mode,
+			webToolsMode: context.webSearchRoutingPlan.mode,
 			webSearchRoute: context.webSearchRoutingPlan.route,
 			webSearchLocalFallbackAvailable: context.webSearchRoutingPlan.localFallbackAvailable,
 			serverTools: [...context.webSearchRoutingPlan.serverTools],
@@ -294,7 +294,7 @@ export class SystemPromptCacheService {
 				? {}
 				: {
 						webSearchRoute: webSearchRoutingPlan.route,
-						webSearchMode: webSearchRoutingPlan.mode,
+						webToolsMode: webSearchRoutingPlan.mode,
 						webSearchLocalFallbackAvailable: webSearchRoutingPlan.localFallbackAvailable,
 					}),
 			serverTools: webSearchRoutingPlan?.serverTools ?? [],

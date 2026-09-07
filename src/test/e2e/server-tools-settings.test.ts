@@ -12,17 +12,17 @@ interface StoredCapabilities {
 	tools?: Array<string | number>
 }
 
+interface StoredProviderConfig {
+	customModelEnabled?: boolean
+	capabilities?: StoredCapabilities
+	disabledServerTools?: Array<string | number>
+}
+
 interface StoredProfile {
 	name: string
-	webSearchMode?: string
-	openai?: {
-		customModelEnabled?: boolean
-		capabilities?: StoredCapabilities
-	}
-	anthropic?: {
-		customModelEnabled?: boolean
-		capabilities?: StoredCapabilities
-	}
+	webToolsMode?: string
+	openai?: StoredProviderConfig
+	anthropic?: StoredProviderConfig
 }
 
 const profilesPath = (dlineDir: string) => path.join(dlineDir, "data", "settings", "api_profiles.json")
@@ -39,6 +39,14 @@ async function readSettings(dlineDir: string): Promise<Record<string, unknown>> 
 
 function hasWebSearchCapability(capabilities: StoredCapabilities | undefined): boolean {
 	return capabilities?.tools?.some((tool) => tool === "WEB_SEARCH" || tool === ServerTool.WEB_SEARCH) === true
+}
+
+/**
+ * The switch subtracts from the registry declaration, so an absent list means
+ * the profile follows whatever the model declares.
+ */
+function hostedWebSearchEnabled(config: StoredProviderConfig | undefined): boolean {
+	return config?.disabledServerTools?.some((tool) => tool === "WEB_SEARCH" || tool === ServerTool.WEB_SEARCH) !== true
 }
 
 async function expectBuiltInWebSearchCatalogs(dlineDir: string): Promise<void> {
@@ -83,17 +91,29 @@ async function openSettings(page: Page, sidebar: Frame): Promise<void> {
 	await expect(sidebar.getByRole("heading", { name: "API Configuration" })).toBeVisible()
 }
 
+/**
+ * Matches on the expand/collapse toggle, whose accessible name always carries
+ * the profile name. The name input only exists while the card is expanded, so
+ * matching on it cannot find a collapsed card.
+ */
 function getProfileCard(sidebar: Frame, profileName: string): Locator {
-	return sidebar.getByTestId("api-profile-card").filter({ has: sidebar.locator(`input[value=${JSON.stringify(profileName)}]`) })
+	return sidebar.getByTestId("api-profile-card").filter({
+		has: sidebar.getByRole("button", { name: new RegExp(`^(Expand|Collapse) ${escapeForRegExp(profileName)}$`) }),
+	})
+}
+
+function escapeForRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
 async function openProfileEditor(sidebar: Frame, profileName: string): Promise<Locator> {
 	const card = getProfileCard(sidebar, profileName)
 	await expect(card).toHaveCount(1)
-	const providerSelector = card.getByRole("combobox", { name: "Provider", exact: true })
-	if (!(await providerSelector.isVisible())) {
-		await card.getByRole("button").first().press("Enter")
+	const expandToggle = card.getByRole("button", { name: /^Expand / })
+	if (await expandToggle.isVisible()) {
+		await expandToggle.click()
 	}
+	const providerSelector = card.getByRole("combobox", { name: "Provider", exact: true })
 	await expect(providerSelector).toBeVisible()
 	return card
 }
@@ -114,7 +134,9 @@ async function setCapability(card: Locator, label: string, value: boolean): Prom
 async function openModelConfiguration(card: Locator): Promise<void> {
 	const toggle = card.getByText("Model Configuration", { exact: true })
 	await expect(toggle).toBeVisible()
-	const webSearch = capabilityCheckbox(card, "Supports Web Search")
+	// The label carries a suffix when the model declares no hosted Web Search,
+	// so the disclosure is detected on the shared prefix.
+	const webSearch = capabilityCheckbox(card, "Use hosted Web Search")
 	if (!(await webSearch.isVisible())) await toggle.click()
 	await expect(webSearch).toBeVisible()
 }
@@ -154,27 +176,27 @@ e2e(
 			await first.sidebar.getByTestId("tab-api-config").click()
 			await expect(first.sidebar.getByRole("heading", { name: "API Configuration" })).toBeVisible()
 			const openAiCard = await openProfileEditor(first.sidebar, E2E_PROFILE_NAMES.persistence)
-			const routingMode = openAiCard.getByRole("combobox", { name: "Web Search mode" })
+			const routingMode = openAiCard.getByRole("combobox", { name: "Web Tools mode" })
 			await expect(routingMode).toHaveValue("0")
 
 			for (const mode of [
-				{ label: "Force Local", value: "1", stored: "WEB_SEARCH_MODE_FORCE_LOCAL" },
-				{ label: "Auto", value: "0", stored: "WEB_SEARCH_MODE_AUTO" },
-				{ label: "Off", value: "2", stored: "WEB_SEARCH_MODE_FORCE_OFF" },
-				{ label: "Force Remote", value: "3", stored: "WEB_SEARCH_MODE_FORCE_REMOTE" },
+				{ label: "Local only", value: "1", stored: "WEB_TOOLS_MODE_FORCE_LOCAL" },
+				{ label: "Auto", value: "0", stored: "WEB_TOOLS_MODE_AUTO" },
+				{ label: "Off", value: "2", stored: "WEB_TOOLS_MODE_FORCE_OFF" },
+				{ label: "Hosted only", value: "3", stored: "WEB_TOOLS_MODE_FORCE_REMOTE" },
 			]) {
 				await routingMode.selectOption({ label: mode.label })
 				await expect(routingMode).toHaveValue(mode.value)
-				await waitForProfile(dlineDir, E2E_PROFILE_NAMES.persistence, (profile) => profile.webSearchMode === mode.stored)
+				await waitForProfile(dlineDir, E2E_PROFILE_NAMES.persistence, (profile) => profile.webToolsMode === mode.stored)
 			}
 
 			await openModelConfiguration(openAiCard)
-			await setCapability(openAiCard, "Supports Web Search", true)
-			await waitForProfile(
-				dlineDir,
-				E2E_PROFILE_NAMES.persistence,
-				(profile) => profile.openai?.capabilities?.tools?.includes("WEB_SEARCH") === true,
-			)
+			// This profile runs a free-form model id, so no registry entry declares
+			// hosted Web Search. The switch must stay unavailable instead of letting
+			// the profile invent a capability the model does not have.
+			const openAiHostedWebSearch = capabilityCheckbox(openAiCard, "Use hosted Web Search")
+			await expect(openAiHostedWebSearch).toContainText("not offered by this model")
+			await expect(openAiHostedWebSearch).toHaveAttribute("disabled", "")
 			await setCapability(openAiCard, "Supports Browser Actions", true)
 			await waitForProfile(
 				dlineDir,
@@ -188,22 +210,19 @@ e2e(
 				(profile) => profile.openai?.capabilities?.supportsImages === false,
 			)
 
+			// Capability editing is available for every model, and the hosted switch
+			// round-trips through disabledServerTools rather than the declaration.
 			const anthropicCard = await openProfileEditor(first.sidebar, E2E_PROFILE_NAMES.mockAnthropic)
-			await setCapability(anthropicCard, "Use custom model ID", true)
-			await waitForProfile(
-				dlineDir,
-				E2E_PROFILE_NAMES.mockAnthropic,
-				(profile) => profile.anthropic?.customModelEnabled === true,
-			)
 			await openModelConfiguration(anthropicCard)
-			for (const label of ["Supports Web Search", "Supports Browser Actions", "Supports Images"]) {
+			for (const label of ["Use hosted Web Search", "Supports Browser Actions", "Supports Images"]) {
 				const checkbox = capabilityCheckbox(anthropicCard, label)
+				await expect(checkbox).not.toHaveAttribute("disabled", "")
 				const initiallyEnabled = await checkbox.evaluate((element) => Boolean((element as HTMLInputElement).checked))
 				if (initiallyEnabled) {
 					await setCapability(anthropicCard, label, false)
 					await waitForProfile(dlineDir, E2E_PROFILE_NAMES.mockAnthropic, (profile) => {
 						const capabilities = profile.anthropic?.capabilities
-						if (label === "Supports Web Search") return hasWebSearchCapability(capabilities) === false
+						if (label === "Use hosted Web Search") return hostedWebSearchEnabled(profile.anthropic) === false
 						if (label === "Supports Browser Actions") return capabilities?.supportsBrowserAction === false
 						return capabilities?.supportsImages === false
 					})
@@ -211,7 +230,9 @@ e2e(
 				await setCapability(anthropicCard, label, true)
 				await waitForProfile(dlineDir, E2E_PROFILE_NAMES.mockAnthropic, (profile) => {
 					const capabilities = profile.anthropic?.capabilities
-					if (label === "Supports Web Search") return hasWebSearchCapability(capabilities)
+					if (label === "Use hosted Web Search") {
+						return hostedWebSearchEnabled(profile.anthropic) && capabilities?.tools === undefined
+					}
 					if (label === "Supports Browser Actions") return capabilities?.supportsBrowserAction === true
 					return capabilities?.supportsImages === true
 				})
@@ -229,25 +250,23 @@ e2e(
 
 			await reopened.sidebar.getByTestId("tab-api-config").click()
 			const reopenedOpenAiCard = await openProfileEditor(reopened.sidebar, E2E_PROFILE_NAMES.persistence)
-			await expect(reopenedOpenAiCard.getByRole("combobox", { name: "Web Search mode" })).toHaveValue("3")
+			await expect(reopenedOpenAiCard.getByRole("combobox", { name: "Web Tools mode" })).toHaveValue("3")
 			await openModelConfiguration(reopenedOpenAiCard)
 			await expectCapabilities(reopenedOpenAiCard, {
-				"Supports Web Search": true,
 				"Supports Browser Actions": true,
 				"Supports Images": false,
 			})
+			await expect(capabilityCheckbox(reopenedOpenAiCard, "Use hosted Web Search")).toHaveAttribute("disabled", "")
 
 			const reopenedAnthropicCard = await openProfileEditor(reopened.sidebar, E2E_PROFILE_NAMES.mockAnthropic)
-			await expect
-				.poll(() =>
-					capabilityCheckbox(reopenedAnthropicCard, "Use custom model ID").evaluate((element) =>
-						Boolean((element as HTMLInputElement).checked),
-					),
-				)
-				.toBe(true)
+			// The custom model ID switch stays available; merging the two pickers
+			// never removed the free-form id entry.
+			await expect(reopenedAnthropicCard.locator("vscode-checkbox").filter({ hasText: "Use custom model ID" })).toHaveCount(
+				1,
+			)
 			await openModelConfiguration(reopenedAnthropicCard)
 			await expectCapabilities(reopenedAnthropicCard, {
-				"Supports Web Search": true,
+				"Use hosted Web Search": true,
 				"Supports Browser Actions": true,
 				"Supports Images": true,
 			})

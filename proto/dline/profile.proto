@@ -60,9 +60,9 @@ message ApiProfile {
   // Previous display names retained for name-only Task migration after rename.
   repeated string legacy_names = 91;
 
-  // Web search routing policy for this provider profile. Omitted legacy values
-  // resolve to WEB_SEARCH_MODE_AUTO.
-  optional dline.provider.WebSearchMode web_search_mode = 90;
+  // Web tools routing policy for this provider profile, covering Web Search and
+  // Web Fetch. Omitted legacy values resolve to WEB_TOOLS_MODE_AUTO.
+  optional dline.provider.WebToolsMode web_tools_mode = 90;
   optional string image_model_id = 92;
   optional ImageGenerationProfileSettings image_generation = 93;
   optional ImageGenerationSource image_source = 94;

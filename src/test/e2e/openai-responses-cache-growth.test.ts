@@ -8,7 +8,7 @@ import { E2ETestHelper, e2e } from "./utils/helpers"
 interface StoredProfile {
 	name: string
 	modelId?: string
-	webSearchMode?: string
+	webToolsMode?: string
 	openai?: {
 		capabilities?: {
 			contextWindow?: number
@@ -38,7 +38,7 @@ async function configureResponsesProfile(dlineDir: string): Promise<void> {
 	const profile = profiles.find((candidate) => candidate.name === E2E_PROFILE_NAMES.mockOpenAiResponses)
 	if (!profile?.openai?.capabilities) throw new Error("Missing configurable OpenAI Responses cache-growth profile")
 	profile.modelId = "gpt-5.6-sol"
-	profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	profile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	profile.openai.capabilities.contextWindow = 472_000
 	profile.openai.capabilities.maxTokens = 10_000
 	await writeFile(profilesPath, `${JSON.stringify(profiles, null, 2)}\n`, "utf8")

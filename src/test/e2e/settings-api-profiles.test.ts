@@ -471,10 +471,11 @@ e2e(
 
 		// The model picker is searchable: typing filters the merged catalog and
 		// remote list, and the reloaded entry must appear without a restart.
-		const modelSearch = profileCard.locator('vscode-text-field[placeholder="Search and select a model..."] input')
+		const modelSearch = profileCard.locator('vscode-text-field[placeholder="Search, select, or enter a model ID..."] input')
 		await modelSearch.click()
 		await modelSearch.fill(modelId)
-		await sidebar.getByRole("option", { name: modelId, exact: true }).click({ timeout: 15_000 })
+		// A row's accessible name is the model id plus an optional origin badge.
+		await sidebar.getByRole("option", { name: new RegExp(`^${modelId}( (New|Custom))?$`) }).click({ timeout: 15_000 })
 		await expect(modelSearch).toHaveValue(modelId)
 
 		await E2ETestHelper.waitUntil(async () => {
@@ -552,9 +553,10 @@ e2e("Settings API Config - exposes OAuth-only controls for OpenAI Codex", async 
 
 	const profileCard = sidebar.getByTestId("api-profile-card").last()
 	await profileCard.getByRole("combobox", { name: "Provider", exact: true }).selectOption("openai-codex")
-	await expect(profileCard.getByRole("button", { name: "Sign in with ChatGPT" })).toBeVisible()
-	await expect(profileCard.getByText("Not signed in", { exact: true })).toBeVisible({ timeout: 15_000 })
-	await expect(profileCard.getByText("Could not read OpenAI Codex sign-in status. Please try again.")).toHaveCount(0)
+	// The OAuth control is presented in the product UI language.
+	await expect(profileCard.getByRole("button", { name: "开始 OAUTH 认证" })).toBeVisible()
+	await expect(profileCard.getByText("未认证", { exact: true })).toBeVisible({ timeout: 15_000 })
+	await expect(profileCard.getByText("凭据无效", { exact: true })).toHaveCount(0)
 	await expect(profileCard.getByRole("textbox", { name: /API Key|Access Token|Refresh Token|OAuth JSON/i })).toHaveCount(0)
 
 	for (const sidebarWidth of [320, 480, 700]) {

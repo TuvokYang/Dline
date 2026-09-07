@@ -97,14 +97,14 @@ async function configureGpt56ResponsesProfile(dlineDir: string): Promise<void> {
 	const profiles = JSON.parse(await readFile(profilesPath, "utf8")) as Array<{
 		name: string
 		modelId?: string
-		webSearchMode?: string
+		webToolsMode?: string
 		openai?: { capabilities?: { contextWindow?: number } }
 	}>
 	const profile = profiles.find((candidate) => candidate.name === E2E_PROFILE_NAMES.mockOpenAiResponses)
 	if (!profile?.openai?.capabilities) throw new Error("Missing configurable OpenAI Responses E2E profile")
 	profile.modelId = "gpt-5.6-sol"
 	profile.openai.capabilities.contextWindow = 372_000
-	profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	profile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	await writeFile(profilesPath, `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 }
 

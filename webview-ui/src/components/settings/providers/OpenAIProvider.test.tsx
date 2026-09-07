@@ -1,11 +1,10 @@
 // @vitest-environment jsdom
 import type { ModelInfo } from "@shared/proto/dline/models"
 import { ApiFormat, type ModelCapabilities, type ModelPricing } from "@shared/proto/dline/models/metadata"
-import { WebSearchMode } from "@shared/proto/dline/provider/common"
+import { WebToolsMode } from "@shared/proto/dline/provider/common"
 import { OpenAiPromptCacheMode, OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { ModelsServiceClient } from "@/services/grpc-client"
 import { OpenAIProvider } from "./OpenAIProvider"
 import type { ApiProfile } from "./ProviderProfile"
 
@@ -39,6 +38,8 @@ const multiFormatModel: ModelInfo = {
 
 const catalogModels = { "gpt-multi": multiFormatModel, "gpt-custom": registryModel }
 
+const refreshRemoteModels = vi.fn()
+
 vi.mock("./useProviderModelOptions", () => ({
 	useProviderModelOptions: () => ({
 		models: catalogModels,
@@ -52,7 +53,12 @@ vi.mock("./useProviderModelOptions", () => ({
 		loading: false,
 		// Catalog entries win over discovered ids, matching the hook's merge.
 		options: { "gpt-listed-only": { id: "gpt-listed-only" }, ...catalogModels },
-		refreshRemoteModels: vi.fn(),
+		optionOrigins: {
+			"gpt-listed-only": "remote",
+			"gpt-multi": "catalog",
+			"gpt-custom": "catalog",
+		},
+		refreshRemoteModels,
 	}),
 }))
 
@@ -124,18 +130,22 @@ vi.mock("../common/DebouncedTextField", () => ({
 	},
 }))
 vi.mock("../common/ModelAutocomplete", () => ({
-	ModelAutocomplete: ({ label, models, onChange, onOpen, selectedModelId }: any) => (
+	ModelAutocomplete: ({ label, models, onChange, onOpen, optionOrigins, selectedModelId }: any) => (
 		<div>
 			<button aria-label={`Open ${label}`} onClick={onOpen} type="button">
 				Open {label}
 			</button>
 			<input
 				aria-label={label}
-				defaultValue={selectedModelId}
 				onChange={(event) => onChange(event.target.value, models[event.target.value])}
+				value={selectedModelId ?? ""}
 			/>
-			<span data-testid={`${label === "Model ID" ? "discovered" : "official"}-models`}>
-				{Object.keys(models).join(",")}
+			<span data-testid="model-options">{Object.keys(models).join(",")}</span>
+			<span data-testid="remote-model-options">
+				{Object.entries(optionOrigins ?? {})
+					.filter(([, origin]) => origin === "remote")
+					.map(([id]) => id)
+					.join(",")}
 			</span>
 		</div>
 	),
@@ -180,7 +190,7 @@ vi.mock("@vscode/webview-ui-toolkit/react", () => ({
 	),
 }))
 vi.mock("@/services/grpc-client", () => ({
-	ModelsServiceClient: { refreshOpenAiModels: vi.fn() },
+	ModelsServiceClient: { refreshOpenAiModels: vi.fn(), refreshProviderModels: vi.fn() },
 }))
 
 describe("OpenAIProvider", () => {
@@ -197,15 +207,17 @@ describe("OpenAIProvider", () => {
 			provider: "openai",
 			modelId: "gpt-multi",
 			openai: config,
-			webSearchMode: WebSearchMode.WEB_SEARCH_MODE_AUTO,
+			webToolsMode: WebToolsMode.WEB_TOOLS_MODE_AUTO,
 		} as unknown as ApiProfile
 
 		render(<OpenAIProvider onUpdate={onUpdate} profile={profile} showModelOptions={true} />)
 
 		expect(screen.getByRole("textbox", { name: "Model" })).toHaveValue("gpt-multi")
-		expect(screen.queryByRole("textbox", { name: "Model ID" })).not.toBeInTheDocument()
-		// Official mode still offers models the local catalog does not carry.
-		expect(screen.getByTestId("official-models")).toHaveTextContent("gpt-listed-only")
+		// A single picker covers both catalog and listing-only models; the custom
+		// switch stays available for ids no listing returns.
+		expect(screen.getByRole("checkbox", { name: "Use custom model ID" })).not.toBeChecked()
+		expect(screen.getByTestId("model-options")).toHaveTextContent("gpt-listed-only")
+		expect(screen.getByTestId("remote-model-options")).toHaveTextContent("gpt-listed-only")
 		const apiFormat = screen.getByRole("combobox", { name: "API Format" })
 		expect(apiFormat).toHaveValue(String(ApiFormat.OPENAI_RESPONSES))
 		expect(apiFormat).toHaveStyle({
@@ -214,8 +226,8 @@ describe("OpenAIProvider", () => {
 		})
 		expect(screen.getByRole("option", { name: "OpenAI Responses" })).toBeInTheDocument()
 		expect(screen.getByRole("option", { name: "OpenAI Chat" })).toBeInTheDocument()
-		expect(screen.getByTestId("capability-fields")).toHaveTextContent("supportsWebSearch")
-		expect(screen.getByRole("combobox", { name: "Web Search mode" })).toHaveValue(String(WebSearchMode.WEB_SEARCH_MODE_AUTO))
+		expect(screen.getByTestId("capability-fields")).toHaveTextContent("hostedWebSearch")
+		expect(screen.getByRole("combobox", { name: "Web Tools mode" })).toHaveValue(String(WebToolsMode.WEB_TOOLS_MODE_AUTO))
 		expect(screen.getByRole("checkbox", { name: "Use explicit prompt cache controls" })).not.toBeChecked()
 
 		fireEvent.change(apiFormat, { target: { value: String(ApiFormat.OPENAI_CHAT) } })
@@ -249,34 +261,66 @@ describe("OpenAIProvider", () => {
 
 		render(<OpenAIProvider onUpdate={onUpdate} profile={profile} showModelOptions={true} />)
 
-		expect(screen.getByRole("checkbox", { name: "Use custom model ID" })).toBeChecked()
-		expect(screen.getByRole("textbox", { name: "Model ID" })).toHaveValue("legacy-compatible-model")
+		// An id outside the catalog stays selectable through the merged picker while
+		// the custom switch remains the user's own choice.
+		expect(screen.getByRole("textbox", { name: "Model" })).toHaveValue("legacy-compatible-model")
+		expect(screen.getByRole("checkbox", { name: "Use custom model ID" })).not.toBeChecked()
 		expect(screen.getByRole("combobox", { name: "API Format" })).toBeInTheDocument()
-		expect(screen.getByText("context:128000")).toBeInTheDocument()
 		expect(screen.getByTestId("default-native-tools")).toHaveTextContent("true")
 	})
 
-	it("loads model suggestions when the custom model dropdown opens", async () => {
-		vi.mocked(ModelsServiceClient.refreshOpenAiModels).mockResolvedValue({ values: ["server-model"] })
+	it("commits a listing-only model without claiming the custom-model switch", () => {
+		const onUpdate = vi.fn()
+		const profile = {
+			id: "official-openai",
+			provider: "openai",
+			modelId: "gpt-multi",
+			openai: OpenAiProviderConfig.create({ customModelEnabled: false }),
+		} as unknown as ApiProfile
+
+		render(<OpenAIProvider onUpdate={onUpdate} profile={profile} showModelOptions={true} />)
+
+		fireEvent.change(screen.getByRole("textbox", { name: "Model" }), { target: { value: "gpt-listed-only" } })
+
+		// The switch belongs to the user. Flipping it from a model commit would
+		// let listing-only ids mask the catalog's own metadata.
+		expect(onUpdate).toHaveBeenCalledWith({
+			modelId: "gpt-listed-only",
+			openai: expect.objectContaining({ customModelEnabled: false }),
+		})
+	})
+
+	it("keeps the custom-model switch on when a catalog model is committed", () => {
+		const onUpdate = vi.fn()
+		const profile = {
+			id: "official-openai",
+			provider: "openai",
+			modelId: "gpt-multi",
+			openai: OpenAiProviderConfig.create({ customModelEnabled: true }),
+		} as unknown as ApiProfile
+
+		render(<OpenAIProvider onUpdate={onUpdate} profile={profile} showModelOptions={true} />)
+
+		fireEvent.change(screen.getByRole("textbox", { name: "Model ID" }), { target: { value: "gpt-custom" } })
+
+		expect(onUpdate).toHaveBeenCalledWith({ modelId: "gpt-custom" })
+	})
+
+	it("refreshes the provider listing when the picker opens", async () => {
 		const profile = {
 			id: "discovered-openai",
 			provider: "openai",
 			apiKey: "secret",
 			baseUrl: "https://gateway.example.test",
-			modelId: "custom-model",
-			openai: OpenAiProviderConfig.create({ customModelEnabled: true }),
+			modelId: "gpt-multi",
+			openai: OpenAiProviderConfig.create(),
 		} as unknown as ApiProfile
 
 		render(<OpenAIProvider onUpdate={vi.fn()} profile={profile} showModelOptions={true} />)
 
-		fireEvent.click(screen.getByRole("button", { name: "Open Model ID" }))
+		fireEvent.click(screen.getByRole("button", { name: "Open Model" }))
 
-		await waitFor(() =>
-			expect(ModelsServiceClient.refreshOpenAiModels).toHaveBeenCalledWith(
-				expect.objectContaining({ baseUrl: "https://gateway.example.test", apiKey: "secret" }),
-			),
-		)
-		await waitFor(() => expect(screen.getByTestId("discovered-models")).toHaveTextContent("server-model"))
+		await waitFor(() => expect(refreshRemoteModels).toHaveBeenCalled())
 	})
 
 	it("uses provider capabilities for configuration updates and merged display", () => {
@@ -297,7 +341,7 @@ describe("OpenAIProvider", () => {
 		expect(screen.getByText("max:64000")).toBeInTheDocument()
 		expect(screen.getByText("input:0.5")).toBeInTheDocument()
 		expect(screen.getByTestId("capability-fields")).toHaveTextContent(
-			"supportsImages,supportsWebSearch,supportsBrowserAction,supportsPromptCache",
+			"supportsImages,hostedWebSearch,supportsBrowserAction,supportsPromptCache",
 		)
 
 		fireEvent.click(screen.getByText("Update Images"))

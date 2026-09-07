@@ -23,7 +23,7 @@ interface GrpcSessionLog {
 
 interface StoredProfile {
 	name: string
-	webSearchMode?: string
+	webToolsMode?: string
 }
 
 e2e.use({ grpcRecorderEnabled: true })
@@ -34,7 +34,7 @@ async function configureProfileBeforeLaunch(dlineDir: string): Promise<void> {
 	const profiles = JSON.parse(await readFile(profilesPath, "utf8")) as StoredProfile[]
 	const profile = profiles.find((candidate) => candidate.name === E2E_PROFILE_NAMES.mockOpenAiResponses)
 	if (!profile) throw new Error(`Missing Task statistics E2E profile: ${E2E_PROFILE_NAMES.mockOpenAiResponses}`)
-	profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	profile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	await writeFile(profilesPath, `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 
 	const settingsPath = path.join(settingsDirectory, "settings.json")

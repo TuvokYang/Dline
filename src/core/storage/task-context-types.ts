@@ -32,7 +32,7 @@ export interface FrozenPromptRuntime {
 	/** Optional so runtime snapshots created before parallel-tool freezing remain readable. */
 	readonly parallelToolsEnabled?: boolean
 	readonly webToolsEnabled: boolean
-	readonly webSearchMode: WebSearchRoutingPlan["mode"]
+	readonly webToolsMode: WebSearchRoutingPlan["mode"]
 	readonly webSearchRoute: WebSearchRoute
 	readonly webSearchLocalFallbackAvailable: boolean
 	readonly serverTools: readonly ServerTool[]
@@ -80,7 +80,7 @@ export interface FrozenPromptBuilderInfo {
 	/** Effective request route used to project local or hosted Web Search. */
 	readonly webSearchRoute?: WebSearchRoute
 	/** Web Search mode used to resolve the frozen route. */
-	readonly webSearchMode?: WebSearchRoutingPlan["mode"]
+	readonly webToolsMode?: WebSearchRoutingPlan["mode"]
 	/** Whether the frozen hosted route could fall back to local Web Search. */
 	readonly webSearchLocalFallbackAvailable?: boolean
 }

@@ -6,7 +6,7 @@ import { E2ETestHelper, e2e } from "./utils/helpers"
 
 interface StoredProfile {
 	name: string
-	webSearchMode?: string
+	webToolsMode?: string
 	openai?: {
 		capabilities?: {
 			contextWindow?: number
@@ -72,7 +72,7 @@ async function configureHostedResponsesProfile(dlineDir: string): Promise<void> 
 	const profiles = JSON.parse(await readFile(profilesPath(dlineDir), "utf8")) as StoredProfile[]
 	const profile = profiles.find((candidate) => candidate.name === E2E_PROFILE_NAMES.mockOpenAiOfficialResponses)
 	if (!profile) throw new Error("Official OpenAI E2E profile is missing")
-	profile.webSearchMode = "WEB_SEARCH_MODE_AUTO"
+	profile.webToolsMode = "WEB_TOOLS_MODE_AUTO"
 	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 
 	const settings = JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>
@@ -88,7 +88,7 @@ async function configureTrajectoryProfile(dlineDir: string): Promise<void> {
 	const profile = profiles.find((candidate) => candidate.name === E2E_PROFILE_NAMES.mockOpenAiResponses)
 	if (!profile?.openai?.capabilities) throw new Error("Configurable OpenAI Responses E2E profile is missing")
 	profile.openai.capabilities.contextWindow = 131_072
-	profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	profile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 	await configureTrajectorySettings(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses)
 }
@@ -101,7 +101,7 @@ async function configureAnthropicTrajectoryProfile(dlineDir: string): Promise<vo
 		...profile.anthropic,
 		capabilities: { ...profile.anthropic?.capabilities, contextWindow: 131_072 },
 	}
-	profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	profile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 	await configureTrajectorySettings(dlineDir, E2E_PROFILE_NAMES.mockAnthropic)
 }

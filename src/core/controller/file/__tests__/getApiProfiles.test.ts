@@ -217,6 +217,34 @@ describe("getApiProfiles", () => {
 		expect(profile.imageModelId).to.equal(undefined)
 	})
 
+	it("reinterprets a legacy capabilities.tools override as a hosted tool switch", () => {
+		// Older builds wrote the user's hosted switch into the model's capability
+		// declaration, so an empty list read as "this model has no server tools".
+		const profile = normalizeApiProfile({
+			id: "legacy-tools-anthropic",
+			name: "Legacy Tools Anthropic",
+			provider: "anthropic",
+			modelId: "claude-opus-5",
+			anthropic: { capabilities: { contextWindow: 200_000, tools: [] } },
+		})
+
+		expect(profile.anthropic?.capabilities).to.not.have.property("tools")
+		expect(profile.anthropic?.disabledServerTools).to.deep.equal([1])
+	})
+
+	it("keeps a legacy override that left hosted search on as no disabled tools", () => {
+		const profile = normalizeApiProfile({
+			id: "legacy-tools-enabled-anthropic",
+			name: "Legacy Tools Enabled Anthropic",
+			provider: "anthropic",
+			modelId: "claude-opus-5",
+			anthropic: { capabilities: { contextWindow: 200_000, tools: ["WEB_SEARCH"] } },
+		})
+
+		expect(profile.anthropic?.capabilities).to.not.have.property("tools")
+		expect(profile.anthropic?.disabledServerTools).to.deep.equal([])
+	})
+
 	it("persists historical Profile names for name-only Task migration", () => {
 		const stored = serializeApiProfilesForStorage([
 			ApiProfile.create({

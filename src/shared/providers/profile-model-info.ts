@@ -1,5 +1,5 @@
 import type { ModelInfo } from "@shared/proto/dline/models"
-import type { ModelCapabilities, ModelPricing } from "@shared/proto/dline/models/metadata"
+import type { ModelCapabilities, ModelPricing, ServerTool } from "@shared/proto/dline/models/metadata"
 import type { ApiProfile } from "@shared/proto/dline/profile"
 import { buildEffectiveModelInfo, type ProviderModelOverrides } from "./effective-model-info"
 import type { ProviderModelsConfig } from "./types"
@@ -71,6 +71,8 @@ function readOverrides(value: unknown): ProviderModelOverrides {
 		return {}
 	}
 
+	// The server-tool declaration is stripped inside buildEffectiveModelInfo, so
+	// every consumer of these overrides shares one rule.
 	const capabilities = isObject(value.capabilities) ? (value.capabilities as ModelCapabilities) : undefined
 
 	const pricing = isObject(value.pricing) ? (value.pricing as ModelPricing) : undefined
@@ -93,6 +95,23 @@ export function resolveProfileOverrides(profile: ApiProfile): ProviderModelOverr
 	const providerKey = PROFILE_PROVIDER_KEYS[profile.provider]
 
 	return providerKey ? readOverrides(profile[providerKey]) : {}
+}
+
+/**
+ * Read the hosted server tools this profile switched off.
+ *
+ * An absent list means the profile follows whatever the model declares, so a
+ * provider without the switch keeps every hosted capability its model offers.
+ */
+export function resolveProfileDisabledServerTools(profile: ApiProfile): readonly ServerTool[] | undefined {
+	const providerKey = PROFILE_PROVIDER_KEYS[profile.provider]
+	if (!providerKey) return undefined
+
+	const config = profile[providerKey]
+	if (!isObject(config)) return undefined
+
+	const disabled = (config as { disabledServerTools?: unknown }).disabledServerTools
+	return Array.isArray(disabled) ? (disabled as ServerTool[]) : undefined
 }
 
 /**

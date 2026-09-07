@@ -1,6 +1,6 @@
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import { ImageGenerationSource } from "@shared/proto/dline/profile"
-import { WebSearchMode } from "@shared/proto/dline/provider/common"
+import { WebToolsMode } from "@shared/proto/dline/provider/common"
 import { describe, expect, it } from "vitest"
 import {
 	disableWebSearchRoutingPlan,
@@ -14,7 +14,7 @@ import {
 function hostedPlan(apiFormat: ApiFormat) {
 	return resolveWebSearchRoutingPlan({
 		enabled: true,
-		mode: WebSearchMode.WEB_SEARCH_MODE_AUTO,
+		mode: WebToolsMode.WEB_TOOLS_MODE_AUTO,
 		modelInfo: { capabilities: { tools: [ServerTool.WEB_SEARCH] } },
 		selectedApiFormat: apiFormat,
 		localAvailable: true,
@@ -79,10 +79,28 @@ describe("resolveServerToolPlan", () => {
 	it("does not infer tools or an API format from empty metadata", () => {
 		expect(resolveServerToolPlan(undefined, undefined)).toEqual({
 			declared: [],
+			disabled: [],
 			active: [],
 			unsupported: [],
 			unrecognized: [],
 		})
+	})
+
+	it("keeps a disabled tool declared so the switch stays reversible", () => {
+		const modelInfo = { capabilities: { tools: [ServerTool.WEB_SEARCH, ServerTool.CODE_EXECUTION] } }
+
+		const plan = resolveServerToolPlan(modelInfo, ApiFormat.ANTHROPIC_CHAT, [ServerTool.WEB_SEARCH])
+
+		expect(plan.declared).toEqual([ServerTool.WEB_SEARCH, ServerTool.CODE_EXECUTION])
+		expect(plan.disabled).toEqual([ServerTool.WEB_SEARCH])
+		expect(plan.active).toEqual([ServerTool.CODE_EXECUTION])
+	})
+
+	it("treats an absent disable list as following the model declaration", () => {
+		const modelInfo = { capabilities: { tools: [ServerTool.WEB_SEARCH] } }
+
+		expect(resolveServerToolPlan(modelInfo, ApiFormat.ANTHROPIC_CHAT).active).toEqual([ServerTool.WEB_SEARCH])
+		expect(resolveServerToolPlan(modelInfo, ApiFormat.ANTHROPIC_CHAT, []).active).toEqual([ServerTool.WEB_SEARCH])
 	})
 
 	it("requires the selected format instead of inferring the first model format", () => {
@@ -126,7 +144,7 @@ describe("resolveServerToolPlan", () => {
 		// allowed_callers, so a search never spends the sandbox's call budget.
 		const plan = resolveWebSearchRoutingPlan({
 			enabled: true,
-			mode: WebSearchMode.WEB_SEARCH_MODE_AUTO,
+			mode: WebToolsMode.WEB_TOOLS_MODE_AUTO,
 			modelInfo: { capabilities: { tools: [ServerTool.WEB_SEARCH, ServerTool.CODE_EXECUTION] } },
 			selectedApiFormat: ApiFormat.ANTHROPIC_CHAT,
 			localAvailable: true,
@@ -145,7 +163,7 @@ describe("resolveServerToolPlan", () => {
 	it("declares the same standalone search version when the model omits the sandbox", () => {
 		const plan = resolveWebSearchRoutingPlan({
 			enabled: true,
-			mode: WebSearchMode.WEB_SEARCH_MODE_AUTO,
+			mode: WebToolsMode.WEB_TOOLS_MODE_AUTO,
 			modelInfo: { capabilities: { tools: [ServerTool.WEB_SEARCH] } },
 			selectedApiFormat: ApiFormat.ANTHROPIC_CHAT,
 			localAvailable: true,
@@ -161,7 +179,7 @@ describe("resolveServerToolPlan", () => {
 	it("never routes the sandbox on its own when search is not hosted", () => {
 		const plan = resolveWebSearchRoutingPlan({
 			enabled: true,
-			mode: WebSearchMode.WEB_SEARCH_MODE_FORCE_LOCAL,
+			mode: WebToolsMode.WEB_TOOLS_MODE_FORCE_LOCAL,
 			modelInfo: { capabilities: { tools: [ServerTool.WEB_SEARCH, ServerTool.CODE_EXECUTION] } },
 			selectedApiFormat: ApiFormat.ANTHROPIC_CHAT,
 			localAvailable: true,
@@ -177,7 +195,7 @@ describe("resolveServerToolPlan", () => {
 		const projection = projectServerTools(
 			resolveWebSearchRoutingPlan({
 				enabled: true,
-				mode: WebSearchMode.WEB_SEARCH_MODE_FORCE_REMOTE,
+				mode: WebToolsMode.WEB_TOOLS_MODE_FORCE_REMOTE,
 				modelInfo: { capabilities: { tools: [ServerTool.WEB_SEARCH] } },
 				selectedApiFormat: ApiFormat.OPENAI_CHAT,
 				localAvailable: true,
@@ -192,7 +210,7 @@ describe("resolveServerToolPlan", () => {
 		const projection = projectServerTools(
 			resolveWebSearchRoutingPlan({
 				enabled: true,
-				mode: WebSearchMode.WEB_SEARCH_MODE_FORCE_REMOTE,
+				mode: WebToolsMode.WEB_TOOLS_MODE_FORCE_REMOTE,
 				modelInfo: { capabilities: { tools: [] } },
 				selectedApiFormat: ApiFormat.OPENAI_RESPONSES,
 				localAvailable: true,
@@ -236,7 +254,7 @@ describe("resolveWebSearchRoutingPlan", () => {
 	}
 
 	it("uses hosted search in Auto and falls back to local when hosted search is unavailable", () => {
-		expect(resolveWebSearchRoutingPlan({ ...base, mode: WebSearchMode.WEB_SEARCH_MODE_AUTO })).toMatchObject({
+		expect(resolveWebSearchRoutingPlan({ ...base, mode: WebToolsMode.WEB_TOOLS_MODE_AUTO })).toMatchObject({
 			route: "hosted",
 			localToolEnabled: false,
 			localFallbackAvailable: true,
@@ -245,19 +263,19 @@ describe("resolveWebSearchRoutingPlan", () => {
 		expect(
 			resolveWebSearchRoutingPlan({
 				...base,
-				mode: WebSearchMode.WEB_SEARCH_MODE_AUTO,
+				mode: WebToolsMode.WEB_TOOLS_MODE_AUTO,
 				selectedApiFormat: ApiFormat.OPENAI_CHAT,
 			}),
 		).toMatchObject({ route: "local", localToolEnabled: true, localFallbackAvailable: true, serverTools: [] })
 	})
 
 	it("keeps Force Local and Force Off mutually exclusive with hosted declarations", () => {
-		expect(resolveWebSearchRoutingPlan({ ...base, mode: WebSearchMode.WEB_SEARCH_MODE_FORCE_LOCAL })).toMatchObject({
+		expect(resolveWebSearchRoutingPlan({ ...base, mode: WebToolsMode.WEB_TOOLS_MODE_FORCE_LOCAL })).toMatchObject({
 			route: "local",
 			localToolEnabled: true,
 			serverTools: [],
 		})
-		expect(resolveWebSearchRoutingPlan({ ...base, mode: WebSearchMode.WEB_SEARCH_MODE_FORCE_OFF })).toMatchObject({
+		expect(resolveWebSearchRoutingPlan({ ...base, mode: WebToolsMode.WEB_TOOLS_MODE_FORCE_OFF })).toMatchObject({
 			route: "disabled",
 			localToolEnabled: false,
 			serverTools: [],
@@ -284,7 +302,7 @@ describe("resolveWebSearchRoutingPlan", () => {
 		const plan = resolveWebSearchRoutingPlan({
 			...base,
 			...overrides,
-			mode: WebSearchMode.WEB_SEARCH_MODE_FORCE_REMOTE,
+			mode: WebToolsMode.WEB_TOOLS_MODE_FORCE_REMOTE,
 		})
 
 		expect(plan).toMatchObject({ route: "unavailable", unavailableReason: reason })
@@ -295,9 +313,9 @@ describe("resolveWebSearchRoutingPlan", () => {
 
 	it("lets the global feature gate disable every provider mode", () => {
 		for (const mode of [
-			WebSearchMode.WEB_SEARCH_MODE_AUTO,
-			WebSearchMode.WEB_SEARCH_MODE_FORCE_LOCAL,
-			WebSearchMode.WEB_SEARCH_MODE_FORCE_REMOTE,
+			WebToolsMode.WEB_TOOLS_MODE_AUTO,
+			WebToolsMode.WEB_TOOLS_MODE_FORCE_LOCAL,
+			WebToolsMode.WEB_TOOLS_MODE_FORCE_REMOTE,
 		]) {
 			expect(resolveWebSearchRoutingPlan({ ...base, enabled: false, mode })).toMatchObject({
 				route: "disabled",

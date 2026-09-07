@@ -29,7 +29,7 @@ interface StoredProfile {
 	modelId: string
 	usedFor: string[]
 	enabled: boolean
-	webSearchMode?: string
+	webToolsMode?: string
 }
 
 class CodexOAuthE2EServer {
@@ -224,7 +224,7 @@ function codexProfile(id: string, name: string): StoredProfile {
 		modelId: "gpt-5.6-sol",
 		usedFor: ["act", "plan"],
 		enabled: true,
-		webSearchMode: "WEB_SEARCH_MODE_FORCE_OFF",
+		webToolsMode: "WEB_TOOLS_MODE_FORCE_OFF",
 	}
 }
 

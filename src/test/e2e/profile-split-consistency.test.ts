@@ -9,7 +9,7 @@ interface StoredProfile {
 	id: string
 	name: string
 	modelId?: string
-	webSearchMode?: "WEB_SEARCH_MODE_FORCE_OFF"
+	webToolsMode?: "WEB_TOOLS_MODE_FORCE_OFF"
 	openai?: {
 		capabilities?: {
 			contextWindow?: number
@@ -78,7 +78,7 @@ async function configureProfileCatalog(
 			profile.name === E2E_PROFILE_NAMES.mockOpenAiResponses ||
 			profile.name === E2E_PROFILE_NAMES.mockDeepSeek
 		) {
-			profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+			profile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 		}
 		const contextWindow = contextWindows[profile.name]
 		if (contextWindow !== undefined) {

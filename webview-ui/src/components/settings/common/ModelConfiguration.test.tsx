@@ -278,48 +278,86 @@ describe("ModelConfiguration", () => {
 		expect(onCapabilitiesUpdate).toHaveBeenCalledWith({ supportsTools: true })
 	})
 
-	it("maps Web Search to ServerTool.WEB_SEARCH while preserving other server tools", () => {
+	it("turns the hosted Web Search switch off without touching the model declaration", () => {
 		const onCapabilitiesUpdate = vi.fn()
-		const tools = [ServerTool.SERVER_TOOL_UNSPECIFIED, ServerTool.WEB_SEARCH, ServerTool.UNRECOGNIZED]
+		const onDisabledServerToolsUpdate = vi.fn()
 
 		render(
 			<ModelConfiguration
-				capabilities={{ tools } as ModelCapabilities}
-				fields={{ capabilities: ["supportsWebSearch"] }}
+				defaults={{ capabilities: { tools: [ServerTool.WEB_SEARCH] } as ModelCapabilities }}
+				fields={{ capabilities: ["hostedWebSearch"] }}
 				onCapabilitiesUpdate={onCapabilitiesUpdate}
+				onDisabledServerToolsUpdate={onDisabledServerToolsUpdate}
 				onPricingUpdate={vi.fn()}
 			/>,
 		)
 
 		fireEvent.click(screen.getByRole("button", { name: /Model Configuration/i }))
-		expect(screen.getByLabelText("Supports Web Search")).toBeChecked()
-		fireEvent.click(screen.getByLabelText("Supports Web Search"))
+		expect(screen.getByLabelText("Use hosted Web Search")).toBeChecked()
+		fireEvent.click(screen.getByLabelText("Use hosted Web Search"))
 
-		expect(onCapabilitiesUpdate).toHaveBeenCalledWith({
-			tools: [ServerTool.SERVER_TOOL_UNSPECIFIED, ServerTool.UNRECOGNIZED],
-		})
+		expect(onDisabledServerToolsUpdate).toHaveBeenCalledWith([ServerTool.WEB_SEARCH])
+		expect(onCapabilitiesUpdate).not.toHaveBeenCalled()
 	})
 
-	it("saves Web Search, Browser Actions, and Images as independent capabilities", () => {
+	it("re-enables a hosted tool by clearing it from the disable list", () => {
+		const onDisabledServerToolsUpdate = vi.fn()
+
+		render(
+			<ModelConfiguration
+				defaults={{ capabilities: { tools: [ServerTool.WEB_SEARCH] } as ModelCapabilities }}
+				disabledServerTools={[ServerTool.WEB_SEARCH, ServerTool.CODE_EXECUTION]}
+				fields={{ capabilities: ["hostedWebSearch"] }}
+				onCapabilitiesUpdate={vi.fn()}
+				onDisabledServerToolsUpdate={onDisabledServerToolsUpdate}
+				onPricingUpdate={vi.fn()}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: /Model Configuration/i }))
+		expect(screen.getByLabelText("Use hosted Web Search")).not.toBeChecked()
+		fireEvent.click(screen.getByLabelText("Use hosted Web Search"))
+
+		expect(onDisabledServerToolsUpdate).toHaveBeenCalledWith([ServerTool.CODE_EXECUTION])
+	})
+
+	it("disables the hosted switch when the model declares no hosted Web Search", () => {
+		render(
+			<ModelConfiguration
+				defaults={{ capabilities: { tools: [] } as ModelCapabilities }}
+				fields={{ capabilities: ["hostedWebSearch"] }}
+				onCapabilitiesUpdate={vi.fn()}
+				onDisabledServerToolsUpdate={vi.fn()}
+				onPricingUpdate={vi.fn()}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: /Model Configuration/i }))
+		// The label carries the reason; the toolkit checkbox does not upgrade under jsdom,
+		// so its disabled state is not observable as a DOM attribute here.
+		const control = screen.getByLabelText("Use hosted Web Search (not offered by this model)")
+		expect(control).not.toBeChecked()
+		expect(screen.queryByLabelText("Use hosted Web Search")).not.toBeInTheDocument()
+	})
+
+	it("saves Browser Actions and Images as independent capabilities", () => {
 		const onCapabilitiesUpdate = vi.fn()
 
 		render(
 			<ModelConfiguration
-				capabilities={{ tools: [], supportsBrowserAction: false, supportsImages: false } as ModelCapabilities}
-				fields={{ capabilities: ["supportsWebSearch", "supportsBrowserAction", "supportsImages"] }}
+				capabilities={{ supportsBrowserAction: false, supportsImages: false } as ModelCapabilities}
+				fields={{ capabilities: ["supportsBrowserAction", "supportsImages"] }}
 				onCapabilitiesUpdate={onCapabilitiesUpdate}
 				onPricingUpdate={vi.fn()}
 			/>,
 		)
 
 		fireEvent.click(screen.getByRole("button", { name: /Model Configuration/i }))
-		fireEvent.click(screen.getByLabelText("Supports Web Search"))
 		fireEvent.click(screen.getByLabelText("Supports Browser Actions"))
 		fireEvent.click(screen.getByLabelText("Supports Images"))
 
-		expect(onCapabilitiesUpdate).toHaveBeenNthCalledWith(1, { tools: [ServerTool.WEB_SEARCH] })
-		expect(onCapabilitiesUpdate).toHaveBeenNthCalledWith(2, { supportsBrowserAction: true })
-		expect(onCapabilitiesUpdate).toHaveBeenNthCalledWith(3, { supportsImages: true })
+		expect(onCapabilitiesUpdate).toHaveBeenNthCalledWith(1, { supportsBrowserAction: true })
+		expect(onCapabilitiesUpdate).toHaveBeenNthCalledWith(2, { supportsImages: true })
 	})
 
 	it("inherits native tool support from the selected model defaults", () => {

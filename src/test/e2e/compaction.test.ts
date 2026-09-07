@@ -8,7 +8,7 @@ import { E2ETestHelper, e2e } from "./utils/helpers"
 interface StoredProfile {
 	name: string
 	modelId?: string
-	webSearchMode?: "WEB_SEARCH_MODE_FORCE_OFF"
+	webToolsMode?: "WEB_TOOLS_MODE_FORCE_OFF"
 	openai?: {
 		capabilities?: {
 			contextWindow?: number
@@ -131,7 +131,7 @@ async function configureAutoCompaction(dlineDir: string, profileName: string): P
 	if (!profile?.openai?.capabilities) throw new Error(`Missing configurable OpenAI E2E profile: ${profileName}`)
 	profile.modelId = "gpt-5.6-sol"
 	profile.openai.capabilities.contextWindow = 131_072
-	profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	profile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 
 	const settings = JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>
@@ -174,7 +174,7 @@ async function configureTriggerBoundary(
 	if (!profile?.openai?.capabilities) throw new Error("Missing configurable OpenAI Responses E2E profile")
 	profile.modelId = "gpt-5.6-sol"
 	profile.openai.capabilities.contextWindow = contextWindow
-	profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	profile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 
 	const settings = JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>
@@ -211,7 +211,7 @@ async function configureRollingMergeTarget(dlineDir: string, providerCase: Rolli
 			contextWindow: 1_000_000,
 		},
 	}
-	profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	profile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 
 	const settings = JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>
@@ -239,7 +239,7 @@ async function configureReducedCapScenario(dlineDir: string): Promise<void> {
 	if (!profile?.openai?.capabilities) throw new Error("Missing configurable OpenAI Responses E2E profile")
 	profile.modelId = "gpt-5.6-sol"
 	profile.openai.capabilities.contextWindow = 1_000_000
-	profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	profile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 
 	const settings = JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>
@@ -267,7 +267,7 @@ async function configureResponsesContextPressure(dlineDir: string): Promise<void
 	if (!profile?.openai?.capabilities) throw new Error("Missing configurable OpenAI Responses E2E profile")
 	profile.modelId = "gpt-5.6-sol"
 	profile.openai.capabilities.contextWindow = 100_000
-	profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	profile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 
 	const settings = JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>
@@ -319,11 +319,7 @@ function expectCompactionBudgetFormula(requestBody: unknown): ParsedCompactionBu
 	// The recommended range is bounded by the remaining window and by the hard limit: advising a
 	// longer response than the request can emit would guarantee truncation.
 	const expectedRecommendedMax = Math.min(Math.floor(budget.availableRemainder * 0.9), 30_000, budget.hardLimit)
-	const expectedRecommendedMin = Math.min(
-		Math.floor(budget.availableRemainder * 0.8),
-		5_000,
-		expectedRecommendedMax,
-	)
+	const expectedRecommendedMin = Math.min(Math.floor(budget.availableRemainder * 0.8), 5_000, expectedRecommendedMax)
 
 	expect(budget.availableRemainder).toBeGreaterThan(0)
 	expect(budget.hardLimit).toBe(expectedHardLimit)

@@ -46,7 +46,7 @@ async function configurePlanModeProfiles(dlineDir: string): Promise<void> {
 	const profiles = JSON.parse(await readFile(profilesPath, "utf8")) as Array<Record<string, unknown>>
 	for (const profile of profiles) {
 		if (profile.name === E2E_PROFILE_NAMES.mockOpenAiResponses || profile.name === E2E_PROFILE_NAMES.mockDeepSeek) {
-			profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+			profile.webToolsMode = "WEB_TOOLS_MODE_FORCE_OFF"
 		}
 	}
 	await writeFile(profilesPath, `${JSON.stringify(profiles, null, 2)}\n`, "utf8")

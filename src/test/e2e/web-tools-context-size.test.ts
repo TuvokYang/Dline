@@ -6,11 +6,12 @@ import { E2E_PROFILE_NAMES } from "./utils/api-profile"
 import { E2ETestHelper, e2e } from "./utils/helpers"
 
 interface StoredProfile {
+	id: string
 	name: string
 	provider: string
 	modelId: string
 	baseUrl?: string
-	webSearchMode?: string
+	webToolsMode?: string
 	openai?: {
 		apiFormat?: string
 		customModelEnabled?: boolean
@@ -35,6 +36,33 @@ async function readSettings(dlineDir: string): Promise<Record<string, unknown>> 
 	return JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>
 }
 
+/**
+ * Edits the profile catalog while the extension host is already running.
+ *
+ * Startup rewrites the same file to strip API keys, so a read-modify-write
+ * issued too early races that rewrite and can leave unparseable JSON behind.
+ * Waiting until a parse succeeds keeps the edit on top of the settled file.
+ */
+async function updateProfilesAfterStartup(dlineDir: string, mutate: (profiles: StoredProfile[]) => void): Promise<void> {
+	const profiles = await E2ETestHelper.waitForValue(async () => {
+		try {
+			return await readProfiles(dlineDir)
+		} catch {
+			return undefined
+		}
+	}, 15_000)
+	mutate(profiles)
+	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
+	// A follow-up parse proves the catalog the extension reloads is well-formed.
+	await E2ETestHelper.waitForValue(async () => {
+		try {
+			return (await readProfiles(dlineDir)).length > 0 ? true : undefined
+		} catch {
+			return undefined
+		}
+	}, 15_000)
+}
+
 async function waitForProfile(
 	dlineDir: string,
 	name: string,
@@ -51,15 +79,27 @@ async function openApiSettings(page: Page, sidebar: Frame): Promise<void> {
 	await expect(sidebar.getByRole("heading", { name: "API Configuration" })).toBeVisible()
 }
 
+/**
+ * Matches on the expand/collapse toggle, whose accessible name always carries
+ * the profile name. The name input only exists while the card is expanded, so
+ * matching on it cannot find a collapsed card.
+ */
 function getProfileCard(sidebar: Frame, profileName: string): Locator {
-	return sidebar.getByTestId("api-profile-card").filter({ has: sidebar.locator(`input[value=${JSON.stringify(profileName)}]`) })
+	return sidebar.getByTestId("api-profile-card").filter({
+		has: sidebar.getByRole("button", { name: new RegExp(`^(Expand|Collapse) ${escapeForRegExp(profileName)}$`) }),
+	})
+}
+
+function escapeForRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
 async function openProfileEditor(sidebar: Frame, profileName: string): Promise<Locator> {
 	const card = getProfileCard(sidebar, profileName)
 	await expect(card).toHaveCount(1)
+	const expandToggle = card.getByRole("button", { name: /^Expand / })
+	if (await expandToggle.isVisible()) await expandToggle.click()
 	const providerSelector = card.getByRole("combobox", { name: "Provider", exact: true })
-	if (!(await providerSelector.isVisible())) await card.getByRole("button").first().press("Enter")
 	await expect(providerSelector).toBeVisible()
 	return card
 }
@@ -112,14 +152,15 @@ e2e(
 		await sidebar.getByTestId("tab-api-config").click()
 		const openAiCard = await openProfileEditor(sidebar, E2E_PROFILE_NAMES.mockOpenAiOfficialResponses)
 		await openModelConfiguration(openAiCard)
-		await expect(openAiCard.locator("vscode-checkbox").filter({ hasText: "Supports Web Search" })).toHaveCount(1)
-		await expect(openAiCard.getByRole("combobox", { name: "Web Search mode" })).toHaveCount(1)
-		await expect(openAiCard.getByText("Hosted Web Search available", { exact: true })).toBeVisible()
+		await expect(openAiCard.locator("vscode-checkbox").filter({ hasText: "Use hosted Web Search" })).toHaveCount(1)
+		await expect(openAiCard.getByRole("combobox", { name: "Web Tools mode" })).toHaveCount(1)
+		await expect(openAiCard.getByText("Hosted Web Tools available", { exact: true })).toBeVisible()
 
 		const deepSeekCard = await openProfileEditor(sidebar, E2E_PROFILE_NAMES.mockDeepSeek)
-		await expect(deepSeekCard.getByRole("combobox", { name: "API Format" })).toHaveValue(String(ApiFormat.ANTHROPIC_CHAT))
-		await expect(deepSeekCard.getByRole("combobox", { name: "Web Search mode" })).toHaveCount(1)
-		await expect(deepSeekCard.getByText("Hosted Web Search available", { exact: true })).toBeVisible()
+		// The fixture configures this profile with the OpenAI chat protocol.
+		await expect(deepSeekCard.getByRole("combobox", { name: "API Format" })).toHaveValue(String(ApiFormat.OPENAI_CHAT))
+		await expect(deepSeekCard.getByRole("combobox", { name: "Web Tools mode" })).toHaveCount(1)
+		await expect(deepSeekCard.getByText("Hosted Web Tools available", { exact: true })).toBeVisible()
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )
@@ -127,12 +168,17 @@ e2e(
 e2e(
 	"BUGFIX-001 hosted search - renders Provider source and compressed results without the extra external icon",
 	async ({ dlineDir, helper, server, sidebar, userDataDir }) => {
-		const profiles = await readProfiles(dlineDir)
-		const profile = profiles.find((candidate) => candidate.name === E2E_PROFILE_NAMES.mockOpenAiOfficialResponses)
-		if (!profile) throw new Error("Official OpenAI E2E profile is missing")
-		profile.webSearchMode = "WEB_SEARCH_MODE_AUTO"
-		await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
+		let officialProfileId = ""
+		await updateProfilesAfterStartup(dlineDir, (profiles) => {
+			const profile = profiles.find((candidate) => candidate.name === E2E_PROFILE_NAMES.mockOpenAiOfficialResponses)
+			if (!profile) throw new Error("Official OpenAI E2E profile is missing")
+			profile.webToolsMode = "WEB_TOOLS_MODE_AUTO"
+			officialProfileId = profile.id
+		})
 		const settings = await readSettings(dlineDir)
+		// The id is the authoritative selector; the name alone no longer routes.
+		settings.actModeProfileId = officialProfileId
+		settings.planModeProfileId = officialProfileId
 		settings.actModeProfile = E2E_PROFILE_NAMES.mockOpenAiOfficialResponses
 		settings.planModeProfile = E2E_PROFILE_NAMES.mockOpenAiOfficialResponses
 		settings.clineWebToolsEnabled = true
@@ -184,9 +230,12 @@ e2e(
 		const compatibleProfileName = E2E_PROFILE_NAMES.persistence
 		const compatibleCard = await openProfileEditor(sidebar, compatibleProfileName)
 		await openModelConfiguration(compatibleCard)
-		const modelInput = compatibleCard.locator('vscode-text-field[placeholder="Enter Model ID..."] input')
+		// The merged picker offers an unlisted query as an explicit custom row.
+		const modelInput = compatibleCard.locator('vscode-text-field[placeholder="Search, select, or enter a model ID..."] input')
+		await modelInput.click()
 		await modelInput.fill("custom-deepseek-model")
-		await modelInput.press("Tab")
+		await sidebar.getByRole("option", { name: /^custom-deepseek-model( (New|Custom))?$/ }).click()
+		await expect(modelInput).toHaveValue("custom-deepseek-model")
 		await setTextField(compatibleCard, "Context Window Size", "256000")
 		await waitForProfile(
 			dlineDir,

@@ -4,7 +4,7 @@ import type { FrozenPromptRuntime, FrozenSystemPromptCache } from "@core/storage
 import { createTaskCapabilityToggles, emptyTaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
 
 export interface ResolvedPromptRuntime
-	extends Omit<FrozenPromptRuntime, "parallelToolsEnabled" | "webSearchMode" | "webSearchRoute" | "serverTools"> {
+	extends Omit<FrozenPromptRuntime, "parallelToolsEnabled" | "webToolsMode" | "webSearchRoute" | "serverTools"> {
 	readonly parallelToolsEnabled: boolean
 	readonly webSearchRoutingPlan: WebSearchRoutingPlan
 }
@@ -52,7 +52,7 @@ export function resolveFrozenPromptRuntime(frozen: FrozenSystemPromptCache, cont
 				: false,
 		webSearchRoutingPlan: Object.freeze({
 			...currentPlan,
-			mode: runtime?.webSearchMode ?? builder?.webSearchMode ?? currentPlan.mode,
+			mode: runtime?.webToolsMode ?? builder?.webToolsMode ?? currentPlan.mode,
 			route,
 			localToolEnabled: route === "local",
 			localFallbackAvailable:

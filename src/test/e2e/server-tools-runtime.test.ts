@@ -1,6 +1,7 @@
 import { access, cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import * as path from "node:path"
 import { expect, type Frame, type Locator, type Page } from "@playwright/test"
+import { ServerTool } from "@shared/proto/dline/models/metadata"
 import type { ElectronApplication } from "playwright"
 // @ts-expect-error puppeteer-chromium-resolver does not publish TypeScript declarations.
 import PCR from "puppeteer-chromium-resolver"
@@ -9,26 +10,27 @@ import { getE2EMockProviderBaseUrl } from "./fixtures/server/api"
 import { E2E_PROFILE_NAMES } from "./utils/api-profile"
 import { E2ETestHelper, e2e } from "./utils/helpers"
 
-type StoredWebSearchMode =
-	| "WEB_SEARCH_MODE_AUTO"
-	| "WEB_SEARCH_MODE_FORCE_LOCAL"
-	| "WEB_SEARCH_MODE_FORCE_OFF"
-	| "WEB_SEARCH_MODE_FORCE_REMOTE"
+type StoredWebToolsMode =
+	| "WEB_TOOLS_MODE_AUTO"
+	| "WEB_TOOLS_MODE_FORCE_LOCAL"
+	| "WEB_TOOLS_MODE_FORCE_OFF"
+	| "WEB_TOOLS_MODE_FORCE_REMOTE"
 
 interface StoredProviderConfiguration {
 	capabilities?: {
 		maxTokens?: number
 		contextWindow?: number
 		supportsTools?: boolean
-		tools?: string[]
 	}
+	disabledServerTools?: ServerTool[]
 	[key: string]: unknown
 }
 
 interface StoredProfile {
 	name: string
 	provider: string
-	webSearchMode?: StoredWebSearchMode
+	webToolsMode?: StoredWebToolsMode
+	modelInfo?: { capabilities?: { tools?: ServerTool[]; [key: string]: unknown }; [key: string]: unknown }
 	openai?: StoredProviderConfiguration
 	anthropic?: StoredProviderConfiguration
 	[key: string]: unknown
@@ -124,7 +126,7 @@ async function prepareRuntimeProfile(
 		apiFormat?: "OPENAI_CHAT" | "OPENAI_RESPONSES"
 		baseUrl?: string
 		enabled: boolean
-		mode: StoredWebSearchMode
+		mode: StoredWebToolsMode
 		supportsWebSearch?: boolean
 	},
 ): Promise<void> {
@@ -132,7 +134,7 @@ async function prepareRuntimeProfile(
 	const profile = profiles.find((candidate) => candidate.name === profileName)
 	if (!profile) throw new Error(`Missing E2E profile: ${profileName}`)
 
-	profile.webSearchMode = options.mode
+	profile.webToolsMode = options.mode
 	if (options.baseUrl) profile.baseUrl = options.baseUrl
 	const providerKey = profile.provider === "anthropic" ? "anthropic" : profile.provider === "deepseek" ? "deepseek" : "openai"
 	const provider = (profile[providerKey] ?? {}) as StoredProviderConfiguration
@@ -143,8 +145,18 @@ async function prepareRuntimeProfile(
 			contextWindow: provider.capabilities?.contextWindow ?? 131_072,
 			supportsTools: true,
 			...provider.capabilities,
-			tools: options.supportsWebSearch ? ["WEB_SEARCH"] : [],
 		}
+		// The model declares what it can do; the profile only records what the user
+		// turned off. Writing "no hosted search" as an empty declaration would make
+		// the capability itself disappear instead of switching the route.
+		//
+		// Stored profiles carry proto enum numbers, and the runtime ignores any
+		// non-numeric entry, so the fixture has to use ServerTool values here.
+		profile.modelInfo = {
+			...profile.modelInfo,
+			capabilities: { ...profile.modelInfo?.capabilities, tools: [ServerTool.WEB_SEARCH] },
+		}
+		provider.disabledServerTools = options.supportsWebSearch ? [] : [ServerTool.WEB_SEARCH]
 	}
 	profile[providerKey] = provider
 	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
@@ -243,6 +255,13 @@ async function setAutoApproveAction(sidebar: Frame, label: string, enabled: bool
 	await sidebar.getByLabel("Close auto-approve settings").click()
 }
 
+/**
+ * Assert the 40vh height budget of a tool card.
+ *
+ * Cards cap their own height but differ in who scrolls: the Web Fetch card
+ * scrolls itself, while the Web Search card clips and lets its results region
+ * scroll. Only the height budget is shared, so that is what this checks.
+ */
 async function expect40VhCard(card: Locator, shouldScroll = false): Promise<void> {
 	await expect(card).toBeVisible({ timeout: 60_000 })
 	const metrics = await card.evaluate((element) => ({
@@ -254,9 +273,9 @@ async function expect40VhCard(card: Locator, shouldScroll = false): Promise<void
 		viewportHeight: window.innerHeight,
 	}))
 	expect(metrics.className).toContain("max-h-[40vh]")
-	expect(metrics.overflowY).toBe("auto")
+	expect(["auto", "hidden"]).toContain(metrics.overflowY)
 	expect(metrics.clientHeight).toBeLessThanOrEqual(metrics.viewportHeight * 0.4 + 1)
-	if (shouldScroll) {
+	if (shouldScroll && metrics.overflowY === "auto") {
 		expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight)
 	}
 	expect(Number.parseFloat(metrics.maxHeight)).toBeCloseTo(metrics.viewportHeight * 0.4, 0)
@@ -326,7 +345,7 @@ e2e(
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
 			enabled: true,
-			mode: "WEB_SEARCH_MODE_AUTO",
+			mode: "WEB_TOOLS_MODE_AUTO",
 			supportsWebSearch: true,
 		})
 		await configureNormalApprovalMode(dlineDir)
@@ -411,7 +430,7 @@ e2e(
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
 			enabled: true,
-			mode: "WEB_SEARCH_MODE_AUTO",
+			mode: "WEB_TOOLS_MODE_AUTO",
 			supportsWebSearch: true,
 		})
 		await configureNormalApprovalMode(dlineDir)
@@ -488,7 +507,7 @@ e2e(
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
 			enabled: true,
-			mode: "WEB_SEARCH_MODE_AUTO",
+			mode: "WEB_TOOLS_MODE_AUTO",
 			supportsWebSearch: true,
 		})
 		await configureNormalApprovalMode(dlineDir)
@@ -564,7 +583,7 @@ e2e(
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
 			enabled: true,
-			mode: "WEB_SEARCH_MODE_AUTO",
+			mode: "WEB_TOOLS_MODE_AUTO",
 			supportsWebSearch: true,
 		})
 		const searchQuery = "Dline multi action hosted search"
@@ -676,7 +695,7 @@ e2e(
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
 			enabled: true,
-			mode: "WEB_SEARCH_MODE_AUTO",
+			mode: "WEB_TOOLS_MODE_AUTO",
 			supportsWebSearch: true,
 		})
 		await configureNormalApprovalMode(dlineDir)
@@ -789,7 +808,7 @@ e2e(
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
 			enabled: true,
-			mode: "WEB_SEARCH_MODE_AUTO",
+			mode: "WEB_TOOLS_MODE_AUTO",
 			supportsWebSearch: true,
 		})
 		await configureSearxngSearch(dlineDir, server.baseUrl)
@@ -857,7 +876,7 @@ e2e(
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
 			enabled: true,
-			mode: "WEB_SEARCH_MODE_FORCE_REMOTE",
+			mode: "WEB_TOOLS_MODE_FORCE_REMOTE",
 			supportsWebSearch: true,
 		})
 		const query = "Dline forced remote hosted search"
@@ -902,7 +921,7 @@ e2e(
 			apiFormat: "OPENAI_RESPONSES",
 			baseUrl: getE2EMockProviderBaseUrl(server.baseUrl, "deepseek-responses"),
 			enabled: true,
-			mode: "WEB_SEARCH_MODE_AUTO",
+			mode: "WEB_TOOLS_MODE_AUTO",
 		})
 		const query = "Dline DeepSeek hosted search"
 		const completion = "E2E_DEEPSEEK_HOSTED_WEB_SEARCH_OK"
@@ -944,7 +963,7 @@ e2e(
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockAnthropic, {
 			enabled: true,
-			mode: "WEB_SEARCH_MODE_AUTO",
+			mode: "WEB_TOOLS_MODE_AUTO",
 			supportsWebSearch: true,
 		})
 		const query = "Dline Anthropic hosted search"
@@ -987,7 +1006,7 @@ e2e(
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockAnthropic, {
 			enabled: true,
-			mode: "WEB_SEARCH_MODE_AUTO",
+			mode: "WEB_TOOLS_MODE_AUTO",
 			supportsWebSearch: true,
 		})
 		const completion = "E2E_ANTHROPIC_NO_HOSTED_ACTION_OK"
@@ -1030,7 +1049,7 @@ e2e(
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockAnthropic, {
 			enabled: true,
-			mode: "WEB_SEARCH_MODE_AUTO",
+			mode: "WEB_TOOLS_MODE_AUTO",
 			supportsWebSearch: true,
 		})
 		const completion = "E2E_ANTHROPIC_ORPHAN_HOSTED_RESULT_IGNORED"
@@ -1072,7 +1091,7 @@ e2e(
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAi, {
 			enabled: true,
-			mode: "WEB_SEARCH_MODE_AUTO",
+			mode: "WEB_TOOLS_MODE_AUTO",
 			supportsWebSearch: true,
 		})
 		await configureSearxngSearch(dlineDir, server.baseUrl)
@@ -1137,7 +1156,7 @@ e2e(
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
 			enabled: true,
-			mode: "WEB_SEARCH_MODE_FORCE_LOCAL",
+			mode: "WEB_TOOLS_MODE_FORCE_LOCAL",
 			supportsWebSearch: true,
 		})
 		await configureSearxngSearch(dlineDir, server.baseUrl)
@@ -1178,7 +1197,7 @@ e2e(
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
 			enabled: true,
-			mode: "WEB_SEARCH_MODE_FORCE_LOCAL",
+			mode: "WEB_TOOLS_MODE_FORCE_LOCAL",
 			supportsWebSearch: true,
 		})
 		await configureSearxngSearch(dlineDir, server.baseUrl)
@@ -1256,7 +1275,7 @@ e2e(
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
 			enabled: true,
-			mode: "WEB_SEARCH_MODE_FORCE_LOCAL",
+			mode: "WEB_TOOLS_MODE_FORCE_LOCAL",
 			supportsWebSearch: true,
 		})
 		await configureSearxngSearch(dlineDir, server.baseUrl)
@@ -1314,7 +1333,7 @@ e2e(
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
 			enabled: true,
-			mode: "WEB_SEARCH_MODE_FORCE_LOCAL",
+			mode: "WEB_TOOLS_MODE_FORCE_LOCAL",
 			supportsWebSearch: true,
 		})
 		const url = `${server.baseUrl}/mock/web-fetch/page`
@@ -1389,7 +1408,7 @@ for (const testCase of webFetchCases) {
 			expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 			await prepareRuntimeProfile(dlineDir, testCase.profileName, {
 				enabled: true,
-				mode: "WEB_SEARCH_MODE_AUTO",
+				mode: "WEB_TOOLS_MODE_AUTO",
 				supportsWebSearch: true,
 			})
 			await prepareWebFetchBrowser(dlineHomeDir)
@@ -1472,7 +1491,7 @@ e2e(
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
 			enabled: true,
-			mode: "WEB_SEARCH_MODE_FORCE_LOCAL",
+			mode: "WEB_TOOLS_MODE_FORCE_LOCAL",
 			supportsWebSearch: true,
 		})
 		await prepareWebFetchBrowser(dlineHomeDir)
@@ -1598,7 +1617,7 @@ e2e(
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
 			enabled: true,
-			mode: "WEB_SEARCH_MODE_AUTO",
+			mode: "WEB_TOOLS_MODE_AUTO",
 			supportsWebSearch: true,
 		})
 		const errorMessage = "E2E Web Fetch blocked by PreToolUse hook"
@@ -1648,7 +1667,7 @@ e2e(
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAi, {
 			enabled: true,
-			mode: "WEB_SEARCH_MODE_AUTO",
+			mode: "WEB_TOOLS_MODE_AUTO",
 			supportsWebSearch: true,
 		})
 		await prepareWebFetchBrowser(dlineHomeDir)
@@ -1706,21 +1725,21 @@ const disabledCases = [
 		profileName: E2E_PROFILE_NAMES.mockOpenAiResponses,
 		target: "openai-compatible-responses" as MockApiTarget,
 		enabled: false,
-		mode: "WEB_SEARCH_MODE_AUTO" as StoredWebSearchMode,
+		mode: "WEB_TOOLS_MODE_AUTO" as StoredWebToolsMode,
 	},
 	{
 		title: "the provider mode is Off",
 		profileName: E2E_PROFILE_NAMES.mockOpenAi,
 		target: "openai-compatible-chat" as MockApiTarget,
 		enabled: true,
-		mode: "WEB_SEARCH_MODE_FORCE_OFF" as StoredWebSearchMode,
+		mode: "WEB_TOOLS_MODE_FORCE_OFF" as StoredWebToolsMode,
 	},
 	{
 		title: "Force Remote is selected for an unsupported transport",
 		profileName: E2E_PROFILE_NAMES.mockOpenAi,
 		target: "openai-compatible-chat" as MockApiTarget,
 		enabled: true,
-		mode: "WEB_SEARCH_MODE_FORCE_REMOTE" as StoredWebSearchMode,
+		mode: "WEB_TOOLS_MODE_FORCE_REMOTE" as StoredWebToolsMode,
 	},
 ] as const
 
