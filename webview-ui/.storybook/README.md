@@ -96,33 +96,21 @@ export const WithDifferentState: Story = {
 
 ### Advanced Story Patterns
 
-For complex components requiring context or state, use decorators:
+For complex components requiring context or state, use the shared typed decorators and fixtures rather than assembling a partial context object manually:
 
 ```typescript
-import { ExtensionStateContext } from "@/context/ExtensionStateContext"
-
-const createMockState = (overrides = {}) => ({
-  // Mock state properties
-  clineMessages: [],
-  taskHistory: [],
-  ...overrides
-})
+import { createStorybookDecorator } from "@/config/StorybookDecorator"
 
 export const WithMockState: Story = {
   decorators: [
-    (Story) => {
-      const mockState = createMockState({ 
-        clineMessages: mockMessages 
-      })
-      return (
-        <ExtensionStateContext.Provider value={mockState}>
-          <Story />
-        </ExtensionStateContext.Provider>
-      )
-    }
-  ]
+    createStorybookDecorator({
+      clineMessages: mockMessages,
+    }),
+  ],
 }
 ```
+
+`Views/Chat` stories use `createChatStoryState` from `src/config/storybook/chatStoryFixtures.ts`. An active task fixture must keep `taskTitleMessage`, `currentTaskItem`, `taskViewState`, `clineMessages`, and message-window counts consistent. Do not put the task title back into the body message window or bypass the contract with `any`.
 
 ### Story Organization
 
@@ -132,6 +120,18 @@ export const WithMockState: Story = {
 - **Multiple Stories**: Show different states, props, or use cases
 
 ## Writing UI Tests
+
+### Automated Storybook Render Tests
+
+Run the executable Chat rendering suite from the repository root:
+
+```bash
+npx playwright test -c playwright.storybook.config.ts
+```
+
+The Playwright config starts Storybook automatically, opens stories through their direct iframe URLs, and verifies that active Chat stories do not fall back to the Welcome state. It also checks representative interaction actions and timeline-card content. The suite currently covers all active `Views/Chat` stories.
+
+`play` functions remain useful for story-local interaction examples, but a `test` tag or `play` function alone is not a CI result. Rendering regressions must be covered by the Playwright suite or another explicitly executed test command.
 
 ### Interactive Testing with `play` Functions
 
@@ -207,7 +207,9 @@ export const WelcomeScreen: Story = {
 1. **Test User Flows**: Focus on how users interact with components
 2. **Verify Accessibility**: Ensure components work with keyboard and screen readers
 3. **Test Responsive Behavior**: Use different viewport sizes
-4. **Mock External Dependencies**: Use mocks for API calls, file operations
+4. **Mock External Dependencies**: Use mocks for API calls and file operations
+5. **Keep State Coherent**: Active Chat fixtures must project the task header and interaction state together
+6. **Assert the Branch**: Active stories should verify `Type a message...` is present and the Welcome task input is absent
 
 ### Performance Tips
 

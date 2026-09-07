@@ -1,0 +1,105 @@
+import { expect, type Page, test } from "@playwright/test"
+
+const ACTIVE_CHAT_STORIES = [
+	"active-conversation",
+	"streaming-response",
+	"long-conversation",
+	"error-state",
+	"auto-approval-enabled",
+	"plan-mode",
+	"browser-automation",
+	"tool-approval",
+	"tool-save",
+	"command-execution",
+	"command-output",
+	"api-request-failed",
+	"mistake-limit-reached",
+	"completion-result",
+	"browser-action-launch",
+	"mcp-server-usage",
+	"followup",
+	"resume-task",
+	"new-task-with-context",
+	"api-request-active",
+	"make-plan-response",
+	"condense-conversation",
+	"report-bug",
+	"resume-completed-task",
+	"shell-integration-warning-with-suggestion",
+	"shell-integration-warning-background-enabled",
+	"shell-integration-warning",
+	"error-retry-in-progress",
+	"error-retry-failed",
+	"generate-explanation-in-progress",
+	"generate-explanation-complete",
+	"generate-explanation-error",
+	"generate-explanation-cancelled",
+	"diff-edit-new-format",
+	"diff-edit-new-format-streaming",
+	"diff-edit-replace-diff-format",
+	"diff-edit-replace-diff-format-streaming",
+	"diff-edit-mixed-formats",
+] as const
+
+const ACTION_EXPECTATIONS = [
+	{ story: "tool-approval", actions: ["Approve", "Reject"] },
+	{ story: "tool-save", actions: ["Approve", "Reject"] },
+	{ story: "command-execution", actions: ["Approve", "Reject"] },
+	{ story: "api-request-failed", actions: ["Retry", "Start New Task"] },
+	{ story: "mistake-limit-reached", actions: ["Process Anyway", "Start New Task"] },
+	{ story: "completion-result", actions: ["Start New Task"] },
+	{ story: "browser-action-launch", actions: ["Approve", "Reject"] },
+	{ story: "mcp-server-usage", actions: ["Approve", "Reject"] },
+	{ story: "resume-task", actions: ["Resume"] },
+	{ story: "new-task-with-context", actions: ["Start New Task", "Regenerate Context"] },
+	{ story: "condense-conversation", actions: ["Condense Conversation", "Regenerate Summary"] },
+	{ story: "report-bug", actions: ["Report Bug"] },
+	{ story: "resume-completed-task", actions: ["Start New Task"] },
+] as const
+
+async function openChatStory(page: Page, story: string): Promise<string[]> {
+	const pageErrors: string[] = []
+	page.on("pageerror", (error) => {
+		if (error.message !== "The user aborted a request.") {
+			pageErrors.push(error.message)
+		}
+	})
+	const response = await page.goto(`/iframe.html?id=views-chat--${story}&viewMode=story`)
+	expect(response?.ok()).toBe(true)
+	await expect(page.locator("#storybook-root")).not.toBeEmpty({ timeout: 60_000 })
+	return pageErrors
+}
+
+test.describe("Views/Chat active task rendering", () => {
+	for (const story of ACTIVE_CHAT_STORIES) {
+		test(`${story} renders the active ChatArea instead of Welcome`, async ({ page }) => {
+			const pageErrors = await openChatStory(page, story)
+
+			await expect(page.getByPlaceholder("Type a message...")).toBeVisible()
+			await expect(page.getByPlaceholder("Type your task here...")).toHaveCount(0)
+			await expect(page.getByText("Task interaction state is unavailable", { exact: true })).toHaveCount(0)
+			expect(pageErrors).toEqual([])
+		})
+	}
+})
+
+test.describe("Views/Chat interaction actions", () => {
+	for (const expectation of ACTION_EXPECTATIONS) {
+		test(`${expectation.story} projects its interaction actions`, async ({ page }) => {
+			const pageErrors = await openChatStory(page, expectation.story)
+
+			for (const action of expectation.actions) {
+				await expect(page.locator(`vscode-button[aria-label="${action}"]`)).toBeVisible()
+			}
+			expect(pageErrors).toEqual([])
+		})
+	}
+})
+
+test("representative timeline cards render their scenario content", async ({ page }) => {
+	const pageErrors = await openChatStory(page, "diff-edit-new-format")
+
+	await expect(page.getByText("src/auth/types.ts", { exact: false }).first()).toBeVisible()
+	await expect(page.getByText("src/auth/login.ts", { exact: false }).first()).toBeVisible()
+	expect(pageErrors).toEqual([])
+})

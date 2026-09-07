@@ -1,12 +1,13 @@
 import { HeroUIProvider } from "@heroui/react"
 import { DEFAULT_AUTO_APPROVAL_SETTINGS } from "@shared/AutoApprovalSettings"
 import { type ApiConfiguration, bedrockModels } from "@shared/api"
-import type { ClineMessage, ClineSayTool } from "@shared/ExtensionMessage"
+import type { ClineAsk, ClineMessage, ClineSayTool } from "@shared/ExtensionMessage"
 import type { HistoryItem } from "@shared/HistoryItem"
-import type { Meta, StoryObj } from "@storybook/react-vite"
+import type { Decorator, Meta, StoryObj } from "@storybook/react-vite"
 import { useEffect, useMemo, useState } from "react"
 import { expect, userEvent, within } from "storybook/test"
-import { ExtensionStateContext, useExtensionState } from "@/context/ExtensionStateContext"
+import { type ChatStoryStateOverrides, createChatStoryState } from "@/config/storybook/chatStoryFixtures"
+import { ExtensionStateContext, type ExtensionStateContextType, useExtensionState } from "@/context/ExtensionStateContext"
 import ChatView from "./components/chat/ChatView"
 import OnboardingView from "./components/onboarding/OnboardingView"
 
@@ -31,7 +32,7 @@ const MockApp = () => {
 }
 
 // Constants
-const SIDEBAR_CLASS = "flex flex-col justify-center h-[60%] w-[80%] overflow-hidden"
+const STORY_SURFACE_CLASS = "flex h-[800px] max-h-screen w-[700px] max-w-full flex-col overflow-hidden"
 const ExtensionStateProviderMock = ExtensionStateContext.Provider
 
 const meta: Meta<typeof MockApp> = {
@@ -72,8 +73,8 @@ The ChatView component is the main interface for interacting with Cline. It prov
 	},
 	decorators: [
 		(Story) => (
-			<div className="w-full h-full flex justify-center items-center overflow-hidden">
-				<div className={SIDEBAR_CLASS}>
+			<div className="flex min-h-screen w-full items-center justify-center overflow-hidden">
+				<div className={STORY_SURFACE_CLASS}>
 					<Story />
 				</div>
 			</div>
@@ -159,7 +160,17 @@ const createSayToolMessage = (
 	...overrides,
 })
 
-const createApiReqMessage = (minutesAgo: number, request: string, metrics: any = {}) =>
+type ApiRequestMetrics = Partial<{
+	tokensIn: number
+	tokensOut: number
+	cacheWrites: number
+	cacheReads: number
+	size: number
+	cost: number
+	partial: boolean
+}>
+
+const createApiReqMessage = (minutesAgo: number, request: string, metrics: ApiRequestMetrics = {}) =>
 	createMessage(
 		minutesAgo,
 		"say",
@@ -224,8 +235,7 @@ const mockStreamingMessages: ClineMessage[] = [
 ]
 
 // Reusable state and decorator factories
-const createMockState = (overrides: any = {}) => ({
-	...useExtensionState(),
+const DEFAULT_STORY_STATE: ChatStoryStateOverrides = {
 	useAutoCondense: true,
 	version: "0.0.1-stories",
 	welcomeViewCompleted: true,
@@ -237,26 +247,27 @@ const createMockState = (overrides: any = {}) => ({
 	openRouterModels: bedrockModels,
 	showAnnouncement: false,
 	backgroundEditEnabled: false,
-	...overrides,
-})
+}
+
+const createMockState = (
+	baseState: ExtensionStateContextType,
+	overrides: ChatStoryStateOverrides = {},
+): ExtensionStateContextType => createChatStoryState(baseState, { ...DEFAULT_STORY_STATE, ...overrides })
 
 const createStoryDecorator =
-	(stateOverrides: any = {}) =>
-	(Story: any) => {
-		const mockState = useMemo(() => createMockState(stateOverrides), [])
+	(stateOverrides: ChatStoryStateOverrides = {}): Decorator =>
+	(Story) => {
+		const baseState = useExtensionState()
+		const mockState = useMemo(() => createMockState(baseState, stateOverrides), [baseState, stateOverrides])
 		return (
 			<ExtensionStateProviderMock value={mockState}>
-				<div className="w-full h-full flex justify-center items-center overflow-hidden">
-					<div className={SIDEBAR_CLASS}>
-						<Story />
-					</div>
-				</div>
+				<Story />
 			</ExtensionStateProviderMock>
 		)
 	}
 
 export const Welcome: Story = {
-	decorators: [createStoryDecorator({ welcomeViewCompleted: false, showWelcome: true, clineMessages: [] })],
+	decorators: [createStoryDecorator({ activeTask: false, welcomeViewCompleted: false, showWelcome: true, clineMessages: [] })],
 	parameters: {
 		docs: {
 			description: {
@@ -282,6 +293,7 @@ export const Welcome: Story = {
 export const Onboarding: Story = {
 	decorators: [
 		createStoryDecorator({
+			activeTask: false,
 			welcomeViewCompleted: false,
 			showWelcome: true,
 			clineMessages: [],
@@ -361,7 +373,9 @@ export const Onboarding: Story = {
 }
 
 export const EmptyState: Story = {
-	decorators: [createStoryDecorator({ clineMessages: [], taskHistory: [], isNewUser: true, showAnnouncement: true })],
+	decorators: [
+		createStoryDecorator({ activeTask: false, clineMessages: [], taskHistory: [], isNewUser: true, showAnnouncement: true }),
+	],
 	parameters: {
 		docs: {
 			description: {
@@ -373,7 +387,13 @@ export const EmptyState: Story = {
 
 export const ReturnUser: Story = {
 	decorators: [
-		createStoryDecorator({ clineMessages: [], taskHistory: mockTaskHistory, isNewUser: true, showAnnouncement: false }),
+		createStoryDecorator({
+			activeTask: false,
+			clineMessages: [],
+			taskHistory: mockTaskHistory,
+			isNewUser: true,
+			showAnnouncement: false,
+		}),
 	],
 	parameters: {
 		docs: {
@@ -385,7 +405,7 @@ export const ReturnUser: Story = {
 }
 
 export const ActiveConversation: Story = {
-	decorators: [createStoryDecorator({ task: mockTaskHistory[0], currentTaskItem: mockTaskHistory[0] })],
+	decorators: [createStoryDecorator({ currentTaskItem: mockTaskHistory[0] })],
 	parameters: {
 		docs: {
 			description: {
@@ -498,12 +518,11 @@ const createErrorMessages = () => [
 	),
 ]
 
-const createAskMessage = (type: string, text: string, streamingFailedMessage?: string) => ({
+const createAskMessage = (type: ClineAsk, text: string): ClineMessage => ({
 	ts: Date.now() - 60000,
-	type: "ask" as const,
+	type: "ask",
 	ask: type,
 	text,
-	streamingFailedMessage,
 })
 
 export const ErrorState: Story = {
@@ -642,13 +661,7 @@ export const ToolSave: Story = {
 }
 
 // Quick story generators for common patterns
-const quickStory = (
-	name: string,
-	askType: string,
-	text: string,
-	description: string,
-	streamingFailedMessage?: string,
-): Story => ({
+const quickStory = (name: string, askType: ClineAsk, text: string, description: string): Story => ({
 	decorators: [
 		createStoryDecorator({
 			clineMessages: [
@@ -656,7 +669,7 @@ const quickStory = (
 				createMessage(6, "say", "task", `Help with ${name.toLowerCase()}`),
 				createMessage(5, "say", "reasoning", `Thinking about helping user with ${name.toLowerCase()}`),
 				createMessage(4.7, "say", "text", `I'll help you with ${name.toLowerCase()}.`),
-				createAskMessage(askType, text, streamingFailedMessage),
+				createAskMessage(askType, text),
 			],
 		}),
 	],
@@ -1005,10 +1018,12 @@ export const GenerateExplanationCancelled: Story = {
 const createNewFormatMultiFileMessages = () => [
 	createMessage(5, "say", "task", "Help me refactor the authentication module"),
 	createMessage(4.7, "say", "text", "I'll help you refactor the authentication module. Let me make the necessary changes."),
-	createSayToolMessage(4.3, {
-		tool: "editedExistingFile",
-		path: "src/auth/types.ts",
-		content: `*** Begin Patch
+	createSayToolMessage(
+		4.3,
+		{
+			tool: "editedExistingFile",
+			path: "src/auth/types.ts",
+			content: `*** Begin Patch
 *** Add File: src/auth/types.ts
 +export interface User {
 +  id: string
@@ -1044,8 +1059,9 @@ const createNewFormatMultiFileMessages = () => [
 -
 -module.exports = { deprecatedHelper }
 *** End Patch`,
-	}),
-	{ partial: false },
+		},
+		{ partial: false },
+	),
 ]
 
 export const DiffEditNewFormat: Story = {
@@ -1062,11 +1078,15 @@ export const DiffEditNewFormat: Story = {
 export const DiffEditNewFormatStreaming: Story = {
 	decorators: [
 		(Story) => {
+			const baseState = useExtensionState()
 			const [messages, setMessages] = useState<ClineMessage[]>([
 				createMessage(5, "say", "task", "Add TypeScript types to the user module"),
 				createMessage(4.7, "say", "text", "I'll add TypeScript types to improve type safety."),
 			])
-			const mockState = useMemo(() => createMockState({ backgroundEditEnabled: true, clineMessages: messages }), [messages])
+			const mockState = useMemo(
+				() => createMockState(baseState, { backgroundEditEnabled: true, clineMessages: messages }),
+				[baseState, messages],
+			)
 
 			useEffect(() => {
 				// Simulate streaming: progressively add more content
@@ -1150,11 +1170,7 @@ export const DiffEditNewFormatStreaming: Story = {
 
 			return (
 				<ExtensionStateProviderMock value={mockState}>
-					<div className="w-full h-full flex justify-center items-center overflow-hidden">
-						<div className={SIDEBAR_CLASS}>
-							<Story />
-						</div>
-					</div>
+					<Story />
 				</ExtensionStateProviderMock>
 			)
 		},
@@ -1202,11 +1218,15 @@ export const DiffEditReplaceDiffFormat: Story = {
 export const DiffEditReplaceDiffFormatStreaming: Story = {
 	decorators: [
 		(Story) => {
+			const baseState = useExtensionState()
 			const [messages, setMessages] = useState<ClineMessage[]>([
 				createMessage(5, "say", "task", "Update error handling"),
 				createMessage(4.7, "say", "text", "I'll improve the error handling in the API client."),
 			])
-			const mockState = useMemo(() => createMockState({ backgroundEditEnabled: true, clineMessages: messages }), [messages])
+			const mockState = useMemo(
+				() => createMockState(baseState, { backgroundEditEnabled: true, clineMessages: messages }),
+				[baseState, messages],
+			)
 
 			useEffect(() => {
 				const completePatch = `------- SEARCH
@@ -1260,11 +1280,7 @@ try {
 
 			return (
 				<ExtensionStateProviderMock value={mockState}>
-					<div className="w-full h-full flex justify-center items-center overflow-hidden">
-						<div className={SIDEBAR_CLASS}>
-							<Story />
-						</div>
-					</div>
+					<Story />
 				</ExtensionStateProviderMock>
 			)
 		},
