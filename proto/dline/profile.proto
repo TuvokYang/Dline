@@ -60,6 +60,12 @@ message ApiProfile {
   // Previous display names retained for name-only Task migration after rename.
   repeated string legacy_names = 91;
 
+  // Storage revision of this profile. One-time repairs that rewrite stored data
+  // run while this trails the reader's current revision, then bump it. Absent
+  // means revision 0, which is what every profile written before the field
+  // existed effectively carries.
+  optional uint32 schema_version = 96;
+
   // Web tools routing policy for this provider profile, covering Web Search and
   // Web Fetch. Omitted legacy values resolve to WEB_TOOLS_MODE_AUTO.
   optional dline.provider.WebToolsMode web_tools_mode = 90;

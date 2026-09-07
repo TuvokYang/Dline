@@ -5,6 +5,7 @@ import path from "node:path"
 import { ModelRegistry } from "@core/model-registry/ModelRegistry"
 import { getAllApiKeys, resetAllStores } from "@core/storage/secrets"
 import { EmptyRequest } from "@shared/proto/dline/common"
+import { ServerTool } from "@shared/proto/dline/models/metadata"
 import { ApiProfile, ImageGenerationSource } from "@shared/proto/dline/profile"
 import PROVIDERS from "@shared/providers/providers.json"
 import { Logger } from "@shared/services/Logger"
@@ -217,9 +218,10 @@ describe("getApiProfiles", () => {
 		expect(profile.imageModelId).to.equal(undefined)
 	})
 
-	it("reinterprets a legacy capabilities.tools override as a hosted tool switch", () => {
-		// Older builds wrote the user's hosted switch into the model's capability
-		// declaration, so an empty list read as "this model has no server tools".
+	it("reads an empty legacy capabilities.tools as no statement about the switches", () => {
+		// Older builds wrote `[]` as their plain default, so it cannot be told
+		// apart from a deliberate "turn everything off". Reading it as one pinned
+		// hosted-capable models to the local route with nothing in the UI to undo.
 		const profile = normalizeApiProfile({
 			id: "legacy-tools-anthropic",
 			name: "Legacy Tools Anthropic",
@@ -229,7 +231,7 @@ describe("getApiProfiles", () => {
 		})
 
 		expect(profile.anthropic?.capabilities).to.not.have.property("tools")
-		expect(profile.anthropic?.disabledServerTools).to.deep.equal([1])
+		expect(profile.anthropic?.disabledServerTools).to.deep.equal([])
 	})
 
 	it("keeps a legacy override that left hosted search on as no disabled tools", () => {
@@ -243,6 +245,35 @@ describe("getApiProfiles", () => {
 
 		expect(profile.anthropic?.capabilities).to.not.have.property("tools")
 		expect(profile.anthropic?.disabledServerTools).to.deep.equal([])
+	})
+
+	it("clears hosted tool disables the earlier misreading already stored", () => {
+		// The legacy declaration is gone by now: a previous run stripped it and
+		// left only the disable list it wrongly inferred.
+		const profile = normalizeApiProfile({
+			id: "already-migrated-anthropic",
+			name: "Already Migrated Anthropic",
+			provider: "anthropic",
+			modelId: "claude-opus-5",
+			anthropic: { capabilities: { contextWindow: 200_000 }, disabledServerTools: ["WEB_SEARCH"] },
+		})
+
+		expect(profile.anthropic?.disabledServerTools).to.deep.equal([])
+		expect(profile.schemaVersion).to.equal(1)
+	})
+
+	it("keeps hosted tool disables chosen after the reset", () => {
+		const profile = normalizeApiProfile({
+			id: "current-revision-anthropic",
+			name: "Current Revision Anthropic",
+			provider: "anthropic",
+			modelId: "claude-opus-5",
+			schemaVersion: 1,
+			anthropic: { capabilities: { contextWindow: 200_000 }, disabledServerTools: ["WEB_SEARCH"] },
+		})
+
+		expect(profile.anthropic?.disabledServerTools).to.deep.equal([ServerTool.WEB_SEARCH])
+		expect(profile.schemaVersion).to.equal(1)
 	})
 
 	it("persists historical Profile names for name-only Task migration", () => {

@@ -49,6 +49,39 @@ import type { Controller } from ".."
 
 const API_PROFILES_FILE = "api_profiles.json"
 
+/**
+ * Storage revision understood by this build.
+ *
+ * Bump this whenever stored profiles need a one-time repair, and handle the
+ * older revisions in `upgradeProfileSchema`.
+ *
+ * 1: clear hosted-tool disables that a legacy empty `capabilities.tools` was
+ *    misread into.
+ */
+const CURRENT_PROFILE_SCHEMA_VERSION = 1
+
+/**
+ * Bring one stored profile up to the current storage revision.
+ *
+ * Revision 1 drops every hosted-tool disable. An earlier migration read a legacy
+ * empty `capabilities.tools` as "the user turned every hosted tool off" and wrote
+ * that reading into the profile, where it is indistinguishable from a real
+ * choice. Resetting the switches is the only way to release the profiles it
+ * pinned to the local route; the revision then keeps the reset from erasing the
+ * choices people make afterwards.
+ */
+function upgradeProfileSchema(profile: ApiProfile): boolean {
+	if ((profile.schemaVersion ?? 0) >= CURRENT_PROFILE_SCHEMA_VERSION) return false
+
+	const providerKey = PROFILE_PROVIDER_KEYS[profile.provider]
+	const config = providerKey ? (profile[providerKey] as { disabledServerTools?: ServerTool[] } | undefined) : undefined
+	if (config?.disabledServerTools?.length) {
+		config.disabledServerTools = []
+	}
+	profile.schemaVersion = CURRENT_PROFILE_SCHEMA_VERSION
+	return true
+}
+
 let apiProfilesWriteQueue: Promise<void> = Promise.resolve()
 let cleanRewriteInProgress = false
 /**
@@ -217,8 +250,15 @@ function clearImageBindings(profile: ApiProfile): boolean {
  * Older builds stored the user's hosted-tool switch inside the model's capability
  * declaration, so a switched-off tool became "this model has no such capability"
  * and the hosted route disappeared for good. The declaration belongs to the
- * registry, so the stored list is reinterpreted as "these were left on" and the
- * complement against the registry declaration becomes the disable list.
+ * registry, so a non-empty stored list is reinterpreted as "these were left on"
+ * and the complement against the registry declaration becomes the disable list.
+ *
+ * An empty list carries no such statement. Those builds also wrote `[]` as their
+ * plain default, so it cannot be told apart from a deliberate "turn everything
+ * off" and reading it as one silently pins a hosted-capable model to the local
+ * route with nothing in the UI to reveal or undo it. Empty therefore means "no
+ * information": the declaration is dropped, the profile follows the model, and
+ * any disable list this same misreading already produced is cleared.
  */
 function migrateLegacyServerToolOverride(profile: ApiProfile): boolean {
 	const providerKey = PROFILE_PROVIDER_KEYS[profile.provider]
@@ -229,6 +269,11 @@ function migrateLegacyServerToolOverride(profile: ApiProfile): boolean {
 	if (!config?.capabilities || storedTools === undefined) return false
 
 	const { tools: _legacyDeclaration, ...capabilities } = config.capabilities
+	if (storedTools.length === 0) {
+		Object.assign(config, { capabilities, disabledServerTools: [] })
+		return true
+	}
+
 	// The registry may not be loaded yet on some startup paths, so fall back to the
 	// static catalog. Without a declaration to compare against, nothing can be
 	// proven disabled and the profile keeps whatever the model offers.
@@ -331,6 +376,7 @@ function normalizeApiProfileWithMigration(profile: unknown): { profile: ApiProfi
 	}
 	if (clearImageBindings(normalized)) migrated = true
 	if (migrateLegacyServerToolOverride(normalized)) migrated = true
+	if (upgradeProfileSchema(normalized)) migrated = true
 	const openai = normalized.openai
 	if (openai && openai.apiFormat === undefined) {
 		const legacyApiFormat = openAiEndpointToApiFormat(openai.apiEndpoint)
