@@ -598,7 +598,12 @@ export class TaskCheckpointManager implements ICheckpointManager {
 			const previousCheckpointHash = lastTaskCompletedMessageCheckpointHash || firstCheckpointMessageCheckpointHash
 
 			if (!previousCheckpointHash) {
-				Logger.error(`[TaskCheckpointManager] No previous checkpoint hash found for task ${this.task.taskId}`)
+				// A task closed before its baseline commit landed has no file
+				// checkpoint to diff against. That is a chat-only history, the same
+				// case the completion message handles above, not a failure.
+				Logger.debug(
+					`[TaskCheckpointManager] No file checkpoint baseline for task ${this.task.taskId}; treating as chat-only history`,
+				)
 				return false
 			}
 

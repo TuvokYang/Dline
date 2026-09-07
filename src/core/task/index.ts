@@ -539,6 +539,13 @@ export class Task {
 	private diffViewProvider: DiffViewProvider
 	public checkpointManager?: ICheckpointManager
 	private initialCheckpointCommitPromise?: Promise<string | undefined>
+	/**
+	 * The initial checkpoint baseline is committed off the request path, but its
+	 * hash still has to reach the message store. Terminate closes that store as a
+	 * durability boundary, so the continuation is tracked here and awaited before
+	 * the close rather than being left to race it.
+	 */
+	private initialCheckpointPersistPromise?: Promise<void>
 	private ignoreController: IgnoreController
 	private commandPermissionController: CommandPermissionController
 	private toolExecutor: ToolExecutor
@@ -4441,6 +4448,10 @@ export class Task {
 	}
 
 	private async persistCheckpointHashToMessage(messageIndex: number, commitHash: string): Promise<void> {
+		// The baseline commit runs off the request path, so the task may already be
+		// tearing down by the time it returns. Writing then would hit a closed store,
+		// and the hash has no reader left anyway.
+		if (this.taskState.abort) return
 		await this.messageStateHandler.updateClineMessage(messageIndex, {
 			lastCheckpointHash: commitHash,
 		})
@@ -5822,6 +5833,11 @@ export class Task {
 			]
 			const asyncCleanups: Array<Promise<void>> = [
 				withTerminateTimeout(taskCancelHookPromise, 5_000, "taskCancelHook"),
+				withTerminateTimeout(
+					this.initialCheckpointPersistPromise ?? Promise.resolve(),
+					5_000,
+					"initialCheckpointPersist",
+				),
 				withTerminateTimeout(this.apiRateMetricsService.dispose(), 5_000, "apiRateMetricsService.dispose"),
 				withTerminateTimeout(this.apiRequestRoundLifecycle.close(), 5_000, "apiRequestRoundLifecycle.close"),
 				withTerminateTimeout(this.activityStore.waitForPersistence(), 5_000, "activityStore.waitForPersistence"),
@@ -8342,9 +8358,13 @@ export class Task {
 					return commitHash
 				})
 				this.initialCheckpointCommitPromise = persistCommitPromise
-				persistCommitPromise.catch((error) => {
-					Logger.error(`[TaskCheckpointManager] Failed to create checkpoint commit for task ${this.taskId}:`, error)
-				})
+				// Terminate waits on this so the hash either lands before the store
+				// closes or is skipped; either way it never writes into a closed store.
+				this.initialCheckpointPersistPromise = persistCommitPromise
+					.catch((error) => {
+						Logger.error(`[TaskCheckpointManager] Failed to create checkpoint commit for task ${this.taskId}:`, error)
+					})
+					.then(() => undefined)
 			}
 		} else if (
 			isFirstRequest &&

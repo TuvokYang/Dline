@@ -11,6 +11,7 @@ describe("Task initial checkpoint hash persistence", () => {
 		const flushMessageUpdate = vi.fn().mockResolvedValue(undefined)
 		const postStateToWebview = vi.fn().mockResolvedValue(undefined)
 		const fakeTask = {
+			taskState: { abort: false },
 			messageStateHandler: { updateClineMessage, flushMessageUpdate },
 			postStateToWebview,
 		}
@@ -30,6 +31,7 @@ describe("Task initial checkpoint hash persistence", () => {
 		const flushError = new Error("checkpoint_jsonl_flush_failed")
 		const postStateToWebview = vi.fn().mockResolvedValue(undefined)
 		const fakeTask = {
+			taskState: { abort: false },
 			messageStateHandler: {
 				updateClineMessage: vi.fn().mockResolvedValue(undefined),
 				flushMessageUpdate: vi.fn().mockRejectedValue(flushError),
@@ -44,6 +46,29 @@ describe("Task initial checkpoint hash persistence", () => {
 				"initial-checkpoint-hash",
 			),
 		).rejects.toBe(flushError)
+		expect(postStateToWebview).not.toHaveBeenCalled()
+	})
+
+	it("skips the write once the task is aborting so it cannot touch a closed store", async () => {
+		// The baseline commit resolves off the request path, so it can return after
+		// terminate already closed the message store as its durability boundary.
+		const updateClineMessage = vi.fn().mockResolvedValue(undefined)
+		const flushMessageUpdate = vi.fn().mockResolvedValue(undefined)
+		const postStateToWebview = vi.fn().mockResolvedValue(undefined)
+		const fakeTask = {
+			taskState: { abort: true },
+			messageStateHandler: { updateClineMessage, flushMessageUpdate },
+			postStateToWebview,
+		}
+
+		await (Task.prototype as unknown as InitialCheckpointHashPersister).persistCheckpointHashToMessage.call(
+			fakeTask,
+			2,
+			"initial-checkpoint-hash",
+		)
+
+		expect(updateClineMessage).not.toHaveBeenCalled()
+		expect(flushMessageUpdate).not.toHaveBeenCalled()
 		expect(postStateToWebview).not.toHaveBeenCalled()
 	})
 })
