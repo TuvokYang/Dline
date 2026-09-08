@@ -701,6 +701,35 @@ export const CommandOutput: Story = {
 	},
 }
 
+export const CommandForegroundLogLink: Story = {
+	decorators: [
+		createStoryDecorator({
+			clineMessages: [
+				createMessage(
+					2,
+					"say",
+					"command",
+					[
+						"python -m tests.random.cli run --suite pyiri --workers 6",
+						"",
+						"Working directory: E:\\workspace\\algorithms\\radar",
+						"Output:",
+						"shard [396, 397] done  395/10000",
+						"📋 Output is large (401 lines, 13KB). Writing to: C:\\Users\\yyk\\AppData\\Local\\Temp\\dline\\command_1788858026082_162.log",
+					].join("\n"),
+				),
+			],
+		}),
+	],
+	parameters: {
+		docs: {
+			description: {
+				story: "Shows a foreground command whose large output moved to an owned log file, rendered as a clickable log link.",
+			},
+		},
+	},
+}
+
 // Batch create remaining optimized stories
 export const ApiRequestFailed = quickStory(
 	"API Request Failed",

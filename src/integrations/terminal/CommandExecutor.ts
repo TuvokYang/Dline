@@ -398,6 +398,19 @@ export class CommandExecutor {
 		// Use shared orchestration logic
 		// The StandaloneTerminalManager handles background command tracking internally
 		let backgroundCommand: BackgroundCommand | undefined
+		/**
+		 * Publish one owned log file so foreground and background commands expose the same
+		 * clickable path in the Activity monitor and in the chat command row.
+		 */
+		const publishCommandLogPath = (logFilePath: string) => {
+			this.callbacks.updateCommandActivity?.(activityId, { logPath: logFilePath })
+			if (!options?.commandTs) return
+			const messages = this.callbacks.getClineMessages() as Array<{ ts?: number }>
+			const commandIndex = messages.findIndex((message) => message.ts === options.commandTs)
+			if (commandIndex !== -1) {
+				void this.callbacks.updateClineMessage(commandIndex, { logPath: logFilePath })
+			}
+		}
 		const markTimedOut = () => {
 			timedOut = true
 			this.callbacks.updateCommandActivity?.(activityId, {
@@ -421,6 +434,7 @@ export class CommandExecutor {
 				this.callbacks.onHandoffAvailabilityChanged?.()
 			},
 			onTimeout: markTimedOut,
+			onLogFileCreated: (logFilePath) => publishCommandLogPath(logFilePath),
 			suppressUserInteraction: options?.suppressUserInteraction,
 			commandTs: options?.commandTs,
 			onOutputFrame: async (frame) => {
@@ -478,15 +492,7 @@ export class CommandExecutor {
 							onTimeout: () => {
 								markTimedOut()
 							},
-							onLogFileCreated: (logFilePath) => {
-								this.callbacks.updateCommandActivity?.(activityId, { logPath: logFilePath })
-								if (!options?.commandTs) return
-								const messages = this.callbacks.getClineMessages() as Array<{ ts?: number }>
-								const commandIndex = messages.findIndex((message) => message.ts === options.commandTs)
-								if (commandIndex !== -1) {
-									void this.callbacks.updateClineMessage(commandIndex, { logPath: logFilePath })
-								}
-							},
+							onLogFileCreated: (logFilePath) => publishCommandLogPath(logFilePath),
 						},
 					)
 				} catch (error) {

@@ -12,6 +12,7 @@ const ACTIVE_CHAT_STORIES = [
 	"tool-save",
 	"command-execution",
 	"command-output",
+	"command-foreground-log-link",
 	"api-request-failed",
 	"mistake-limit-reached",
 	"completion-result",
@@ -109,6 +110,24 @@ test.describe("Views/Chat interaction actions", () => {
 			expect(pageErrors).toEqual([])
 		})
 	}
+})
+
+test("foreground large-output command exposes a clickable log link", async ({ page }) => {
+	const pageErrors = await openChatStory(page, "command-foreground-log-link")
+
+	// The command card starts collapsed; expand it to reach the output region.
+	await page.getByRole("button", { name: "python -m tests.random.cli run --suite pyiri --workers 6" }).click()
+
+	const logLink = page.getByRole("button", { name: "Open log file command_1788858026082_162.log" })
+	await expect(logLink).toBeVisible()
+	await expect(logLink).toHaveAttribute(
+		"title",
+		"Click to open: C:\\Users\\yyk\\AppData\\Local\\Temp\\dline\\command_1788858026082_162.log",
+	)
+	// The raw notice text must be replaced by the link, not rendered as plain output.
+	await expect(page.getByText("Output is large", { exact: false })).toHaveCount(0)
+	await expect(page.getByText("shard [396, 397] done", { exact: false }).first()).toBeVisible()
+	expect(pageErrors).toEqual([])
 })
 
 test("representative timeline cards render their scenario content", async ({ page }) => {

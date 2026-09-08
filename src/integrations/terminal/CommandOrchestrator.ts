@@ -18,6 +18,7 @@ import { processFilesIntoText } from "@integrations/misc/extract-text"
 import { DlineRuntimeFileManager } from "@services/runtime-files"
 import { TerminalHangStage, telemetryService } from "@services/telemetry"
 import * as fs from "fs"
+import { formatCommandLogNotice, formatLargeOutputLogNotice } from "@/shared/command-log-notice"
 import { Logger } from "@/shared/services/Logger"
 import { isCommandCompletionSuccessful } from "./command-completion"
 import { appendCommandLogPath } from "./command-result"
@@ -62,6 +63,7 @@ export async function orchestrateCommandExecution(
 		onOutputFrame,
 		onOutputLine,
 		showShellIntegrationSuggestion,
+		onLogFileCreated,
 		onProceedWhileRunning,
 		startInBackground = false,
 		terminalType = "vscode",
@@ -243,8 +245,13 @@ export async function orchestrateCommandExecution(
 		firstLines = output.slice(0, firstLineLimit)
 		lastLines = lastLineLimit > 0 ? output.slice(-lastLineLimit) : []
 		await writeLargeOutputBatch(output)
+		onLogFileCreated?.(largeOutputLogPath)
 		await presentPartialFrame(
-			`📋 Output is large (${totalLineCount} lines, ${Math.round(totalOutputBytes / 1024)}KB). Writing to: ${largeOutputLogPath}`,
+			formatLargeOutputLogNotice({
+				lineCount: totalLineCount,
+				byteCount: totalOutputBytes,
+				logFilePath: largeOutputLogPath,
+			}),
 		)
 	}
 
@@ -323,7 +330,7 @@ export async function orchestrateCommandExecution(
 		}
 
 		if (trackingResult?.logFilePath) {
-			await say("command_output", `\n📋 Output is being logged to: ${trackingResult.logFilePath}`)
+			await say("command_output", `\n${formatCommandLogNotice(trackingResult.logFilePath)}`)
 		}
 
 		process.resumeOutput?.()

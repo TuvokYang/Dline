@@ -1,8 +1,14 @@
+import { isCommandLogNoticeLine } from "@shared/command-log-notice"
+
 const ANSI_SEQUENCE_PATTERN =
 	/(?:(?:\u001B\[|\u009B)[0-?]*[ -/]*[@-~])|(?:(?:\u001B\]|\u009D)[^\u0007\u009C]*(?:\u0007|\u001B\\|\u009C))/g
 const TERMINAL_TITLE_PATTERN = /(?:\u001B\]|\u009D)0;[^\u0007\u009C]*(?:\u0007|\u001B\\|\u009C)/
-const OUTPUT_METADATA_PATTERN =
-	/^(?:📋 Output is being logged to:|⏱️ Command timed out\. Output is being logged to:|Full output saved to:)\s*/
+const RESULT_METADATA_PATTERN = /^Full output saved to:\s*/
+
+/** Return whether one visible line only carries log-file metadata instead of command output. */
+function isOutputMetadataLine(line: string): boolean {
+	return isCommandLogNoticeLine(line) || RESULT_METADATA_PATTERN.test(line)
+}
 
 function parseShellPromptArtifact(line: string): { environmentLabel?: string } | undefined {
 	if (!TERMINAL_TITLE_PATTERN.test(line)) return undefined
@@ -43,7 +49,7 @@ export function getCommandOutputSummary(output: string | undefined): string | un
 	const lines = visibleOutput.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n")
 	for (let index = lines.length - 1; index >= 0; index--) {
 		const line = lines[index].trim()
-		if (line.length > 0 && !OUTPUT_METADATA_PATTERN.test(line)) return line
+		if (line.length > 0 && !isOutputMetadataLine(line)) return line
 	}
 	return undefined
 }

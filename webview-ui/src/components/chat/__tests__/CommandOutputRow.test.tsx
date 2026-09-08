@@ -220,6 +220,42 @@ describe("CommandOutputRow cancellation", () => {
 		expect(FileServiceClient.openFile).toHaveBeenCalledWith(expect.objectContaining({ value: structuredPath }))
 	})
 
+	it("renders the foreground large-output notice as a clickable log link", () => {
+		const foregroundPath = "C:\\Temp\\dline\\command_1788858026082_162.log"
+		render(
+			<CommandOutputRow
+				{...baseProps}
+				isCollapsed={false}
+				message={{
+					...baseProps.message,
+					text: `run scan${COMMAND_OUTPUT_STRING}shard 396 done\n📋 Output is large (401 lines, 13KB). Writing to: ${foregroundPath}`,
+				}}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: "Open log file command_1788858026082_162.log" }))
+		expect(FileServiceClient.openFile).toHaveBeenCalledWith(expect.objectContaining({ value: foregroundPath }))
+		expect(screen.queryByText(/Output is large/)).not.toBeInTheDocument()
+	})
+
+	it("renders the structured log path even when the output carries no notice line", () => {
+		const structuredPath = "C:\\Temp\\dline\\command_no_notice.log"
+		render(
+			<CommandOutputRow
+				{...baseProps}
+				isCollapsed={false}
+				message={{
+					...baseProps.message,
+					logPath: structuredPath,
+					text: `run scan${COMMAND_OUTPUT_STRING}shard 396 done`,
+				}}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: "Open log file command_no_notice.log" }))
+		expect(FileServiceClient.openFile).toHaveBeenCalledWith(expect.objectContaining({ value: structuredPath }))
+	})
+
 	it("opens a timeout log path from legacy command output", () => {
 		const legacyPath = "C:\\Temp\\timeout.log"
 		render(

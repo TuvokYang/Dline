@@ -645,6 +645,17 @@ e2e(
 		expect(log).toContain(`${outputPrefix}219`)
 		expect(log.match(new RegExp(outputPrefix, "g"))).toHaveLength(220)
 		await expect(sidebar.getByRole("button", { name: "Copy command" }).last()).toBeVisible()
+
+		// A foreground command that moves its complete output to an owned log file must expose
+		// the same clickable log link as a background command, not plain notice text.
+		const logFileName = logPath.split(/[\\/]/).filter(Boolean).at(-1)
+		if (!logFileName) throw new Error("Bounded command log path did not resolve to a file name")
+		const commandLogLink = sidebar.getByRole("button", { name: `Open log file ${logFileName}` }).last()
+		await expect(commandLogLink).toBeVisible({ timeout: 30_000 })
+		await expect(commandLogLink).toHaveAttribute("title", `Click to open: ${logPath}`)
+		await expect(sidebar.getByText("Output is large", { exact: false })).toHaveCount(0)
+		await commandLogLink.click()
+		await expect(page.getByRole("tab", { name: logFileName })).toBeVisible({ timeout: 30_000 })
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )

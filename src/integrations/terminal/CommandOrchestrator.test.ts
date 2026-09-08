@@ -486,6 +486,29 @@ describe("CommandOrchestrator exit status messaging", () => {
 		}
 	})
 
+	it("publishes the owned log path when a foreground command switches to file retention", async () => {
+		const process = new FakeTerminalProcess()
+		const onLogFileCreated = vi.fn()
+		const orchestrationPromise = orchestrateCommandExecution(
+			process.asResultPromise(),
+			createTerminalManager(1),
+			createCallbacks(),
+			{ command: "large-output", activityId: "command_foreground_log_link", onLogFileCreated },
+		)
+
+		process.emitOutput("first", "stdout")
+		process.emitOutput("second", "stdout")
+		process.complete({ exitCode: 0, signal: null })
+		const result = await orchestrationPromise
+
+		try {
+			assert.ok(result.logFilePath)
+			assert.deepEqual(onLogFileCreated.mock.calls, [[result.logFilePath]])
+		} finally {
+			if (result.logFilePath) await fs.rm(result.logFilePath, { force: true })
+		}
+	})
+
 	it("collects stdout and stderr separately in the final tool result", async () => {
 		const process = new FakeTerminalProcess()
 		const orchestrationPromise = orchestrateCommandExecution(

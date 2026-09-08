@@ -1,4 +1,5 @@
 import { COMMAND_OUTPUT_STRING, COMMAND_REQ_APP_STRING } from "@shared/combineCommandSequences"
+import { COMMAND_LOG_NOTICE_LABEL, findCommandLogNotice } from "@shared/command-log-notice"
 import { ClineMessage } from "@shared/ExtensionMessage"
 import AnsiUp from "ansi-to-html"
 import DOMPurify from "dompurify"
@@ -65,12 +66,11 @@ export const CommandOutputContent = memo(
 			return null
 		}
 
-		const logPathPattern = /(?:📋 Output is being logged to:|⏱️ Command timed out\. Output is being logged to:)\s*([^\n]+)/
-		const logFilePathMatch = displayOutput.match(logPathPattern)
-		const logFilePath = logPath ?? (logFilePathMatch ? logFilePathMatch[1].trim() : null)
-		const logPathLineStart = displayOutput.search(
-			/(?:📋 Output is being logged to:|⏱️ Command timed out\. Output is being logged to:)/,
-		)
+		// The notice is the only in-output marker; `logPath` is the structured fact and wins.
+		const logNotice = findCommandLogNotice(displayOutput)
+		const logFilePath = logPath ?? logNotice?.logFilePath ?? null
+		const logPathLineStart = logNotice?.start ?? -1
+		const logPathLineEnd = logNotice?.end ?? -1
 
 		/**
 		 * Render ANSI-colored output as sanitized HTML.
@@ -101,42 +101,24 @@ export const CommandOutputContent = memo(
 		})
 
 		const renderOutput = () => {
-			// If output contains ANSI escape sequences, render with color support
-			if (hasAnsiSequences(displayOutput)) {
-				if (!logFilePath) {
-					return renderAnsiOutput(displayOutput)
-				}
-				// Split around log file path and render each segment with ANSI support
-				const logPathLineEnd = logPathLineStart >= 0 ? displayOutput.indexOf("\n", logPathLineStart) : -1
-				const beforeLogPath = logPathLineStart >= 0 ? displayOutput.substring(0, logPathLineStart) : displayOutput
-				const afterLogPath = logPathLineEnd !== -1 ? displayOutput.substring(logPathLineEnd) : ""
-				return (
-					<div className={outputGroupClassName}>
-						{beforeLogPath && renderAnsiOutput(beforeLogPath)}
-						<div
-							className={logRowClassName}
-							data-testid={presentation === "activity" ? "activity-log-row" : undefined}>
-							<OpenFilePathLink filePath={logFilePath} label="📋 Output is being logged to:" />
-						</div>
-						{afterLogPath && renderAnsiOutput(afterLogPath)}
-					</div>
-				)
+			const renderSegment = hasAnsiSequences(displayOutput)
+				? renderAnsiOutput
+				: (text: string) => <CodeBlock forceWrap={true} source={`${"```"}shell\n${text}\n${"```"}`} />
+
+			if (!logFilePath) {
+				return renderSegment(displayOutput)
 			}
 
-			// Fallback: no ANSI sequences, use standard CodeBlock rendering
-			if (!logFilePath) {
-				return <CodeBlock forceWrap={true} source={`${"```"}shell\n${displayOutput}\n${"```"}`} />
-			}
-			const logPathLineEnd = logPathLineStart >= 0 ? displayOutput.indexOf("\n", logPathLineStart) : -1
+			// Replace the in-output notice line, when present, with one clickable log link.
 			const beforeLogPath = logPathLineStart >= 0 ? displayOutput.substring(0, logPathLineStart) : displayOutput
-			const afterLogPath = logPathLineEnd !== -1 ? displayOutput.substring(logPathLineEnd) : ""
+			const afterLogPath = logPathLineStart >= 0 && logPathLineEnd !== -1 ? displayOutput.substring(logPathLineEnd) : ""
 			return (
 				<div className={outputGroupClassName}>
-					{beforeLogPath && <CodeBlock forceWrap={true} source={`${"```"}shell\n${beforeLogPath}\n${"```"}`} />}
+					{beforeLogPath && renderSegment(beforeLogPath)}
 					<div className={logRowClassName} data-testid={presentation === "activity" ? "activity-log-row" : undefined}>
-						<OpenFilePathLink filePath={logFilePath} label="📋 Output is being logged to:" />
+						<OpenFilePathLink filePath={logFilePath} label={COMMAND_LOG_NOTICE_LABEL} />
 					</div>
-					{afterLogPath && <CodeBlock forceWrap={true} source={`${"```"}shell\n${afterLogPath}\n${"```"}`} />}
+					{afterLogPath && renderSegment(afterLogPath)}
 				</div>
 			)
 		}

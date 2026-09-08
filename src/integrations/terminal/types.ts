@@ -538,6 +538,8 @@ export interface OrchestrationOptions {
 	handoffRequest?: { promise: Promise<void>; resolve: () => void }
 	/** Called once when the absolute command deadline is reached. */
 	onTimeout?: () => void
+	/** Called once when this command starts retaining its complete output in an owned log file. */
+	onLogFileCreated?: (logFilePath: string) => void
 	/** Callback to project one coalesced output frame. */
 	onOutputFrame?: (frame: readonly TerminalOutputLine[]) => void | Promise<void>
 	/** @deprecated Use onOutputFrame for bounded runtime work. */
