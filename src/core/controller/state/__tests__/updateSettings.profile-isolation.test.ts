@@ -23,7 +23,11 @@ function createController(): {
 			getGlobalSettingsKey: vi.fn((key: string) => (key === "planActSeparateModelsSetting" ? true : undefined)),
 			clearTaskSetting,
 		},
-		task: { taskId: "history-task", rebuildApiHandler },
+		task: {
+			taskId: "history-task",
+			rebuildApiHandler,
+			flushPromptFreshnessInvalidation: vi.fn().mockResolvedValue(undefined),
+		},
 		restartAccountUsagePolling: vi.fn(),
 		postStateToWebview: vi.fn().mockResolvedValue(undefined),
 	} as unknown as Controller
@@ -55,6 +59,7 @@ describe("updateSettings profile isolation", () => {
 			},
 			task: {
 				commitProfileBindings,
+				flushPromptFreshnessInvalidation: vi.fn().mockResolvedValue(undefined),
 				taskSm: {
 					mode: "act",
 					actModeProfileId: "act-profile-id",
@@ -114,7 +119,11 @@ describe("updateTaskSettings account usage", () => {
 				setTaskSettingsBatch: vi.fn(),
 				setTaskSettings: vi.fn(),
 			},
-			task: { taskId: "task-1", rebuildApiHandler },
+			task: {
+				taskId: "task-1",
+				rebuildApiHandler,
+				flushPromptFreshnessInvalidation: vi.fn().mockResolvedValue(undefined),
+			},
 			restartAccountUsagePolling,
 			postStateToWebview: vi.fn().mockResolvedValue(undefined),
 		} as unknown as Controller

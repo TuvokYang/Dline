@@ -4,6 +4,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { allProviderModels } from "../../../core/api/providers/models"
 import { getOpenAiCodexProfileAuthFileName } from "../../../core/storage/secrets/OpenAiCodexProfileAuthPath"
+import { SETTINGS_MIGRATION_VERSION, SETTINGS_MIGRATION_VERSION_KEY } from "../../../core/storage/settings/settings-types"
 import { getE2EMockProviderBaseUrl, getE2EOpenAIImageBaseUrl } from "../fixtures/server/api"
 
 export const E2E_PROFILE_NAMES = {
@@ -538,8 +539,10 @@ export async function prepareE2EState(options: PrepareE2EStateOptions): Promise<
 		},
 	])
 	await writeJson(apiKeysPath, apiKeys, 0o600)
+	// Seed an already-migrated document: without the current version, startup
+	// replays the legacy migration and revives stale global-state values.
 	await writeJson(path.join(settingsDir, "settings.json"), {
-		__settingsMigrationVersion: 1,
+		[SETTINGS_MIGRATION_VERSION_KEY]: SETTINGS_MIGRATION_VERSION,
 		actModeProfile: selectedProfileName,
 		planModeProfile: selectedProfileName,
 		imageGenerationEnabled: false,

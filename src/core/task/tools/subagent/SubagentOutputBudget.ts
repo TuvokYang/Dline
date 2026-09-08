@@ -6,6 +6,17 @@ import type { TaskConfig } from "../types/TaskConfig"
 export const DEFAULT_SUBAGENT_OUTPUT_TOKEN_RATIO = 0.05
 const TOKEN_ESTIMATE_BYTES = 4
 
+/**
+ * Lower bound for the subagent final-response budget.
+ *
+ * The budget is derived from the main task's remaining context window, so a
+ * nearly full main task drives it to zero and silently erases a subagent result
+ * that may represent many minutes of work. A truncated result is always more
+ * useful to the main task than an empty one, so the budget never drops below
+ * this floor even when the remaining window is exhausted.
+ */
+export const MIN_SUBAGENT_OUTPUT_TOKENS = 512
+
 export type SubagentOutputBudgetSource = "default_ratio" | "configured_ratio" | "configured_absolute"
 
 export interface SubagentOutputBudget {
@@ -72,32 +83,45 @@ export function resolveSubagentOutputBudget(
 				? Math.max(1, Math.ceil(mainTask.remainingTokens * configured))
 				: 0
 			: Math.floor(configured)
+	const cappedOutputTokens = Math.min(mainTask.remainingTokens, Math.max(0, requestedOutputTokens))
 	return {
 		mainTaskContextWindow: mainTask.contextWindow,
 		mainTaskContextTokens: mainTask.contextTokens,
 		mainTaskRemainingTokens: mainTask.remainingTokens,
 		requestedOutputTokens,
-		outputTokens: Math.min(mainTask.remainingTokens, Math.max(0, requestedOutputTokens)),
+		outputTokens: Math.max(MIN_SUBAGENT_OUTPUT_TOKENS, cappedOutputTokens),
 		source,
 	}
 }
 
 /** Add the effective final-response budget to the subagent's user task prompt. */
 export function buildSubagentOutputBudgetPrompt(prompt: string, outputTokens: number): string {
-	return `${prompt.trimEnd()}\n\n# Final Response Budget\nYour final attempt_completion result is returned to the main task. Keep that final result within ${outputTokens.toLocaleString()} tokens. This is a hard output budget; prioritize the most useful findings and omit lower-value detail when necessary.`
+	const budgetSection = [
+		"# Final Response Budget",
+		"Your final attempt_completion result is returned to the main task.",
+		"Keep that final result within " + outputTokens.toLocaleString() + " tokens.",
+		"This is a hard output budget; prioritize the most useful findings and omit lower-value detail.",
+	].join("\n")
+	return prompt.trimEnd() + "\n\n" + budgetSection
 }
 
-/** Truncate text without exceeding the requested estimated token budget. */
+/**
+ * Truncate text without exceeding the requested estimated token budget.
+ *
+ * Truncation stays visible to the main task: a silently shortened result cannot
+ * be distinguished from a complete one, so the caller would keep reasoning on
+ * partial findings without knowing anything was dropped.
+ */
 export function truncateTextToSubagentOutputBudget(text: string, maxTokens: number): string {
 	if (!text || maxTokens <= 0) return ""
 	if (estimateSubagentOutputTokens(text) <= maxTokens) return text
 
-	const marker = `\n...[truncated to ${maxTokens.toLocaleString()} tokens]`
+	const marker = "\n...[truncated to " + maxTokens.toLocaleString() + " tokens; findings exceeded the output budget]"
 	const markerTokens = estimateSubagentOutputTokens(marker)
 	if (markerTokens >= maxTokens) return sliceTextToTokenBudget(text, maxTokens)
 
 	const body = sliceTextToTokenBudget(text, maxTokens - markerTokens)
-	const withMarker = `${body}${marker}`
+	const withMarker = body + marker
 	return estimateSubagentOutputTokens(withMarker) <= maxTokens ? withMarker : sliceTextToTokenBudget(text, maxTokens)
 }
 

@@ -5,6 +5,7 @@ import type { TaskConfig } from "../../types/TaskConfig"
 import {
 	buildSubagentOutputBudgetPrompt,
 	estimateSubagentOutputTokens,
+	MIN_SUBAGENT_OUTPUT_TOKENS,
 	resolveSubagentOutputBudget,
 	truncateTextToSubagentOutputBudget,
 } from "../SubagentOutputBudget"
@@ -44,33 +45,43 @@ describe("SubagentOutputBudget", () => {
 	})
 
 	it("supports an explicit ratio and caps it at the main task remaining context", () => {
-		const budget = resolveSubagentOutputBudget(createConfig(10_000, 9_000), 0.5)
+		const budget = resolveSubagentOutputBudget(createConfig(100_000, 90_000), 0.5)
 
-		assert.equal(budget.requestedOutputTokens, 500)
-		assert.equal(budget.outputTokens, 500)
+		assert.equal(budget.requestedOutputTokens, 5_000)
+		assert.equal(budget.outputTokens, 5_000)
 		assert.equal(budget.source, "configured_ratio")
 	})
 
-	it("keeps a one-token budget when a non-empty remaining window is smaller than the ratio floor", () => {
+	// A nearly full main task used to drive the budget to zero, which silently
+	// erased the subagent result instead of shortening it.
+	it("never drops the budget below the floor when the remaining window is tiny", () => {
 		const budget = resolveSubagentOutputBudget(createConfig(10_000, 9_990))
 
 		assert.equal(budget.mainTaskRemainingTokens, 10)
 		assert.equal(budget.requestedOutputTokens, 1)
-		assert.equal(budget.outputTokens, 1)
+		assert.equal(budget.outputTokens, MIN_SUBAGENT_OUTPUT_TOKENS)
+	})
+
+	it("never drops the budget to zero when the main task window is exhausted", () => {
+		const budget = resolveSubagentOutputBudget(createConfig(10_000, 10_000))
+
+		assert.equal(budget.mainTaskRemainingTokens, 0)
+		assert.equal(budget.requestedOutputTokens, 0)
+		assert.equal(budget.outputTokens, MIN_SUBAGENT_OUTPUT_TOKENS)
 	})
 
 	it("supports an explicit absolute token count and caps it at remaining context", () => {
-		const budget = resolveSubagentOutputBudget(createConfig(10_000, 9_000), 10_240)
+		const budget = resolveSubagentOutputBudget(createConfig(100_000, 90_000), 10_240)
 
 		assert.equal(budget.requestedOutputTokens, 10_240)
-		assert.equal(budget.outputTokens, 1_000)
+		assert.equal(budget.outputTokens, 10_000)
 		assert.equal(budget.source, "configured_absolute")
 	})
 
 	it("falls back to the default ratio for an invalid runtime configuration", () => {
-		const budget = resolveSubagentOutputBudget(createConfig(10_000, 9_000), 1.5)
+		const budget = resolveSubagentOutputBudget(createConfig(1_000_000, 800_000), 1.5)
 
-		assert.equal(budget.outputTokens, 50)
+		assert.equal(budget.outputTokens, 10_000)
 		assert.equal(budget.source, "default_ratio")
 	})
 
@@ -87,5 +98,13 @@ describe("SubagentOutputBudget", () => {
 
 		assert.ok(result.length < source.length)
 		assert.ok(estimateSubagentOutputTokens(result) <= 20)
+	})
+
+	it("marks truncated output so the main task can tell it is incomplete", () => {
+		const source = "abcdefghij".repeat(500)
+		const result = truncateTextToSubagentOutputBudget(source, 200)
+
+		assert.match(result, /truncated to 200 tokens/)
+		assert.ok(estimateSubagentOutputTokens(result) <= 200)
 	})
 })

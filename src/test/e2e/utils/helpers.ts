@@ -70,6 +70,15 @@ export interface E2ETestConfigs {
 	devWebview: boolean
 }
 
+/**
+ * Output-channel errors that never indicate a product regression under test.
+ *
+ * These background refreshes reach the real network, which the mock provider
+ * does not serve. They fire on timers, so they can land in any test's log
+ * window and would otherwise turn every suite into a flaky one.
+ */
+const ALWAYS_ALLOWED_DLINE_OUTPUT_ERRORS: RegExp[] = [/Error fetching OpenRouter models/i, /Failed to refresh MCP marketplace/i]
+
 export class E2ETestHelper {
 	// Constants
 	public static readonly CODEBASE_ROOT_DIR = path.resolve(__dirname, "..", "..", "..", "..")
@@ -364,7 +373,8 @@ export class E2ETestHelper {
 		const suspiciousLines = outputLines.filter((line) =>
 			/\[error\]|uncaught|unhandled|TypeError|ReferenceError|invalid_runtime_event/i.test(line),
 		)
-		const unexpected = suspiciousLines.filter((line) => !allowed.some((pattern) => pattern.test(line)))
+		const ignored = [...ALWAYS_ALLOWED_DLINE_OUTPUT_ERRORS, ...allowed]
+		const unexpected = suspiciousLines.filter((line) => !ignored.some((pattern) => pattern.test(line)))
 		const profileRewriteLines = outputLines.filter((line) =>
 			line.includes("[cleanRewriteApiProfiles] Stripped apiKey fields from api_profiles.json"),
 		)

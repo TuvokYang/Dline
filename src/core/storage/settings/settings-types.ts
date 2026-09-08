@@ -5,6 +5,17 @@ export const SETTINGS_REPOSITORY_REVISION_KEY = "__settingsRepositoryRevision" a
 export const SETTINGS_REPOSITORY_SOURCE_ID_KEY = "__settingsRepositorySourceId" as const
 export const SETTINGS_REPOSITORY_SCHEMA_KEY = "__settingsRepositorySchemaVersion" as const
 
+/**
+ * Marks a Settings document as already migrated out of legacy global state.
+ *
+ * A document carrying at least the current version is authoritative: a key it
+ * omits resolves to its declared default rather than to a stale legacy value.
+ * Fixtures that seed a canonical document must write the current version, or
+ * startup replays the one-time migration and revives those legacy values.
+ */
+export const SETTINGS_MIGRATION_VERSION_KEY = "__settingsMigrationVersion" as const
+export const SETTINGS_MIGRATION_VERSION = 2
+
 export type SettingsRepositoryMetadataKey =
 	| typeof SETTINGS_REPOSITORY_REVISION_KEY
 	| typeof SETTINGS_REPOSITORY_SOURCE_ID_KEY

@@ -667,8 +667,8 @@ e2e(
 					},
 				],
 				expectedRequestIncludes: [
-					"The user can restart it with the Retry control",
-					"do not treat this failure as a completed result",
+					"restart it with the Retry control on the subagent activity",
+					"Do not treat this as a completed result",
 				],
 				expectedRequestExcludes: [sensitiveDiagnostic],
 			},

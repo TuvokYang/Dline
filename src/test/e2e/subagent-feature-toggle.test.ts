@@ -191,6 +191,20 @@ e2e(
 
 		await setSubagentsEnabled(page, sidebar, true)
 		await expect.poll(() => readSubagentsEnabled(dlineDir)).toBe(true)
+
+		// A running Task keeps its frozen prompt: changing Settings only marks it
+		// stale and offers the refresh control. The new tool set reaches the model
+		// once that refresh rebuilds the prompt.
+		const refreshButton = sidebar.locator("button:has(svg.lucide-refresh-cw)").first()
+		await expect(refreshButton.getByTestId("prompt-freshness-warning")).toBeVisible({ timeout: 30_000 })
+		await refreshButton.click()
+		const refreshDialog = sidebar.getByRole("dialog")
+		await expect(refreshDialog.getByRole("heading", { name: "Refresh Prompt Cache", exact: true })).toBeVisible()
+		await refreshDialog.getByRole("button", { name: "Confirm", exact: true }).click()
+		await expect(refreshButton.getByTestId("prompt-freshness-warning")).toHaveCount(0, { timeout: 30_000 })
+		// Refreshing rebuilds the prompt locally; it must not spend an API request.
+		await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(1)
+
 		await sendTask(sidebar, "Use the default subagent now that the feature is enabled.")
 
 		await expect.poll(() => server.getRequestCount("openai-compatible-chat"), { timeout: 60_000 }).toBe(2)
@@ -475,6 +489,17 @@ e2e(
 			await expect(subagentsSwitch(instanceA.sidebar)).toHaveAttribute("aria-checked", "true")
 
 			await instanceA.sidebar.getByRole("button", { name: "Done", exact: true }).click()
+
+			// The active Task keeps its frozen prompt until refreshed, so rebuild it
+			// before asserting that the merged (still enabled) setting reaches the model.
+			const staleRefreshButton = instanceA.sidebar.locator("button:has(svg.lucide-refresh-cw)").first()
+			await expect(staleRefreshButton.getByTestId("prompt-freshness-warning")).toBeVisible({ timeout: 30_000 })
+			await staleRefreshButton.click()
+			const staleRefreshDialog = instanceA.sidebar.getByRole("dialog")
+			await expect(staleRefreshDialog.getByRole("heading", { name: "Refresh Prompt Cache", exact: true })).toBeVisible()
+			await staleRefreshDialog.getByRole("button", { name: "Confirm", exact: true }).click()
+			await expect(staleRefreshButton.getByTestId("prompt-freshness-warning")).toHaveCount(0, { timeout: 30_000 })
+
 			await sendTask(instanceA.sidebar, "Use the default subagent after the stale instance committed another setting.")
 			await expect(instanceA.sidebar.getByText("E2E_STALE_SUBAGENT_PARENT_DONE", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
@@ -561,6 +586,17 @@ Return only the requested result.`,
 		await setNamedSubagentToggle(sidebar, agentName, true)
 		await captureSubagentCapabilityPopup(sidebar, "named-subagent-enabled.png")
 		await sidebar.getByRole("button", { name: "Hide Dline Rules & Workflows", exact: true }).first().click()
+
+		// The active Task keeps its frozen prompt until the refresh control
+		// rebuilds it, so the re-enabled agent reaches the model only after that.
+		const namedRefreshButton = sidebar.locator("button:has(svg.lucide-refresh-cw)").first()
+		await expect(namedRefreshButton.getByTestId("prompt-freshness-warning")).toBeVisible({ timeout: 30_000 })
+		await namedRefreshButton.click()
+		const namedRefreshDialog = sidebar.getByRole("dialog")
+		await expect(namedRefreshDialog.getByRole("heading", { name: "Refresh Prompt Cache", exact: true })).toBeVisible()
+		await namedRefreshDialog.getByRole("button", { name: "Confirm", exact: true }).click()
+		await expect(namedRefreshButton.getByTestId("prompt-freshness-warning")).toHaveCount(0, { timeout: 30_000 })
+		await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(2)
 
 		server.enqueueOpenAiResponses(
 			{

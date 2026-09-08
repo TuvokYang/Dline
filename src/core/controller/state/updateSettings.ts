@@ -10,10 +10,12 @@ import {
 } from "@shared/auto-condense"
 import { Empty } from "@shared/proto/dline/common"
 import { PlanActMode, McpDisplayMode as ProtoMcpDisplayMode, UpdateSettingsRequest } from "@shared/proto/dline/state"
+import type { SettingsKey } from "@shared/storage/state-keys"
 import { OpenaiReasoningEffort } from "@shared/storage/types"
 import { TelemetrySetting } from "@shared/TelemetrySetting"
 import { isLocalSearchEngineId } from "@shared/web-search"
 import { ClineEnv } from "@/config"
+import { settingsAffectPromptFreshness } from "@/core/prompts/system-prompt-cache/PromptFreshnessProjection"
 import { fetchRemoteConfig } from "@/core/storage/remote-config/fetch"
 import { clearRemoteConfig } from "@/core/storage/remote-config/utils"
 import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
@@ -526,9 +528,17 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		await controller.configureGlobalComponents()
 		const configureMs = Math.round(performance.now() - configureStartedAt)
 
-		// Post updated state to webview
+		// A running Task holds a frozen prompt. Settings that the freshness
+		// projection represents must re-evaluate it here, or the next request
+		// keeps advertising the tool set captured before this commit.
+		// `onSyncExternalChange` only covers commits observed from another
+		// process, so a local RPC would otherwise never invalidate.
 		const publishStartedAt = performance.now()
-		await controller.postStateToWebview()
+		if (controller.task && settingsAffectPromptFreshness(fields as SettingsKey[])) {
+			await controller.task.flushPromptFreshnessInvalidation("settings")
+		} else {
+			await controller.postStateToWebview()
+		}
 		recordPerfPhase(
 			PerfDomain.Settings,
 			"rpc_complete",

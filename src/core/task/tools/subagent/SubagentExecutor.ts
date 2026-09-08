@@ -57,7 +57,13 @@ export interface SubagentExecResult {
 	stats: SubagentRunStats
 }
 
-export type SubagentFinishReason = "timeout" | "user"
+/**
+ * Why a subagent run must stop exploring and produce its final result.
+ *
+ * `context_pressure` is raised from inside the run when usage crosses the
+ * convergence threshold; `timeout` and `user` are raised from outside.
+ */
+export type SubagentFinishReason = "timeout" | "user" | "context_pressure"
 
 export interface SubagentRunnerLike {
 	run(prompt: string, onProgress: (update: SubagentProgressUpdate) => void): Promise<SubagentExecResult>

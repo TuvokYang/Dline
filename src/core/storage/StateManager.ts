@@ -50,7 +50,12 @@ import {
 import type { CapabilityScope } from "./settings/capability-toggle-scopes"
 import { capabilityToggleSettingsKey } from "./settings/capability-toggle-store"
 import { SettingsRepository } from "./settings/SettingsRepository"
-import type { SettingsCommit, SettingsSnapshot } from "./settings/settings-types"
+import {
+	SETTINGS_MIGRATION_VERSION,
+	SETTINGS_MIGRATION_VERSION_KEY,
+	type SettingsCommit,
+	type SettingsSnapshot,
+} from "./settings/settings-types"
 import { openTaskHistory, TaskHistory } from "./TaskHistory"
 import { importLegacyTaskHistory } from "./task-history-import"
 import { readGlobalStateFromStorage, readSecretsFromStorage, readWorkspaceStateFromStorage } from "./utils/state-helpers"
@@ -259,8 +264,6 @@ export class StateManager {
 		storage: StorageContext,
 		_globalState: GlobalStateAndSettings,
 	): Promise<void> {
-		const SETTINGS_MIGRATION_VERSION_KEY = "__settingsMigrationVersion"
-		const SETTINGS_MIGRATION_VERSION = 2
 		const repository = new SettingsRepository({ filePath: storage.settingsFilePath })
 		instance.settingsRepository = repository
 		instance.settingsRepositoryUnsubscribe = repository.subscribe((commit) => instance.applySettingsCommit(commit))

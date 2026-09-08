@@ -47,6 +47,12 @@ import { ToolValidator } from "../ToolValidator"
 import type { TaskConfig } from "../types/TaskConfig"
 import type { AgentBaseConfig } from "./AgentConfigLoader"
 import { SUBAGENT_COMPLETION_CONTRACT, SubagentBuilder } from "./SubagentBuilder"
+import {
+	buildContextUsageSection,
+	buildSalvagedConvergenceResult,
+	describeConvergenceTrigger,
+	exceedsContextConvergenceThreshold,
+} from "./SubagentConvergenceGate"
 import type { SubagentFinishReason, SubagentProgressUpdate, SubagentRunStats } from "./SubagentExecutor"
 import {
 	buildSubagentOutputBudgetPrompt,
@@ -56,6 +62,15 @@ import {
 
 const MAX_EMPTY_ASSISTANT_RETRIES = 3
 const MAX_INVALID_COMPLETION_RETRIES = 3
+/**
+ * How many turns a converging run may keep calling non-completion tools.
+ *
+ * Kept separate from `MAX_INVALID_COMPLETION_RETRIES`: an empty
+ * `attempt_completion` is a malformed call, while ignoring the convergence
+ * order is a steering failure whose remedy is to salvage what was collected
+ * rather than to fail the run.
+ */
+const MAX_CONVERGENCE_REJECTIONS = 2
 const INITIAL_STREAM_RETRY_DELAYS_MS = [5_000, 8_000, 11_000, 14_000, 17_000] as const
 const MAX_INITIAL_STREAM_ATTEMPTS = INITIAL_STREAM_RETRY_DELAYS_MS.length + 1
 const SUBAGENT_COMPLETION_CALL_EXAMPLE =
@@ -127,9 +142,31 @@ function buildInvalidCompletionFailure(): string {
 	return `Subagent repeatedly called attempt_completion without a non-empty result.\n\n${SUBAGENT_COMPLETION_CONTRACT}\n\n${SUBAGENT_COMPLETION_CALL_EXAMPLE}`
 }
 
+/**
+ * Attach the current context usage to the request without altering the stored turn.
+ *
+ * The figures change every turn, so they cannot live in the persisted
+ * conversation: appending them as their own message would also break the
+ * user/assistant alternation the providers require. Folding the section into the
+ * trailing user message keeps the transcript shape intact.
+ */
+function withCurrentContextUsage(messages: ClineStorageMessage[], usageSection: string | undefined): ClineStorageMessage[] {
+	if (!usageSection || messages.length === 0) return messages
+
+	const lastIndex = messages.length - 1
+	const lastMessage = messages[lastIndex]
+	if (!lastMessage || lastMessage.role !== "user" || !Array.isArray(lastMessage.content)) return messages
+
+	const usageBlock = { type: "text", text: usageSection } as ClineTextContentBlock
+	const withUsage: ClineStorageMessage = {
+		...lastMessage,
+		content: [...lastMessage.content, usageBlock],
+	}
+	return [...messages.slice(0, lastIndex), withUsage]
+}
+
 function buildFinishReminder(reason: SubagentFinishReason): string {
-	const trigger =
-		reason === "timeout" ? "The subagent time limit was reached." : "The user requested that the subagent finish now."
+	const trigger = describeConvergenceTrigger(reason)
 	return `${trigger}\n\nStop all further exploration. On your next response, call attempt_completion with a non-empty result that summarizes the useful findings already collected. Do not call any other tool. If the investigation is incomplete, state the remaining limitations in the result.\n\n${SUBAGENT_COMPLETION_CALL_EXAMPLE}`
 }
 
@@ -414,10 +451,28 @@ export class SubagentRunner {
 	}
 
 	async requestFinish(reason: SubagentFinishReason): Promise<boolean> {
-		if (!this.running || this.finishRequested || this.completionOnly || this.shouldAbort()) return false
+		if (!this.canAcceptFinishRequest()) return false
 		this.finishRequested = reason
 		await this.interruptActiveWork("finish")
 		return true
+	}
+
+	/**
+	 * Ask the run to converge without disturbing the turn already in flight.
+	 *
+	 * Context pressure is observed from the run's own usage accounting, at a
+	 * point where the current response has already been paid for. Interrupting
+	 * it would discard work that is complete, so the order is recorded and takes
+	 * effect when the next turn is composed.
+	 */
+	private requestFinishAfterCurrentTurn(reason: SubagentFinishReason): boolean {
+		if (!this.canAcceptFinishRequest()) return false
+		this.finishRequested = reason
+		return true
+	}
+
+	private canAcceptFinishRequest(): boolean {
+		return Boolean(this.running) && !this.finishRequested && !this.completionOnly && !this.shouldAbort()
 	}
 
 	/**
@@ -480,9 +535,9 @@ export class SubagentRunner {
 		return this.abortRequested || (this.options.inheritTaskAbort !== false && this.baseConfig.taskState.abort)
 	}
 
-	private async getWorkspaceMetadataEnvironmentBlock(): Promise<string | null> {
+	private async getWorkspaceMetadataJson(): Promise<string | null> {
 		try {
-			const workspacesJson =
+			return (
 				(await this.baseConfig.workspaceManager?.buildWorkspacesJson()) ??
 				JSON.stringify(
 					{
@@ -495,12 +550,23 @@ export class SubagentRunner {
 					null,
 					2,
 				)
-
-			return `<environment_details>\n# Workspace Configuration\n${workspacesJson}\n</environment_details>`
+			)
 		} catch (error) {
 			Logger.warn("[SubagentRunner] Failed to build workspace metadata block", error)
 			return null
 		}
+	}
+
+	/**
+	 * Build the static environment block carried by the initial user message.
+	 *
+	 * Context usage is deliberately excluded: it changes every turn and is
+	 * attached to the outgoing request instead, so the stored transcript keeps a
+	 * single stable copy of the workspace facts.
+	 */
+	private buildEnvironmentBlock(workspacesJson: string | null): string | null {
+		if (!workspacesJson) return null
+		return `<environment_details>\n# Workspace Configuration\n${workspacesJson}\n</environment_details>`
 	}
 
 	/**
@@ -537,6 +603,10 @@ export class SubagentRunner {
 		const state = new TaskState()
 		let emptyAssistantResponseRetries = 0
 		let invalidCompletionRetries = 0
+		let convergenceRejections = 0
+		// Latest narrative text produced by the run, used to salvage findings if
+		// the model never converts them into an attempt_completion result.
+		let latestAssistantNarrative = ""
 		const contextState: SubagentContextState = {}
 		const contextManager = new ContextManager()
 		const usageState: SubagentUsageState = {
@@ -673,7 +743,8 @@ export class SubagentRunner {
 				if ("function" in tool) return tool.function.name === ClineDefaultTool.ATTEMPT
 				return "name" in tool && tool.name === ClineDefaultTool.ATTEMPT
 			})
-			const workspaceMetadataEnvironmentBlock = await this.getWorkspaceMetadataEnvironmentBlock()
+			const workspacesJson = await this.getWorkspaceMetadataJson()
+			const workspaceMetadataEnvironmentBlock = this.buildEnvironmentBlock(workspacesJson)
 
 			if (useNativeToolCalls && (!nativeTools || nativeTools.length === 0)) {
 				const error = "Subagent tool requires native tool calling support."
@@ -821,6 +892,11 @@ export class SubagentRunner {
 						requestId = undefined
 					},
 					onProgress,
+					() =>
+						buildContextUsageSection({
+							contextTokens: stats.contextTokens,
+							contextWindow: stats.contextWindow,
+						}),
 				)
 				const stream = normalizeApiStream(providerStream, createStreamNormalizer(this.identityFactory))
 
@@ -862,6 +938,16 @@ export class SubagentRunner {
 								stats.contextUsagePercentage =
 									stats.contextWindow > 0 ? (stats.contextTokens / stats.contextWindow) * 100 : 0
 								onProgress({ stats: { ...stats } })
+
+								// Past this point the remaining window has to carry the
+								// final result, so the run converges from the next turn on.
+								if (exceedsContextConvergenceThreshold(stats)) {
+									if (this.requestFinishAfterCurrentTurn("context_pressure")) {
+										Logger.warn(
+											"[SubagentRunner] Context usage crossed the convergence threshold; steering the next turn to attempt_completion.",
+										)
+									}
+								}
 								break
 							case "text":
 								requestId = requestId ?? chunk.provider_metadata?.response_id
@@ -966,6 +1052,10 @@ export class SubagentRunner {
 					requestUsage.cacheReadTokens
 				stats.totalCost += calculatedRequestCost || 0
 				usageState.lastRequest = { ...requestUsage }
+
+				// Keep the most recent narrative so a run that never converges can
+				// still hand back what it had reasoned out.
+				if (assistantText.trim()) latestAssistantNarrative = assistantText.trim()
 
 				const nativeFinalizedToolCalls: SubagentToolCall[] = toolUseHandler.getAllFinalizedToolUses().map((toolCall) => {
 					if (!toolCall.function_id || !toolCall.dline_tid) {
@@ -1102,11 +1192,16 @@ export class SubagentRunner {
 
 					if (this.completionOnly && toolName !== ClineDefaultTool.ATTEMPT) {
 						providerExecution.failTool()
-						invalidCompletionRetries += 1
-						if (invalidCompletionRetries > MAX_INVALID_COMPLETION_RETRIES) {
-							const error = buildInvalidCompletionFailure()
-							onProgress({ status: "failed", error, stats: { ...stats } })
-							return { status: "failed", error, stats }
+						convergenceRejections += 1
+						if (convergenceRejections > MAX_CONVERGENCE_REJECTIONS) {
+							// Failing here would throw away everything the run collected,
+							// which is the opposite of what convergence is for.
+							const salvaged = truncateTextToSubagentOutputBudget(
+								buildSalvagedConvergenceResult(this.finishRequested ?? "user", latestAssistantNarrative),
+								outputBudget.outputTokens,
+							)
+							onProgress({ status: "completed", result: salvaged, stats: { ...stats } })
+							return { status: "completed", result: salvaged, stats }
 						}
 						pushSubagentToolResultBlock(
 							toolResultBlocks,
@@ -1489,12 +1584,16 @@ export class SubagentRunner {
 		providerRequestRound: ProviderRequestRoundAdmission | undefined,
 		onReplayableAttemptDiscarded: () => void,
 		onProgress: (update: SubagentProgressUpdate) => void,
+		contextUsage: () => string | undefined = () => undefined,
 	) {
 		let cumulativeRetryDelayMs = 0
 		for (let attempt = 1; attempt <= MAX_INITIAL_STREAM_ATTEMPTS; attempt += 1) {
-			const truncatedConversation = contextManager
-				.getTruncatedMessages(fullConversation, contextState.conversationHistoryDeletedRange)
-				.map((message) => message as ClineStorageMessage)
+			const truncatedConversation = withCurrentContextUsage(
+				contextManager
+					.getTruncatedMessages(fullConversation, contextState.conversationHistoryDeletedRange)
+					.map((message) => message as ClineStorageMessage),
+				contextUsage(),
+			)
 			const roundContext = {
 				taskId: this.baseConfig.taskId,
 				requestIndex: ++this.apiLogRequestIndex,

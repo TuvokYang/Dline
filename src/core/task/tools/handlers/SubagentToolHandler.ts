@@ -78,6 +78,17 @@ async function getAvailableSubagentNames(config: TaskConfig): Promise<string[]> 
  * @param text Text to normalize.
  * @returns Trimmed text.
  */
+/**
+ * Statuses that count as a failed subagent outcome.
+ *
+ * A timeout is a failure to reach the goal, so the status card and the summary
+ * returned to the model must agree on it. They previously disagreed, which made
+ * the visible failure count differ from the one the model reasoned about.
+ */
+function isFailureStatus(status: SubagentStatusItem["status"]): boolean {
+	return status === "failed" || status === "timeout"
+}
+
 function excerpt(text: string | undefined): string {
 	return text?.trim() ?? ""
 }
@@ -403,7 +414,7 @@ export function buildStatusPayload(
 ): ClineSaySubagentStatus {
 	const completed = entries.filter((entry) => entry.status !== "pending" && entry.status !== "running").length
 	const successes = entries.filter((entry) => entry.status === "completed").length
-	const failures = entries.filter((entry) => entry.status === "failed").length
+	const failures = entries.filter((entry) => isFailureStatus(entry.status)).length
 	const toolCalls = entries.reduce((acc, entry) => acc + (entry.toolCalls || 0), 0)
 	const inputTokens = entries.reduce((acc, entry) => acc + (entry.inputTokens || 0), 0)
 	const outputTokens = entries.reduce((acc, entry) => acc + (entry.outputTokens || 0), 0)
@@ -435,7 +446,7 @@ export function buildStatusPayload(
  * @returns Text returned to the model.
  */
 function formatSummary(entries: SubagentStatusItem[]): string {
-	const failures = entries.filter((entry) => entry.status === "failed" || entry.status === "timeout").length
+	const failures = entries.filter((entry) => isFailureStatus(entry.status)).length
 	const successCount = entries.filter((entry) => entry.status === "completed").length
 	const cancellations = entries.filter((entry) => entry.status === "cancelled").length
 	const totalToolCalls = entries.reduce((acc, entry) => acc + (entry.toolCalls || 0), 0)

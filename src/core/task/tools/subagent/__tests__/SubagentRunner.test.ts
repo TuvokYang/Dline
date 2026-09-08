@@ -2557,7 +2557,9 @@ describe("SubagentRunner", () => {
 				.filter((block) => block.type === "text")
 				.map((block) => block.text ?? "")
 				.join("\n")
-			assert.match(initialText, /within 64 tokens/)
+			// Above MIN_SUBAGENT_OUTPUT_TOKENS so the configured value, not the
+			// floor, is the effective budget under test.
+			assert.match(initialText, /within 1,024 tokens/)
 			yield {
 				type: "tool_calls",
 				function_id: "budget-complete",
@@ -2579,13 +2581,13 @@ describe("SubagentRunner", () => {
 			name: "budget-agent",
 			description: "Budget test agent",
 			tools: [ClineDefaultTool.ATTEMPT],
-			maxOutputTokens: 64,
+			maxOutputTokens: 1_024,
 			systemPrompt: "",
 		}).run("Return a detailed report", () => {})
 
 		assert.equal(result.status, "completed", result.error)
 		assert.ok(result.result)
-		assert.ok(Buffer.byteLength(result.result ?? "", "utf8") <= 64 * 4)
+		assert.ok(Buffer.byteLength(result.result ?? "", "utf8") <= 1_024 * 4)
 	})
 
 	it("includes workspace metadata only in the initial user message", async () => {
