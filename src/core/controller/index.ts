@@ -142,6 +142,7 @@ export type TaskLifecycleScope = {
 		clearPanelState?: boolean
 		preserveCompletedState?: boolean
 		suppressPostState?: boolean
+		deferTeardown?: boolean
 	}): Promise<void>
 }
 
@@ -181,6 +182,15 @@ export class Controller {
 
 	// Flag to prevent duplicate cancellations from spam clicking
 	private cancelInProgress = false
+	/**
+	 * Durable teardown of a Task that has already been detached from the surface.
+	 *
+	 * Closing a task only needs the surface released to return the user to Recent;
+	 * flushing stores, releasing the task lock and clearing registries can finish
+	 * afterwards. Every lifecycle operation awaits this promise, so the deferred
+	 * work still completes before another Task is created or resumed.
+	 */
+	private pendingTaskTeardown?: Promise<void>
 	private readonly taskLifecycleMutex = new Mutex()
 	private readonly taskHistoryProjectionMutex = new Mutex()
 
@@ -665,6 +675,9 @@ export class Controller {
 		}
 
 		await this.clearTask()
+		// Window shutdown is the one path that must observe a fully closed task:
+		// its stores and locks may not outlive this process.
+		await this.pendingTaskTeardown
 		await this.workspaceHistoryManager
 			?.flush()
 			.catch((error) => Logger.error("[WorkspaceHistoryManager] Shutdown durability flush failed:", error))
@@ -2339,11 +2352,15 @@ export class Controller {
 
 	/** Serialize operations that may resume or remove the active Task instance. */
 	async runTaskLifecycleOperation<T>(operation: (scope: TaskLifecycleScope) => Promise<T>): Promise<T> {
-		return this.taskLifecycleMutex.withLock(() =>
-			operation({
+		return this.taskLifecycleMutex.withLock(async () => {
+			// A deferred teardown still owns the previous task's locks, settings and
+			// stores. Draining it here keeps every lifecycle operation ordered behind
+			// the task it replaces, while the surface itself was already released.
+			await this.pendingTaskTeardown
+			return operation({
 				clearTask: (options) => this.clearTaskWithinLifecycle(options),
-			}),
-		)
+			})
+		})
 	}
 
 	/** Replace one source-owned Task with an independent successor on the same surface. */
@@ -2364,7 +2381,7 @@ export class Controller {
 		})
 	}
 
-	async clearTask(options?: { clearPanelState?: boolean; preserveCompletedState?: boolean }) {
+	async clearTask(options?: { clearPanelState?: boolean; preserveCompletedState?: boolean; deferTeardown?: boolean }) {
 		return this.runTaskLifecycleOperation((scope) => scope.clearTask(options))
 	}
 
@@ -2372,10 +2389,12 @@ export class Controller {
 		clearPanelState?: boolean
 		preserveCompletedState?: boolean
 		suppressPostState?: boolean
+		deferTeardown?: boolean
 	}) {
 		const startedAt = performance.now()
 		let stageStartedAt = startedAt
-		const taskId = this.task?.taskId
+		const task = this.task
+		const taskId = task?.taskId
 		const logCloseStage = (phase: string, details = "") => {
 			const now = performance.now()
 			recordPerfPhase(
@@ -2401,45 +2420,80 @@ export class Controller {
 			this.profileTransitionEngine.reset("Task cleared during context transition."),
 		])
 		logCloseStage("context_transition_reset")
-		if (this.task) {
+		if (task) {
 			// Sync task mode to global state so slider works after task closed
-			this.stateManager.setGlobalState("mode", this.task.taskSm.mode)
-			// Clear task settings cache when task ends
-			await this.stateManager.clearTaskSettings(taskId)
-			logCloseStage("task_settings_clear")
+			this.stateManager.setGlobalState("mode", task.taskSm.mode)
 		}
-		await this.task?.terminate({ preserveCompletedState: options?.preserveCompletedState })
-		logCloseStage("task_terminate", `preserveCompleted=${options?.preserveCompletedState === true}`)
-		// Stop lock heartbeat and polling only after terminate() completes:
-		// terminate() pushes intermediate state to the webview while the task
-		// instance still exists, so flipping taskLockAcquired early would make
-		// getTaskLockStatus() report a phantom "locked by another instance" banner.
-		if (this.lockHeartbeatTimer) {
-			clearInterval(this.lockHeartbeatTimer)
-			this.lockHeartbeatTimer = undefined
-		}
-		this.stopLockPoll()
-		this.taskLockAcquired = false
-		// Release file lock so other instances can open the task
-		if (taskId) {
-			await this.lockService.releaseTaskLock(taskId).catch((e) => Logger.error("Failed to release lock:", e))
-			logCloseStage("lock_release")
-			const { OrchestratorController } = await import("@/core/orchestrator/OrchestratorController")
-			OrchestratorController.getInstance().unregisterController(taskId)
-		}
-		this.task = undefined // removes reference to it, so once promises end it will be garbage collected
+		// Detach the surface before any durable teardown runs. The Webview decides
+		// between the task view and the recent-tasks view purely from `this.task`,
+		// so releasing the reference here is what returns the user to Recent; every
+		// remaining step is durability work that no longer has a visible effect.
+		this.task = undefined
 		this.workspaceHistorySession = undefined
 		this.restartAccountUsagePolling()
-		// Release file ownership in the global checkpoint registry
-		if (taskId) {
-			const { WorkspaceFileRegistry } = await import("@integrations/checkpoints/WorkspaceFileRegistry")
-			WorkspaceFileRegistry.getInstance().releaseTask(taskId)
-		}
 		if (!options?.suppressPostState) {
-			await this.postStateToWebview()
-			logCloseStage("final_state_publish")
+			await this.postStateToWebview({ immediate: true })
+			logCloseStage("detached_state_publish")
 		}
+
+		const teardown = this.teardownDetachedTask(task, taskId, options?.preserveCompletedState === true, logCloseStage)
+		if (options?.deferTeardown) {
+			const pending = teardown.finally(() => {
+				if (this.pendingTaskTeardown === pending) {
+					this.pendingTaskTeardown = undefined
+				}
+			})
+			this.pendingTaskTeardown = pending
+			logCloseStage("teardown_deferred")
+			return
+		}
+		await teardown
 		logCloseStage("complete", `suppressPostState=${options?.suppressPostState === true}`)
+	}
+
+	/**
+	 * Release every durable resource owned by a Task that is already detached.
+	 *
+	 * Nothing here changes what the user sees, so it may run after the surface has
+	 * moved on. Failures are logged rather than rethrown: the caller may have
+	 * returned already, and the next lifecycle operation still awaits this promise
+	 * before it may create or resume another Task.
+	 */
+	private async teardownDetachedTask(
+		task: Task | undefined,
+		taskId: string | undefined,
+		preserveCompletedState: boolean,
+		logCloseStage: (phase: string, details?: string) => void,
+	): Promise<void> {
+		try {
+			if (task) {
+				// Clear task settings cache when task ends
+				await this.stateManager.clearTaskSettings(taskId)
+				logCloseStage("task_settings_clear")
+			}
+			await task?.terminate({ preserveCompletedState })
+			logCloseStage("task_terminate", `preserveCompleted=${preserveCompletedState}`)
+			// Stop lock heartbeat and polling only after terminate() completes, so a
+			// task that is still flushing keeps its lock until its stores are closed.
+			if (this.lockHeartbeatTimer) {
+				clearInterval(this.lockHeartbeatTimer)
+				this.lockHeartbeatTimer = undefined
+			}
+			this.stopLockPoll()
+			this.taskLockAcquired = false
+			// Release file lock so other instances can open the task
+			if (taskId) {
+				await this.lockService.releaseTaskLock(taskId).catch((e) => Logger.error("Failed to release lock:", e))
+				logCloseStage("lock_release")
+				const { OrchestratorController } = await import("@/core/orchestrator/OrchestratorController")
+				OrchestratorController.getInstance().unregisterController(taskId)
+				// Release file ownership in the global checkpoint registry
+				const { WorkspaceFileRegistry } = await import("@integrations/checkpoints/WorkspaceFileRegistry")
+				WorkspaceFileRegistry.getInstance().releaseTask(taskId)
+			}
+		} catch (error) {
+			Logger.error(`[Controller] Task teardown failed for ${taskId ?? "none"}:`, error)
+		}
 	}
 
 	// Caching mechanism to keep track of webview messages + API conversation history per provider instance

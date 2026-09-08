@@ -24,12 +24,12 @@ export const Navbar = () => {
 				tooltip: "New Task",
 				icon: PlusIcon,
 				navigate: () => {
-					// Close the current task, then navigate to the chat view
-					TaskServiceClient.clearTask({})
-						.catch((error) => {
-							console.error("Failed to clear task:", error)
-						})
-						.finally(() => navigateToChat())
+					// Navigate first: the backend detaches the task and pushes the new
+					// state on its own, so waiting for the RPC only delays the view.
+					navigateToChat()
+					TaskServiceClient.clearTask({}).catch((error) => {
+						console.error("Failed to clear task:", error)
+					})
 				},
 			},
 			{

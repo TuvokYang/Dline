@@ -1,5 +1,5 @@
 import type { ExtensionMessage } from "@shared/ExtensionMessage"
-import { EmptyRequest } from "@shared/proto/dline/common"
+import { EmptyRequest, type KeyValuePair } from "@shared/proto/dline/common"
 import { ResetStateRequest } from "@shared/proto/dline/state"
 import { UserOrganization } from "@shared/proto/index.dline"
 import {
@@ -135,21 +135,6 @@ const renderSectionHeader = (tabId: string) => {
 }
 
 const SettingsView = ({ onDone, targetSection }: SettingsViewProps) => {
-	// Memoize to avoid recreation
-	const TAB_CONTENT_MAP: Record<SettingsTabID, React.FC<any>> = useMemo(
-		() => ({
-			"api-config": ApiConfigurationSection,
-			general: GeneralSettingsSection,
-			features: FeatureSettingsSection,
-			browser: BrowserSettingsSection,
-			terminal: TerminalSettingsSection,
-			"remote-config": RemoteConfigSection,
-			about: AboutSection,
-			debug: DebugSection,
-		}),
-		[],
-	) // Empty deps - these imports never change
-
 	const { version, environment } = useExtensionState()
 	const { activeOrganization } = useClineAuth()
 
@@ -182,7 +167,10 @@ const SettingsView = ({ onDone, targetSection }: SettingsViewProps) => {
 			return
 		}
 
-		const grpcMessage = message.grpc_response?.message
+		// This listener sees every RPC response, so the response is read as the
+		// KeyValuePair that scrollToSettings returns and the key selects the one
+		// this handler owns.
+		const grpcMessage = message.grpc_response?.message as Partial<KeyValuePair> | undefined
 		if (grpcMessage?.key !== "scrollToSettings") {
 			return
 		}
@@ -260,23 +248,33 @@ const SettingsView = ({ onDone, targetSection }: SettingsViewProps) => {
 		[activeTab],
 	)
 
-	// Memoized active content component
+	// Memoized active content component.
+	//
+	// Each section is rendered against its own props contract rather than through
+	// a shared props bag, so a section that gains or renames a required prop fails
+	// to compile here instead of receiving an undefined value at runtime.
 	const ActiveContent = useMemo(() => {
-		const Component = TAB_CONTENT_MAP[activeTab as keyof typeof TAB_CONTENT_MAP]
-		if (!Component) {
-			return null
+		switch (activeTab) {
+			case "api-config":
+				return <ApiConfigurationSection renderSectionHeader={renderSectionHeader} />
+			case "general":
+				return <GeneralSettingsSection renderSectionHeader={renderSectionHeader} />
+			case "features":
+				return <FeatureSettingsSection renderSectionHeader={renderSectionHeader} />
+			case "browser":
+				return <BrowserSettingsSection renderSectionHeader={renderSectionHeader} />
+			case "terminal":
+				return <TerminalSettingsSection renderSectionHeader={renderSectionHeader} />
+			case "remote-config":
+				return <RemoteConfigSection renderSectionHeader={renderSectionHeader} />
+			case "about":
+				return <AboutSection renderSectionHeader={renderSectionHeader} version={version} />
+			case "debug":
+				return <DebugSection onResetState={handleResetState} renderSectionHeader={renderSectionHeader} />
+			default:
+				return null
 		}
-
-		// Special props for specific components
-		const props: any = { renderSectionHeader }
-		if (activeTab === "debug") {
-			props.onResetState = handleResetState
-		} else if (activeTab === "about") {
-			props.version = version
-		}
-
-		return <Component {...props} />
-	}, [activeTab, handleResetState, version, TAB_CONTENT_MAP])
+	}, [activeTab, handleResetState, version])
 
 	return (
 		<Tab>

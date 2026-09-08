@@ -1,4 +1,5 @@
 import { GrpcRecorder, IRecorder } from "@core/controller/grpc-recorder/grpc-recorder"
+import type { GrpcLogEntry } from "@core/controller/grpc-recorder/types"
 import { expect } from "chai"
 import { ExtensionMessage } from "@/shared/ExtensionMessage"
 import { GrpcRequest } from "@/shared/WebviewMessage"
@@ -31,7 +32,7 @@ describe("grpc-recorder", () => {
 					},
 					response: {
 						request_id: "request-id-1",
-						message: "the-message-response",
+						message: { value: "the-message-response" },
 						error: "",
 					},
 					expectedStatus: "completed",
@@ -63,7 +64,6 @@ describe("grpc-recorder", () => {
 					},
 					response: {
 						request_id: "request-id-3",
-						message: "",
 						error: "Something went wrong",
 					},
 					expectedStatus: "error",
@@ -214,11 +214,11 @@ describe("grpc-recorder", () => {
 
 		it("recordResponse executes post-record hooks", async () => {
 			let hookExecuted = false
-			let hookEntry: any = null
+			const recordedEntries: GrpcLogEntry[] = []
 
-			const mockHook = async (entry: any) => {
+			const mockHook = async (entry: GrpcLogEntry) => {
 				hookExecuted = true
-				hookEntry = entry
+				recordedEntries.push(entry)
 			}
 
 			const testRecorder = GrpcRecorder.builder().withPostRecordHooks(mockHook).enableIf(true).build()
@@ -233,13 +233,13 @@ describe("grpc-recorder", () => {
 
 			testRecorder.recordResponse("test-id", {
 				request_id: "test-id",
-				message: "response-message",
+				message: { value: "response-message" },
 				error: "",
 			})
 
 			expect(hookExecuted).to.be.true
-			expect(hookEntry).to.not.be.null
-			expect(hookEntry.requestId).equal("test-id")
+			expect(recordedEntries).to.have.lengthOf(1)
+			expect(recordedEntries[0].requestId).equal("test-id")
 		})
 	})
 })

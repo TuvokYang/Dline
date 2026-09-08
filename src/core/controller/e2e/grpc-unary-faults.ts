@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
+import type { ProtoJsonMessage } from "@shared/ExtensionMessage"
 import type { GrpcRequest } from "@shared/WebviewMessage"
 
 interface DelayUnaryFault {
@@ -103,7 +104,11 @@ export async function applyE2EUnaryRequestFault(request: GrpcRequest): Promise<n
 }
 
 /** Apply deterministic unary-response faults only inside explicitly configured E2E runs. */
-export async function applyE2EUnaryResponseFault(request: GrpcRequest, occurrence: number, response: unknown): Promise<unknown> {
+export async function applyE2EUnaryResponseFault(
+	request: GrpcRequest,
+	occurrence: number,
+	response: ProtoJsonMessage,
+): Promise<ProtoJsonMessage> {
 	if (!faultsEnabled()) return response
 	const plan = matchingPlan(request, occurrence)
 	if (!plan || plan.action === "delayRequest") return response
@@ -114,7 +119,7 @@ export async function applyE2EUnaryResponseFault(request: GrpcRequest, occurrenc
 		} else {
 			await writeMarker(plan.markerName, "released")
 		}
-		return response && typeof response === "object" ? { ...(response as Record<string, unknown>), messages: [] } : response
+		return { ...response, messages: [] }
 	}
 
 	if (plan.action === "delay") await applyDelay(plan)

@@ -36,8 +36,18 @@ export interface ExtensionMessage {
 	grpc_response?: GrpcResponse
 }
 
+/**
+ * One protobuf message serialized as a JSON object.
+ *
+ * Which message it is depends on the RPC that produced it, so this fixes only
+ * what every response shares: a message is always an object, never a bare
+ * scalar. The RPC's generated type supplies the concrete fields at the call
+ * site.
+ */
+export type ProtoJsonMessage = object
+
 export type GrpcResponse = {
-	message?: any // JSON serialized protobuf message
+	message?: ProtoJsonMessage // JSON serialized protobuf message
 	request_id: string // Same ID as the request
 	error?: string // Optional error message
 	is_streaming?: boolean // Whether this is part of a streaming response
@@ -259,6 +269,14 @@ export interface ClineMessage {
 	logPath?: string
 	lastCheckpointHash?: string
 	isCheckpointCheckedOut?: boolean
+	/**
+	 * Whether this completion produced workspace changes that can be diffed.
+	 *
+	 * Carried as its own field rather than encoded into `text`, because the
+	 * completion row is rewritten as an ask presentation using the model's
+	 * original result text, which would drop any marker appended to it.
+	 */
+	completionHasChanges?: boolean
 	isOperationOutsideWorkspace?: boolean
 	conversationHistoryIndex?: number
 	conversationHistoryDeletedRange?: [number, number] // for when conversation history is truncated for API requests

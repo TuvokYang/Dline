@@ -346,6 +346,8 @@ message ClineMessage {
   string user_input_kind = 34;
   string queued_input_mode = 35;
   optional ImageGenerationPresentation image_generation = 36;
+  // Whether this completion produced workspace changes that can be diffed.
+  bool completion_has_changes = 37;
 }
 
 message ShowWebviewEvent {

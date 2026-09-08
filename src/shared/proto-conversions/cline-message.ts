@@ -5,9 +5,9 @@ import {
 	type CommandStatus,
 } from "@shared/ExtensionMessage"
 import {
+	type ImageGenerationPresentationV1,
 	parseImageGenerationPresentation,
 	parseImageGenerationToolText,
-	type ImageGenerationPresentationV1,
 } from "@shared/image-generation"
 import {
 	ClineAsk,
@@ -249,6 +249,7 @@ export function convertClineMessageToProto(message: AppClineMessage): ProtoCline
 		partial: message.partial ?? false,
 		lastCheckpointHash: message.lastCheckpointHash ?? "",
 		isCheckpointCheckedOut: message.isCheckpointCheckedOut ?? false,
+		completionHasChanges: message.completionHasChanges ?? false,
 		isOperationOutsideWorkspace: message.isOperationOutsideWorkspace ?? false,
 		conversationHistoryIndex: message.conversationHistoryIndex ?? 0,
 		conversationHistoryDeletedRange: message.conversationHistoryDeletedRange
@@ -339,6 +340,9 @@ export function convertProtoToClineMessage(protoMessage: ProtoClineMessage): App
 	}
 	if (protoMessage.isCheckpointCheckedOut) {
 		message.isCheckpointCheckedOut = protoMessage.isCheckpointCheckedOut
+	}
+	if (protoMessage.completionHasChanges) {
+		message.completionHasChanges = protoMessage.completionHasChanges
 	}
 	if (protoMessage.isOperationOutsideWorkspace) {
 		message.isOperationOutsideWorkspace = protoMessage.isOperationOutsideWorkspace

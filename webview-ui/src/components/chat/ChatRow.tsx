@@ -82,6 +82,23 @@ import WebSearchRow from "./WebSearchRow"
 
 const HEADER_CLASSNAMES = "flex items-center gap-2.5 mb-3"
 
+/**
+ * Read the workspace-change verdict and display text of a completion message.
+ *
+ * Current messages carry the verdict in `completionHasChanges`. Tasks recorded
+ * before that field existed appended a marker to the text instead, so the
+ * marker is still accepted and stripped to keep old histories rendering their
+ * change actions with the same text.
+ */
+function readCompletionChanges(message: ClineMessage): { hasChanges: boolean; text: string } {
+	const rawText = message.text ?? ""
+	const hasLegacyFlag = rawText.endsWith(COMPLETION_RESULT_CHANGES_FLAG)
+	return {
+		hasChanges: message.completionHasChanges === true || hasLegacyFlag,
+		text: hasLegacyFlag ? rawText.slice(0, -COMPLETION_RESULT_CHANGES_FLAG.length) : rawText,
+	}
+}
+
 // Module-level cache for command collapse state — survives virtual list row recycling
 const commandCollapsedCache = new Map<number, boolean>()
 // Track which commands have been auto-collapsed (completed -> collapsed once)
@@ -182,7 +199,7 @@ function AutoRetryErrorBox({ info, startedAt }: { info: AutoRetryInfo; startedAt
 
 const ChatRow = memo(
 	(props: ChatRowProps) => {
-		const { isLast, onHeightChange, message } = props
+		const { isLast, onHeightChange } = props
 		// Store the previous height to compare with the current height
 		// This allows us to detect changes without causing re-renders
 		const prevHeightRef = useRef(0)
@@ -228,7 +245,6 @@ export const ChatRowContent = memo(
 		onSetQuote,
 		onCancelCommand,
 		mode,
-		isRequestInProgress,
 		reasoningContent,
 		responseStarted,
 	}: ChatRowContentProps) => {
@@ -486,8 +502,12 @@ export const ChatRowContent = memo(
 		const conditionalRulesInfo = useMemo(() => {
 			if (message.say !== "conditional_rules_applied" || !message.text) return null
 			try {
-				const parsed: Record<string, unknown> = JSON.parse(message.text)
-				if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as any).rules)) {
+				const parsed: unknown = JSON.parse(message.text)
+				if (typeof parsed !== "object" || parsed === null) {
+					return null
+				}
+				const { rules } = parsed as { rules?: unknown }
+				if (!Array.isArray(rules)) {
 					return null
 				}
 				return parsed as {
@@ -589,7 +609,7 @@ export const ChatRowContent = memo(
 									code={Array.isArray(tool.content) ? tool.content.join("\n\n") : tool.content}
 									isExpanded={isExpanded}
 									onToggleExpand={handleToggle}
-									path={tool.path!}
+									path={tool.path ?? ""}
 								/>
 							)}
 						</>
@@ -600,7 +620,7 @@ export const ChatRowContent = memo(
 							code={Array.isArray(tool.content) ? tool.content.join("\n\n") : tool.content}
 							isExpanded={isExpanded}
 							onToggleExpand={handleToggle}
-							path={tool.path!}
+							path={tool.path ?? ""}
 						/>
 					)
 				case "newFileCreated":
@@ -617,17 +637,35 @@ export const ChatRowContent = memo(
 								/>
 							) : (
 								<CodeAccordian
-									code={Array.isArray(tool.content) ? tool.content.join("\n\n") : tool.content!}
+									code={Array.isArray(tool.content) ? tool.content.join("\n\n") : (tool.content ?? "")}
 									isExpanded={isExpanded}
 									isLoading={message.partial}
 									onToggleExpand={handleToggle}
-									path={tool.path!}
+									path={tool.path ?? ""}
 								/>
 							)}
 						</>
 					)
 				case "readFile":
 					const isImage = isImageFile(tool.path || "")
+					// Shared by both renderings below so the clickable and inert
+					// variants cannot drift apart in how the path is displayed.
+					const readFilePathContent = (
+						<>
+							{tool.path?.startsWith(".") && <span>.</span>}
+							{tool.path && !tool.path.startsWith(".") && !tool.path.match(/^[a-zA-Z]:/) && <span>/</span>}
+							<span className="ph-no-capture whitespace-nowrap overflow-hidden text-ellipsis mr-2 text-left [direction: rtl]">
+								{`${cleanPathPrefix(tool.path ?? "")}\u200E`}
+								{tool.readLineStart != null && tool.readLineEnd != null ? (
+									<span className="opacity-80">
+										{" "}
+										({tool.readLineStart}-{tool.readLineEnd})
+									</span>
+								) : null}
+							</span>
+							<div className="grow" />
+						</>
+					)
 					return (
 						<div>
 							<div className={HEADER_CLASSNAMES}>
@@ -637,33 +675,28 @@ export const ChatRowContent = memo(
 								<span className="font-bold">Dline wants to read this file:</span>
 							</div>
 							<div className="bg-code rounded-sm overflow-hidden border border-editor-group-border">
-								<div
-									className={cn("text-description flex items-center cursor-pointer select-none py-2 px-2.5", {
-										"cursor-default select-text": isImage,
-									})}
-									onClick={() => {
-										if (!isImage) {
+								{/* Only a non-image path opens an editor, so only that case is
+								    rendered as a button. An image row stays inert text instead of
+								    a control that announces an action it never performs. */}
+								{isImage ? (
+									<div className="text-description flex items-center select-text py-2 px-2.5">
+										{readFilePathContent}
+									</div>
+								) : (
+									<button
+										className="text-description flex items-center w-full bg-transparent border-0 cursor-pointer select-none py-2 px-2.5 text-inherit font-inherit"
+										onClick={() => {
 											const filePathWithLine =
 												tool.readLineStart != null ? `${tool.path}:${tool.readLineStart}` : tool.path
 											FileServiceClient.openFileRelativePath(
 												StringRequest.create({ value: filePathWithLine }),
 											).catch((err) => console.error("Failed to open file:", err))
-										}
-									}}>
-									{tool.path?.startsWith(".") && <span>.</span>}
-									{tool.path && !tool.path.startsWith(".") && !tool.path.match(/^[a-zA-Z]:/) && <span>/</span>}
-									<span className="ph-no-capture whitespace-nowrap overflow-hidden text-ellipsis mr-2 text-left [direction: rtl]">
-										{`${cleanPathPrefix(tool.path ?? "")}\u200E`}
-										{tool.readLineStart != null && tool.readLineEnd != null ? (
-											<span className="opacity-80">
-												{" "}
-												({tool.readLineStart}-{tool.readLineEnd})
-											</span>
-										) : null}
-									</span>
-									<div className="grow" />
-									{!isImage && <SquareArrowOutUpRightIcon className="size-2" />}
-								</div>
+										}}
+										type="button">
+										{readFilePathContent}
+										<SquareArrowOutUpRightIcon className="size-2" />
+									</button>
+								)}
 							</div>
 						</div>
 					)
@@ -681,11 +714,11 @@ export const ChatRowContent = memo(
 								</span>
 							</div>
 							<CodeAccordian
-								code={Array.isArray(tool.content) ? tool.content.join("\n") : tool.content!}
+								code={Array.isArray(tool.content) ? tool.content.join("\n") : (tool.content ?? "")}
 								isExpanded={isExpanded}
 								language="shell-session"
 								onToggleExpand={handleToggle}
-								path={tool.path!}
+								path={tool.path ?? ""}
 							/>
 						</div>
 					)
@@ -703,11 +736,11 @@ export const ChatRowContent = memo(
 								</span>
 							</div>
 							<CodeAccordian
-								code={Array.isArray(tool.content) ? tool.content.join("\n") : tool.content!}
+								code={Array.isArray(tool.content) ? tool.content.join("\n") : (tool.content ?? "")}
 								isExpanded={isExpanded}
 								language="shell-session"
 								onToggleExpand={handleToggle}
-								path={tool.path!}
+								path={tool.path ?? ""}
 							/>
 						</div>
 					)
@@ -725,10 +758,10 @@ export const ChatRowContent = memo(
 								</span>
 							</div>
 							<CodeAccordian
-								code={Array.isArray(tool.content) ? tool.content.join("\n") : tool.content!}
+								code={Array.isArray(tool.content) ? tool.content.join("\n") : (tool.content ?? "")}
 								isExpanded={isExpanded}
 								onToggleExpand={handleToggle}
-								path={tool.path!}
+								path={tool.path ?? ""}
 							/>
 						</div>
 					)
@@ -744,11 +777,11 @@ export const ChatRowContent = memo(
 								</span>
 							</div>
 							<SearchResultsDisplay
-								content={Array.isArray(tool.content) ? tool.content.join("\n") : tool.content!}
+								content={Array.isArray(tool.content) ? tool.content.join("\n") : (tool.content ?? "")}
 								filePattern={tool.filePattern}
 								isExpanded={isExpanded}
 								onToggleExpand={handleToggle}
-								path={tool.path!}
+								path={tool.path ?? ""}
 							/>
 						</div>
 					)
@@ -832,19 +865,12 @@ export const ChatRowContent = memo(
 									)}
 								{content ? (
 									<div className="px-2.5 pb-2.5" data-testid="compaction-summary-content">
-										<div
+										<button
+											aria-expanded={isExpanded}
 											aria-label={isExpanded ? "Collapse summary" : "Expand summary"}
-											className="text-description cursor-pointer select-none"
+											className="text-description cursor-pointer select-none w-full bg-transparent border-0 p-0 text-inherit font-inherit text-left"
 											onClick={handleToggle}
-											onKeyDown={(e) => {
-												if (e.key === "Enter" || e.key === " ") {
-													e.preventDefault()
-													e.stopPropagation()
-													handleToggle()
-												}
-											}}
-											role="button"
-											tabIndex={0}>
+											type="button">
 											{isExpanded ? (
 												<div>
 													<div className="flex items-center mb-2">
@@ -866,7 +892,7 @@ export const ChatRowContent = memo(
 													<ChevronRightIcon className="my-0.5 shrink-0 size-4" />
 												</div>
 											)}
-										</div>
+										</button>
 									</div>
 								) : null}
 							</div>
@@ -922,7 +948,7 @@ export const ChatRowContent = memo(
 				case "renameSymbol":
 					return (
 						<EditResultRow
-							content={Array.isArray(tool.content) ? tool.content.join("\n") : tool.content!}
+							content={Array.isArray(tool.content) ? tool.content.join("\n") : (tool.content ?? "")}
 							isExpanded={isExpanded}
 							matches={tool.matches}
 							onToggleExpand={handleToggle}
@@ -932,7 +958,7 @@ export const ChatRowContent = memo(
 				case "replaceText":
 					return (
 						<EditResultRow
-							content={Array.isArray(tool.content) ? tool.content.join("\n") : tool.content!}
+							content={Array.isArray(tool.content) ? tool.content.join("\n") : (tool.content ?? "")}
 							isExpanded={isExpanded}
 							matches={tool.matches}
 							onToggleExpand={handleToggle}
@@ -1027,7 +1053,14 @@ export const ChatRowContent = memo(
 
 						{useMcpServer.type === "use_mcp_tool" && (
 							<div>
-								<div onClick={(e) => e.stopPropagation()}>
+								{/* Keeps a click inside the tool row from reaching the row's own
+								    expand handler. It is a propagation boundary, not a control, so
+								    it exposes no role and no keyboard handler: keyboard events do
+								    not bubble to the row the way this click does. */}
+								<div
+									onClickCapture={(e) => {
+										e.stopPropagation()
+									}}>
 									<McpToolRow
 										showAutoApprove={false}
 										tool={{
@@ -1161,7 +1194,7 @@ export const ChatRowContent = memo(
 						return (
 							<div className="w-full -mt-2.5">
 								<CodeAccordian
-									diff={tool.diff!}
+									diff={tool.diff ?? ""}
 									isExpanded={isExpanded}
 									isFeedback={true}
 									onToggleExpand={handleToggle}
@@ -1260,8 +1293,7 @@ export const ChatRowContent = memo(
 						)
 					}
 					case "completion_result":
-						const hasChanges = message.text?.endsWith(COMPLETION_RESULT_CHANGES_FLAG) ?? false
-						const text = hasChanges ? message.text?.slice(0, -COMPLETION_RESULT_CHANGES_FLAG.length) : message.text
+						const { hasChanges, text } = readCompletionChanges(message)
 
 						return (
 							<CompletionOutputRow
@@ -1342,7 +1374,8 @@ export const ChatRowContent = memo(
 										} catch (error) {
 											console.error("Failed to enable background terminal:", error)
 										}
-									}}>
+									}}
+									type="button">
 									<SettingsIcon className="size-2" />
 									{isBackgroundModeEnabled
 										? "Background Terminal Enabled"
@@ -1388,8 +1421,7 @@ export const ChatRowContent = memo(
 						return <ErrorRow errorType="mistake_limit_reached" message={message} />
 					case "completion_result":
 						if (message.text) {
-							const hasChanges = message.text.endsWith(COMPLETION_RESULT_CHANGES_FLAG) ?? false
-							const text = hasChanges ? message.text.slice(0, -COMPLETION_RESULT_CHANGES_FLAG.length) : message.text
+							const { hasChanges, text } = readCompletionChanges(message)
 							return (
 								<CompletionOutputRow
 									explainChangesDisabled={explainChangesDisabled}

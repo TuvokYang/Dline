@@ -9,7 +9,6 @@ import { processFilesIntoText } from "@integrations/misc/extract-text"
 import { showSystemNotification } from "@integrations/notifications"
 import { telemetryService } from "@services/telemetry"
 import { findLastIndex } from "@shared/array"
-import { COMPLETION_RESULT_CHANGES_FLAG } from "@shared/ExtensionMessage"
 import { Logger } from "@shared/services/Logger"
 import { ClineDefaultTool } from "@shared/tools"
 import { commitCompletion } from "../../completion/CompletionCommit"
@@ -108,7 +107,7 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 		await commitCompletion({
 			publishResult: () => config.callbacks.say("completion_result", result, undefined, undefined, false, block.ts),
 			saveCheckpoint: (completionMessageTs) => config.callbacks.saveCheckpoint(true, completionMessageTs),
-			markWorkspaceChanges: () => this.addNewChangesFlagToLastCompletionResultMessage(config),
+			markWorkspaceChanges: (completionMessageTs) => this.markCompletionWorkspaceChanges(config, completionMessageTs),
 			captureTelemetry: () => telemetryService.captureTaskCompleted(config.ulid ?? "", getTaskCompletionTelemetry(config)),
 		})
 
@@ -135,22 +134,29 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 		return this.continueInteraction(config, block, outcome)
 	}
 
-	private async addNewChangesFlagToLastCompletionResultMessage(config: TaskConfig): Promise<void> {
+	/**
+	 * Record whether this completion produced diffable workspace changes.
+	 *
+	 * The verdict is stored as a field on the completion row instead of a marker
+	 * appended to its text: the same row is immediately rewritten as an ask
+	 * presentation carrying the model's original result, which would discard any
+	 * text marker. The row is located by its timestamp because that rewrite also
+	 * clears `say`.
+	 */
+	private async markCompletionWorkspaceChanges(config: TaskConfig, completionMessageTs: number | undefined): Promise<void> {
 		const hasNewChanges = await config.callbacks.doesLatestTaskCompletionHaveNewChanges()
-		const clineMessages = config.messageState.clineMessages
-		const lastCompletionResultMessageIndex = findLastIndex(clineMessages, (message) => message.say === "completion_result")
-		const lastCompletionResultMessage =
-			lastCompletionResultMessageIndex !== -1 ? clineMessages[lastCompletionResultMessageIndex] : undefined
-		if (
-			lastCompletionResultMessage &&
-			lastCompletionResultMessageIndex !== -1 &&
-			hasNewChanges &&
-			!lastCompletionResultMessage.text?.endsWith(COMPLETION_RESULT_CHANGES_FLAG)
-		) {
-			await config.messageState.updateClineMessage(lastCompletionResultMessageIndex, {
-				text: lastCompletionResultMessage.text + COMPLETION_RESULT_CHANGES_FLAG,
-			})
+		if (!hasNewChanges) {
+			return
 		}
+		const clineMessages = config.messageState.clineMessages
+		const completionIndex =
+			completionMessageTs === undefined
+				? findLastIndex(clineMessages, (message) => message.say === "completion_result")
+				: clineMessages.findIndex((message) => message.ts === completionMessageTs)
+		if (completionIndex === -1 || clineMessages[completionIndex]?.completionHasChanges === true) {
+			return
+		}
+		await config.messageState.updateClineMessage(completionIndex, { completionHasChanges: true })
 	}
 
 	/** Consume completion feedback without replaying the completion commit. */
