@@ -5,6 +5,7 @@ import {
 	createDefaultEnabledTaskMetricsSeries,
 	createTaskMetricsChartLayout,
 	formatTaskMetricsSeriesValue,
+	getTaskMetricsAxisTitles,
 	getVisibleTaskMetricsSeries,
 	readTaskMetricsSeriesValue,
 	type TaskMetricsChartPoint,
@@ -26,6 +27,8 @@ export function TaskMetricsChart({ points, view, chartType, degraded = false }: 
 	const [activePointIndex, setActivePointIndex] = useState<number>()
 	const chart = useMemo(() => createTaskMetricsChartLayout(points, view, enabledSeries), [enabledSeries, points, view])
 	const descriptors = useMemo(() => getVisibleTaskMetricsSeries(points, view), [points, view])
+	const axisTitles = getTaskMetricsAxisTitles(view)
+	const rightTicks = chart.percentageTicks.length > 0 ? chart.percentageTicks : chart.secondaryTicks
 	const activePoint = activePointIndex === undefined ? undefined : chart.hitAreas[activePointIndex]?.point
 	const toggleSeries = (key: TaskMetricsSeriesKey) => {
 		setEnabledSeries((current) => {
@@ -104,12 +107,40 @@ export function TaskMetricsChart({ points, view, chartType, degraded = false }: 
 						{tick.label}
 					</text>
 				))}
-				<text fill="currentColor" fontSize="10" fontWeight="600" x={chart.plotLeft} y={16}>
-					{view === "tokenCache" ? "Tokens" : "Rate"}
-				</text>
-				{chart.percentageTicks.length > 0 && (
-					<text fill="currentColor" fontSize="10" fontWeight="600" textAnchor="end" x={chart.plotRight} y={16}>
-						Cache Hit Rate
+				{chart.percentageTicks.length === 0 &&
+					chart.secondaryTicks.map((tick) => (
+						<text
+							data-testid="task-metrics-secondary-tick"
+							fill="currentColor"
+							fontSize="10"
+							key={tick.value}
+							textAnchor="start"
+							x={chart.plotRight + 8}
+							y={tick.y + 3}>
+							{tick.label}
+						</text>
+					))}
+				{chart.primaryTicks.length > 0 && (
+					<text
+						data-testid="task-metrics-left-axis-title"
+						fill={axisTitles.left.color ?? "currentColor"}
+						fontSize="10"
+						fontWeight="600"
+						x={chart.plotLeft}
+						y={16}>
+						{axisTitles.left.label}
+					</text>
+				)}
+				{rightTicks.length > 0 && (
+					<text
+						data-testid="task-metrics-right-axis-title"
+						fill={axisTitles.right.color ?? "currentColor"}
+						fontSize="10"
+						fontWeight="600"
+						textAnchor="end"
+						x={chart.plotRight}
+						y={16}>
+						{axisTitles.right.label}
 					</text>
 				)}
 				<line

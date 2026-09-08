@@ -4,7 +4,17 @@ import { formatTokenMetric } from "../util"
 export type TaskMetricsView = "tokenCache" | "rates"
 export type TaskMetricsChartType = "bar" | "line"
 export type TaskMetricsSeriesKey = "input" | "output" | "cacheWrite" | "cacheRead" | "cacheHit" | "totalTokens" | "tpm" | "rpm"
-export type TaskMetricsAxis = "primary" | "percentage"
+export type TaskMetricsAxis = "primary" | "secondary" | "percentage"
+
+export interface TaskMetricsAxisTitle {
+	readonly label: string
+	readonly color?: string
+}
+
+export interface TaskMetricsAxisTitles {
+	readonly left: TaskMetricsAxisTitle
+	readonly right: TaskMetricsAxisTitle
+}
 
 export interface TaskMetricsSeriesDescriptor {
 	readonly key: TaskMetricsSeriesKey
@@ -61,7 +71,9 @@ export interface TaskMetricsChartLayout {
 	readonly plotTop: number
 	readonly plotBottom: number
 	readonly primaryAxisMax: number
+	readonly secondaryAxisMax: number
 	readonly primaryTicks: TaskMetricsChartTick[]
+	readonly secondaryTicks: TaskMetricsChartTick[]
 	readonly percentageTicks: TaskMetricsChartTick[]
 	readonly series: TaskMetricsChartSeries[]
 	readonly hitAreas: TaskMetricsHitArea[]
@@ -135,7 +147,7 @@ export const TASK_METRICS_SERIES: readonly TaskMetricsSeriesDescriptor[] = [
 		key: "tpm",
 		view: "rates",
 		label: "TPM",
-		axis: "primary",
+		axis: "secondary",
 		color: "var(--vscode-charts-blue, #58a6ff)",
 		dashed: false,
 		defaultEnabled: true,
@@ -157,6 +169,20 @@ const MAX_BAR_GROUP_WIDTH = 48
 
 export function getTaskMetricsSeries(view: TaskMetricsView): readonly TaskMetricsSeriesDescriptor[] {
 	return TASK_METRICS_SERIES.filter((descriptor) => descriptor.view === view)
+}
+
+/** Describe the left and right axis of a view so each rate keeps its own readable scale. */
+export function getTaskMetricsAxisTitles(view: TaskMetricsView): TaskMetricsAxisTitles {
+	if (view === "rates") {
+		return {
+			left: { label: "RPM", color: getSeriesColor("rpm") },
+			right: { label: "TPM", color: getSeriesColor("tpm") },
+		}
+	}
+	return {
+		left: { label: "Tokens" },
+		right: { label: "Cache Hit Rate", color: getSeriesColor("cacheHit") },
+	}
 }
 
 export function getVisibleTaskMetricsSeries(
@@ -195,18 +221,22 @@ export function createTaskMetricsChartLayout(
 	const firstMidpointMs = firstPoint ? getBucketMidpointMs(firstPoint) : 0
 	const lastMidpointMs = lastPoint ? getBucketMidpointMs(lastPoint) : firstMidpointMs
 	const durationMs = Math.max(1, lastMidpointMs - firstMidpointMs)
-	const primaryValues = sortedPoints.flatMap((point) =>
-		descriptors
-			.filter(({ axis }) => axis === "primary")
-			.map(({ key }) => readTaskMetricsSeriesValue(point, key))
-			.filter((value): value is number => value !== undefined),
-	)
-	const primaryAxisMax = getAxisMax(Math.max(0, ...primaryValues))
-	const primaryTicks = createChartTicks(primaryAxisMax).map((value) => ({
-		value,
-		y: plotBottom - (value / primaryAxisMax) * plotHeight,
-		label: formatTokenMetric(value),
-	}))
+	const primaryAxisMax = getAxisMaxForAxis(sortedPoints, descriptors, "primary")
+	const secondaryAxisMax = getAxisMaxForAxis(sortedPoints, descriptors, "secondary")
+	const primaryTicks = descriptors.some(({ axis }) => axis === "primary")
+		? createChartTicks(primaryAxisMax).map((value) => ({
+				value,
+				y: plotBottom - (value / primaryAxisMax) * plotHeight,
+				label: formatTokenMetric(value),
+			}))
+		: []
+	const secondaryTicks = descriptors.some(({ axis }) => axis === "secondary")
+		? createChartTicks(secondaryAxisMax).map((value) => ({
+				value,
+				y: plotBottom - (value / secondaryAxisMax) * plotHeight,
+				label: formatTokenMetric(value),
+			}))
+		: []
 	const percentageTicks = descriptors.some(({ axis }) => axis === "percentage")
 		? PERCENTAGE_TICK_VALUES.map((value) => ({
 				value,
@@ -226,7 +256,9 @@ export function createTaskMetricsChartLayout(
 		plotTop,
 		plotBottom,
 		primaryAxisMax,
+		secondaryAxisMax,
 		primaryTicks,
+		secondaryTicks,
 		percentageTicks,
 		series: descriptors.map((descriptor, index) =>
 			createSeries(
@@ -237,7 +269,7 @@ export function createTaskMetricsChartLayout(
 				plotRight,
 				plotTop,
 				plotBottom,
-				primaryAxisMax,
+				descriptor.axis === "secondary" ? secondaryAxisMax : primaryAxisMax,
 				index,
 				descriptors.length,
 				durationMs,
@@ -260,19 +292,8 @@ export function readTaskMetricsSeriesValue(point: TaskRateMetricPoint, key: Task
 			return point.cacheReadTokens
 		case "cacheHit":
 			return point.cacheUsageAvailable ? point.cacheHitRate : undefined
-		case "totalTokens": {
-			if (point.tokenCount !== undefined) return point.tokenCount
-			const values = [
-				point.inputTokens,
-				point.outputTokens,
-				point.thoughtsTokens,
-				point.cacheWriteTokens,
-				point.cacheReadTokens,
-			]
-			return values.some((value) => value !== undefined)
-				? values.reduce<number>((sum, value) => sum + (value ?? 0), 0)
-				: undefined
-		}
+		case "totalTokens":
+			return readTotalTokens(point)
 		case "tpm":
 			return point.tokensPerMinute
 		case "rpm":
@@ -286,6 +307,34 @@ export function formatTaskMetricsSeriesValue(descriptor: TaskMetricsSeriesDescri
 	return descriptor.axis === "percentage" ? `${(value * 100).toFixed(1)}%` : value.toLocaleString()
 }
 
+/**
+ * Sum the same token facts the chart renders so Total Tokens can never fall below one of its parts.
+ * `tokenCount` is a provider-active-second estimate that may lag the canonical per-round usage.
+ */
+function readTotalTokens(point: TaskRateMetricPoint): number | undefined {
+	const values = [point.inputTokens, point.outputTokens, point.thoughtsTokens, point.cacheWriteTokens, point.cacheReadTokens]
+	if (values.every((value) => value === undefined)) return point.tokenCount
+	return values.reduce<number>((sum, value) => sum + (value ?? 0), 0)
+}
+
+function getSeriesColor(key: TaskMetricsSeriesKey): string | undefined {
+	return TASK_METRICS_SERIES.find((descriptor) => descriptor.key === key)?.color
+}
+
+function getAxisMaxForAxis(
+	points: readonly TaskRateMetricPoint[],
+	descriptors: readonly TaskMetricsSeriesDescriptor[],
+	axis: TaskMetricsAxis,
+): number {
+	const axisDescriptors = descriptors.filter((descriptor) => descriptor.axis === axis)
+	const values = points.flatMap((point) =>
+		axisDescriptors
+			.map(({ key }) => readTaskMetricsSeriesValue(point, key))
+			.filter((value): value is number => value !== undefined),
+	)
+	return getAxisMax(Math.max(0, ...values))
+}
+
 function createSeries(
 	points: readonly TaskRateMetricPoint[],
 	descriptor: TaskMetricsSeriesDescriptor,
@@ -294,7 +343,7 @@ function createSeries(
 	plotRight: number,
 	plotTop: number,
 	plotBottom: number,
-	primaryAxisMax: number,
+	axisMax: number,
 	seriesIndex: number,
 	seriesCount: number,
 	durationMs: number,
@@ -307,7 +356,7 @@ function createSeries(
 
 	for (const point of points) {
 		const value = readTaskMetricsSeriesValue(point, descriptor.key) ?? 0
-		const normalized = descriptor.axis === "percentage" ? clamp(value, 0, 1) : value / primaryAxisMax
+		const normalized = descriptor.axis === "percentage" ? clamp(value, 0, 1) : value / axisMax
 		const x = xForPoint(point)
 		const bucketWidth = ((point.bucketEndMs - point.bucketStartMs) / durationMs) * plotWidth
 		const groupWidth = clamp(bucketWidth * 0.72, MIN_BAR_WIDTH * seriesCount, MAX_BAR_GROUP_WIDTH)

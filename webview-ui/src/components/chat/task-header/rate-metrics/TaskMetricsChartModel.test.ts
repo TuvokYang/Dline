@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
 	createDefaultEnabledTaskMetricsSeries,
 	createTaskMetricsChartLayout,
+	getTaskMetricsAxisTitles,
 	getTaskMetricsSeries,
 	getVisibleTaskMetricsSeries,
 	readTaskMetricsSeriesValue,
@@ -95,5 +96,49 @@ describe("TaskMetricsChartModel", () => {
 		).toBeUndefined()
 		expect(readTaskMetricsSeriesValue(point(0), "totalTokens")).toBe(140)
 		expect(readTaskMetricsSeriesValue(point(0, { tokenCount: undefined }), "totalTokens")).toBe(140)
+	})
+
+	it("never reports Total Tokens below a rendered token part when the active-second estimate lags", () => {
+		expect(readTaskMetricsSeriesValue(point(0, { tokenCount: 3 }), "totalTokens")).toBe(140)
+		expect(readTaskMetricsSeriesValue(point(0, { tokenCount: 900 }), "totalTokens")).toBe(140)
+		expect(
+			readTaskMetricsSeriesValue(
+				point(0, {
+					tokenCount: 42,
+					inputTokens: undefined,
+					outputTokens: undefined,
+					thoughtsTokens: undefined,
+					cacheWriteTokens: undefined,
+					cacheReadTokens: undefined,
+				}),
+				"totalTokens",
+			),
+		).toBe(42)
+	})
+
+	it("scales RPM on the left axis and TPM on the right axis so neither rate flattens the other", () => {
+		expect(getTaskMetricsAxisTitles("rates")).toMatchObject({
+			left: { label: "RPM" },
+			right: { label: "TPM" },
+		})
+		expect(getTaskMetricsAxisTitles("tokenCache")).toMatchObject({
+			left: { label: "Tokens" },
+			right: { label: "Cache Hit Rate" },
+		})
+
+		const layout = createTaskMetricsChartLayout([point(0), point(60_000)], "rates", new Set(["tpm", "rpm"] as const))
+		expect(layout.primaryAxisMax).toBe(30)
+		expect(layout.secondaryAxisMax).toBe(6_000)
+		expect(layout.primaryTicks.at(-1)?.value).toBe(layout.primaryAxisMax)
+		expect(layout.secondaryTicks.at(-1)?.value).toBe(layout.secondaryAxisMax)
+		expect(layout.percentageTicks).toEqual([])
+
+		const plotHeight = layout.plotBottom - layout.plotTop
+		const rpm = layout.series.find(({ descriptor }) => descriptor.key === "rpm")
+		const tpm = layout.series.find(({ descriptor }) => descriptor.key === "tpm")
+		// RPM uses its own axis, so 30 reaches full height instead of collapsing onto the TPM scale.
+		expect(rpm?.points[0]?.y).toBeCloseTo(layout.plotTop, 6)
+		expect(rpm?.points[0]?.y).toBeLessThan(layout.plotBottom - plotHeight / 2)
+		expect(tpm?.points[0]?.y).toBeCloseTo(layout.plotBottom - (4_500 / 6_000) * plotHeight, 6)
 	})
 })
