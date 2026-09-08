@@ -281,8 +281,13 @@ export class GenerateImageToolHandler implements IFullyManagedTool {
 			const message = safeError.message
 			if (activePresentation) {
 				const isCancelled = safeError.code === "cancelled"
+				// The service deletes every stored preview for a request that did not
+				// commit a result, so a terminal presentation must stop advertising
+				// those IDs. Keeping them would make the webview request bytes that no
+				// longer exist, once per state broadcast.
+				const { previews: _discardedPreviews, ...withoutPreviews } = activePresentation
 				activePresentation = {
-					...activePresentation,
+					...withoutPreviews,
 					status: isCancelled ? "cancelled" : "failed",
 					error: {
 						message,

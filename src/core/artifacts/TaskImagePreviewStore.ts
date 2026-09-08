@@ -103,7 +103,13 @@ export class TaskImagePreviewStore {
 		if (!match) throw new ArtifactStoreError("invalid_artifact_id", "Image preview ID is invalid.")
 		await initializePreviewRoot(this.previewRoot)
 		const absolutePath = path.join(this.previewRoot, match[1])
-		const buffer = await fs.readFile(absolutePath)
+		// Previews are deleted as soon as their request stops running, so a missing
+		// file is an expected outcome rather than a defect. The native error is not
+		// propagated because it carries the host's absolute path into the log
+		// channel and the webview.
+		const buffer = await fs.readFile(absolutePath).catch(() => {
+			throw new ArtifactStoreError("artifact_not_found", "Image preview is no longer available.")
+		})
 		const actualHash = createHash("sha256").update(buffer).digest("hex")
 		if (actualHash !== match[1]) {
 			throw new ArtifactStoreError("artifact_integrity_failed", "Image preview hash does not match its ID.")

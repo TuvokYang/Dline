@@ -13,7 +13,7 @@ import {
 	PaperclipIcon,
 	TriangleAlertIcon,
 } from "lucide-react"
-import { type KeyboardEvent, useEffect, useMemo, useState } from "react"
+import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react"
 import { FileServiceClient, UiServiceClient } from "@/services/grpc-client"
 
 interface ImageGenerationRowProps {
@@ -98,12 +98,7 @@ function ImageSurface({ alt, dataUrl, displayMode, error, height, onActivate, wi
 	)
 }
 
-export default function ImageGenerationRow({
-	presentation,
-	isExpanded,
-	onAddToInput,
-	onToggleExpand,
-}: ImageGenerationRowProps) {
+export default function ImageGenerationRow({ presentation, isExpanded, onAddToInput, onToggleExpand }: ImageGenerationRowProps) {
 	const [previews, setPreviews] = useState<Record<string, ArtifactPreviewState>>({})
 	const [displayMode, setDisplayMode] = useState<ImageDisplayMode>("fit")
 	const artifacts = useMemo(() => presentation.artifacts ?? [], [presentation.artifacts])
@@ -115,6 +110,13 @@ export default function ImageGenerationRow({
 		[presentation.preview, presentation.previews],
 	)
 	const latestTransientPreview = artifacts.length === 0 ? transientPreviews.at(-1) : undefined
+	// Previews are ephemeral: the extension deletes them as soon as a request
+	// stops running, so a failed load will keep failing. Identity is tracked
+	// separately from `previews` because that state is what the effect writes,
+	// and reading it here would re-trigger the effect it just satisfied.
+	const requestedPreviewIds = useRef(new Set<string>())
+	const artifactIds = useMemo(() => artifacts.map((artifact) => artifact.id).join("\u0000"), [artifacts])
+	const latestTransientPreviewId = latestTransientPreview?.id
 
 	useEffect(() => {
 		let active = true
@@ -140,16 +142,21 @@ export default function ImageGenerationRow({
 		for (const artifact of artifacts) {
 			load(artifact.id, UiServiceClient.getImageArtifact(ImageArtifactRequest.create({ artifactId: artifact.id })))
 		}
-		if (latestTransientPreview) {
+		if (latestTransientPreviewId && !requestedPreviewIds.current.has(latestTransientPreviewId)) {
+			requestedPreviewIds.current.add(latestTransientPreviewId)
 			load(
-				latestTransientPreview.id,
-				UiServiceClient.getImagePreview(ImagePreviewRequest.create({ previewId: latestTransientPreview.id })),
+				latestTransientPreviewId,
+				UiServiceClient.getImagePreview(ImagePreviewRequest.create({ previewId: latestTransientPreviewId })),
 			)
 		}
 		return () => {
 			active = false
 		}
-	}, [artifacts, latestTransientPreview])
+		// `artifactIds` and `latestTransientPreviewId` are the identities that decide
+		// what to fetch; depending on the arrays themselves would refetch on every
+		// state broadcast, because each broadcast rebuilds them.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [artifactIds, latestTransientPreviewId])
 
 	const isRunning = presentation.status === "queued" || presentation.status === "started" || presentation.status === "preview"
 	const isFailed = presentation.status === "failed"
@@ -173,7 +180,11 @@ export default function ImageGenerationRow({
 						<ImageIcon className="size-4 shrink-0" />
 					)}
 					<span className="min-w-0 flex-1 truncate font-semibold">{statusLabel(presentation.status)}</span>
-					{isExpanded ? <ChevronDownIcon className="size-4 shrink-0" /> : <ChevronRightIcon className="size-4 shrink-0" />}
+					{isExpanded ? (
+						<ChevronDownIcon className="size-4 shrink-0" />
+					) : (
+						<ChevronRightIcon className="size-4 shrink-0" />
+					)}
 				</button>
 			</div>
 			{isExpanded && (
@@ -198,7 +209,11 @@ export default function ImageGenerationRow({
 									className="rounded p-1 hover:bg-toolbar-hover"
 									onClick={() => setDisplayMode((current) => (current === "fit" ? "fill" : "fit"))}
 									type="button">
-									{displayMode === "fit" ? <Maximize2Icon className="size-3.5" /> : <Minimize2Icon className="size-3.5" />}
+									{displayMode === "fit" ? (
+										<Maximize2Icon className="size-3.5" />
+									) : (
+										<Minimize2Icon className="size-3.5" />
+									)}
 								</button>
 							</div>
 							<ImageSurface
@@ -226,12 +241,20 @@ export default function ImageGenerationRow({
 												className="rounded p-1 hover:bg-toolbar-hover"
 												onClick={() => setDisplayMode((current) => (current === "fit" ? "fill" : "fit"))}
 												type="button">
-												{displayMode === "fit" ? <Maximize2Icon className="size-3.5" /> : <Minimize2Icon className="size-3.5" />}
+												{displayMode === "fit" ? (
+													<Maximize2Icon className="size-3.5" />
+												) : (
+													<Minimize2Icon className="size-3.5" />
+												)}
 											</button>
 											<button
 												aria-label="Copy Artifact ID"
 												className="rounded p-1 hover:bg-toolbar-hover"
-												onClick={() => void FileServiceClient.copyToClipboard(StringRequest.create({ value: artifact.id }))}
+												onClick={() =>
+													void FileServiceClient.copyToClipboard(
+														StringRequest.create({ value: artifact.id }),
+													)
+												}
 												type="button">
 												<CopyIcon className="size-3.5" />
 											</button>
@@ -240,7 +263,9 @@ export default function ImageGenerationRow({
 												className="rounded p-1 hover:bg-toolbar-hover disabled:opacity-50"
 												disabled={!onAddToInput}
 												onClick={() =>
-													onAddToInput?.(`Use image artifact ${artifact.id} as a reference for the next image generation.`)
+													onAddToInput?.(
+														`Use image artifact ${artifact.id} as a reference for the next image generation.`,
+													)
 												}
 												type="button">
 												<PaperclipIcon className="size-3.5" />
@@ -253,7 +278,9 @@ export default function ImageGenerationRow({
 											error={preview?.error}
 											height={artifact.height}
 											onActivate={() =>
-												void UiServiceClient.openImageArtifact(ImageArtifactRequest.create({ artifactId: artifact.id }))
+												void UiServiceClient.openImageArtifact(
+													ImageArtifactRequest.create({ artifactId: artifact.id }),
+												)
 											}
 											width={artifact.width}
 										/>
