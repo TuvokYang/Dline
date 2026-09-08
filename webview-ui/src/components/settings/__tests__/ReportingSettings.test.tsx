@@ -47,8 +47,8 @@ describe("reporting consent placement", () => {
 		mocks.state.remoteConfigSettings = undefined
 	})
 
-	it("offers both consents next to the diagnostics export once usage reporting is on", () => {
-		mocks.state.usageReportingSetting = "enabled"
+	it("offers both consents next to the diagnostics export once error reporting is on", () => {
+		mocks.state.errorReportingSetting = "enabled"
 		render(<AboutSection renderSectionHeader={renderSectionHeader} version="1.2.3" />)
 
 		expect(screen.getByTestId(USAGE_CHECKBOX)).toBeTruthy()
@@ -57,32 +57,31 @@ describe("reporting consent placement", () => {
 	})
 
 	/**
-	 * Runtime telemetry follows the usage consent and starts only on an
-	 * explicit "enabled". While that consent is undecided or refused nothing is
-	 * recorded, so an export would have no session to write and could only
-	 * fail. Showing it anyway would advertise diagnostics the extension is not
-	 * permitted to collect.
+	 * Runtime diagnostics follow the error consent and start only on an explicit
+	 * "enabled". While that consent is undecided or refused nothing is recorded,
+	 * so an export would have no session to write and could only fail. Showing it
+	 * anyway would advertise diagnostics the extension is not permitted to collect.
 	 */
-	it.each(["unset", "disabled"])("hides the diagnostics export while usage consent is %s", (setting) => {
-		mocks.state.usageReportingSetting = setting
+	it.each(["unset", "disabled"])("hides the diagnostics export while error consent is %s", (setting) => {
+		mocks.state.errorReportingSetting = setting
 		render(<AboutSection renderSectionHeader={renderSectionHeader} version="1.2.3" />)
 
 		expect(screen.queryByText("Export diagnostic bundle")).toBeNull()
 		expect(screen.queryByText("Diagnostics")).toBeNull()
 		// The consent itself must remain reachable, or the user could never
-		// turn reporting back on.
-		expect(screen.getByTestId(USAGE_CHECKBOX)).toBeTruthy()
+		// turn diagnostics back on.
+		expect(screen.getByTestId(ERROR_CHECKBOX)).toBeTruthy()
 	})
 
-	it("does not let the error consent stand in for the usage one", () => {
-		// The two were a single switch once; agreeing to report crashes must
-		// not silently start product analytics or the diagnostics recorder.
-		mocks.state.errorReportingSetting = "enabled"
+	it("does not let the usage consent stand in for the error one", () => {
+		// The two were a single switch once; agreeing to product analytics must
+		// not silently start crash reporting or the diagnostics recorder.
+		mocks.state.usageReportingSetting = "enabled"
 		render(<AboutSection renderSectionHeader={renderSectionHeader} version="1.2.3" />)
 
 		expect(screen.queryByText("Export diagnostic bundle")).toBeNull()
-		expect((screen.getByTestId(USAGE_CHECKBOX) as HTMLInputElement).checked).toBe(false)
-		expect((screen.getByTestId(ERROR_CHECKBOX) as HTMLInputElement).checked).toBe(true)
+		expect((screen.getByTestId(USAGE_CHECKBOX) as HTMLInputElement).checked).toBe(true)
+		expect((screen.getByTestId(ERROR_CHECKBOX) as HTMLInputElement).checked).toBe(false)
 	})
 
 	it("treats an undecided consent as not granted", () => {

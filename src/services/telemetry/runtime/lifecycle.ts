@@ -10,18 +10,14 @@ import { RuntimeSampler } from "./performance/runtime-sampler"
 import { DEFAULT_METRIC_BUDGETS, type PolicyVerdict, ThresholdPolicy } from "./performance/threshold-policy"
 import { RuntimeEventBus } from "./runtime-event-bus"
 import { RuntimeTelemetryService } from "./service"
-import {
-	OtelLogTransport,
-	type OtelLogTransportOptions,
-	type OtelLogTransportStats,
-} from "./transports/otel-log-transport"
 import { enforceJournalRetention } from "./transports/journal-retention"
+import { OtelLogTransport, type OtelLogTransportOptions, type OtelLogTransportStats } from "./transports/otel-log-transport"
 import { SessionJournal, type SessionJournalStats } from "./transports/session-journal"
 import type { RuntimeDropAccounting, RuntimeTelemetryEvent } from "./types"
 
 /**
- * Turns the user's "Allow error and usage reporting" choice into a running (or
- * stopped) runtime telemetry pipeline.
+ * Turns the user's "Allow error reporting" choice into a running (or stopped)
+ * runtime diagnostics pipeline.
  *
  * This is the only place that decides whether diagnostics may touch the disk or
  * the network. Keeping the decision here means the bus, journal and transport

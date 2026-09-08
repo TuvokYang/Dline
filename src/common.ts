@@ -17,11 +17,11 @@ import { ErrorService } from "./services/error"
 import { featureFlagsService } from "./services/feature-flags"
 import { getDistinctId } from "./services/logging/distinctId"
 import { DlineRuntimeFileManager } from "./services/runtime-files"
+import { telemetryService } from "./services/telemetry"
 import { recordPerfPhase } from "./services/telemetry/instrumentation/duration-recorder"
 import { PerfDomain } from "./services/telemetry/instrumentation/perf-domains"
-import { activateRuntimeTelemetry, deactivateRuntimeTelemetry } from "./services/telemetry/runtime/activation"
-import { telemetryService } from "./services/telemetry"
 import { PostHogClientProvider } from "./services/telemetry/providers/posthog/PostHogClientProvider"
+import { activateRuntimeTelemetry, deactivateRuntimeTelemetry } from "./services/telemetry/runtime/activation"
 import { cleanupTestMode } from "./services/test/TestMode"
 import { ShowMessageType } from "./shared/proto/dline/host/window"
 import { syncWorker } from "./shared/services/worker/sync"
@@ -157,9 +157,9 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 	try {
 		await activateRuntimeTelemetry({
 			dataDir: storageContext.dataDir,
-			// Diagnostics describe how the user's own session behaved, so they
-			// follow the usage consent rather than the error one.
-			telemetrySetting: stateManager.getGlobalSettingsKey("usageReportingSetting") ?? "unset",
+			// Runtime diagnostics support error investigation, so they follow the
+			// error-reporting consent rather than product analytics consent.
+			telemetrySetting: stateManager.getGlobalSettingsKey("errorReportingSetting") ?? "unset",
 		})
 	} catch (error) {
 		Logger.error("[Dline] Failed to start runtime telemetry:", error)

@@ -79,7 +79,7 @@ function ConsentCheckbox({
  *
  * They live beside the export button rather than in General settings because
  * the bundle only contains data these switches allowed to be collected, and a
- * user who turns usage reporting off should see the export stop working right
+ * user who turns error reporting off should see the export stop working right
  * here instead of hunting for the cause elsewhere.
  */
 function ReportingConsent() {
@@ -105,9 +105,9 @@ function ReportingConsent() {
 			/>
 
 			<p className="text-sm mt-[5px] text-description">
-				Usage reporting sends anonymous product analytics and lets Dline record the runtime events a diagnostic bundle is
-				built from. Error reporting sends crash and exception reports. No code, prompts, or personal information are ever
-				sent. See our{" "}
+				Usage reporting sends anonymous product analytics. Error reporting sends crash and exception reports and lets
+				Dline record the runtime events a diagnostic bundle is built from. No code, prompts, or personal information are
+				ever sent. See our{" "}
 				<VSCodeLink
 					className="text-inherit"
 					href="https://docs.dline.bot/more-info/telemetry"
@@ -133,7 +133,7 @@ function ReportingConsent() {
  * This sits next to the issue links because that is when it is needed: the
  * archive exists to be attached to a bug report, not to configure anything.
  *
- * Rendered only while usage reporting is enabled. Runtime telemetry starts on
+ * Rendered only while error reporting is enabled. Runtime diagnostics start on
  * that consent alone, so with it off there is no session to export and the
  * button could only ever fail. Offering it anyway would advertise diagnostics
  * the extension is not permitted to collect.
@@ -183,11 +183,11 @@ function DiagnosticBundleExport() {
 	)
 }
 const AboutSection = ({ version, renderSectionHeader }: AboutSectionProps) => {
-	const { usageReportingSetting } = useExtensionState()
-	// Mirrors the backend gate exactly: the runtime pipeline follows the usage
-	// consent and starts only on "enabled", so an undecided user must not be
-	// shown an export that has nothing to collect.
-	const isReportingEnabled = usageReportingSetting === "enabled"
+	const { errorReportingSetting } = useExtensionState()
+	// Mirrors the backend gate exactly: the runtime diagnostics pipeline follows
+	// the error consent and starts only on "enabled", so an undecided user must
+	// not be shown an export that has nothing to collect.
+	const isDiagnosticsEnabled = errorReportingSetting === "enabled"
 
 	return (
 		<div>
@@ -214,7 +214,7 @@ const AboutSection = ({ version, renderSectionHeader }: AboutSectionProps) => {
 					</p>
 
 					<ReportingConsent />
-					{isReportingEnabled && <DiagnosticBundleExport />}
+					{isDiagnosticsEnabled && <DiagnosticBundleExport />}
 				</div>
 			</Section>
 		</div>

@@ -70,10 +70,10 @@ import { OcaAuthService } from "@/services/auth/oca/OcaAuthService"
 import { LogoutReason } from "@/services/auth/types"
 import { featureFlagsService } from "@/services/feature-flags"
 import { getDistinctId } from "@/services/logging/distinctId"
+import { telemetryService } from "@/services/telemetry"
 import { recordPerfPhase } from "@/services/telemetry/instrumentation/duration-recorder"
 import { PerfDomain } from "@/services/telemetry/instrumentation/perf-domains"
 import { getRuntimeTelemetryLifecycle } from "@/services/telemetry/runtime/host"
-import { telemetryService } from "@/services/telemetry"
 import { ClineExtensionContext } from "@/shared/cline"
 import { getAxiosSettings } from "@/shared/net"
 import { ShowMessageType } from "@/shared/proto/dline/host/window"
@@ -982,9 +982,8 @@ export class Controller {
 	 * Records the usage reporting consent.
 	 *
 	 * Consent must be given, not merely left unanswered: an undecided user is
-	 * treated the same as one who declined. The local runtime diagnostics ride
-	 * along with this consent, since they describe how the user's own session
-	 * behaved rather than what went wrong in it.
+	 * treated the same as one who declined. This setting controls product
+	 * analytics only; runtime diagnostics follow error-reporting consent.
 	 */
 	async updateUsageReportingSetting(usageReportingSetting: TelemetrySetting) {
 		const wasOptedIn = isReportingAllowed(this.stateManager.getGlobalSettingsKey("usageReportingSetting"))
@@ -998,18 +997,6 @@ export class Controller {
 		this.stateManager.setGlobalState("usageReportingSetting", usageReportingSetting)
 		telemetryService.updateTelemetryState(isOptedIn)
 
-		// The runtime diagnostics pipeline holds its own consent state, decided
-		// when it started. Without this it would keep the choice made at
-		// activation until the next window reload, so a user who opts in would
-		// see no journal and an empty diagnostic bundle.
-		try {
-			await getRuntimeTelemetryLifecycle()?.applyConsent(usageReportingSetting)
-		} catch (error) {
-			// Diagnostics are an aid; failing to apply consent must not stop
-			// the setting itself from being saved and reported.
-			Logger.error("[Controller] Failed to apply runtime telemetry consent:", error)
-		}
-
 		// Capture opt-in event AFTER updating (so telemetry is enabled to receive it)
 		if (!wasOptedIn && isOptedIn) {
 			telemetryService.captureUserOptIn()
@@ -1021,12 +1008,25 @@ export class Controller {
 	/**
 	 * Records the error reporting consent.
 	 *
-	 * Independent of usage reporting: a user may want crashes investigated
-	 * without agreeing to be measured, or the reverse. The error provider reads
-	 * this key directly, so no further wiring is needed here.
+	 * Independent of usage reporting: a user may want crashes and runtime
+	 * diagnostics available without agreeing to product analytics, or the reverse.
+	 * The error provider reads this key directly; the runtime diagnostics pipeline
+	 * must also receive changes immediately so its journal and export stay aligned.
 	 */
 	async updateErrorReportingSetting(errorReportingSetting: TelemetrySetting) {
 		this.stateManager.setGlobalState("errorReportingSetting", errorReportingSetting)
+
+		// The runtime diagnostics pipeline holds its own consent state, decided
+		// when it started. Applying changes here avoids requiring a window reload
+		// before journaling starts or stops.
+		try {
+			await getRuntimeTelemetryLifecycle()?.applyConsent(errorReportingSetting)
+		} catch (error) {
+			// Diagnostics are an aid; failing to apply consent must not stop the
+			// setting itself from being saved or the webview from being refreshed.
+			Logger.error("[Controller] Failed to apply runtime diagnostics consent:", error)
+		}
+
 		await this.postStateToWebview()
 	}
 

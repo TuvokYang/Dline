@@ -71,27 +71,27 @@ async function openSettings(page: Page, sidebar: Frame): Promise<void> {
 	await expect(sidebar.getByRole("heading", { name: "API Configuration" })).toBeVisible({ timeout: 30_000 })
 }
 
-function reportingCheckbox(sidebar: Frame) {
-	// Runtime diagnostics follow the usage consent, not the error one.
-	return sidebar.getByText("Allow usage reporting", { exact: true })
+function diagnosticsConsentCheckbox(sidebar: Frame) {
+	// Runtime diagnostics follow the error consent, not product analytics consent.
+	return sidebar.getByText("Allow error reporting", { exact: true })
 }
 
 /** The persisted consent value, or undefined before it has been written. */
-function persistedUsageReportingSetting(dlineDir: string): string | undefined {
+function persistedErrorReportingSetting(dlineDir: string): string | undefined {
 	const settingsPath = path.join(dlineDir, "data", "settings", "settings.json")
 	if (!existsSync(settingsPath)) return undefined
-	return (JSON.parse(readFileSync(settingsPath, "utf8")) as { usageReportingSetting?: string }).usageReportingSetting
+	return (JSON.parse(readFileSync(settingsPath, "utf8")) as { errorReportingSetting?: string }).errorReportingSetting
 }
 
 /**
- * Tick the usage consent and wait for it to be persisted.
+ * Tick the error-reporting consent and wait for it to be persisted.
  *
  * The checkbox is checked only for an explicit `enabled`, so an undecided
  * profile starts unchecked and a single click opts in.
  */
-async function grantReportingConsent(dlineDir: string, sidebar: Frame): Promise<void> {
-	await reportingCheckbox(sidebar).click()
-	await expect.poll(() => persistedUsageReportingSetting(dlineDir), { timeout: 15_000 }).toBe("enabled")
+async function grantDiagnosticsConsent(dlineDir: string, sidebar: Frame): Promise<void> {
+	await diagnosticsConsentCheckbox(sidebar).click()
+	await expect.poll(() => persistedErrorReportingSetting(dlineDir), { timeout: 15_000 }).toBe("enabled")
 }
 
 e2e(
@@ -107,7 +107,7 @@ e2e(
 		// The consent gate: an undecided or declined user produces no journal,
 		// even though activation already installed the pipeline and producers
 		// have been recording since startup.
-		await expect(reportingCheckbox(sidebar)).toBeVisible()
+		await expect(diagnosticsConsentCheckbox(sidebar)).toBeVisible()
 		expect(
 			journalFiles(dlineDir),
 			`Expected no session journal before consent, found ${journalFiles(dlineDir).join(", ")}`,
@@ -124,7 +124,7 @@ e2e(
 		).toHaveLength(0)
 
 		// Opting in starts the sinks.
-		await grantReportingConsent(dlineDir, sidebar)
+		await grantDiagnosticsConsent(dlineDir, sidebar)
 
 		// A journal appears while the session is still running. This is the
 		// property that matters: the lifecycle drains the process-wide bus its
