@@ -116,10 +116,10 @@ describe("TaskMetricsChartModel", () => {
 		).toBe(42)
 	})
 
-	it("scales RPM on the left axis and TPM on the right axis so neither rate flattens the other", () => {
+	it("scales TPM on the left axis and RPM on the right axis so neither rate flattens the other", () => {
 		expect(getTaskMetricsAxisTitles("rates")).toMatchObject({
-			left: { label: "RPM" },
-			right: { label: "TPM" },
+			left: { label: "TPM" },
+			right: { label: "RPM" },
 		})
 		expect(getTaskMetricsAxisTitles("tokenCache")).toMatchObject({
 			left: { label: "Tokens" },
@@ -127,8 +127,8 @@ describe("TaskMetricsChartModel", () => {
 		})
 
 		const layout = createTaskMetricsChartLayout([point(0), point(60_000)], "rates", new Set(["tpm", "rpm"] as const))
-		expect(layout.primaryAxisMax).toBe(30)
-		expect(layout.secondaryAxisMax).toBe(6_000)
+		expect(layout.primaryAxisMax).toBe(6_000)
+		expect(layout.secondaryAxisMax).toBe(30)
 		expect(layout.primaryTicks.at(-1)?.value).toBe(layout.primaryAxisMax)
 		expect(layout.secondaryTicks.at(-1)?.value).toBe(layout.secondaryAxisMax)
 		expect(layout.percentageTicks).toEqual([])

@@ -147,7 +147,7 @@ export const TASK_METRICS_SERIES: readonly TaskMetricsSeriesDescriptor[] = [
 		key: "tpm",
 		view: "rates",
 		label: "TPM",
-		axis: "secondary",
+		axis: "primary",
 		color: "var(--vscode-charts-blue, #58a6ff)",
 		dashed: false,
 		defaultEnabled: true,
@@ -156,7 +156,7 @@ export const TASK_METRICS_SERIES: readonly TaskMetricsSeriesDescriptor[] = [
 		key: "rpm",
 		view: "rates",
 		label: "RPM",
-		axis: "primary",
+		axis: "secondary",
 		color: "var(--vscode-charts-orange, #d18616)",
 		dashed: false,
 		defaultEnabled: true,
@@ -175,8 +175,8 @@ export function getTaskMetricsSeries(view: TaskMetricsView): readonly TaskMetric
 export function getTaskMetricsAxisTitles(view: TaskMetricsView): TaskMetricsAxisTitles {
 	if (view === "rates") {
 		return {
-			left: { label: "RPM", color: getSeriesColor("rpm") },
-			right: { label: "TPM", color: getSeriesColor("tpm") },
+			left: { label: "TPM", color: getSeriesColor("tpm") },
+			right: { label: "RPM", color: getSeriesColor("rpm") },
 		}
 	}
 	return {

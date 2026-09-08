@@ -103,13 +103,13 @@ describe("TaskMetricsChart", () => {
 		expect(screen.getByTestId("task-metrics-line-tpm-0")).toBeInTheDocument()
 	})
 
-	it("labels RPM on the left axis and TPM on the right axis with their own ticks", () => {
+	it("labels TPM on the left axis and RPM on the right axis with their own ticks", () => {
 		const rendered = render(<TaskMetricsChart chartType="line" points={[point(0), point(60_000)]} view="rates" />)
-		expect(screen.getByTestId("task-metrics-left-axis-title")).toHaveTextContent("RPM")
-		expect(screen.getByTestId("task-metrics-right-axis-title")).toHaveTextContent("TPM")
+		expect(screen.getByTestId("task-metrics-left-axis-title")).toHaveTextContent("TPM")
+		expect(screen.getByTestId("task-metrics-right-axis-title")).toHaveTextContent("RPM")
 		expect(screen.queryByTestId("task-metrics-percentage-tick")).not.toBeInTheDocument()
-		expect(screen.getAllByTestId("task-metrics-secondary-tick").at(-1)).toHaveTextContent("6.0K")
-		expect(screen.getAllByTestId("task-metrics-primary-tick").at(-1)).toHaveTextContent("30")
+		expect(screen.getAllByTestId("task-metrics-primary-tick").at(-1)).toHaveTextContent("6.0K")
+		expect(screen.getAllByTestId("task-metrics-secondary-tick").at(-1)).toHaveTextContent("30")
 
 		rendered.rerender(<TaskMetricsChart chartType="line" points={[point(0), point(60_000)]} view="tokenCache" />)
 		expect(screen.getByTestId("task-metrics-left-axis-title")).toHaveTextContent("Tokens")
