@@ -115,7 +115,7 @@ export const workspace = {
 		return {
 			get: (key: string, defaultValue?: any) => {
 				// Return default values for common configuration keys
-				if (section === "cline" && key === "telemetrySetting") {
+				if (section === "cline" && (key === "usageReportingSetting" || key === "errorReportingSetting")) {
 					return "enabled"
 				}
 				if (section === "telemetry" && key === "telemetryLevel") {

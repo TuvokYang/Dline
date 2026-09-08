@@ -9,7 +9,6 @@ import { telemetryService } from "@/services/telemetry"
 import { Logger } from "@/shared/services/Logger"
 import { openExternal } from "@/utils/env"
 import { AuthInvalidTokenError, AuthNetworkError } from "../error/ClineError"
-import { featureFlagsService } from "../feature-flags"
 import { ClineAuthProvider } from "./providers/ClineAuthProvider"
 import { LogoutReason } from "./types"
 
@@ -407,10 +406,7 @@ export class AuthService {
 		// Identify the user in telemetry if available
 		if (this._clineAuthInfo?.userInfo?.id) {
 			telemetryService.identifyAccount(this._clineAuthInfo.userInfo)
-			// Poll feature flags immediately for authenticated users to ensure cache is populated
-			await featureFlagsService.poll(this._clineAuthInfo.userInfo?.id)
 		}
-		// Skip feature flags poll for unauthenticated users — defaults are sufficient
 
 		// Update state in webviews once per unique controller
 		await Promise.all(Array.from(uniqueControllers).map((c) => c.postStateToWebview()))

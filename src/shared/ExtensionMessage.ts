@@ -94,7 +94,8 @@ export interface ExtensionState {
 	environment?: Environment
 	shouldShowAnnouncement: boolean
 	taskHistory: HistoryItem[]
-	telemetrySetting: TelemetrySetting
+	usageReportingSetting: TelemetrySetting
+	errorReportingSetting: TelemetrySetting
 	/** Complete task interaction projection derived only from runtime state. */
 	taskViewState?: TaskViewState
 	/** Input the user queued while the task was busy; the backend owns it. */

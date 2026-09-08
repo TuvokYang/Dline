@@ -6,6 +6,7 @@ import { getDistinctId, setDistinctId } from "@/services/logging/distinctId"
 import { fetch } from "@/shared/net"
 import { Setting } from "@/shared/proto/dline/host"
 import { Logger } from "@/shared/services/Logger"
+import { isReportingAllowed } from "@/shared/TelemetrySetting"
 import { posthogConfig } from "../../../../shared/services/config/posthog-config"
 import type { ClineAccountUserInfo } from "../../../auth/AuthService"
 import type { ITelemetryProvider, TelemetryProperties, TelemetrySettings } from "../ITelemetryProvider"
@@ -28,12 +29,14 @@ export class PostHogTelemetryProvider implements ITelemetryProvider {
 		if (sharedClient) {
 			this.client = sharedClient
 		} else {
-			// Only create a new client if we have an API key
-			if (!posthogConfig.apiKey) {
-				throw new Error("PostHog API key is required to create a new client")
+			// A key alone is not enough: without a configured host there is
+			// nowhere to report to.
+			const { apiKey, host } = posthogConfig
+			if (!apiKey || !host) {
+				throw new Error("A PostHog API key and host are required to create a new client")
 			}
-			this.client = new PostHog(posthogConfig.apiKey, {
-				host: posthogConfig.host,
+			this.client = new PostHog(apiKey, {
+				host,
 				fetch: (url, options) => fetch(url, options),
 			})
 		}
@@ -120,7 +123,7 @@ export class PostHogTelemetryProvider implements ITelemetryProvider {
 	}
 
 	public isEnabled(): boolean {
-		const isOptedIn = StateManager.get().getGlobalSettingsKey("telemetrySetting") !== "disabled"
+		const isOptedIn = isReportingAllowed(StateManager.get().getGlobalSettingsKey("usageReportingSetting"))
 		const wasOptedIn = this.optInCache
 		try {
 			if (isOptedIn && !wasOptedIn) {

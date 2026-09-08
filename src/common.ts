@@ -6,7 +6,6 @@ import { Logger } from "@/shared/services/Logger"
 import type { StorageContext } from "@/shared/storage/storage-context"
 import { FileContextTracker } from "./core/context/context-tracking/FileContextTracker"
 import { flushAllWorkspaceHistoryManagers } from "./core/controller/history/WorkspaceHistoryManager"
-import { clearOnboardingModelsCache } from "./core/controller/models/getClineOnboardingModels"
 import { HookDiscoveryCache } from "./core/hooks/HookDiscoveryCache"
 import { HookProcessRegistry } from "./core/hooks/HookProcessRegistry"
 import { ModelRegistry } from "./core/model-registry/ModelRegistry"
@@ -18,9 +17,9 @@ import { ErrorService } from "./services/error"
 import { featureFlagsService } from "./services/feature-flags"
 import { getDistinctId } from "./services/logging/distinctId"
 import { DlineRuntimeFileManager } from "./services/runtime-files"
-import { recordPerfPhase } from "./services/runtime-telemetry/instrumentation/duration-recorder"
-import { PerfDomain } from "./services/runtime-telemetry/instrumentation/perf-domains"
-import { activateRuntimeTelemetry, deactivateRuntimeTelemetry } from "./services/runtime-telemetry/runtime-telemetry-activation"
+import { recordPerfPhase } from "./services/telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "./services/telemetry/instrumentation/perf-domains"
+import { activateRuntimeTelemetry, deactivateRuntimeTelemetry } from "./services/telemetry/runtime/activation"
 import { telemetryService } from "./services/telemetry"
 import { PostHogClientProvider } from "./services/telemetry/providers/posthog/PostHogClientProvider"
 import { cleanupTestMode } from "./services/test/TestMode"
@@ -158,7 +157,9 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 	try {
 		await activateRuntimeTelemetry({
 			dataDir: storageContext.dataDir,
-			telemetrySetting: stateManager.getGlobalSettingsKey("telemetrySetting") ?? "unset",
+			// Diagnostics describe how the user's own session behaved, so they
+			// follow the usage consent rather than the error one.
+			telemetrySetting: stateManager.getGlobalSettingsKey("usageReportingSetting") ?? "unset",
 		})
 	} catch (error) {
 		Logger.error("[Dline] Failed to start runtime telemetry:", error)
@@ -295,7 +296,6 @@ export async function tearDown(): Promise<void> {
 
 	await StateManager.shutdown()
 	syncWorker().dispose()
-	clearOnboardingModelsCache()
 
 	// Kill any running hook processes to prevent zombies
 	await HookProcessRegistry.terminateAll()

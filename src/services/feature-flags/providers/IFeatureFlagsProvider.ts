@@ -1,6 +1,9 @@
 /**
- * Interface for feature flags providers
- * Allows switching between different feature flag providers (PostHog, etc.)
+ * Interface for experimental feature flag providers.
+ *
+ * Resolution is local, so the contract is synchronous: the callers that read a
+ * switch sit on hot paths and cannot await. The previous asynchronous shape
+ * existed for the remote flag service, which has been removed.
  */
 
 /**
@@ -24,17 +27,15 @@ type JsonType =
 	| Array<JsonType>
 	| JsonType[]
 export type FeatureFlagPayload = string | number | boolean | { [key: string]: JsonType } | JsonType[] | null
-export type FeatureFlagsAndPayloads = {
-	featureFlags?: Record<string, FeatureFlagPayload>
-	featureFlagPayloads?: Record<string, FeatureFlagPayload>
-}
 
-/**
- * Abstract interface for feature flags providers
- * Any feature flags provider must implement this interface
- */
 export interface IFeatureFlagsProvider {
-	getAllFlagsAndPayloads(options: { flagKeys?: string[] }): Promise<FeatureFlagsAndPayloads | undefined>
+	/**
+	 * Resolve the requested switches.
+	 *
+	 * A switch the provider has no opinion on must be omitted rather than
+	 * reported as `false`, so the caller can fall back to its default.
+	 */
+	resolveFlags(flagKeys: readonly string[]): Record<string, FeatureFlagPayload>
 
 	/**
 	 * Check if the provider is enabled and ready

@@ -4,8 +4,8 @@ import { resolveCapabilityToggles } from "@core/storage/settings/capability-togg
 import { ClineRulesToggles } from "@shared/cline-rules"
 import { Logger } from "@shared/services/Logger"
 import { Controller } from "@/core/controller"
-import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
-import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
+import { recordPerfPhase } from "@/services/telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/telemetry/instrumentation/perf-domains"
 
 /**
  * Refresh the workflow toggles.

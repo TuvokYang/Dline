@@ -6,8 +6,8 @@ import { Logger } from "@shared/services/Logger"
 import type { Settings, SettingsKey } from "@shared/storage/state-keys"
 import { SettingsKeys } from "@shared/storage/state-keys"
 import chokidar, { type FSWatcher } from "chokidar"
-import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
-import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
+import { recordPerfPhase } from "@/services/telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/telemetry/instrumentation/perf-domains"
 import { FileLock } from "../backend/jsonl/FileLock"
 import {
 	SETTINGS_REPOSITORY_SCHEMA_VERSION,

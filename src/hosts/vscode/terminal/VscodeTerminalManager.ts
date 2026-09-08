@@ -11,10 +11,10 @@ import {
 	TerminalManagerConfiguration,
 	TerminalManagerConfigurationResult,
 } from "@/integrations/terminal/types"
-import { DiagnosticDomain, DiagnosticOutcome } from "@/services/runtime-telemetry/instrumentation/diagnostic-events"
-import { recordDiagnostic } from "@/services/runtime-telemetry/instrumentation/diagnostic-recorder"
-import { markPerfPhase, recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
-import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
+import { DiagnosticDomain, DiagnosticOutcome } from "@/services/telemetry/instrumentation/diagnostic-events"
+import { recordDiagnostic } from "@/services/telemetry/instrumentation/diagnostic-recorder"
+import { markPerfPhase, recordPerfPhase } from "@/services/telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/telemetry/instrumentation/perf-domains"
 import { Logger } from "@/shared/services/Logger"
 import { type VscodeTerminalLease, VscodeTerminalPool, type VscodeTerminalPoolPreparation } from "./VscodeTerminalPool"
 import { mergePromise, VscodeTerminalProcess } from "./VscodeTerminalProcess"

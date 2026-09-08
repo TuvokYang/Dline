@@ -5,7 +5,7 @@ export {
 } from "./FeatureFlagsProviderFactory"
 export { FeatureFlagsService } from "./FeatureFlagsService"
 export type { FeatureFlagsSettings, IFeatureFlagsProvider } from "./providers/IFeatureFlagsProvider"
-export { PostHogFeatureFlagsProvider } from "./providers/PostHogFeatureFlagsProvider"
+export { LocalFeatureFlagsProvider } from "./providers/LocalFeatureFlagsProvider"
 
 import { FeatureFlagsProviderFactory } from "./FeatureFlagsProviderFactory"
 import { FeatureFlagsService } from "./FeatureFlagsService"

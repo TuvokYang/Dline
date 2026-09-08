@@ -11,17 +11,19 @@ export interface PostHogClientConfig {
 	 */
 	errorTrackingApiKey?: string | undefined
 	enableErrorAutocapture?: boolean
-	host: string
-	uiHost: string
+	host?: string | undefined
+	uiHost?: string | undefined
 }
 
 /**
  * Helper type for a valid PostHog client configuration.
- * Must contains api keys for both telemetry and error tracking.
+ * Must contain api keys for both telemetry and error tracking, and a host to
+ * send them to.
  */
 export interface PostHogClientValidConfig extends PostHogClientConfig {
 	apiKey: string
 	errorTrackingApiKey: string
+	host: string
 }
 
 /**
@@ -32,17 +34,24 @@ export interface PostHogClientValidConfig extends PostHogClientConfig {
 const useDevEnv = envFlagEnabled(process.env.IS_DEV) || process.env.DLINE_ENVIRONMENT === "local"
 
 /**
- * PostHog configuration for Production Environment.
- * NOTE: The production environment variables will be injected at build time in CI/CD pipeline.
- * IMPORTANT: The secrets must be added to the GitHub Secrets and matched with the environment variables names
- * defined in the .github/workflows/publish.yml workflow.
- * NOTE: The development environment variables should be retrieved from 1password shared vault.
+ * Where product analytics and error reports are sent.
+ *
+ * There is deliberately no default. The transport is kept so a Dline-operated
+ * endpoint can be attached later, but an unconfigured build must not reach any
+ * external service. Relying on an empty API key for that is not sufficient:
+ * injecting a key in CI would silently restore reporting to whatever host was
+ * compiled in.
  */
+function readEndpoint(rawValue: string | undefined): string | undefined {
+	const trimmed = rawValue?.trim()
+	return trimmed ? trimmed : undefined
+}
+
 export const posthogConfig: PostHogClientConfig = {
 	apiKey: BUILD_CONSTANTS.TELEMETRY_SERVICE_API_KEY,
 	errorTrackingApiKey: BUILD_CONSTANTS.ERROR_SERVICE_API_KEY,
-	host: "https://data.dline.bot",
-	uiHost: useDevEnv ? "https://us.i.posthog.com" : "https://us.posthog.com",
+	host: readEndpoint(process.env.DLINE_TELEMETRY_HOST),
+	uiHost: readEndpoint(process.env.DLINE_TELEMETRY_UI_HOST),
 	enableErrorAutocapture: BUILD_CONSTANTS.ENABLE_ERROR_AUTOCAPTURE === "true",
 }
 
@@ -55,8 +64,15 @@ export function isPostHogConfigValid(config: PostHogClientConfig): config is Pos
 	}
 	return (
 		typeof config.apiKey === "string" &&
+		config.apiKey.length > 0 &&
 		typeof config.errorTrackingApiKey === "string" &&
+		config.errorTrackingApiKey.length > 0 &&
 		typeof config.host === "string" &&
-		typeof config.uiHost === "string"
+		config.host.length > 0
 	)
+}
+
+/** Only meaningful once a host is configured; unused otherwise. */
+export function isDevEnvironment(): boolean {
+	return useDevEnv
 }

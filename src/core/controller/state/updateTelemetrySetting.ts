@@ -4,13 +4,13 @@ import { convertProtoTelemetrySettingToDomain } from "../../../shared/proto-conv
 import { Controller } from ".."
 
 /**
- * Updates the telemetry setting
- * @param controller The controller instance
- * @param request The telemetry setting request
- * @returns Empty response
+ * Records both reporting consents.
+ *
+ * The two travel together because the consent dialog presents them together,
+ * but they are stored and gated independently.
  */
 export async function updateTelemetrySetting(controller: Controller, request: TelemetrySettingRequest): Promise<Empty> {
-	const telemetrySetting = convertProtoTelemetrySettingToDomain(request.setting)
-	await controller.updateTelemetrySetting(telemetrySetting)
+	await controller.updateUsageReportingSetting(convertProtoTelemetrySettingToDomain(request.usageSetting))
+	await controller.updateErrorReportingSetting(convertProtoTelemetrySettingToDomain(request.errorSetting))
 	return Empty.create()
 }

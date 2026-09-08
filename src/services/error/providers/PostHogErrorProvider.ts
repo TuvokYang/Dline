@@ -7,6 +7,7 @@ import { PostHogClientProvider } from "@/services/telemetry/providers/posthog/Po
 import { fetch } from "@/shared/net"
 import { Setting } from "@/shared/proto/dline/host"
 import { Logger } from "@/shared/services/Logger"
+import { isReportingAllowed } from "@/shared/TelemetrySetting"
 import * as pkg from "../../../../package.json"
 import type { PostHogClientValidConfig } from "../../../shared/services/config/posthog-config"
 import { getErrorLevelFromString } from ".."
@@ -145,7 +146,10 @@ export class PostHogErrorProvider implements IErrorProvider {
 	}
 
 	public isEnabled(): boolean {
-		return StateManager.get().getGlobalSettingsKey("telemetrySetting") !== "disabled" && this.errorSettings.hostEnabled
+		// Error reporting has its own consent: agreeing to be measured is not
+		// agreeing to have crashes collected, nor the reverse. An undecided
+		// user has not consented.
+		return isReportingAllowed(StateManager.get().getGlobalSettingsKey("errorReportingSetting")) && this.errorSettings.hostEnabled
 	}
 
 	public getSettings(): ErrorSettings {

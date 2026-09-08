@@ -176,7 +176,6 @@ export interface ExtensionStateContextType extends ExtensionState {
 	mcpTab?: McpViewTab
 	showSettings: boolean
 	settingsTargetSection?: string
-	settingsInitialModelTab?: "recommended" | "free"
 	showHistory: boolean
 	showAccount: boolean
 	showWorktrees: boolean
@@ -229,7 +228,6 @@ export interface ExtensionStateContextType extends ExtensionState {
 	// Navigation functions
 	navigateToMcp: (tab?: McpViewTab) => void
 	navigateToSettings: (targetSection?: string) => void
-	navigateToSettingsModelPicker: (opts: { targetSection?: string; initialModelTab?: "recommended" | "free" }) => void
 	navigateToHistory: () => void
 	navigateToAccount: () => void
 	navigateToWorktrees: () => void
@@ -257,7 +255,6 @@ export const ExtensionStateContextProvider: React.FC<{
 	const [mcpTab, setMcpTab] = useState<McpViewTab | undefined>(undefined)
 	const [showSettings, setShowSettings] = useState(false)
 	const [settingsTargetSection, setSettingsTargetSection] = useState<string | undefined>(undefined)
-	const [settingsInitialModelTab, setSettingsInitialModelTab] = useState<"recommended" | "free" | undefined>(undefined)
 	const [showHistory, setShowHistory] = useState(false)
 	const [showAccount, setShowAccount] = useState(false)
 	const [showWorktrees, setShowWorktrees] = useState(false)
@@ -273,7 +270,6 @@ export const ExtensionStateContextProvider: React.FC<{
 	const hideSettings = useCallback(() => {
 		setShowSettings(false)
 		setSettingsTargetSection(undefined)
-		setSettingsInitialModelTab(undefined)
 	}, [])
 	const hideHistory = useCallback(() => setShowHistory(false), [])
 	const hideAccount = useCallback(() => setShowAccount(false), [])
@@ -299,20 +295,6 @@ export const ExtensionStateContextProvider: React.FC<{
 			setShowAccount(false)
 			setShowWorktrees(false)
 			setSettingsTargetSection(targetSection)
-			setSettingsInitialModelTab(undefined)
-			setShowSettings(true)
-		},
-		[closeMcpView],
-	)
-
-	const navigateToSettingsModelPicker = useCallback(
-		(opts: { targetSection?: string; initialModelTab?: "recommended" | "free" }) => {
-			setShowHistory(false)
-			closeMcpView()
-			setShowAccount(false)
-			setShowWorktrees(false)
-			setSettingsTargetSection(opts.targetSection)
-			setSettingsInitialModelTab(opts.initialModelTab)
 			setShowSettings(true)
 		},
 		[closeMcpView],
@@ -363,7 +345,8 @@ export const ExtensionStateContextProvider: React.FC<{
 		mode: "act",
 		platform: DEFAULT_PLATFORM,
 		environment: Environment.production,
-		telemetrySetting: "unset",
+		usageReportingSetting: "unset",
+		errorReportingSetting: "unset",
 		distinctId: "",
 		planActSeparateModelsSetting: true,
 		enableCheckpointsSetting: true,
@@ -1343,7 +1326,6 @@ export const ExtensionStateContextProvider: React.FC<{
 			mcpTab,
 			showSettings,
 			settingsTargetSection,
-			settingsInitialModelTab,
 			showHistory,
 			showAccount,
 			showWorktrees,
@@ -1366,7 +1348,6 @@ export const ExtensionStateContextProvider: React.FC<{
 			// Navigation functions
 			navigateToMcp,
 			navigateToSettings,
-			navigateToSettingsModelPicker,
 			navigateToHistory,
 			navigateToAccount,
 			navigateToWorktrees,
@@ -1430,7 +1411,6 @@ export const ExtensionStateContextProvider: React.FC<{
 			mcpTab,
 			showSettings,
 			settingsTargetSection,
-			settingsInitialModelTab,
 			showHistory,
 			showAccount,
 			showWorktrees,
@@ -1438,7 +1418,6 @@ export const ExtensionStateContextProvider: React.FC<{
 			firstItemIndex,
 			navigateToMcp,
 			navigateToSettings,
-			navigateToSettingsModelPicker,
 			navigateToHistory,
 			navigateToAccount,
 			navigateToWorktrees,

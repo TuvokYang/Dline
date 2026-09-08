@@ -172,7 +172,11 @@ const USER_SETTINGS_FIELDS = {
 		default: DEFAULT_BROWSER_SETTINGS as BrowserSettings,
 		transform: (v: any) => ({ ...DEFAULT_BROWSER_SETTINGS, ...v }),
 	},
-	telemetrySetting: { default: "unset" as TelemetrySetting },
+	// Usage and error reporting are consented to separately. The former
+	// `telemetrySetting` covered both at once and is deliberately not migrated:
+	// an answer to the combined question does not answer either of these.
+	usageReportingSetting: { default: "unset" as TelemetrySetting },
+	errorReportingSetting: { default: "unset" as TelemetrySetting },
 	planActSeparateModelsSetting: { default: false as boolean, isComputed: true },
 	enableCheckpointsSetting: { default: true as boolean },
 	shellIntegrationTimeout: { default: 4000 as number },

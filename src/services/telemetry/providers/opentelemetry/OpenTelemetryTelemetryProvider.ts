@@ -8,6 +8,7 @@ import { getErrorLevelFromString } from "@/services/error"
 import { getDistinctId, setDistinctId } from "@/services/logging/distinctId"
 import { Setting } from "@/shared/proto/dline/host"
 import { Logger } from "@/shared/services/Logger"
+import { isReportingAllowed } from "@/shared/TelemetrySetting"
 import type { ClineAccountUserInfo } from "../../../auth/AuthService"
 import type { ITelemetryProvider, TelemetryProperties, TelemetrySettings } from "../ITelemetryProvider"
 
@@ -191,7 +192,8 @@ export class OpenTelemetryTelemetryProvider implements ITelemetryProvider {
 	public isEnabled(): boolean {
 		return (
 			this.bypassUserSettings ||
-			(StateManager.get().getGlobalSettingsKey("telemetrySetting") !== "disabled" && this.telemetrySettings.hostEnabled)
+			(isReportingAllowed(StateManager.get().getGlobalSettingsKey("usageReportingSetting")) &&
+				this.telemetrySettings.hostEnabled)
 		)
 	}
 

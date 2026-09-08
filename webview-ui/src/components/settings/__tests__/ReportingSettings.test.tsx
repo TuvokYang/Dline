@@ -4,18 +4,25 @@ import AboutSection from "../sections/AboutSection"
 import GeneralSettingsSection from "../sections/GeneralSettingsSection"
 
 /**
- * Where the reporting consent lives.
+ * Where the reporting consents live, and that they stay independent.
  *
- * The checkbox and the diagnostic bundle export describe the same decision:
+ * The checkboxes and the diagnostic bundle export describe the same subject:
  * what Dline is allowed to record about a session. Splitting them across two
  * settings tabs meant a user who wanted to attach a bundle to a bug report had
  * to find the switch somewhere else first. These tests pin the placement so a
- * later edit cannot silently move the consent back out of About.
+ * later edit cannot silently move a consent back out of About.
  */
+
+const USAGE_CHECKBOX = "usage-reporting-setting-checkbox"
+const ERROR_CHECKBOX = "error-reporting-setting-checkbox"
 
 const mocks = vi.hoisted(() => ({
 	updateSetting: vi.fn(),
-	state: { telemetrySetting: "unset" as string, remoteConfigSettings: undefined as unknown },
+	state: {
+		usageReportingSetting: "unset" as string,
+		errorReportingSetting: "unset" as string,
+		remoteConfigSettings: undefined as unknown,
+	},
 }))
 
 vi.mock("@/context/ExtensionStateContext", () => ({
@@ -35,43 +42,86 @@ const renderSectionHeader = (tabId: string) => <div>{tabId}</div>
 describe("reporting consent placement", () => {
 	beforeEach(() => {
 		mocks.updateSetting.mockClear()
-		mocks.state.telemetrySetting = "unset"
+		mocks.state.usageReportingSetting = "unset"
+		mocks.state.errorReportingSetting = "unset"
 		mocks.state.remoteConfigSettings = undefined
 	})
 
-	it("offers the reporting consent next to the diagnostics export", () => {
+	it("offers both consents next to the diagnostics export once usage reporting is on", () => {
+		mocks.state.usageReportingSetting = "enabled"
 		render(<AboutSection renderSectionHeader={renderSectionHeader} version="1.2.3" />)
 
-		expect(screen.getByTestId("telemetry-setting-checkbox")).toBeTruthy()
+		expect(screen.getByTestId(USAGE_CHECKBOX)).toBeTruthy()
+		expect(screen.getByTestId(ERROR_CHECKBOX)).toBeTruthy()
 		expect(screen.getByText("Export diagnostic bundle")).toBeTruthy()
 	})
 
-	it("persists the choice through the shared settings path", () => {
+	/**
+	 * Runtime telemetry follows the usage consent and starts only on an
+	 * explicit "enabled". While that consent is undecided or refused nothing is
+	 * recorded, so an export would have no session to write and could only
+	 * fail. Showing it anyway would advertise diagnostics the extension is not
+	 * permitted to collect.
+	 */
+	it.each(["unset", "disabled"])("hides the diagnostics export while usage consent is %s", (setting) => {
+		mocks.state.usageReportingSetting = setting
 		render(<AboutSection renderSectionHeader={renderSectionHeader} version="1.2.3" />)
 
-		const checkbox = screen.getByTestId("telemetry-setting-checkbox")
-		fireEvent.click(checkbox)
-
-		expect(mocks.updateSetting).toHaveBeenCalledWith("telemetrySetting", expect.stringMatching(/^(enabled|disabled)$/))
+		expect(screen.queryByText("Export diagnostic bundle")).toBeNull()
+		expect(screen.queryByText("Diagnostics")).toBeNull()
+		// The consent itself must remain reachable, or the user could never
+		// turn reporting back on.
+		expect(screen.getByTestId(USAGE_CHECKBOX)).toBeTruthy()
 	})
 
-	it("locks the consent when an organization pins it off", () => {
+	it("does not let the error consent stand in for the usage one", () => {
+		// The two were a single switch once; agreeing to report crashes must
+		// not silently start product analytics or the diagnostics recorder.
+		mocks.state.errorReportingSetting = "enabled"
+		render(<AboutSection renderSectionHeader={renderSectionHeader} version="1.2.3" />)
+
+		expect(screen.queryByText("Export diagnostic bundle")).toBeNull()
+		expect((screen.getByTestId(USAGE_CHECKBOX) as HTMLInputElement).checked).toBe(false)
+		expect((screen.getByTestId(ERROR_CHECKBOX) as HTMLInputElement).checked).toBe(true)
+	})
+
+	it("treats an undecided consent as not granted", () => {
+		render(<AboutSection renderSectionHeader={renderSectionHeader} version="1.2.3" />)
+
+		expect((screen.getByTestId(USAGE_CHECKBOX) as HTMLInputElement).checked).toBe(false)
+		expect((screen.getByTestId(ERROR_CHECKBOX) as HTMLInputElement).checked).toBe(false)
+	})
+
+	it("persists each choice under its own key", () => {
+		render(<AboutSection renderSectionHeader={renderSectionHeader} version="1.2.3" />)
+
+		fireEvent.click(screen.getByTestId(USAGE_CHECKBOX))
+		expect(mocks.updateSetting).toHaveBeenCalledWith("usageReportingSetting", "enabled")
+
+		fireEvent.click(screen.getByTestId(ERROR_CHECKBOX))
+		expect(mocks.updateSetting).toHaveBeenCalledWith("errorReportingSetting", "enabled")
+	})
+
+	it("locks a consent when an organization pins it off", () => {
 		const { unmount } = render(<AboutSection renderSectionHeader={renderSectionHeader} version="1.2.3" />)
 		// The unlocked render is the control: without it, a checkbox that is
 		// never disabled would still satisfy the assertion below.
-		expect((screen.getByTestId("telemetry-setting-checkbox") as HTMLInputElement).disabled).toBe(false)
+		expect((screen.getByTestId(USAGE_CHECKBOX) as HTMLInputElement).disabled).toBe(false)
 		unmount()
 
-		mocks.state.telemetrySetting = "disabled"
-		mocks.state.remoteConfigSettings = { telemetrySetting: "disabled" }
+		mocks.state.usageReportingSetting = "disabled"
+		mocks.state.errorReportingSetting = "disabled"
+		mocks.state.remoteConfigSettings = { usageReportingSetting: "disabled", errorReportingSetting: "disabled" }
 		render(<AboutSection renderSectionHeader={renderSectionHeader} version="1.2.3" />)
 
-		expect((screen.getByTestId("telemetry-setting-checkbox") as HTMLInputElement).disabled).toBe(true)
+		expect((screen.getByTestId(USAGE_CHECKBOX) as HTMLInputElement).disabled).toBe(true)
+		expect((screen.getByTestId(ERROR_CHECKBOX) as HTMLInputElement).disabled).toBe(true)
 	})
 
 	it("no longer duplicates the consent in general settings", () => {
 		render(<GeneralSettingsSection renderSectionHeader={renderSectionHeader} />)
 
-		expect(screen.queryByTestId("telemetry-setting-checkbox")).toBeNull()
+		expect(screen.queryByTestId(USAGE_CHECKBOX)).toBeNull()
+		expect(screen.queryByTestId(ERROR_CHECKBOX)).toBeNull()
 	})
 })

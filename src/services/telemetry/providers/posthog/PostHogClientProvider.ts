@@ -27,15 +27,19 @@ export class PostHogClientProvider {
 			return
 		}
 
-		// Initialize PostHog client
-		this.client = posthogConfig.apiKey
-			? new PostHog(posthogConfig.apiKey, {
-					host: posthogConfig.host,
-					fetch: (url, options) => fetch(url, options),
-					enableExceptionAutocapture: false, // This is only enabled for error services
-					before_send: (event) => PostHogClientProvider.eventFilter(event),
-				})
-			: null
+		// Both a key and a destination are required. Without a configured host
+		// there is nowhere to report to, and creating a client would fall back
+		// to whatever default the SDK carries.
+		const { apiKey, host } = posthogConfig
+		this.client =
+			apiKey && host
+				? new PostHog(apiKey, {
+						host,
+						fetch: (url, options) => fetch(url, options),
+						enableExceptionAutocapture: false, // This is only enabled for error services
+						before_send: (event) => PostHogClientProvider.eventFilter(event),
+					})
+				: null
 
 		if (this.client) {
 			Logger.log("PostHog client initialized")

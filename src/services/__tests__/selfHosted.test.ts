@@ -26,32 +26,21 @@ describe("SelfHosted Mode - PostHog Disabling", () => {
 	})
 
 	describe("FeatureFlagsProviderFactory", () => {
-		it("should return no-op config when in selfHosted mode", () => {
+		// Experimental switches are resolved locally, so self-hosted mode has
+		// nothing to disable: there is no request to suppress either way.
+		it("should resolve locally regardless of selfHosted mode", () => {
 			isSelfHostedStub = vi.spyOn(ClineEndpoint, "isSelfHosted").mockReturnValue(true)
+			assert.strictEqual(FeatureFlagsProviderFactory.getDefaultConfig().type, "local")
 
-			const config = FeatureFlagsProviderFactory.getDefaultConfig()
-
-			assert.strictEqual(config.type, "no-op", "Should return no-op type in selfHosted mode")
+			isSelfHostedStub.mockReturnValue(false)
+			assert.strictEqual(FeatureFlagsProviderFactory.getDefaultConfig().type, "local")
 		})
 
-		it("should return posthog config when NOT in selfHosted mode (if PostHog config is valid)", () => {
-			isSelfHostedStub = vi.spyOn(ClineEndpoint, "isSelfHosted").mockReturnValue(false)
-
-			const config = FeatureFlagsProviderFactory.getDefaultConfig()
-
-			// Will be "posthog" if PostHog config is valid, "no-op" otherwise
-			// The important thing is it's NOT forced to "no-op" by selfHosted check
-			assert.ok(config.type === "posthog" || config.type === "no-op", "Should not be forced to no-op")
-		})
-
-		it("should create NoOp provider when in selfHosted mode", () => {
-			isSelfHostedStub = vi.spyOn(ClineEndpoint, "isSelfHosted").mockReturnValue(true)
-
+		it("should create a provider that reports as enabled", () => {
 			const config = FeatureFlagsProviderFactory.getDefaultConfig()
 			const provider = FeatureFlagsProviderFactory.createProvider(config)
 
-			// NoOp provider should always be enabled (returns true for isEnabled)
-			assert.strictEqual(provider.isEnabled(), true, "NoOp provider should report as enabled")
+			assert.strictEqual(provider.isEnabled(), true)
 		})
 	})
 
@@ -86,14 +75,12 @@ describe("SelfHosted Mode - PostHog Disabling", () => {
 	})
 
 	describe("Integration - selfHosted should disable all PostHog services", () => {
-		it("should return no-op for all PostHog-based factories when selfHosted", () => {
+		it("should return no-op for every PostHog-based factory when selfHosted", () => {
 			isSelfHostedStub = vi.spyOn(ClineEndpoint, "isSelfHosted").mockReturnValue(true)
 
-			const featureFlagsConfig = FeatureFlagsProviderFactory.getDefaultConfig()
-			const errorConfig = ErrorProviderFactory.getDefaultConfig()
-
-			assert.strictEqual(featureFlagsConfig.type, "no-op", "FeatureFlags should be no-op in selfHosted")
-			assert.strictEqual(errorConfig.type, "no-op", "Error provider should be no-op in selfHosted")
+			// Feature flags are no longer PostHog-based, so they are not part of
+			// this assertion: local resolution makes no request to suppress.
+			assert.strictEqual(ErrorProviderFactory.getDefaultConfig().type, "no-op", "Error provider should be no-op")
 		})
 	})
 })

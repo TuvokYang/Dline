@@ -156,7 +156,6 @@ export interface WelcomeSectionProps {
 	showAnnouncement: boolean
 	hideAnnouncement: () => void
 	showHistoryView: () => void
-	telemetrySetting: string
 	version: string
 	taskHistory: any[]
 	shouldShowQuickWins: boolean

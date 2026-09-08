@@ -1,13 +1,14 @@
 import { metrics } from "@opentelemetry/api"
 import { logs } from "@opentelemetry/api-logs"
-import { Resource } from "@opentelemetry/resources"
-import { BatchLogRecordProcessor, LoggerProvider } from "@opentelemetry/sdk-logs"
+import type { Resource } from "@opentelemetry/resources"
+import { BatchLogRecordProcessor, type LoggerProvider, type LogRecordProcessor } from "@opentelemetry/sdk-logs"
 import { MeterProvider } from "@opentelemetry/sdk-metrics"
-import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions"
 import { envFlagEnabled } from "@shared/env"
-import { ExtensionRegistryInfo } from "@/registry"
 import { OpenTelemetryClientValidConfig } from "@/shared/services/config/otel-config"
 import { Logger } from "@/shared/services/Logger"
+import { USAGE_SCOPE_NAME } from "../../otel/scopes"
+import { attachScopedProcessors, detachScope } from "../../otel/shared-logger-provider"
+import { createTelemetryResource } from "../../otel/telemetry-resource"
 import {
 	createConsoleLogExporter,
 	createConsoleMetricReader,
@@ -19,10 +20,20 @@ import {
  * OpenTelemetry client provider.
  * Manages meter and logger providers for telemetry collection.
  */
+let routeOwnerSequence = 0
+
 export class OpenTelemetryClientProvider {
 	readonly meterProvider: MeterProvider | null = null
 	readonly loggerProvider: LoggerProvider | null = null
 	private readonly config: OpenTelemetryClientValidConfig | null
+	/**
+	 * Distinguishes this client's registration from other collectors on the
+	 * product scope; a user-configured and an organization-configured client
+	 * can be active at once and must not evict each other.
+	 */
+	private readonly routeOwnerId = `otel-client-${++routeOwnerSequence}`
+	/** Processors this client attached, and therefore this client must close. */
+	private logProcessors: LogRecordProcessor[] = []
 
 	/**
 	 * Check if debug diagnostics are enabled.
@@ -56,11 +67,10 @@ export class OpenTelemetryClientProvider {
 			Logger.log("[OTEL DEBUG] ================================================")
 		}
 
-		// Create resource with service information
-		const resource = new Resource({
-			[ATTR_SERVICE_NAME]: "cline",
-			[ATTR_SERVICE_VERSION]: ExtensionRegistryInfo.version,
-		})
+		// One resource describes the whole extension host, so product
+		// analytics and runtime diagnostics report the same service identity
+		// instead of each inventing its own.
+		const resource = createTelemetryResource()
 
 		// Initialize metrics if configured
 		if (this.config.metricsExporter) {
@@ -133,9 +143,9 @@ export class OpenTelemetryClientProvider {
 		return meterProvider
 	}
 
-	private createLoggerProvider(resource: Resource): LoggerProvider {
+	private createLoggerProvider(_resource: Resource): LoggerProvider {
 		const exporters = this.config?.logsExporter?.split(",").map((type) => type.trim()) ?? []
-		const loggerProvider = new LoggerProvider({ resource })
+		const processors: LogRecordProcessor[] = []
 
 		Logger.log(`[OTEL] Creating LoggerProvider with exporters: ${exporters.join(", ")}`)
 
@@ -175,7 +185,8 @@ export class OpenTelemetryClientProvider {
 						scheduledDelayMillis: this.config?.logBatchTimeout || 5000,
 					}
 
-					loggerProvider.addLogRecordProcessor(new BatchLogRecordProcessor(exporter, batchConfig))
+					processors.push(new BatchLogRecordProcessor(exporter, batchConfig))
+					this.logProcessors = processors
 
 					Logger.log(
 						`[OTEL] Log batch processor configured: maxQueue=${batchConfig.maxQueueSize}, batchSize=${batchConfig.maxExportBatchSize}, timeout=${batchConfig.scheduledDelayMillis}ms`,
@@ -185,6 +196,13 @@ export class OpenTelemetryClientProvider {
 				Logger.error(`[OTEL] Failed to create logs exporter '${exporterType}':`, error)
 			}
 		}
+
+		// Attaching under the product scope keeps these exporters from
+		// receiving runtime diagnostics: the router delivers a record only to
+		// the scope that emitted it. Each client instance registers under its
+		// own owner id so a second configured collector — an organization's,
+		// say — does not displace the first.
+		const loggerProvider = attachScopedProcessors(USAGE_SCOPE_NAME, this.routeOwnerId, processors)
 
 		// Set as global logger provider
 		logs.setGlobalLoggerProvider(loggerProvider)
@@ -205,11 +223,19 @@ export class OpenTelemetryClientProvider {
 		}
 
 		if (this.loggerProvider) {
-			promises.push(
-				this.loggerProvider.shutdown().catch((error) => {
-					Logger.error("Error shutting down LoggerProvider:", error)
-				}),
-			)
+			// The LoggerProvider is shared with runtime diagnostics, so
+			// shutting it down here would silence a subsystem this client does
+			// not own. Detaching this client's route and closing only its own
+			// processors stops its export and leaves the rest running.
+			detachScope(USAGE_SCOPE_NAME, this.routeOwnerId)
+			for (const processor of this.logProcessors) {
+				promises.push(
+					processor.shutdown().catch((error) => {
+						Logger.error("Error shutting down log processor:", error)
+					}),
+				)
+			}
+			this.logProcessors = []
 		}
 
 		await Promise.all(promises)

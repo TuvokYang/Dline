@@ -9,14 +9,13 @@ import Section from "../Section"
 
 interface ApiConfigurationSectionProps {
 	renderSectionHeader?: (tabId: string) => JSX.Element | null
-	initialModelTab?: "recommended" | "free"
 }
 
 /**
  * API Configuration section — replaced old provider selector + conditional rendering
  * with a unified ProviderProfileList that reuses existing Provider components.
  */
-const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiConfigurationSectionProps) => {
+const ApiConfigurationSection = ({ renderSectionHeader }: ApiConfigurationSectionProps) => {
 	const { mode, imageGenerationEnabled } = useExtensionState()
 	const [currentTab] = useState<Mode>(mode)
 	const {

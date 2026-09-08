@@ -4,8 +4,8 @@ import path from "node:path"
 import type { ApiProfile } from "@shared/proto/dline/profile"
 import { Logger } from "@shared/services/Logger"
 import chokidar, { type FSWatcher } from "chokidar"
-import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
-import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
+import { recordPerfPhase } from "@/services/telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/telemetry/instrumentation/perf-domains"
 import { FileLock } from "../storage/backend/jsonl/FileLock"
 
 export interface ProfileCatalogCommit {

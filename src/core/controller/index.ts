@@ -48,7 +48,7 @@ import {
 	serializeTaskCapabilityToggles,
 	type TaskCapabilityToggles,
 } from "@shared/TaskCapabilityToggles"
-import type { TelemetrySetting } from "@shared/TelemetrySetting"
+import { isReportingAllowed, type TelemetrySetting } from "@shared/TelemetrySetting"
 import type { UserInfo } from "@shared/UserInfo"
 import { fileExistsAtPath } from "@utils/fs"
 import axios from "axios"
@@ -70,9 +70,9 @@ import { OcaAuthService } from "@/services/auth/oca/OcaAuthService"
 import { LogoutReason } from "@/services/auth/types"
 import { featureFlagsService } from "@/services/feature-flags"
 import { getDistinctId } from "@/services/logging/distinctId"
-import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
-import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
-import { getRuntimeTelemetryLifecycle } from "@/services/runtime-telemetry/runtime-telemetry-host"
+import { recordPerfPhase } from "@/services/telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/telemetry/instrumentation/perf-domains"
+import { getRuntimeTelemetryLifecycle } from "@/services/telemetry/runtime/host"
 import { telemetryService } from "@/services/telemetry"
 import { ClineExtensionContext } from "@/shared/cline"
 import { getAxiosSettings } from "@/shared/net"
@@ -978,18 +978,24 @@ export class Controller {
 		}
 	}
 
-	async updateTelemetrySetting(telemetrySetting: TelemetrySetting) {
-		// Get previous setting to detect state changes
-		const previousSetting = this.stateManager.getGlobalSettingsKey("telemetrySetting")
-		const wasOptedIn = previousSetting !== "disabled"
-		const isOptedIn = telemetrySetting !== "disabled"
+	/**
+	 * Records the usage reporting consent.
+	 *
+	 * Consent must be given, not merely left unanswered: an undecided user is
+	 * treated the same as one who declined. The local runtime diagnostics ride
+	 * along with this consent, since they describe how the user's own session
+	 * behaved rather than what went wrong in it.
+	 */
+	async updateUsageReportingSetting(usageReportingSetting: TelemetrySetting) {
+		const wasOptedIn = isReportingAllowed(this.stateManager.getGlobalSettingsKey("usageReportingSetting"))
+		const isOptedIn = isReportingAllowed(usageReportingSetting)
 
 		// Capture opt-out event BEFORE updating (so it gets sent while telemetry is still enabled)
 		if (wasOptedIn && !isOptedIn) {
 			telemetryService.captureUserOptOut()
 		}
 
-		this.stateManager.setGlobalState("telemetrySetting", telemetrySetting)
+		this.stateManager.setGlobalState("usageReportingSetting", usageReportingSetting)
 		telemetryService.updateTelemetryState(isOptedIn)
 
 		// The runtime diagnostics pipeline holds its own consent state, decided
@@ -997,7 +1003,7 @@ export class Controller {
 		// activation until the next window reload, so a user who opts in would
 		// see no journal and an empty diagnostic bundle.
 		try {
-			await getRuntimeTelemetryLifecycle()?.applyConsent(telemetrySetting)
+			await getRuntimeTelemetryLifecycle()?.applyConsent(usageReportingSetting)
 		} catch (error) {
 			// Diagnostics are an aid; failing to apply consent must not stop
 			// the setting itself from being saved and reported.
@@ -1009,6 +1015,18 @@ export class Controller {
 			telemetryService.captureUserOptIn()
 		}
 
+		await this.postStateToWebview()
+	}
+
+	/**
+	 * Records the error reporting consent.
+	 *
+	 * Independent of usage reporting: a user may want crashes investigated
+	 * without agreeing to be measured, or the reverse. The error provider reads
+	 * this key directly, so no further wiring is needed here.
+	 */
+	async updateErrorReportingSetting(errorReportingSetting: TelemetrySetting) {
+		this.stateManager.setGlobalState("errorReportingSetting", errorReportingSetting)
 		await this.postStateToWebview()
 	}
 
@@ -1781,7 +1799,8 @@ export class Controller {
 		const userInfo = this.stateManager.getGlobalStateKey("userInfo")
 		const mcpMarketplaceEnabled = this.stateManager.getGlobalStateKey("mcpMarketplaceEnabled")
 		const mcpDisplayMode = this.stateManager.getGlobalStateKey("mcpDisplayMode")
-		const telemetrySetting = this.stateManager.getGlobalSettingsKey("telemetrySetting")
+		const usageReportingSetting = this.stateManager.getGlobalSettingsKey("usageReportingSetting")
+		const errorReportingSetting = this.stateManager.getGlobalSettingsKey("errorReportingSetting")
 		const planActSeparateModelsSetting = this.stateManager.getGlobalSettingsKey("planActSeparateModelsSetting")
 		const enableCheckpointsSetting = this.stateManager.getGlobalSettingsKey("enableCheckpointsSetting")
 		const globalClineRulesToggles = this.stateManager.getGlobalSettingsKey("globalClineRulesToggles")
@@ -1921,7 +1940,8 @@ export class Controller {
 			userInfo,
 			mcpMarketplaceEnabled,
 			mcpDisplayMode,
-			telemetrySetting,
+			usageReportingSetting,
+			errorReportingSetting,
 			planActSeparateModelsSetting,
 			enableCheckpointsSetting: enableCheckpointsSetting ?? true,
 			platform,

@@ -28,45 +28,86 @@ function formatBytes(bytes: number): string {
 }
 
 /**
- * The consent that governs everything Dline records about a session.
+ * One reporting consent.
  *
- * It lives beside the export button rather than in General settings because
- * the two describe one decision: the bundle only contains data this switch
- * allowed to be collected, and a user who turns the switch off should see the
- * export stop working right here instead of hunting for the cause elsewhere.
+ * Consent must be given rather than merely left unanswered, so an undecided
+ * user reads as unchecked and nothing is reported until the box is ticked.
+ */
+function ConsentCheckbox({
+	label,
+	setting,
+	settingKey,
+	organizationSetting,
+	testId,
+}: {
+	label: string
+	setting: string
+	settingKey: "usageReportingSetting" | "errorReportingSetting"
+	organizationSetting: string | undefined
+	testId: string
+}) {
+	return (
+		<Tooltip>
+			<TooltipContent hidden={organizationSetting === undefined}>
+				This setting is managed by your organization's remote configuration
+			</TooltipContent>
+			<TooltipTrigger asChild>
+				<div className="flex items-center gap-2 mt-2">
+					<VSCodeCheckbox
+						checked={setting === "enabled"}
+						data-testid={testId}
+						disabled={organizationSetting === "disabled"}
+						onChange={(e: any) => {
+							const checked = e.target.checked === true
+							updateSetting(settingKey, checked ? "enabled" : "disabled")
+						}}>
+						{label}
+					</VSCodeCheckbox>
+					{organizationSetting === "disabled" && <i className="codicon codicon-lock text-description text-sm" />}
+				</div>
+			</TooltipTrigger>
+		</Tooltip>
+	)
+}
+
+/**
+ * The consents that govern what Dline records about a session.
+ *
+ * Usage and error reporting are asked separately because they answer different
+ * questions: a user may want crashes investigated without agreeing to be
+ * measured, or the reverse.
+ *
+ * They live beside the export button rather than in General settings because
+ * the bundle only contains data these switches allowed to be collected, and a
+ * user who turns usage reporting off should see the export stop working right
+ * here instead of hunting for the cause elsewhere.
  */
 function ReportingConsent() {
-	const { telemetrySetting, remoteConfigSettings } = useExtensionState()
+	const { usageReportingSetting, errorReportingSetting, remoteConfigSettings } = useExtensionState()
 
 	return (
 		<div>
 			<h3 className="text-md font-semibold">Error and usage reporting</h3>
-			<Tooltip>
-				<TooltipContent hidden={remoteConfigSettings?.telemetrySetting === undefined}>
-					This setting is managed by your organization's remote configuration
-				</TooltipContent>
-				<TooltipTrigger asChild>
-					<div className="flex items-center gap-2 mt-2">
-						<VSCodeCheckbox
-							checked={telemetrySetting !== "disabled"}
-							data-testid="telemetry-setting-checkbox"
-							disabled={remoteConfigSettings?.telemetrySetting === "disabled"}
-							onChange={(e: any) => {
-								const checked = e.target.checked === true
-								updateSetting("telemetrySetting", checked ? "enabled" : "disabled")
-							}}>
-							Allow error and usage reporting
-						</VSCodeCheckbox>
-						{!!remoteConfigSettings?.telemetrySetting && (
-							<i className="codicon codicon-lock text-description text-sm" />
-						)}
-					</div>
-				</TooltipTrigger>
-			</Tooltip>
+
+			<ConsentCheckbox
+				label="Allow usage reporting"
+				organizationSetting={remoteConfigSettings?.usageReportingSetting}
+				setting={usageReportingSetting}
+				settingKey="usageReportingSetting"
+				testId="usage-reporting-setting-checkbox"
+			/>
+			<ConsentCheckbox
+				label="Allow error reporting"
+				organizationSetting={remoteConfigSettings?.errorReportingSetting}
+				setting={errorReportingSetting}
+				settingKey="errorReportingSetting"
+				testId="error-reporting-setting-checkbox"
+			/>
 
 			<p className="text-sm mt-[5px] text-description">
-				Help improve Dline by sending usage data and error reports, and let Dline record the runtime events a diagnostic
-				bundle is built from. No code, prompts, or personal information are ever sent. See our{" "}
+				Usage reporting sends anonymous product analytics and lets Dline record the runtime events a diagnostic bundle is
+				built from. Error reporting sends crash and exception reports. No code, prompts, or personal information are ever
+				sent. See our{" "}
 				<VSCodeLink
 					className="text-inherit"
 					href="https://docs.dline.bot/more-info/telemetry"
@@ -92,9 +133,10 @@ function ReportingConsent() {
  * This sits next to the issue links because that is when it is needed: the
  * archive exists to be attached to a bug report, not to configure anything.
  *
- * The button stays enabled while telemetry is off: the extension host answers
- * with a specific reason in that case, and showing that reason is more useful
- * than a disabled control the user cannot interrogate.
+ * Rendered only while usage reporting is enabled. Runtime telemetry starts on
+ * that consent alone, so with it off there is no session to export and the
+ * button could only ever fail. Offering it anyway would advertise diagnostics
+ * the extension is not permitted to collect.
  */
 function DiagnosticBundleExport() {
 	const [isExporting, setIsExporting] = useState(false)
@@ -141,6 +183,12 @@ function DiagnosticBundleExport() {
 	)
 }
 const AboutSection = ({ version, renderSectionHeader }: AboutSectionProps) => {
+	const { usageReportingSetting } = useExtensionState()
+	// Mirrors the backend gate exactly: the runtime pipeline follows the usage
+	// consent and starts only on "enabled", so an undecided user must not be
+	// shown an export that has nothing to collect.
+	const isReportingEnabled = usageReportingSetting === "enabled"
+
 	return (
 		<div>
 			{renderSectionHeader("about")}
@@ -166,7 +214,7 @@ const AboutSection = ({ version, renderSectionHeader }: AboutSectionProps) => {
 					</p>
 
 					<ReportingConsent />
-					<DiagnosticBundleExport />
+					{isReportingEnabled && <DiagnosticBundleExport />}
 				</div>
 			</Section>
 		</div>

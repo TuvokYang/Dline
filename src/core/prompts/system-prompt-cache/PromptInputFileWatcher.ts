@@ -1,8 +1,8 @@
 import path from "node:path"
 import { Logger } from "@shared/services/Logger"
 import chokidar, { type ChokidarOptions, type FSWatcher } from "chokidar"
-import { markPerfPhase, recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
-import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
+import { markPerfPhase, recordPerfPhase } from "@/services/telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/telemetry/instrumentation/perf-domains"
 
 export interface PromptInputFileWatcherDeps {
 	readonly taskId?: string

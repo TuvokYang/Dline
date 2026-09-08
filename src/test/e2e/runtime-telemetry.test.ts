@@ -40,7 +40,13 @@ function journalFiles(dlineDir: string): string[] {
 	return readdirSync(directory).filter((name) => name.endsWith(".jsonl"))
 }
 
-/** Event names recorded across every journal of this run. */
+/**
+ * Event names recorded across every journal of this run.
+ *
+ * Journal lines are OTLP log records, so the event name is the record `body`
+ * rather than a private `name` field. Reading it through the standard shape is
+ * also what proves the file is the format a `filelog` receiver can ingest.
+ */
 function journaledEventNames(dlineDir: string): string[] {
 	const directory = journalDirectory(dlineDir)
 	return journalFiles(dlineDir).flatMap((name) =>
@@ -49,7 +55,8 @@ function journaledEventNames(dlineDir: string): string[] {
 			.filter((line) => line.trim().length > 0)
 			.map((line) => {
 				try {
-					return String((JSON.parse(line) as { name?: unknown }).name ?? "")
+					const record = JSON.parse(line) as { body?: { stringValue?: unknown } }
+					return String(record.body?.stringValue ?? "")
 				} catch {
 					return ""
 				}
@@ -65,35 +72,26 @@ async function openSettings(page: Page, sidebar: Frame): Promise<void> {
 }
 
 function reportingCheckbox(sidebar: Frame) {
-	return sidebar.getByText("Allow error and usage reporting", { exact: true })
+	// Runtime diagnostics follow the usage consent, not the error one.
+	return sidebar.getByText("Allow usage reporting", { exact: true })
 }
 
 /** The persisted consent value, or undefined before it has been written. */
-function persistedTelemetrySetting(dlineDir: string): string | undefined {
+function persistedUsageReportingSetting(dlineDir: string): string | undefined {
 	const settingsPath = path.join(dlineDir, "data", "settings", "settings.json")
 	if (!existsSync(settingsPath)) return undefined
-	return (JSON.parse(readFileSync(settingsPath, "utf8")) as { telemetrySetting?: string }).telemetrySetting
+	return (JSON.parse(readFileSync(settingsPath, "utf8")) as { usageReportingSetting?: string }).usageReportingSetting
 }
 
 /**
- * Drive the checkbox until consent is `enabled`, tolerating either starting state.
+ * Tick the usage consent and wait for it to be persisted.
  *
- * The checkbox reflects `telemetrySetting !== "disabled"`, so a fresh profile
- * shows it checked while consent is still undecided. Clicking blindly would
- * then opt out. Clicking until the persisted value says `enabled` states the
- * intent — "end up opted in" — instead of assuming where we started.
+ * The checkbox is checked only for an explicit `enabled`, so an undecided
+ * profile starts unchecked and a single click opts in.
  */
 async function grantReportingConsent(dlineDir: string, sidebar: Frame): Promise<void> {
-	for (let attempt = 0; attempt < 2; attempt++) {
-		await reportingCheckbox(sidebar).click()
-		try {
-			await expect.poll(() => persistedTelemetrySetting(dlineDir), { timeout: 15_000 }).toBe("enabled")
-			return
-		} catch {
-			// The first click landed on "disabled"; the next one opts in.
-		}
-	}
-	await expect.poll(() => persistedTelemetrySetting(dlineDir), { timeout: 15_000 }).toBe("enabled")
+	await reportingCheckbox(sidebar).click()
+	await expect.poll(() => persistedUsageReportingSetting(dlineDir), { timeout: 15_000 }).toBe("enabled")
 }
 
 e2e(
@@ -115,12 +113,10 @@ e2e(
 			`Expected no session journal before consent, found ${journalFiles(dlineDir).join(", ")}`,
 		).toHaveLength(0)
 
-		// Exporting without a running pipeline must explain itself rather than
-		// fail silently or produce an empty archive.
-		await sidebar.getByRole("button", { name: "Export diagnostic bundle", exact: true }).click()
-		const exportError = sidebar.getByTestId("diagnostic-bundle-error")
-		await expect(exportError).toBeVisible({ timeout: 30_000 })
-		await expect(exportError).toContainText("Runtime telemetry is not running")
+		// With no pipeline running there is nothing to export, so the control
+		// is absent rather than present-and-failing: offering it would advertise
+		// diagnostics the extension is not permitted to collect.
+		await expect(sidebar.getByRole("button", { name: "Export diagnostic bundle", exact: true })).toHaveCount(0)
 
 		expect(
 			exportedBundles(dlineDir),
@@ -142,10 +138,12 @@ e2e(
 		await expect.poll(() => journalFiles(dlineDir).length, { timeout: 60_000 }).toBeGreaterThan(0)
 		await expect.poll(() => journaledEventNames(dlineDir).length, { timeout: 60_000 }).toBeGreaterThan(0)
 
-		// With the pipeline collecting, the same button now produces an archive
-		// in the data directory. Reading it off disk rather than trusting the
-		// success message is what proves the gRPC route reached the exporter.
-		await sidebar.getByRole("button", { name: "Export diagnostic bundle", exact: true }).click()
+		// Consent also reveals the export. Reading the archive off disk rather
+		// than trusting the success message is what proves the gRPC route
+		// reached the exporter.
+		const exportButton = sidebar.getByRole("button", { name: "Export diagnostic bundle", exact: true })
+		await expect(exportButton).toBeVisible({ timeout: 30_000 })
+		await exportButton.click()
 
 		const written = sidebar.getByTestId("diagnostic-bundle-written")
 		await expect(written).toBeVisible({ timeout: 60_000 })

@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto"
 import * as path from "node:path"
 import fs from "fs/promises"
-import { DiagnosticDomain, DiagnosticOutcome } from "@/services/runtime-telemetry/instrumentation/diagnostic-events"
-import { recordDiagnostic } from "@/services/runtime-telemetry/instrumentation/diagnostic-recorder"
-import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
-import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
+import { DiagnosticDomain, DiagnosticOutcome } from "@/services/telemetry/instrumentation/diagnostic-events"
+import { recordDiagnostic } from "@/services/telemetry/instrumentation/diagnostic-recorder"
+import { recordPerfPhase } from "@/services/telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/telemetry/instrumentation/perf-domains"
 import { Logger } from "@/shared/services/Logger"
 
 /**

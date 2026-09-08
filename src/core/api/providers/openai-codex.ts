@@ -14,7 +14,7 @@ import { featureFlagsService } from "@/services/feature-flags"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { fetch } from "@/shared/net"
 import { ApiFormat, ServerTool } from "@/shared/proto/dline/models/metadata"
-import { FeatureFlag } from "@/shared/services/feature-flags/feature-flags"
+import { ExperimentalFeatureFlag } from "@/shared/services/feature-flags/feature-flags"
 import { Logger } from "@/shared/services/Logger"
 import { AccountUsage, ApiHandler, ApiHandlerContext, type ApiRequestOptions } from "../"
 import { isOutputLimitExceededError, OutputLimitExceededError } from "../stream/OutputLimitExceededError"
@@ -394,7 +394,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 	}
 
 	private useWebsocketMode(apiFormat?: ApiFormat): boolean {
-		if (featureFlagsService.getBooleanFlagEnabled(FeatureFlag.OPENAI_RESPONSES_WEBSOCKET_MODE)) {
+		if (featureFlagsService.getBooleanFlagEnabled(ExperimentalFeatureFlag.OPENAI_RESPONSES_WEBSOCKET_MODE)) {
 			return apiFormat === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE
 		}
 		return false

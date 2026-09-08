@@ -1,37 +1,28 @@
-import { envFlagEnabled } from "@shared/env"
 import type { FeatureFlagPayload } from "@/services/feature-flags/providers/IFeatureFlagsProvider"
 
-export enum FeatureFlag {
+/**
+ * Experimental capability switches.
+ *
+ * These were once remote rollout flags. The flags that existed only to let an
+ * upstream service steer this extension — model list sources, promotional
+ * banners, onboarding overrides — have been removed, so what remains are local
+ * switches for capabilities that are not yet ready to be on for everyone.
+ *
+ * The enum string values are the persisted identity of each switch and are also
+ * what the environment variable names are derived from, so they must not be
+ * changed casually.
+ */
+export enum ExperimentalFeatureFlag {
 	WEBTOOLS = "webtools",
 	WORKTREES = "worktree-exp",
-	// Feature flag for showing the new onboarding flow or old welcome view.
-	ONBOARDING_MODELS = "onboarding_models",
-	// Feature flag for remote banner service
-	REMOTE_BANNERS = "remote-banners",
-	// Feature flag payload (milliseconds) controlling remote banner cache TTL
-	EXTENSION_REMOTE_BANNERS_TTL = "extension_remote_banners_ttl",
-	// Feature flag for DB-backed welcome banners (What's New modal)
-	// When off, hardcoded welcome items are shown instead
-	REMOTE_WELCOME_BANNERS = "remote-welcome-banners",
-	// Feature flag for upstream Cline recommended model cards
-	CLINE_RECOMMENDED_MODELS_UPSTREAM = "cline-recommended-models-upstream",
-	// Rollout flag for Cline provider model sourcing:
-	// off => OpenRouter model list, on => Cline endpoint model list.
-	EXTENSION_CLINE_MODELS_ENDPOINT = "extension_cline_models_endpoint",
 	// Use the websocket mode for OpenAI native Responses API format
 	OPENAI_RESPONSES_WEBSOCKET_MODE = "openai-responses-websocket-mode",
 }
 
-export const FeatureFlagDefaultValue: Partial<Record<FeatureFlag, FeatureFlagPayload>> = {
-	[FeatureFlag.WEBTOOLS]: false,
-	[FeatureFlag.WORKTREES]: false,
-	[FeatureFlag.ONBOARDING_MODELS]: envFlagEnabled(process.env.E2E_TEST) ? { models: {} } : undefined,
-	[FeatureFlag.REMOTE_BANNERS]: envFlagEnabled(process.env.E2E_TEST) || envFlagEnabled(process.env.IS_DEV),
-	[FeatureFlag.EXTENSION_REMOTE_BANNERS_TTL]: 24 * 60 * 60 * 1000,
-	[FeatureFlag.REMOTE_WELCOME_BANNERS]: envFlagEnabled(process.env.E2E_TEST) || envFlagEnabled(process.env.IS_DEV),
-	[FeatureFlag.CLINE_RECOMMENDED_MODELS_UPSTREAM]: false,
-	[FeatureFlag.EXTENSION_CLINE_MODELS_ENDPOINT]: false,
-	[FeatureFlag.OPENAI_RESPONSES_WEBSOCKET_MODE]: false,
+export const ExperimentalFeatureFlagDefaultValue: Partial<Record<ExperimentalFeatureFlag, FeatureFlagPayload>> = {
+	[ExperimentalFeatureFlag.WEBTOOLS]: false,
+	[ExperimentalFeatureFlag.WORKTREES]: false,
+	[ExperimentalFeatureFlag.OPENAI_RESPONSES_WEBSOCKET_MODE]: false,
 }
 
-export const FEATURE_FLAGS = Object.values(FeatureFlag)
+export const EXPERIMENTAL_FEATURE_FLAGS = Object.values(ExperimentalFeatureFlag)

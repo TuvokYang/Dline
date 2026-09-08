@@ -45,8 +45,14 @@ export function transformRemoteConfigToStateShape(remoteConfig: RemoteConfig): P
 	const transformed: Partial<RemoteConfigFields> = {}
 
 	// Map top-level settings
+	// The organization answers a single question, so it governs both consents.
+	// It cannot grant them on the user's behalf either: an organization that
+	// permits reporting still leaves the choice to the user, so the permissive
+	// case maps to "unset" rather than to "enabled".
 	if (remoteConfig.telemetryEnabled !== undefined) {
-		transformed.telemetrySetting = remoteConfig.telemetryEnabled ? "enabled" : "disabled"
+		const organizationSetting = remoteConfig.telemetryEnabled ? "unset" : "disabled"
+		transformed.usageReportingSetting = organizationSetting
+		transformed.errorReportingSetting = organizationSetting
 	}
 	if (remoteConfig.mcpMarketplaceEnabled !== undefined) {
 		transformed.mcpMarketplaceEnabled = remoteConfig.mcpMarketplaceEnabled

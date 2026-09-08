@@ -15,8 +15,8 @@ import os from "os"
 import * as path from "path"
 import { HostProvider } from "@/hosts/host-provider"
 import { ExtensionRegistryInfo } from "@/registry"
-import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
-import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
+import { recordPerfPhase } from "@/services/telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/telemetry/instrumentation/perf-domains"
 import { telemetryService } from "@/services/telemetry"
 import { McpMarketplaceCatalog } from "@/shared/mcp"
 import type { ClineStorageMessage } from "@/shared/messages/content"
@@ -100,7 +100,6 @@ export const GlobalFileNames = {
 	apiConversationHistory: "api_conversation_history.jsonl",
 	contextHistory: "context_history.jsonl",
 	uiMessages: "ui_messages.jsonl",
-	clineRecommendedModels: "cline_recommended_models.json",
 	clineModels: "cline_models.json",
 	groqModels: "groq_models.json",
 	basetenModels: "baseten_models.json",

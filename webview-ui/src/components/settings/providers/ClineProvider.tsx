@@ -8,7 +8,6 @@ import type { ApiProfile } from "./ProviderProfile"
 interface ClineProviderProps {
 	showModelOptions: boolean
 	isPopup?: boolean
-	initialModelTab?: "recommended" | "free"
 	/** NEW: ApiProfile for profile-driven config (preferred when provided) */
 	profile?: ApiProfile
 	/** NEW: Callback to persist profile updates */
@@ -22,8 +21,6 @@ interface ClineProviderProps {
 export const ClineProvider = ({
 	showModelOptions,
 	isPopup,
-
-	initialModelTab,
 	profile: _profile,
 	onUpdate: _onUpdate,
 }: ClineProviderProps) => {
@@ -34,7 +31,7 @@ export const ClineProvider = ({
 				<ClineAccountInfoCard />
 			</div>
 
-			{showModelOptions && <ClineModelPicker initialTab={initialModelTab} isPopup={isPopup} showProviderRouting={true} />}
+			{showModelOptions && <ClineModelPicker isPopup={isPopup} showProviderRouting={true} />}
 		</div>
 	)
 }

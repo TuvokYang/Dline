@@ -31,17 +31,19 @@ export class ErrorProviderFactory {
 	public static async createProvider(config: ErrorProviderConfig): Promise<IErrorProvider> {
 		switch (config.type) {
 			case "posthog": {
-				const hasValidPostHogConfig = isPostHogConfigValid(config.config)
-				const errorTrackingApiKey = config.config.errorTrackingApiKey
-				return hasValidPostHogConfig && errorTrackingApiKey
-					? await new PostHogErrorProvider({
-							apiKey: errorTrackingApiKey,
-							errorTrackingApiKey: errorTrackingApiKey,
-							host: config.config.host,
-							uiHost: config.config.uiHost,
-							enableExceptionAutocapture: !!config.config.enableErrorAutocapture,
-						}).initialize()
-					: new NoOpErrorProvider() // Fallback to no-op provider
+				const { errorTrackingApiKey, host, uiHost, enableErrorAutocapture } = config.config
+				// A destination is as necessary as a key: with no configured
+				// host there is nowhere to report to.
+				if (!isPostHogConfigValid(config.config) || !errorTrackingApiKey || !host) {
+					return new NoOpErrorProvider()
+				}
+				return await new PostHogErrorProvider({
+					apiKey: errorTrackingApiKey,
+					errorTrackingApiKey,
+					host,
+					uiHost,
+					enableExceptionAutocapture: !!enableErrorAutocapture,
+				}).initialize()
 			}
 			default:
 				return new NoOpErrorProvider()

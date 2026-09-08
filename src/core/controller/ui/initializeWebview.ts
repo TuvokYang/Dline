@@ -8,6 +8,7 @@ import { readMcpMarketplaceCatalogFromCache } from "@/core/storage/disk"
 import { telemetryService } from "@/services/telemetry"
 import { Logger } from "@/shared/services/Logger"
 import { GlobalStateAndSettings } from "@/shared/storage/state-keys"
+import { isReportingAllowed } from "@/shared/TelemetrySetting"
 import type { Controller } from "../index"
 import { sendMcpMarketplaceCatalogEvent } from "../mcp/subscribeToMcpMarketplaceCatalog"
 import { refreshBasetenModels } from "../models/refreshBasetenModels"
@@ -110,9 +111,10 @@ export async function initializeWebview(controller: Controller, _request: EmptyR
 		// Silently refresh MCP marketplace catalog
 		controller.refreshMcpMarketplace(true /* sendCatalogEvent */)
 
-		// Initialize telemetry service with user's current setting
-		const telemetrySetting = controller.stateManager.getGlobalSettingsKey("telemetrySetting")
-		telemetryService.updateTelemetryState(telemetrySetting !== "disabled")
+		// Initialize telemetry service with the user's usage reporting consent.
+		// An undecided user has not consented.
+		const usageReportingSetting = controller.stateManager.getGlobalSettingsKey("usageReportingSetting")
+		telemetryService.updateTelemetryState(isReportingAllowed(usageReportingSetting))
 
 		return Empty.create({})
 	} catch (error) {

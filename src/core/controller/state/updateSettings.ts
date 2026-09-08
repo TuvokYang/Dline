@@ -18,8 +18,8 @@ import { ClineEnv } from "@/config"
 import { settingsAffectPromptFreshness } from "@/core/prompts/system-prompt-cache/PromptFreshnessProjection"
 import { fetchRemoteConfig } from "@/core/storage/remote-config/fetch"
 import { clearRemoteConfig } from "@/core/storage/remote-config/utils"
-import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
-import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
+import { recordPerfPhase } from "@/services/telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/telemetry/instrumentation/perf-domains"
 import { isChatInputSendShortcut } from "@/shared/ChatInputSendShortcut"
 import { McpDisplayMode } from "@/shared/McpDisplayMode"
 import { Logger } from "@/shared/services/Logger"
@@ -119,9 +119,13 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			}
 		}
 
-		// Update telemetry setting
-		if (request.telemetrySetting) {
-			await controller.updateTelemetrySetting(request.telemetrySetting as TelemetrySetting)
+		// Reporting consents are independent, so each is applied only when the
+		// request actually carries it.
+		if (request.usageReportingSetting) {
+			await controller.updateUsageReportingSetting(request.usageReportingSetting as TelemetrySetting)
+		}
+		if (request.errorReportingSetting) {
+			await controller.updateErrorReportingSetting(request.errorReportingSetting as TelemetrySetting)
 		}
 
 		// Update plan/act separate models setting. An active Task must collapse

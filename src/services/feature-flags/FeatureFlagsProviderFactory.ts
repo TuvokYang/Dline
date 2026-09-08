@@ -1,14 +1,16 @@
-import { ClineEndpoint } from "@/config"
-import { isPostHogConfigValid, posthogConfig } from "@/shared/services/config/posthog-config"
-import { Logger } from "@/shared/services/Logger"
-import { PostHogClientProvider } from "../telemetry/providers/posthog/PostHogClientProvider"
-import type { FeatureFlagsAndPayloads, IFeatureFlagsProvider } from "./providers/IFeatureFlagsProvider"
-import { PostHogFeatureFlagsProvider } from "./providers/PostHogFeatureFlagsProvider"
+import type { FeatureFlagPayload, IFeatureFlagsProvider } from "./providers/IFeatureFlagsProvider"
+import { LocalFeatureFlagsProvider } from "./providers/LocalFeatureFlagsProvider"
 
 /**
- * Supported feature flags provider types
+ * Supported feature flags provider types.
+ *
+ * The PostHog-backed provider was removed with the remote flags it served:
+ * asking an upstream service which capabilities this extension may use is not a
+ * dependency Dline keeps. `local` resolves the remaining experimental switches
+ * from the environment; `no-op` leaves every switch at its static default and
+ * exists for tests and for hosts that want no environment influence at all.
  */
-export type FeatureFlagsProviderType = "posthog" | "no-op"
+export type FeatureFlagsProviderType = "local" | "no-op"
 
 /**
  * Configuration for feature flags providers
@@ -19,7 +21,6 @@ export interface FeatureFlagsProviderConfig {
 
 /**
  * Factory class for creating feature flags providers
- * Allows easy switching between different feature flag providers
  */
 export class FeatureFlagsProviderFactory {
 	/**
@@ -29,42 +30,31 @@ export class FeatureFlagsProviderFactory {
 	 */
 	public static createProvider(config: FeatureFlagsProviderConfig): IFeatureFlagsProvider {
 		switch (config.type) {
-			case "posthog": {
-				// Get the shared PostHog client from PostHogClientProvider
-				const sharedClient = PostHogClientProvider.getClient()
-				if (sharedClient) {
-					return new PostHogFeatureFlagsProvider(sharedClient)
-				}
-				// Fall back to NoOp provider if no client is available
-				return new NoOpFeatureFlagsProvider()
-			}
+			case "local":
+				return new LocalFeatureFlagsProvider()
 			default:
 				return new NoOpFeatureFlagsProvider()
 		}
 	}
 
 	/**
-	 * Gets the default feature flags provider configuration
-	 * @returns Default configuration using PostHog, or no-op for self-hosted mode
+	 * Gets the default feature flags provider configuration.
+	 *
+	 * Resolution is local and makes no network call, so the same configuration
+	 * applies to every deployment, self-hosted included.
 	 */
 	public static getDefaultConfig(): FeatureFlagsProviderConfig {
-		// Use no-op provider in self-hosted mode to avoid external network calls
-		if (ClineEndpoint.isSelfHosted()) {
-			return { type: "no-op" }
-		}
-		const hasValidConfig = isPostHogConfigValid(posthogConfig)
-		return {
-			type: hasValidConfig ? "posthog" : "no-op",
-		}
+		return { type: "local" }
 	}
 }
 
 /**
- * No-operation feature flags provider for when feature flags are disabled
- * or for testing purposes
+ * No-operation feature flags provider.
+ *
+ * Returns no values, which leaves each switch at its static default.
  */
 class NoOpFeatureFlagsProvider implements IFeatureFlagsProvider {
-	async getAllFlagsAndPayloads(_: { flagKeys?: string[] }): Promise<FeatureFlagsAndPayloads | undefined> {
+	resolveFlags(_flagKeys: readonly string[]): Record<string, FeatureFlagPayload> {
 		return {}
 	}
 
@@ -73,13 +63,10 @@ class NoOpFeatureFlagsProvider implements IFeatureFlagsProvider {
 	}
 
 	public getSettings() {
-		return {
-			enabled: true,
-			timeout: 1000,
-		}
+		return { enabled: true }
 	}
 
 	public async dispose(): Promise<void> {
-		Logger.info("[NoOpFeatureFlagsProvider] Disposing")
+		// Nothing is held open.
 	}
 }

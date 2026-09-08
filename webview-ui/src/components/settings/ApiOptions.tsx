@@ -63,7 +63,6 @@ interface ApiOptionsProps {
 	modelIdErrorMessage?: string
 	isPopup?: boolean
 	currentMode: Mode
-	initialModelTab?: "recommended" | "free"
 }
 
 // This is necessary to ensure dropdown opens downward, important for when this is used in popup
@@ -89,7 +88,6 @@ const ApiOptions = ({
 	modelIdErrorMessage,
 	isPopup,
 	currentMode,
-	initialModelTab,
 }: ApiOptionsProps) => {
 	// Use full context state for immediate save payload
 	const { apiConfiguration, remoteConfigSettings } = useExtensionState()
@@ -394,7 +392,6 @@ const ApiOptions = ({
 
 			{currentProfile && selectedProvider === "cline" && (
 				<ClineProvider
-					initialModelTab={initialModelTab}
 					isPopup={isPopup}
 					onUpdate={handleProfileUpdate}
 					profile={currentProfile}

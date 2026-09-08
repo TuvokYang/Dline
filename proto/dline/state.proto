@@ -158,7 +158,9 @@ message Settings {
   optional string global_workflow_toggles = 130;
   optional string global_skills_toggles = 131;
   optional BrowserSettings browser_settings = 132;
-  optional string telemetry_setting = 133;
+  reserved 133; // was telemetry_setting; usage and error are consented separately
+  optional string usage_reporting_setting = 250;
+  optional string error_reporting_setting = 251;
   optional bool plan_act_separate_models_setting = 134;
   optional bool enable_checkpoints_setting = 135;
   optional int32 shell_integration_timeout = 136;
@@ -419,8 +421,10 @@ enum TelemetrySettingEnum {
 }
 
 message TelemetrySettingRequest {
+  reserved 2; // was a single setting covering usage and error together
   Metadata metadata = 1;
-  TelemetrySettingEnum setting = 2;
+  TelemetrySettingEnum usage_setting = 3;
+  TelemetrySettingEnum error_setting = 4;
 }
 
 // Browser settings for UpdateSettingsRequest
@@ -447,7 +451,7 @@ message UpdateSettingsRequest {
 
   Metadata metadata = 1;
   optional ModelsApiConfiguration api_configuration = 2;
-  optional string telemetry_setting = 3;
+  reserved 3; // was telemetry_setting; usage and error are consented separately
   optional bool plan_act_separate_models_setting = 4;
   optional bool enable_checkpoints_setting = 5;
   optional bool mcp_marketplace_enabled = 6;
@@ -502,6 +506,8 @@ message UpdateSettingsRequest {
   optional string image_profile = 58;
   optional bool image_generation_enabled = 59;
   optional string image_profile_id = 60;
+  optional string usage_reporting_setting = 61;
+  optional string error_reporting_setting = 62;
 }
 
 message UpdateTerminalConnectionTimeoutRequest {

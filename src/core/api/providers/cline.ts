@@ -5,12 +5,10 @@ import axios from "axios"
 import OpenAI from "openai"
 import type { ChatCompletionTool as OpenAITool } from "openai/resources/chat/completions"
 import { ClineEnv } from "@/config"
-import { refreshClineRecommendedModels } from "@/core/controller/models/refreshClineRecommendedModels"
 import { ClineAccountService } from "@/services/account/ClineAccountService"
 import { AuthService } from "@/services/auth/AuthService"
 import { buildClineExtraHeaders } from "@/services/EnvUtils"
 import { CLINE_ACCOUNT_AUTH_ERROR_MESSAGE } from "@/shared/ClineAccount"
-import { CLINE_RECOMMENDED_MODELS_FALLBACK } from "@/shared/cline/recommended-models"
 import type { ClineStorageMessage } from "@/shared/messages/content"
 import { fetch, getAxiosSettings } from "@/shared/net"
 import { Logger } from "@/shared/services/Logger"
@@ -20,12 +18,6 @@ import { createOpenRouterStream } from "../transform/openrouter-stream"
 import type { ApiStream, ApiStreamUsageChunk } from "../transform/stream"
 import { ToolCallProcessor } from "../transform/tool-call-processor"
 import type { OpenRouterErrorResponse } from "./types"
-
-function normalizeModelId(modelId: string): string {
-	return modelId.trim().toLowerCase()
-}
-
-const CLINE_FREE_MODEL_IDS = new Set(CLINE_RECOMMENDED_MODELS_FALLBACK.free.map((model) => normalizeModelId(model.id)))
 
 function getCacheReadTokens(usage: any): number {
 	return usage?.prompt_tokens_details?.cached_tokens || usage?.cache_read_input_tokens || 0
@@ -70,20 +62,6 @@ export class ClineHandler implements ApiHandler {
 	}
 	private get thinkingBudgetTokens() {
 		return this.config?.reasoning?.thinkingBudget ?? 0
-	}
-
-	private async getFreeModelIdSet(): Promise<Set<string>> {
-		try {
-			const models = await refreshClineRecommendedModels()
-			const freeModelIds = models.free.map((model) => normalizeModelId(model.id)).filter((modelId) => modelId.length > 0)
-			if (freeModelIds.length > 0) {
-				return new Set(freeModelIds)
-			}
-		} catch (error) {
-			Logger.error("Error resolving Cline free model IDs from recommended models:", error)
-		}
-
-		return CLINE_FREE_MODEL_IDS
 	}
 
 	private async ensureClient(): Promise<OpenAI> {
@@ -148,7 +126,6 @@ export class ClineHandler implements ApiHandler {
 			this.lastRequestId = undefined
 
 			let didOutputUsage = false
-			const freeModelIds = await this.getFreeModelIdSet()
 
 			const stream = await createOpenRouterStream(
 				client,
@@ -236,16 +213,12 @@ export class ClineHandler implements ApiHandler {
 				}
 
 				if (!didOutputUsage && chunk.usage) {
+					// The API reports what the request cost, including zero for free
+					// models; overriding it here would only mask a billing bug.
 					// @ts-expect-error-next-line
-					let totalCost = (chunk.usage.cost || 0) + (chunk.usage.cost_details?.upstream_inference_cost || 0)
-					const modelId = this.getModel().id
-					const isFreeModel = freeModelIds.has(normalizeModelId(modelId))
+					const totalCost = (chunk.usage.cost || 0) + (chunk.usage.cost_details?.upstream_inference_cost || 0)
 					const cacheReadTokens = getCacheReadTokens(chunk.usage)
 					const cacheWriteTokens = getCacheWriteTokens(chunk.usage)
-
-					if (isFreeModel) {
-						totalCost = 0
-					}
 
 					yield {
 						type: "usage",
@@ -262,7 +235,7 @@ export class ClineHandler implements ApiHandler {
 			// Fallback to generation endpoint if usage chunk not returned
 			if (!didOutputUsage) {
 				Logger.warn("Cline API did not return usage chunk, fetching from generation endpoint")
-				const apiStreamUsage = await this.getApiStreamUsage(freeModelIds)
+				const apiStreamUsage = await this.getApiStreamUsage()
 				if (apiStreamUsage) {
 					yield apiStreamUsage
 				}
@@ -273,10 +246,9 @@ export class ClineHandler implements ApiHandler {
 		}
 	}
 
-	async getApiStreamUsage(freeModelIds?: Set<string>): Promise<ApiStreamUsageChunk | undefined> {
+	async getApiStreamUsage(): Promise<ApiStreamUsageChunk | undefined> {
 		if (this.lastGenerationId) {
 			try {
-				const resolvedFreeModelIds = freeModelIds || (await this.getFreeModelIdSet())
 				const clineAccountAuthToken = await this._authService.getAuthToken()
 				if (!clineAccountAuthToken) {
 					throw new Error(CLINE_ACCOUNT_AUTH_ERROR_MESSAGE)
@@ -294,13 +266,7 @@ export class ClineHandler implements ApiHandler {
 				})
 
 				const generation = response.data
-				let totalCost = generation?.total_cost || 0
-				const modelId = this.getModel().id
-				const isFreeModel = resolvedFreeModelIds.has(normalizeModelId(modelId))
-
-				if (isFreeModel) {
-					totalCost = 0
-				}
+				const totalCost = generation?.total_cost || 0
 
 				return {
 					type: "usage",

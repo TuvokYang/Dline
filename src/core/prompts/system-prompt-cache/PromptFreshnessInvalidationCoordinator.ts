@@ -1,6 +1,6 @@
 import { Logger } from "@shared/services/Logger"
-import { recordPerfPhase } from "@/services/runtime-telemetry/instrumentation/duration-recorder"
-import { PerfDomain } from "@/services/runtime-telemetry/instrumentation/perf-domains"
+import { recordPerfPhase } from "@/services/telemetry/instrumentation/duration-recorder"
+import { PerfDomain } from "@/services/telemetry/instrumentation/perf-domains"
 
 export type PromptFreshnessInvalidationSource =
 	| "prompt_input_file"
