@@ -8,7 +8,7 @@ import {
 	VSCodeRadioGroup,
 	VSCodeTextField,
 } from "@vscode/webview-ui-toolkit/react"
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { McpServiceClient } from "@/services/grpc-client"
 import McpMarketplaceCard from "./McpMarketplaceCard"
@@ -18,7 +18,7 @@ const McpMarketplaceView = () => {
 	const { mcpServers, mcpMarketplaceCatalog, setMcpMarketplaceCatalog, remoteConfigSettings } = useExtensionState()
 
 	const showMarketplace = remoteConfigSettings?.mcpMarketplaceEnabled !== false
-	const [isLoading, setIsLoading] = useState(true)
+	const [isLoading, setIsLoading] = useState(showMarketplace)
 	const [error, setError] = useState<string | null>(null)
 	const [isRefreshing, setIsRefreshing] = useState(false)
 	const [searchQuery, setSearchQuery] = useState("")
@@ -59,77 +59,52 @@ const McpMarketplaceView = () => {
 			})
 	}, [items, searchQuery, selectedCategory, sortBy])
 
-	const fetchMarketplace = (forceRefresh = false) => {
-		if (forceRefresh) {
-			setIsRefreshing(true)
-		} else {
-			setIsLoading(true)
-		}
-		setError(null)
+	// Keeping this callback referentially stable is required: it is an effect dependency,
+	// and an unstable identity would re-trigger the fetch on every render.
+	const fetchMarketplace = useCallback(
+		(forceRefresh = false) => {
+			if (!showMarketplace) {
+				setIsLoading(false)
+				setIsRefreshing(false)
+				return
+			}
 
-		if (showMarketplace) {
+			if (forceRefresh) {
+				setIsRefreshing(true)
+			} else {
+				setIsLoading(true)
+			}
+			setError(null)
+
 			McpServiceClient.refreshMcpMarketplace(EmptyRequest.create({}))
 				.then((response) => {
 					setMcpMarketplaceCatalog(response)
 				})
-				.catch((error) => {
-					console.error("Error refreshing MCP marketplace:", error)
+				.catch((requestError) => {
+					console.error("Error refreshing MCP marketplace:", requestError)
 					setError("Failed to load marketplace data")
+				})
+				.finally(() => {
 					setIsLoading(false)
 					setIsRefreshing(false)
 				})
-		}
-	}
+		},
+		[showMarketplace, setMcpMarketplaceCatalog],
+	)
+
+	const hasRequestedCatalogRef = useRef(false)
 
 	useEffect(() => {
-		// Fetch marketplace catalog on initial load
+		// Fetch the catalog once per mount. Later updates arrive through the catalog
+		// subscription in ExtensionStateContext or through an explicit retry.
+		if (hasRequestedCatalogRef.current) {
+			return
+		}
+		hasRequestedCatalogRef.current = true
 		fetchMarketplace()
 	}, [fetchMarketplace])
 
-	useEffect(() => {
-		// Update loading state when catalog arrives
-		if (mcpMarketplaceCatalog?.items) {
-			setIsLoading(false)
-			setIsRefreshing(false)
-			setError(null)
-		}
-	}, [mcpMarketplaceCatalog])
-
-	if (isLoading || isRefreshing) {
-		return (
-			<div
-				style={{
-					display: "flex",
-					justifyContent: "center",
-					alignItems: "center",
-					height: "100%",
-					padding: "20px",
-				}}>
-				<VSCodeProgressRing />
-			</div>
-		)
-	}
-
-	if (error) {
-		return (
-			<div
-				style={{
-					display: "flex",
-					flexDirection: "column",
-					justifyContent: "center",
-					alignItems: "center",
-					height: "100%",
-					padding: "20px",
-					gap: "12px",
-				}}>
-				<div style={{ color: "var(--vscode-errorForeground)" }}>{error}</div>
-				<VSCodeButton appearance="secondary" onClick={() => fetchMarketplace(true)}>
-					<span className="codicon codicon-refresh" style={{ marginRight: "6px" }} />
-					Retry
-				</VSCodeButton>
-			</div>
-		)
-	}
+	const isBusy = isLoading || isRefreshing
 
 	return (
 		<div
@@ -269,28 +244,56 @@ const McpMarketplaceView = () => {
 				</div>
 			)}
 
-			<div style={{ display: "flex", flexDirection: "column" }}>
-				{filteredItems.length === 0 ? (
-					<div
-						style={{
-							display: "flex",
-							justifyContent: "center",
-							alignItems: "center",
-							height: "100%",
-							padding: "20px",
-							color: "var(--vscode-descriptionForeground)",
-						}}>
-						{searchQuery || selectedCategory
-							? "No matching MCP servers found"
-							: "No MCP servers found in the marketplace"}
-					</div>
-				) : (
-					filteredItems.map((item) => (
-						<McpMarketplaceCard installedServers={mcpServers} item={item} key={item.mcpId} setError={setError} />
-					))
-				)}
-				<McpSubmitCard />
-			</div>
+			{/* Only the result area swaps between states so the search field keeps focus while loading. */}
+			{isBusy ? (
+				<div
+					style={{
+						display: "flex",
+						justifyContent: "center",
+						alignItems: "center",
+						padding: "40px 20px",
+					}}>
+					<VSCodeProgressRing />
+				</div>
+			) : error ? (
+				<div
+					style={{
+						display: "flex",
+						flexDirection: "column",
+						justifyContent: "center",
+						alignItems: "center",
+						padding: "40px 20px",
+						gap: "12px",
+					}}>
+					<div style={{ color: "var(--vscode-errorForeground)" }}>{error}</div>
+					<VSCodeButton appearance="secondary" onClick={() => fetchMarketplace(true)}>
+						<span className="codicon codicon-refresh" style={{ marginRight: "6px" }} />
+						Retry
+					</VSCodeButton>
+				</div>
+			) : (
+				<div style={{ display: "flex", flexDirection: "column" }}>
+					{filteredItems.length === 0 ? (
+						<div
+							style={{
+								display: "flex",
+								justifyContent: "center",
+								alignItems: "center",
+								padding: "40px 20px",
+								color: "var(--vscode-descriptionForeground)",
+							}}>
+							{searchQuery || selectedCategory
+								? "No matching MCP servers found"
+								: "No MCP servers found in the marketplace"}
+						</div>
+					) : (
+						filteredItems.map((item) => (
+							<McpMarketplaceCard installedServers={mcpServers} item={item} key={item.mcpId} setError={setError} />
+						))
+					)}
+					<McpSubmitCard />
+				</div>
+			)}
 		</div>
 	)
 }

@@ -6,6 +6,7 @@ import { useEffect, useState } from "react"
 import styled from "styled-components"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { McpServiceClient } from "@/services/grpc-client"
+import { Tab, TabContent } from "../../common/Tab"
 import ViewHeader from "../../common/ViewHeader"
 import AddRemoteServerForm from "./tabs/add-server/AddRemoteServerForm"
 import ConfigureServersView from "./tabs/installed/ConfigureServersView"
@@ -37,79 +38,57 @@ const McpConfigurationView = ({ onDone, initialTab }: McpViewProps) => {
 		}
 	}, [showMarketplace, showRemoteServers, activeTab])
 
-	// Get setter for MCP marketplace catalog from context
-	const { setMcpMarketplaceCatalog } = useExtensionState()
-
 	useEffect(() => {
-		if (showMarketplace) {
-			McpServiceClient.refreshMcpMarketplace(EmptyRequest.create({}))
-				.then((response) => {
-					setMcpMarketplaceCatalog(response)
-				})
-				.catch((error) => {
-					console.error("Error refreshing MCP marketplace:", error)
-				})
-
-			McpServiceClient.getLatestMcpServers(EmptyRequest.create({}))
-				.then((response: McpServers) => {
-					if (response.mcpServers) {
-						const mcpServers = convertProtoMcpServersToMcpServers(response.mcpServers)
-						setMcpServers(mcpServers)
-					}
-				})
-				.catch((error) => {
-					console.error("Failed to fetch MCP servers:", error)
-				})
-		}
-	}, [showMarketplace, setMcpServers, setMcpMarketplaceCatalog])
+		// The marketplace catalog is owned by McpMarketplaceView; this view only loads the
+		// installed servers that every tab depends on.
+		McpServiceClient.getLatestMcpServers(EmptyRequest.create({}))
+			.then((response: McpServers) => {
+				if (response.mcpServers) {
+					setMcpServers(convertProtoMcpServersToMcpServers(response.mcpServers))
+				}
+			})
+			.catch((error) => {
+				console.error("Failed to fetch MCP servers:", error)
+			})
+	}, [setMcpServers])
 
 	return (
-		<div
-			style={{
-				position: "fixed",
-				top: 0,
-				left: 0,
-				right: 0,
-				bottom: 0,
-				display: "flex",
-				flexDirection: "column",
-			}}>
+		<Tab>
 			<ViewHeader environment={environment} onDone={onDone} title="MCP Servers" />
 
-			<div style={{ flex: 1, overflow: "auto" }}>
-				{/* Tabs container */}
-				<div
-					style={{
-						display: "flex",
-						gap: "1px",
-						padding: "0 20px 0 20px",
-						borderBottom: "1px solid var(--vscode-panel-border)",
-					}}>
-					{showMarketplace && (
-						<TabButton isActive={activeTab === "marketplace"} onClick={() => handleTabChange("marketplace")}>
-							Marketplace
-						</TabButton>
-					)}
-					{showRemoteServers && (
-						<TabButton isActive={activeTab === "addRemote"} onClick={() => handleTabChange("addRemote")}>
-							Remote Servers
-						</TabButton>
-					)}
-					<TabButton isActive={activeTab === "configure"} onClick={() => handleTabChange("configure")}>
-						Configure
+			{/* Tabs container stays outside the scroll area so it does not scroll away */}
+			<div
+				className="shrink-0"
+				style={{
+					display: "flex",
+					gap: "1px",
+					padding: "0 20px 0 20px",
+					borderBottom: "1px solid var(--vscode-panel-border)",
+				}}>
+				{showMarketplace && (
+					<TabButton isActive={activeTab === "marketplace"} onClick={() => handleTabChange("marketplace")}>
+						Marketplace
 					</TabButton>
-				</div>
-
-				{/* Content container */}
-				<div style={{ width: "100%" }}>
-					{showMarketplace && activeTab === "marketplace" && <McpMarketplaceView />}
-					{showRemoteServers && activeTab === "addRemote" && (
-						<AddRemoteServerForm onServerAdded={() => handleTabChange("configure")} />
-					)}
-					{activeTab === "configure" && <ConfigureServersView />}
-				</div>
+				)}
+				{showRemoteServers && (
+					<TabButton isActive={activeTab === "addRemote"} onClick={() => handleTabChange("addRemote")}>
+						Remote Servers
+					</TabButton>
+				)}
+				<TabButton isActive={activeTab === "configure"} onClick={() => handleTabChange("configure")}>
+					Configure
+				</TabButton>
 			</div>
-		</div>
+
+			{/* Single scroll container for the active tab content */}
+			<TabContent className="w-full">
+				{showMarketplace && activeTab === "marketplace" && <McpMarketplaceView />}
+				{showRemoteServers && activeTab === "addRemote" && (
+					<AddRemoteServerForm onServerAdded={() => handleTabChange("configure")} />
+				)}
+				{activeTab === "configure" && <ConfigureServersView />}
+			</TabContent>
+		</Tab>
 	)
 }
 
