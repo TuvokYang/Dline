@@ -7,7 +7,7 @@ import { getAllApiKeys, resetAllStores } from "@core/storage/secrets"
 import { EmptyRequest } from "@shared/proto/dline/common"
 import { ServerTool } from "@shared/proto/dline/models/metadata"
 import { ApiProfile, ImageGenerationSource } from "@shared/proto/dline/profile"
-import PROVIDERS from "@shared/providers/providers.json"
+import { PROVIDER_OPTIONS } from "@shared/providers/providers"
 import { Logger } from "@shared/services/Logger"
 import { expect } from "chai"
 import { afterEach, beforeEach, describe, it, vi } from "vitest"
@@ -364,7 +364,7 @@ describe("getApiProfiles", () => {
 	})
 
 	it("stores API keys for every registered provider only in secrets storage", async () => {
-		const profiles = PROVIDERS.list.map(({ value: provider }, index) =>
+		const profiles = PROVIDER_OPTIONS.map(({ value: provider }, index) =>
 			ApiProfile.create({
 				id: `all-provider-${index}`,
 				name: `E2E ${provider}`,
@@ -380,12 +380,12 @@ describe("getApiProfiles", () => {
 
 		const profilesPath = path.join(process.env.DLINE_DIR!, "data", "settings", "api_profiles.json")
 		const raw = await fs.readFile(profilesPath, "utf8")
-		for (const { value: provider } of PROVIDERS.list) {
+		for (const { value: provider } of PROVIDER_OPTIONS) {
 			expect(raw).not.to.include(`secret-${provider}`)
 		}
 
 		const storedKeys = getAllApiKeys()
-		expect(Object.keys(storedKeys)).to.have.length(PROVIDERS.list.length)
+		expect(Object.keys(storedKeys)).to.have.length(PROVIDER_OPTIONS.length)
 		for (const profile of profiles) {
 			expect(storedKeys[profile.id]).to.deep.equal({ apiKey: profile.apiKey, name: profile.name })
 		}

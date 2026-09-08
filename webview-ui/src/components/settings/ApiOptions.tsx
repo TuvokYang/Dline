@@ -1,5 +1,5 @@
 import { StringRequest } from "@shared/proto/dline/common"
-import PROVIDERS from "@shared/providers/providers.json"
+import { PROVIDER_OPTIONS } from "@shared/providers/providers"
 import { Mode } from "@shared/storage/types"
 import { VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
 import Fuse from "fuse.js"
@@ -150,7 +150,7 @@ const ApiOptions = ({
 	const dropdownListRef = useRef<HTMLDivElement>(null)
 
 	const providerOptions = useMemo(() => {
-		let providers = PROVIDERS.list
+		let providers: readonly { value: string; label: string }[] = PROVIDER_OPTIONS
 		// Filter by platform
 		if (PLATFORM_CONFIG.type !== PlatformType.VSCODE) {
 			// Don't include VS Code LM API for non-VSCode platforms

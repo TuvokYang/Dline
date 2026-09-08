@@ -1,5 +1,5 @@
 import type { ApiProvider } from "@shared/api"
-import PROVIDERS from "@shared/providers/providers.json"
+import { getProviderLabel as resolveProviderLabel } from "@shared/providers/providers"
 import type { RemoteConfigFields } from "@shared/storage/state-keys"
 import type { ApiProfile } from "@/components/settings/providers/ProviderProfile"
 
@@ -132,9 +132,8 @@ export function getConfiguredProviders(
 
 /**
  * Get provider display label from provider value.
- * Uses the canonical providers.json as source of truth.
+ * Uses the canonical provider list as source of truth.
  */
 export function getProviderLabel(provider: ApiProvider): string {
-	const providerEntry = PROVIDERS.list.find((p) => p.value === provider)
-	return providerEntry?.label || provider
+	return resolveProviderLabel(provider)
 }

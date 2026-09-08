@@ -39,7 +39,7 @@ interface ApiProfileCardProps {
 	isExpanded: boolean
 	editMode: boolean
 	currentMode: Mode
-	providerOptions: { value: string; label: string }[]
+	providerOptions: readonly { value: string; label: string }[]
 	imageProfiles: ImageGenerationProfile[]
 	imageGenerationEnabled: boolean
 	onToggleExpand: () => void

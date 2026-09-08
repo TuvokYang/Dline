@@ -1,7 +1,7 @@
 import { EmptyRequest } from "@shared/proto/dline/common"
 import { ApiProfile, ApiProfilesResponse, UpdateApiProfilesRequest } from "@shared/proto/dline/profile"
 import { PlanActMode, ProfileSwitchRequest, ProfileSwitchStatus } from "@shared/proto/dline/state"
-import PROVIDERS from "@shared/providers/providers.json"
+import { PROVIDER_OPTIONS } from "@shared/providers/providers"
 import deepEqual from "fast-deep-equal"
 import { useCallback, useContext, useEffect, useMemo, useState } from "react"
 import { ExtensionStateContext } from "../../../context/ExtensionStateContext"
@@ -310,7 +310,7 @@ export function useApiProfiles() {
 		setSharedExpandedId((current) => (current === id ? null : id))
 	}, [])
 
-	const providerOptions = useMemo(() => PROVIDERS.list, [])
+	const providerOptions = useMemo(() => PROVIDER_OPTIONS, [])
 
 	return {
 		profiles: sharedProfiles,

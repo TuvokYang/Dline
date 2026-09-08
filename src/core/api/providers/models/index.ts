@@ -3,7 +3,7 @@
  * Each provider file exports a ModelInfo[] array.
  * This index aggregates all providers into a single Record for seed data export.
  */
-import type { ProviderModelsConfig } from "../../../../shared/providers/types"
+import type { ProviderModelsConfig } from "@shared/providers/types"
 
 import { anthropicModels } from "./anthropic"
 import { askSageModels } from "./asksage"
@@ -47,6 +47,8 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	anthropic: {
 		provider: "anthropic",
 		providerName: "Anthropic",
+		tier: "frontier",
+		frontierRank: 10,
 		baseUrl: "https://api.anthropic.com",
 		billingMode: "token",
 		models: anthropicModels,
@@ -55,20 +57,24 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	"claude-code": {
 		provider: "claude-code",
 		providerName: "Claude Code",
+		tier: "frontier",
+		frontierRank: 20,
 		billingMode: "token",
 		models: claudeCodeModels,
 		defaultModelId: firstKey(claudeCodeModels),
 	},
 	bedrock: {
 		provider: "bedrock",
-		providerName: "AWS Bedrock",
+		providerName: "Amazon Bedrock",
+		tier: "aggregator",
 		billingMode: "token",
 		models: bedrockModels,
 		defaultModelId: firstKey(bedrockModels),
 	},
 	vertex: {
 		provider: "vertex",
-		providerName: "Google Vertex AI",
+		providerName: "GCP Vertex AI",
+		tier: "aggregator",
 		billingMode: "token",
 		models: vertexModels,
 		defaultModelId: firstKey(vertexModels),
@@ -76,6 +82,7 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	gemini: {
 		provider: "gemini",
 		providerName: "Google Gemini",
+		tier: "standard",
 		baseUrl: "https://generativelanguage.googleapis.com",
 		billingMode: "token",
 		models: geminiModels,
@@ -85,7 +92,9 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	},
 	"openai-codex": {
 		provider: "openai-codex",
-		providerName: "OpenAI Codex",
+		providerName: "ChatGPT Subscription",
+		tier: "frontier",
+		frontierRank: 40,
 		billingMode: "subscription",
 		models: openAiCodexModels,
 		defaultModelId: firstKey(openAiCodexModels),
@@ -93,6 +102,8 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	deepseek: {
 		provider: "deepseek",
 		providerName: "DeepSeek",
+		tier: "frontier",
+		frontierRank: 80,
 		baseUrl: "https://api.deepseek.com",
 		billingMode: "token",
 		models: deepSeekModels,
@@ -101,6 +112,7 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	huggingface: {
 		provider: "huggingface",
 		providerName: "Hugging Face",
+		tier: "aggregator",
 		baseUrl: "https://router.huggingface.co/v1",
 		billingMode: "token",
 		models: huggingFaceModels,
@@ -108,7 +120,9 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	},
 	qwen: {
 		provider: "qwen",
-		providerName: "Qwen (International)",
+		providerName: "Alibaba Qwen",
+		tier: "frontier",
+		frontierRank: 90,
 		baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
 		billingMode: "token",
 		models: internationalQwenModels,
@@ -116,7 +130,8 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	},
 	"qwen-cn": {
 		provider: "qwen-cn",
-		providerName: "Qwen (Mainland China)",
+		providerName: "Alibaba Qwen (Mainland China)",
+		regionVariantOf: "qwen",
 		baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
 		billingMode: "token",
 		models: mainlandQwenModels,
@@ -124,7 +139,7 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	},
 	doubao: {
 		provider: "doubao",
-		providerName: "Doubao",
+		providerName: "ByteDance Doubao",
 		baseUrl: "https://ark.cn-beijing.volces.com/api/v3/",
 		billingMode: "token",
 		models: doubaoModels,
@@ -133,6 +148,8 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	mistral: {
 		provider: "mistral",
 		providerName: "Mistral",
+		tier: "frontier",
+		frontierRank: 120,
 		baseUrl: "https://api.mistral.ai",
 		billingMode: "token",
 		models: mistralModels,
@@ -148,7 +165,7 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	},
 	nebius: {
 		provider: "nebius",
-		providerName: "Nebius",
+		providerName: "Nebius AI Studio",
 		baseUrl: "https://api.studio.nebius.ai/v1",
 		billingMode: "token",
 		models: nebiusModels,
@@ -156,7 +173,7 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	},
 	wandb: {
 		provider: "wandb",
-		providerName: "Weights & Biases",
+		providerName: "W&B Inference",
 		baseUrl: "https://api.inference.wandb.ai/v1",
 		billingMode: "token",
 		models: wandbModels,
@@ -165,6 +182,8 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	xai: {
 		provider: "xai",
 		providerName: "xAI",
+		tier: "frontier",
+		frontierRank: 50,
 		baseUrl: "https://api.x.ai/v1",
 		billingMode: "token",
 		models: xaiModels,
@@ -197,6 +216,7 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	sapaicore: {
 		provider: "sapaicore",
 		providerName: "SAP AI Core",
+		tier: "aggregator",
 		billingMode: "token",
 		models: sapAiCoreModels,
 		defaultModelId: firstKey(sapAiCoreModels),
@@ -204,6 +224,8 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	moonshot: {
 		provider: "moonshot",
 		providerName: "Moonshot",
+		tier: "frontier",
+		frontierRank: 70,
 		baseUrl: "https://api.moonshot.cn/v1",
 		billingMode: "token",
 		models: moonshotModels,
@@ -225,9 +247,11 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 		models: basetenModels,
 		defaultModelId: firstKey(basetenModels),
 	},
-	"zai-intl": {
-		provider: "zai-intl",
-		providerName: "ZAi (International)",
+	zai: {
+		provider: "zai",
+		providerName: "Z AI",
+		tier: "frontier",
+		frontierRank: 60,
 		baseUrl: "https://api.z.ai/api/paas/v4",
 		billingMode: "token",
 		models: internationalZAiModels,
@@ -235,7 +259,8 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	},
 	"zai-cn": {
 		provider: "zai-cn",
-		providerName: "ZAi (Mainland China)",
+		providerName: "Z AI (Mainland China)",
+		regionVariantOf: "zai",
 		baseUrl: "https://open.bigmodel.cn/api/paas/v4",
 		billingMode: "token",
 		models: mainlandZAiModels,
@@ -243,7 +268,7 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	},
 	fireworks: {
 		provider: "fireworks",
-		providerName: "Fireworks",
+		providerName: "Fireworks AI",
 		baseUrl: "https://api.fireworks.ai/inference/v1",
 		billingMode: "token",
 		models: fireworksModels,
@@ -260,6 +285,8 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	minimax: {
 		provider: "minimax",
 		providerName: "MiniMax",
+		tier: "frontier",
+		frontierRank: 100,
 		baseUrl: "https://api.minimax.chat/v1",
 		billingMode: "token",
 		models: minimaxModels,
@@ -276,6 +303,7 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	openrouter: {
 		provider: "openrouter",
 		providerName: "OpenRouter",
+		tier: "aggregator",
 		baseUrl: "https://openrouter.ai/api/v1",
 		billingMode: "token",
 		models: emptyModels,
@@ -284,6 +312,8 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	openai: {
 		provider: "openai",
 		providerName: "OpenAI",
+		tier: "frontier",
+		frontierRank: 30,
 		baseUrl: "https://api.openai.com/v1",
 		billingMode: "token",
 		models: openAiModels,
@@ -308,6 +338,7 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	requesty: {
 		provider: "requesty",
 		providerName: "Requesty",
+		tier: "aggregator",
 		baseUrl: "https://router.requesty.ai/v1",
 		billingMode: "token",
 		models: emptyModels,
@@ -321,32 +352,37 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	},
 	"vscode-lm": {
 		provider: "vscode-lm",
-		providerName: "VS Code LM",
+		providerName: "GitHub Copilot",
+		tier: "aggregator",
 		billingMode: "free",
 		models: emptyModels,
 	},
 	cline: {
 		provider: "cline",
 		providerName: "Cline",
+		tier: "aggregator",
 		billingMode: "token",
 		models: emptyModels,
 	},
 	litellm: {
 		provider: "litellm",
 		providerName: "LiteLLM",
+		tier: "aggregator",
 		baseUrl: "http://localhost:4000",
 		billingMode: "token",
 		models: emptyModels,
 	},
 	dify: {
 		provider: "dify",
-		providerName: "Dify",
+		providerName: "Dify.ai",
+		tier: "aggregator",
 		billingMode: "token",
 		models: emptyModels,
 	},
 	"vercel-ai-gateway": {
 		provider: "vercel-ai-gateway",
 		providerName: "Vercel AI Gateway",
+		tier: "aggregator",
 		baseUrl: "https://ai-gateway.vercel.sh/v1",
 		billingMode: "token",
 		models: emptyModels,
@@ -354,13 +390,15 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	},
 	oca: {
 		provider: "oca",
-		providerName: "OCA",
+		providerName: "Oracle Code Assist",
+		tier: "aggregator",
 		billingMode: "token",
 		models: emptyModels,
 	},
 	aihubmix: {
 		provider: "aihubmix",
 		providerName: "AIHubMix",
+		tier: "aggregator",
 		baseUrl: "https://aihubmix.com",
 		billingMode: "token",
 		models: emptyModels,
@@ -368,6 +406,7 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	hicap: {
 		provider: "hicap",
 		providerName: "HiCap",
+		tier: "aggregator",
 		baseUrl: "https://api.hicap.ai/v2/openai",
 		billingMode: "token",
 		models: emptyModels,

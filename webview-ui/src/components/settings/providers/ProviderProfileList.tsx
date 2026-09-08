@@ -25,7 +25,7 @@ interface ApiProfileListProps {
 	expandedId: string | null
 	editMode: boolean
 	currentMode: Mode
-	providerOptions: { value: string; label: string }[]
+	providerOptions: readonly { value: string; label: string }[]
 	onToggleExpand: (id: string) => void
 	onToggleEditMode: () => void
 	onAddProfile: () => void
@@ -81,8 +81,8 @@ function SortableProfileCard({
 					</button>
 				}
 				editMode={editMode}
-				imageProfiles={imageProfiles}
 				imageGenerationEnabled={imageGenerationEnabled}
+				imageProfiles={imageProfiles}
 				isExpanded={expandedId === profile.id}
 				onDelete={() => onDeleteProfile(profile.id)}
 				onToggleExpand={() => onToggleExpand(profile.id)}
@@ -181,9 +181,9 @@ const ApiProfileList: React.FC<ApiProfileListProps> = ({
 						<SortableProfileCard
 							currentMode={currentMode}
 							editMode={editMode}
-							imageProfiles={imageProfiles}
-							imageGenerationEnabled={imageGenerationEnabled}
 							expandedId={expandedId}
+							imageGenerationEnabled={imageGenerationEnabled}
+							imageProfiles={imageProfiles}
 							key={profile.id}
 							onDeleteProfile={onDeleteProfile}
 							onToggleExpand={onToggleExpand}

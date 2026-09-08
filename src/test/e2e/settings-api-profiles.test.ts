@@ -3,7 +3,7 @@ import * as path from "node:path"
 import { expect } from "@playwright/test"
 import type { ElectronApplication, Frame, Locator } from "playwright"
 import { ApiFormat } from "../../shared/proto/dline/models/metadata"
-import PROVIDERS from "../../shared/providers/providers.json"
+import { PROVIDER_OPTIONS } from "../../shared/providers/providers"
 import { E2E_PROFILE_NAMES } from "./utils/api-profile"
 import { E2ETestHelper, e2e } from "./utils/helpers"
 import { resizePrimarySidebar } from "./utils/resize-primary-sidebar"
@@ -505,7 +505,7 @@ e2e(
 		})
 		const providerSelector = profileCard.getByRole("combobox", { name: "Provider", exact: true })
 
-		for (const { value: provider } of PROVIDERS.list) {
+		for (const { value: provider } of PROVIDER_OPTIONS) {
 			await providerSelector.selectOption(provider)
 			const storedProfile = await E2ETestHelper.waitForValue(async () => {
 				const profile = (await readJson<StoredProfile[]>(profilesPath)).find((candidate) => candidate.id === profileId)
@@ -554,9 +554,9 @@ e2e("Settings API Config - exposes OAuth-only controls for OpenAI Codex", async 
 	const profileCard = sidebar.getByTestId("api-profile-card").last()
 	await profileCard.getByRole("combobox", { name: "Provider", exact: true }).selectOption("openai-codex")
 	// The OAuth control is presented in the product UI language.
-	await expect(profileCard.getByRole("button", { name: "开始 OAUTH 认证" })).toBeVisible()
-	await expect(profileCard.getByText("未认证", { exact: true })).toBeVisible({ timeout: 15_000 })
-	await expect(profileCard.getByText("凭据无效", { exact: true })).toHaveCount(0)
+	await expect(profileCard.getByRole("button", { name: "Sign in", exact: true })).toBeVisible()
+	await expect(profileCard.getByText("ChatGPT: Not signed in")).toBeVisible({ timeout: 15_000 })
+	await expect(profileCard.getByText("Invalid credential", { exact: true })).toHaveCount(0)
 	await expect(profileCard.getByRole("textbox", { name: /API Key|Access Token|Refresh Token|OAuth JSON/i })).toHaveCount(0)
 
 	for (const sidebarWidth of [320, 480, 700]) {
