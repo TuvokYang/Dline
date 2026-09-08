@@ -208,9 +208,11 @@ const ActModeHighlight: React.FC = () => {
 			role="button"
 			tabIndex={canSwitchToAct ? 0 : -1}
 			title={canSwitchToAct ? "Click to toggle to Act Mode" : "Already in Act Mode"}>
-			<div className="p-1 rounded-md bg-code flex items-center justify-end w-7 border border-input-border">
-				<div className="rounded-full bg-link w-2 h-2" />
-			</div>
+			<span
+				aria-hidden="true"
+				className="p-1 rounded-md bg-code flex items-center justify-end w-7 border border-input-border">
+				<span className="rounded-full bg-link w-2 h-2" />
+			</span>
 			Act Mode (⌘⇧A)
 		</span>
 	)
@@ -230,10 +232,15 @@ interface MarkdownBlockProps {
  * within their parent elements (like paragraphs, list items, etc.).
  * This caused the entire content to disappear because the structure became invalid.
  */
+const isExistingLinkNode = (node: Node | null | undefined): boolean => node?.type === "link" || node?.type === "linkReference"
+
 const remarkUrlToLink = () => {
 	return (tree: Node) => {
-		// Visit all "text" nodes in the markdown AST (Abstract Syntax Tree)
+		// Visit all "text" nodes in the markdown AST (Abstract Syntax Tree).
 		visit(tree, "text", (node: any, index, parent) => {
+			// GFM may already have linked a bare URL; never create a link inside that link.
+			if (isExistingLinkNode(parent)) return
+
 			const urlRegex = /https?:\/\/[^\s<>)"]+/g
 			const matches = node.value.match(urlRegex)
 			if (!matches) {

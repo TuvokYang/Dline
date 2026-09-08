@@ -57,18 +57,33 @@ const ACTION_EXPECTATIONS = [
 	{ story: "resume-completed-task", actions: ["Start New Task"] },
 ] as const
 
-async function openChatStory(page: Page, story: string): Promise<string[]> {
+async function openChatStory(page: Page, story: string, rootTimeout = 60_000): Promise<string[]> {
 	const pageErrors: string[] = []
 	page.on("pageerror", (error) => {
 		if (error.message !== "The user aborted a request.") {
 			pageErrors.push(error.message)
 		}
 	})
-	const response = await page.goto(`/iframe.html?id=views-chat--${story}&viewMode=story`)
+	const response = await page.goto(`/iframe.html?id=views-chat--${story}&viewMode=story`, {
+		waitUntil: "domcontentloaded",
+	})
 	expect(response?.ok()).toBe(true)
-	await expect(page.locator("#storybook-root")).not.toBeEmpty({ timeout: 60_000 })
+	await expect(page.locator("#storybook-root")).not.toBeEmpty({ timeout: rootTimeout })
 	return pageErrors
 }
+
+// Warm the heavy Chat story module once before applying normal per-scenario timeouts.
+test.describe.configure({ mode: "serial" })
+test.beforeAll(async ({ browser }) => {
+	test.setTimeout(180_000)
+	const page = await browser.newPage()
+	try {
+		const pageErrors = await openChatStory(page, "active-conversation", 150_000)
+		expect(pageErrors).toEqual([])
+	} finally {
+		await page.close()
+	}
+})
 
 test.describe("Views/Chat active task rendering", () => {
 	for (const story of ACTIVE_CHAT_STORIES) {

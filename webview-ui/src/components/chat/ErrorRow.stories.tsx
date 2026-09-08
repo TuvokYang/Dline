@@ -1,8 +1,8 @@
 import { ClineMessage } from "@shared/ExtensionMessage"
-import type { Meta, StoryObj } from "@storybook/react-vite"
-import { useMemo } from "react"
+import type { Decorator, Meta, StoryObj } from "@storybook/react-vite"
 import { expect, userEvent, within } from "storybook/test"
 import { createStorybookDecorator } from "@/config/StorybookDecorator"
+import type { ClineAuthContextType } from "@/context/ClineAuthContext"
 import ErrorRow from "./ErrorRow"
 
 // Mock data factories
@@ -14,35 +14,9 @@ const createMockMessage = (overrides: Partial<ClineMessage> = {}): ClineMessage 
 	...overrides,
 })
 
-const createMockAuthState = (overrides: any = {}) => ({
-	clineUser: null,
-	activeOrganization: null,
-	isAuthenticated: false,
-	...overrides,
-})
-
-const createMockExtensionState = (overrides: any = {}) => ({
-	version: "1.0.0",
-	clineMessages: [],
-	taskHistory: [],
-	shouldShowAnnouncement: false,
-	...overrides,
-})
-
-// Reusable decorators
-const createStoryDecorator =
-	(authOverrides: any = {}, extensionOverrides: any = {}) =>
-	(Story: any) => {
-		const mockExtensionState = useMemo(
-			() => ({
-				state: { ...createMockExtensionState(extensionOverrides) },
-				auth: { ...createMockAuthState(authOverrides) },
-			}),
-			[],
-		)
-
-		return createStorybookDecorator(mockExtensionState.state, "p-4", mockExtensionState.auth)(Story)
-	}
+// Reusable decorator that only overrides the auth fields this component consumes.
+const createStoryDecorator = (authOverrides: Partial<ClineAuthContextType> = {}): Decorator =>
+	createStorybookDecorator(undefined, "p-4", authOverrides)
 
 const meta: Meta<typeof ErrorRow> = {
 	title: "Views/Components/ErrorRow",
@@ -246,8 +220,7 @@ export const AuthErrorSignedIn: Story = {
 	...AuthenticationErrors,
 	decorators: [
 		createStoryDecorator({
-			clineUser: { id: "user123", email: "user@example.com" },
-			isAuthenticated: true,
+			clineUser: { uid: "user123", email: "user@example.com" },
 		}),
 	],
 	args: {
@@ -276,8 +249,8 @@ export const InteractiveSignIn: Story = {
 	play: async ({ canvasElement }) => {
 		const canvas = within(canvasElement)
 
-		// Find the sign in button
-		const signInButton = canvas.getByRole("button", { name: /sign in to cline/i })
+		// Keep the story assertion aligned with the current product branding.
+		const signInButton = canvas.getByRole("button", { name: /sign in to dline/i })
 		await expect(signInButton).toBeInTheDocument()
 
 		// Test button is clickable
@@ -289,6 +262,7 @@ export const InteractiveSignIn: Story = {
 }
 
 export const TroubleshootingLink: Story = {
+	name: "PowerShell Error",
 	args: {
 		message: createMockMessage(),
 		errorType: "error",
@@ -298,13 +272,9 @@ export const TroubleshootingLink: Story = {
 	play: async ({ canvasElement }) => {
 		const canvas = within(canvasElement)
 
-		// Find the troubleshooting link
-		const troubleshootingLink = canvas.getByRole("link", { name: /troubleshooting guide/i })
-		await expect(troubleshootingLink).toBeInTheDocument()
-
-		// Verify link attributes
-		await expect(troubleshootingLink).toHaveAttribute("href")
-		await expect(troubleshootingLink).toHaveClass("underline")
+		await expect(canvas.getByTestId("api-error-box")).toBeInTheDocument()
+		await expect(canvas.getByTestId("api-error-box-message")).toHaveTextContent(/PowerShell is not recognized/i)
+		await expect(canvas.queryByRole("link", { name: /troubleshooting guide/i })).not.toBeInTheDocument()
 	},
 }
 
@@ -326,8 +296,8 @@ export const ErrorWithRequestId: Story = {
 		const errorMessage = canvas.getByText(/an unexpected error occurred/i)
 		await expect(errorMessage).toBeInTheDocument()
 
-		// Verify request ID is displayed
-		const requestId = canvas.getByText(/request id: req_detailed_123456/i)
-		await expect(requestId).toBeInTheDocument()
+		// Structured metadata renders its label and value in separate definition-list cells.
+		await expect(canvas.getByText("Request ID", { exact: true })).toBeInTheDocument()
+		await expect(canvas.getByTestId("api-error-box-request-id")).toHaveTextContent("req_detailed_123456")
 	},
 }

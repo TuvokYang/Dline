@@ -96,4 +96,25 @@ describe("MarkdownBlock links", () => {
 
 		expect(FileServiceClient.openFileRelativePath).not.toHaveBeenCalled()
 	})
+
+	it("renders a bare HTTPS URL as one non-nested link", () => {
+		const { container } = render(<MarkdownBlock markdown="Read https://example.com/docs for details." />)
+
+		const links = screen.getAllByRole("link", { name: "https://example.com/docs" })
+		expect(links).toHaveLength(1)
+		expect(links[0]).toHaveAttribute("href", "https://example.com/docs")
+		expect(container.querySelector("a a")).toBeNull()
+	})
+})
+
+describe("MarkdownBlock Act Mode content model", () => {
+	it("keeps the interactive Act Mode hint inside valid phrasing content", () => {
+		const { container } = render(<MarkdownBlock markdown="Please switch to Act Mode to continue." />)
+
+		const control = screen.getByRole("button", { name: /Act Mode/ })
+		expect(control.tagName).toBe("SPAN")
+		expect(control.querySelector("div")).toBeNull()
+		expect(control.closest("p")).not.toBeNull()
+		expect(container.querySelector("p div")).toBeNull()
+	})
 })

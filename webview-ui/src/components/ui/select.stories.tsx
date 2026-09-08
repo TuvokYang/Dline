@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
+import { Fragment } from "react"
 import ClineLogoWhite from "@/assets/ClineLogoWhite"
 import {
 	Select,
@@ -117,12 +118,10 @@ export const Interactive: StoryObj<StoryProps> = {
 								</>
 							) : (
 								args.items.map((item, index) => (
-									<>
-										<SelectItem key={item} value={item}>
-											{item}
-										</SelectItem>
+									<Fragment key={item}>
+										<SelectItem value={item}>{item}</SelectItem>
 										{args.showSeparators && index < args.items.length - 1 && <SelectSeparator />}
-									</>
+									</Fragment>
 								))
 							)}
 						</SelectContent>
@@ -184,8 +183,8 @@ export const Overview = () => {
 							<SelectContent position="popper">
 								{variant.hasGroups && "groups" in variant
 									? variant?.groups?.map((group, groupIndex) => (
-											<>
-												<SelectGroup key={group.label}>
+											<Fragment key={group.label}>
+												<SelectGroup>
 													<SelectLabel>{group.label}</SelectLabel>
 													{group.items.map((item) => (
 														<SelectItem key={item} value={item}>
@@ -194,16 +193,14 @@ export const Overview = () => {
 													))}
 												</SelectGroup>
 												{groupIndex < variant.groups.length - 1 && <SelectSeparator />}
-											</>
+											</Fragment>
 										))
 									: "items" in variant &&
 										variant?.items?.map((item, index) => (
-											<>
-												<SelectItem key={item} value={item}>
-													{item}
-												</SelectItem>
+											<Fragment key={item}>
+												<SelectItem value={item}>{item}</SelectItem>
 												{variant.hasSeparators && index < variant.items.length - 1 && <SelectSeparator />}
-											</>
+											</Fragment>
 										))}
 							</SelectContent>
 						</Select>

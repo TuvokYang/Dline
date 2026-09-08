@@ -11,7 +11,8 @@ export default defineConfig({
 		timeout: 15_000,
 	},
 	fullyParallel: true,
-	workers: 2,
+	// Storybook uses one Vite compiler process; parallel cold compilation starves the preview root.
+	workers: 1,
 	retries: isCI ? 1 : 0,
 	forbidOnly: isCI,
 	reporter: [["list"]],
