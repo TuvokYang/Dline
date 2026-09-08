@@ -114,7 +114,6 @@ if (onTag || onMain) {
 	originalVersion = pkg.version
 
 	// Append git hash to version
-	pkg.version = `${pkg.version}-${hash}`
 
 	// Apply nightly theme: preview flag + renamed identity
 	const originalName = pkg.name
