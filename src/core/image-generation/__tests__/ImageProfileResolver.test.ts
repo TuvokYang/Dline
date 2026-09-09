@@ -1,5 +1,5 @@
 import { ApiFormat } from "@shared/proto/dline/models/metadata"
-import { ImageGenerationSource, type ApiProfile, type ImageGenerationProfile } from "@shared/proto/dline/profile"
+import { type ApiProfile, type ImageGenerationProfile, ImageGenerationSource } from "@shared/proto/dline/profile"
 import { describe, expect, it } from "vitest"
 import { ImageGenerationError } from "../contracts"
 import { ImageProfileResolver, OPENAI_HOSTED_IMAGE_ADAPTER_ID } from "../ImageProfileResolver"
@@ -7,7 +7,9 @@ import { ImageProfileResolver, OPENAI_HOSTED_IMAGE_ADAPTER_ID } from "../ImagePr
 const modelCatalog = {
 	openai: {
 		"gpt-image-2": { id: "gpt-image-2", capabilities: { supportsGeneration: true, maxImages: 4 } },
-		"gpt-image-2-sub": { id: "gpt-image-2-sub", capabilities: { supportsGeneration: true, maxImages: 1 } },
+	},
+	"openai-codex": {
+		"gpt-image-2": { id: "gpt-image-2", capabilities: { supportsGeneration: true, maxImages: 1 } },
 	},
 	gemini: {
 		"gemini-3.1-flash-image": {
@@ -24,7 +26,8 @@ function createResolver(apiProfiles: ApiProfile[], imageProfiles: ImageGeneratio
 		getCurrentProfileId: () => currentProfileId,
 		getCurrentProfileName: () => undefined,
 		getImageModel: (providerId, modelId) => modelCatalog[providerId as keyof typeof modelCatalog]?.[modelId as never],
-		getDefaultImageModelId: (providerId) => (providerId === "openai" ? "gpt-image-2" : undefined),
+		getDefaultImageModelId: (providerId) =>
+			providerId === "openai" || providerId === "openai-codex" ? "gpt-image-2" : undefined,
 	})
 }
 
@@ -36,7 +39,7 @@ const currentProfile = {
 	apiKey: "current-secret",
 	modelId: "gpt-5",
 	imageModelId: "gpt-image-2",
-	imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT,
+	imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_GPT_SUBSCRIPTION,
 	openai: { apiFormat: ApiFormat.OPENAI_RESPONSES },
 	usedFor: ["act"],
 	enabled: true,
@@ -113,11 +116,62 @@ describe("ImageProfileResolver", () => {
 		} as ApiProfile
 
 		expect(() => createResolver([profile], [independentOpenAI], profile.id).resolve()).toThrow(
-			/only available with the Current image source/,
+			/only available with GPT Subscription/,
 		)
 	})
 
-	it("routes Hosted through the dedicated Responses adapter without a local image model binding", () => {
+	it("routes GPT API through the existing OpenAI Images adapter", () => {
+		const profile = {
+			...currentProfile,
+			imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_GPT_API,
+			openai: { apiFormat: ApiFormat.OPENAI_CHAT },
+		} as ApiProfile
+
+		expect(createResolver([profile], [], profile.id).resolve()).toMatchObject({
+			profile,
+			source: ImageGenerationSource.IMAGE_GENERATION_SOURCE_GPT_API,
+			adapterId: "openai",
+			model: { id: "gpt-image-2" },
+		})
+	})
+
+	it("routes OpenAI Codex GPT Subscription through the OAuth-backed hosted adapter", () => {
+		const profile = {
+			...currentProfile,
+			id: "codex-profile",
+			name: "Codex Profile",
+			provider: "openai-codex",
+			openai: undefined,
+		} as ApiProfile
+
+		expect(createResolver([profile], [], profile.id).resolve()).toMatchObject({
+			profile,
+			source: ImageGenerationSource.IMAGE_GENERATION_SOURCE_GPT_SUBSCRIPTION,
+			adapterId: "openai-codex",
+			model: { id: "gpt-image-2" },
+		})
+	})
+
+	it("routes OpenAI Codex Hosted through the same OAuth-backed provider adapter with the default real image model", () => {
+		const profile = {
+			...currentProfile,
+			id: "codex-hosted-profile",
+			name: "Codex Hosted Profile",
+			provider: "openai-codex",
+			imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED,
+			imageModelId: undefined,
+			openai: undefined,
+		} as ApiProfile
+
+		expect(createResolver([profile], [], profile.id).resolve()).toMatchObject({
+			profile,
+			source: ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED,
+			adapterId: "openai-codex",
+			model: { id: "gpt-image-2" },
+		})
+	})
+
+	it("routes OpenAI Hosted through the dedicated Responses adapter without a local image model binding", () => {
 		const profile = {
 			...currentProfile,
 			modelId: "gpt-5",
@@ -149,7 +203,12 @@ describe("ImageProfileResolver", () => {
 	})
 
 	it("does not fall back to another API or independent profile", () => {
-		const invalid = { ...currentProfile, id: "invalid-current", name: "Invalid Current", imageModelId: "missing-image-model" } as ApiProfile
+		const invalid = {
+			...currentProfile,
+			id: "invalid-current",
+			name: "Invalid Current",
+			imageModelId: "missing-image-model",
+		} as ApiProfile
 		expect(() => createResolver([invalid, currentProfile], [independentConnection], invalid.id).resolve()).toThrow(
 			/selected image model is unavailable/,
 		)

@@ -1,6 +1,8 @@
 export const IMAGE_GENERATION_PRESENTATION_SCHEMA_VERSION = 1 as const
 export const GPT_IMAGE_1_MODEL_ID = "gpt-image-1"
 export const GPT_IMAGE_2_MODEL_ID = "gpt-image-2"
+export const GPT_IMAGE_2_5_MODEL_ID = "gpt-image-2.5"
+/** @deprecated Stored-profile compatibility only; new configuration uses a real model ID plus ImageGenerationSource. */
 export const GPT_IMAGE_2_SUBSCRIPTION_MODEL_ID = "gpt-image-2-sub"
 
 export type ImageGenerationPresentationStatus = "queued" | "started" | "preview" | "completed" | "failed" | "cancelled"

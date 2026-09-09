@@ -1,4 +1,5 @@
 import {
+	type OpenAiCodexAccount,
 	type OpenAiCodexAuthFlow,
 	OpenAiCodexAuthStatus,
 	type OpenAiCodexAuthStatusResponse,
@@ -32,6 +33,7 @@ export function isOpenAiCodexAuthenticated(status: OpenAiCodexAuthStatus): boole
 
 export function useOpenAiCodexOAuthFlow(profileId: string) {
 	const [status, setStatus] = useState(OpenAiCodexAuthStatus.OPEN_AI_CODEX_AUTH_STATUS_UNSPECIFIED)
+	const [account, setAccount] = useState<OpenAiCodexAccount>()
 	const [dialog, setDialog] = useState<OpenAiCodexOAuthDialogState>({ phase: "closed" })
 	const [statusError, setStatusError] = useState<string>()
 	const [actionError, setActionError] = useState<string>()
@@ -83,6 +85,7 @@ export function useOpenAiCodexOAuthFlow(profileId: string) {
 			if (response.profileId !== profileId) return
 			statusFailureCountRef.current = 0
 			setStatus(response.status)
+			setAccount(response.account)
 			setStatusError(undefined)
 			const currentFlow = flowRef.current
 			const outcome = response.lastFlowOutcome
@@ -139,6 +142,7 @@ export function useOpenAiCodexOAuthFlow(profileId: string) {
 		statusFailureCountRef.current = 0
 		setBusy(false)
 		setStatus(OpenAiCodexAuthStatus.OPEN_AI_CODEX_AUTH_STATUS_UNSPECIFIED)
+		setAccount(undefined)
 		setClosed()
 		setStatusError(undefined)
 		void refreshStatus()
@@ -270,6 +274,7 @@ export function useOpenAiCodexOAuthFlow(profileId: string) {
 			if (!isCurrent(targetProfileId, epoch)) return
 			setClosed()
 			setStatus(OpenAiCodexAuthStatus.OPEN_AI_CODEX_AUTH_STATUS_MISSING)
+			setAccount(undefined)
 		} catch {
 			if (isCurrent(targetProfileId, epoch)) setActionError("Cannot sign out of this profile. Try again.")
 		} finally {
@@ -287,6 +292,7 @@ export function useOpenAiCodexOAuthFlow(profileId: string) {
 
 	return {
 		status,
+		account,
 		dialog,
 		statusError,
 		actionError,

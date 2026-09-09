@@ -97,6 +97,26 @@ describe("OpenAiCodexProvider OAUTH control", () => {
 		expect(screen.queryByLabelText(/api key|access token|refresh token|oauth json/i)).not.toBeInTheDocument()
 	})
 
+	it("shows the signed-in ChatGPT account name and email", async () => {
+		mocks.getStatus.mockResolvedValue({
+			profileId: profile.id,
+			status: OpenAiCodexAuthStatus.OPEN_AI_CODEX_AUTH_STATUS_AUTHENTICATED,
+			account: {
+				accountId: "account-a",
+				displayName: "Ada Lovelace",
+				email: "ada@example.test",
+				accountType: "pro",
+			},
+		})
+
+		renderProvider()
+
+		expect(await screen.findByText("Ada Lovelace")).toBeInTheDocument()
+		expect(screen.getByText("ada@example.test")).toBeInTheDocument()
+		expect(screen.getByText("Pro")).toBeInTheDocument()
+		expect(screen.getByLabelText("Signed-in ChatGPT account")).toBeInTheDocument()
+	})
+
 	it("opens the OAUTH dialog immediately and then shows the transient authorization URI", async () => {
 		let resolveFlow!: (flow: OpenAiCodexAuthFlow) => void
 		mocks.signIn.mockReturnValue(new Promise((resolve) => (resolveFlow = resolve)))

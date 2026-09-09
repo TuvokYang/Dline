@@ -5,12 +5,15 @@ import {
 	OpenAiCodexFlowStatus,
 	type OpenAiCodexOAuthJsonRequest,
 	type OpenAiCodexProfileRequest,
+	OpenAiCodexRateLimitResetOutcome,
 } from "@shared/proto/dline/account"
 import { ApiProfile } from "@shared/proto/dline/profile"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { cancelOpenAiCodexSignIn } from "./cancelOpenAiCodexSignIn"
 import { completeOpenAiCodexCallbackUri } from "./completeOpenAiCodexCallbackUri"
+import { consumeOpenAiCodexRateLimitResetCredit } from "./consumeOpenAiCodexRateLimitResetCredit"
 import { getOpenAiCodexAuthStatus } from "./getOpenAiCodexAuthStatus"
+import { getOpenAiCodexUsage } from "./getOpenAiCodexUsage"
 import { importOpenAiCodexOAuthJson } from "./importOpenAiCodexOAuthJson"
 import { openAiCodexSignIn as deprecatedOpenAiCodexSignIn } from "./openAiCodexSignIn"
 import { openAiCodexSignOut as deprecatedOpenAiCodexSignOut } from "./openAiCodexSignOut"
@@ -21,12 +24,15 @@ const mocks = vi.hoisted(() => ({
 	readApiProfilesFresh: vi.fn(),
 	startAuthorizationFlow: vi.fn(),
 	getAuthStatus: vi.fn(),
+	getAccountIdentity: vi.fn(),
 	getActiveAuthorizationFlow: vi.fn(),
 	getLastAuthorizationFlowOutcome: vi.fn(),
 	completeFromCallbackUri: vi.fn(),
 	importCredentials: vi.fn(),
 	cancelAuthorizationFlow: vi.fn(),
 	clearCredentials: vi.fn(),
+	getUsage: vi.fn(),
+	consumeResetCredit: vi.fn(),
 	showMessage: vi.fn(),
 	loggerError: vi.fn(),
 }))
@@ -36,12 +42,19 @@ vi.mock("@/integrations/openai-codex/oauth", () => ({
 	openAiCodexOAuthManager: {
 		startAuthorizationFlow: mocks.startAuthorizationFlow,
 		getAuthStatus: mocks.getAuthStatus,
+		getAccountIdentity: mocks.getAccountIdentity,
 		getActiveAuthorizationFlow: mocks.getActiveAuthorizationFlow,
 		getLastAuthorizationFlowOutcome: mocks.getLastAuthorizationFlowOutcome,
 		completeFromCallbackUri: mocks.completeFromCallbackUri,
 		importCredentials: mocks.importCredentials,
 		cancelAuthorizationFlow: mocks.cancelAuthorizationFlow,
 		clearCredentials: mocks.clearCredentials,
+	},
+}))
+vi.mock("@/integrations/openai-codex/usage", () => ({
+	openAiCodexUsageClient: {
+		getUsage: mocks.getUsage,
+		consumeRateLimitResetCredit: mocks.consumeResetCredit,
 	},
 }))
 vi.mock("@/hosts/host-provider", () => ({ HostProvider: { window: { showMessage: mocks.showMessage } } }))
@@ -74,12 +87,15 @@ describe("OpenAI Codex Profile OAuth handlers", () => {
 			result: new Promise(() => undefined),
 		})
 		mocks.getAuthStatus.mockResolvedValue("missing")
+		mocks.getAccountIdentity.mockResolvedValue(null)
 		mocks.getActiveAuthorizationFlow.mockReturnValue(undefined)
 		mocks.getLastAuthorizationFlowOutcome.mockReturnValue(undefined)
 		mocks.completeFromCallbackUri.mockResolvedValue(credentials)
 		mocks.importCredentials.mockResolvedValue(credentials)
 		mocks.cancelAuthorizationFlow.mockResolvedValue(undefined)
 		mocks.clearCredentials.mockResolvedValue(undefined)
+		mocks.getUsage.mockResolvedValue(undefined)
+		mocks.consumeResetCredit.mockResolvedValue({ outcome: "reset", windowsReset: ["primary"] })
 	})
 
 	it("starts an OAUTH flow for the explicit Profile and returns its transient presentation", async () => {
@@ -142,6 +158,65 @@ describe("OpenAI Codex Profile OAuth handlers", () => {
 				endedAtMs: 1_800_000_000_000,
 			},
 		})
+	})
+
+	it("returns the signed-in account name and email without credentials", async () => {
+		mocks.getAuthStatus.mockResolvedValue("authenticated")
+		mocks.getAccountIdentity.mockResolvedValue({
+			accountId: "account-a",
+			displayName: "Ada Lovelace",
+			email: "ada@example.test",
+			accountType: "pro",
+		})
+
+		await expect(getOpenAiCodexAuthStatus(controller, profileRequest())).resolves.toMatchObject({
+			profileId: "profile-a",
+			status: OpenAiCodexAuthStatus.OPEN_AI_CODEX_AUTH_STATUS_AUTHENTICATED,
+			account: {
+				accountId: "account-a",
+				displayName: "Ada Lovelace",
+				email: "ada@example.test",
+				accountType: "pro",
+			},
+		})
+	})
+
+	it("returns Profile-scoped usage with plan, quota windows, and reset-card availability", async () => {
+		mocks.getUsage.mockResolvedValue({
+			planType: "pro",
+			allowed: true,
+			limitReached: false,
+			windows: [
+				{
+					type: "5hour",
+					label: "5 hour",
+					usedPercent: 25,
+					remainingPercent: 75,
+					limitWindowSeconds: 18_000,
+					resetAtMs: 1_800_000_000_000,
+				},
+			],
+			creditsBalance: 5,
+			resetCreditsAvailableCount: 1,
+		})
+
+		await expect(getOpenAiCodexUsage(controller, profileRequest())).resolves.toMatchObject({
+			profileId: "profile-a",
+			planType: "pro",
+			isAvailable: true,
+			resetCreditsAvailableCount: 1,
+			windows: [{ type: "5hour", remainingPercent: 75 }],
+		})
+		expect(mocks.getUsage).toHaveBeenCalledWith("profile-a")
+	})
+
+	it("consumes a reset credit only for the explicit Profile and maps the official outcome", async () => {
+		await expect(consumeOpenAiCodexRateLimitResetCredit(controller, profileRequest())).resolves.toEqual({
+			profileId: "profile-a",
+			outcome: OpenAiCodexRateLimitResetOutcome.OPEN_AI_CODEX_RATE_LIMIT_RESET_OUTCOME_RESET,
+			windowsReset: ["primary"],
+		})
+		expect(mocks.consumeResetCredit).toHaveBeenCalledWith("profile-a", expect.any(String))
 	})
 
 	it("uses the same Profile and flow owner for callback completion and cancellation", async () => {

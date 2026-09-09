@@ -17,13 +17,14 @@ interface ImageCatalogFixture {
 }
 
 describe("built-in image model catalogs", () => {
-	it("declares selectable gpt-image-1 and gpt-image-2 models with gpt-image-2 as the default", () => {
+	it("declares selectable OpenAI image models with gpt-image-2.5 as the default", () => {
 		const openai = allProviderModels.openai as ImageCatalogFixture
 
-		expect(openai.defaultImageModelId).toBe("gpt-image-2")
+		expect(openai.defaultImageModelId).toBe("gpt-image-2.5")
 		expect(Object.keys(openai.imageModels ?? {})).toEqual(
-			expect.arrayContaining(["gpt-image-1", "gpt-image-2", "gpt-image-2-sub"]),
+			expect.arrayContaining(["gpt-image-1", "gpt-image-2", "gpt-image-2.5"]),
 		)
+		expect(openai.imageModels?.["gpt-image-2-sub"]).toBeUndefined()
 		expect(openai.imageModels?.["gpt-image-1"]).toMatchObject({
 			id: "gpt-image-1",
 			capabilities: {
@@ -40,13 +41,9 @@ describe("built-in image model catalogs", () => {
 				supportsMask: true,
 			},
 		})
-		expect(openai.imageModels?.["gpt-image-2-sub"]).toMatchObject({
-			id: "gpt-image-2-sub",
-			capabilities: {
-				supportsEditing: true,
-				supportsGeneration: true,
-				supportsMask: false,
-			},
+		expect(openai.imageModels?.["gpt-image-2.5"]).toMatchObject({
+			id: "gpt-image-2.5",
+			capabilities: { supportsEditing: true, supportsGeneration: true, supportsMask: true },
 		})
 	})
 
@@ -68,10 +65,10 @@ describe("built-in image model catalogs", () => {
 		})
 	})
 
-	it("does not mark the ChatGPT subscription Codex provider as an image provider", () => {
+	it("shares the OpenAI image catalog with the ChatGPT subscription Codex provider", () => {
 		const codex = allProviderModels["openai-codex"] as ImageCatalogFixture
 
-		expect(codex.defaultImageModelId).toBeUndefined()
-		expect(codex.imageModels).toBeUndefined()
+		expect(codex.defaultImageModelId).toBe("gpt-image-2.5")
+		expect(codex.imageModels).toBe((allProviderModels.openai as ImageCatalogFixture).imageModels)
 	})
 })

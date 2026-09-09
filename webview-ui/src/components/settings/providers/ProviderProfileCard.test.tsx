@@ -26,7 +26,7 @@ const providerCatalog = vi.hoisted(() => ({
 	},
 	openai: {
 		defaultModelId: "model-a",
-		defaultImageModelId: "gpt-image-2",
+		defaultImageModelId: "gpt-image-2.5",
 		models: {
 			"model-a": {
 				id: "model-a",
@@ -38,7 +38,17 @@ const providerCatalog = vi.hoisted(() => ({
 		imageModels: {
 			"gpt-image-1": { id: "gpt-image-1", name: "GPT Image 1" },
 			"gpt-image-2": { id: "gpt-image-2", name: "GPT Image 2" },
+			"gpt-image-2.5": { id: "gpt-image-2.5", name: "GPT Image 2.5" },
 			"gpt-image-2-sub": { id: "gpt-image-2-sub", name: "GPT Image 2 (Subscription)" },
+		},
+	},
+	"openai-codex": {
+		defaultModelId: "gpt-5",
+		defaultImageModelId: "gpt-image-2.5",
+		models: { "gpt-5": { id: "gpt-5", name: "GPT-5" } },
+		imageModels: {
+			"gpt-image-1": { id: "gpt-image-1", name: "GPT Image 1" },
+			"gpt-image-2.5": { id: "gpt-image-2.5", name: "GPT Image 2.5" },
 		},
 	},
 }))
@@ -65,6 +75,7 @@ vi.mock("./ProviderProfileEditor", () => ({
 
 const providerOptions = [
 	{ value: "openai", label: "OpenAI" },
+	{ value: "openai-codex", label: "OpenAI Codex" },
 	{ value: "gemini", label: "Google Gemini" },
 	{ value: "anthropic", label: "Anthropic" },
 ]
@@ -316,13 +327,13 @@ describe("ProviderProfileCard", () => {
 		expect(screen.queryByRole("checkbox", { name: "Image" })).not.toBeInTheDocument()
 	})
 
-	it("shows Current image models from provider metadata and persists the selected model", () => {
+	it("shows GPT image models from provider metadata and persists the selected model", () => {
 		const onUpdate = vi.fn()
 		const profile = ApiProfile.create({
 			...buildProfile(),
 			modelId: "custom-responses-model",
 			modelInfo: { id: "custom-responses-model", apiFormats: [ApiFormat.OPENAI_RESPONSES] },
-			imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT,
+			imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_GPT_SUBSCRIPTION,
 			openai: OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_RESPONSES }),
 		})
 
@@ -341,10 +352,10 @@ describe("ProviderProfileCard", () => {
 		)
 
 		const imageModel = screen.getByRole("combobox", { name: "Image model" })
-		expect(imageModel).toHaveValue("gpt-image-2")
+		expect(imageModel).toHaveValue("gpt-image-2.5")
 		expect(screen.getByRole("option", { name: "GPT Image 1" })).toBeInTheDocument()
 		expect(screen.getByRole("option", { name: "GPT Image 2" })).toBeInTheDocument()
-		expect(screen.getByRole("option", { name: "GPT Image 2 (Subscription)" })).toBeInTheDocument()
+		expect(screen.queryByRole("option", { name: "GPT Image 2 (Subscription)" })).not.toBeInTheDocument()
 
 		fireEvent.change(imageModel, { target: { value: "gpt-image-1" } })
 		expect(onUpdate).toHaveBeenCalledWith({ imageModelId: "gpt-image-1" })
@@ -424,7 +435,7 @@ describe("ProviderProfileCard", () => {
 		expect(screen.getByRole("combobox", { name: "Image model" })).toHaveValue("gemini-3.1-flash-image")
 	})
 
-	it("shows Current, Independent, and Hosted sources with API billing guidance", () => {
+	it("shows GPT Subscription, GPT API, Independent, and Hosted sources with API billing guidance", () => {
 		const profile = ApiProfile.create({
 			...buildProfile(),
 			usedFor: ["act"],
@@ -452,7 +463,8 @@ describe("ProviderProfileCard", () => {
 		const source = screen.getByRole("combobox", { name: "Image source" })
 		expect(source).toHaveValue(String(ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED))
 		expect(screen.getByRole("option", { name: "None" })).toBeInTheDocument()
-		expect(screen.getByRole("option", { name: "Current" })).toBeInTheDocument()
+		expect(screen.getByRole("option", { name: "GPT Subscription" })).toBeInTheDocument()
+		expect(screen.getByRole("option", { name: "GPT API" })).toBeInTheDocument()
 		expect(screen.queryByRole("option", { name: "Independent" })).not.toBeInTheDocument()
 		expect(screen.getByRole("option", { name: "Hosted" })).toBeEnabled()
 		expect(screen.queryByRole("combobox", { name: "Image model" })).not.toBeInTheDocument()
@@ -460,12 +472,46 @@ describe("ProviderProfileCard", () => {
 		expect(screen.getByText(/ChatGPT\/GPT subscriptions are not used/)).toBeInTheDocument()
 	})
 
+	it("limits OpenAI Codex to None, GPT Subscription, Independent, and Hosted", () => {
+		const profile = ApiProfile.create({
+			...buildProfile(),
+			provider: "openai-codex",
+			modelId: "gpt-5",
+			imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_GPT_SUBSCRIPTION,
+			imageModelId: "gpt-image-2.5",
+		})
+		const imageProfiles: ImageGenerationProfile[] = [
+			{ id: "independent-openai", name: "Independent OpenAI", provider: "openai", enabled: true, legacyNames: [] },
+		]
+
+		render(
+			<ProviderProfileCard
+				currentMode="act"
+				editMode={false}
+				imageGenerationEnabled={true}
+				imageProfiles={imageProfiles}
+				isExpanded={true}
+				onDelete={vi.fn()}
+				onToggleExpand={vi.fn()}
+				onUpdate={vi.fn()}
+				profile={profile}
+				providerOptions={providerOptions}
+			/>,
+		)
+
+		expect(screen.getByRole("option", { name: "None" })).toBeInTheDocument()
+		expect(screen.getByRole("option", { name: "GPT Subscription" })).toBeInTheDocument()
+		expect(screen.getByRole("option", { name: "Independent" })).toBeInTheDocument()
+		expect(screen.queryByRole("option", { name: "GPT API" })).not.toBeInTheDocument()
+		expect(screen.getByRole("option", { name: "Hosted" })).toBeInTheDocument()
+	})
+
 	it("selects Hosted without interception and clears local image bindings", () => {
 		const onUpdate = vi.fn()
 		const profile = ApiProfile.create({
 			...buildProfile(),
 			usedFor: ["act"],
-			imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT,
+			imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_GPT_SUBSCRIPTION,
 			imageModelId: "gpt-image-2",
 			modelInfo: {
 				id: "model-a",
@@ -537,7 +583,7 @@ describe("ProviderProfileCard", () => {
 		const profile = {
 			...buildProfile(),
 			imageModelId: "gpt-image-2",
-			imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT,
+			imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_GPT_SUBSCRIPTION,
 		} as ApiProfile
 		render(
 			<ProviderProfileCard
@@ -559,14 +605,15 @@ describe("ProviderProfileCard", () => {
 	})
 
 	it.each([
-		ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT,
+		ImageGenerationSource.IMAGE_GENERATION_SOURCE_GPT_SUBSCRIPTION,
 		ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED,
 	])("clears an OpenAI-only image source when the provider changes", (imageSource) => {
 		const onUpdate = vi.fn()
 		const profile = {
 			...buildProfile(),
 			imageSource,
-			imageModelId: imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT ? "gpt-image-2" : undefined,
+			imageModelId:
+				imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_GPT_SUBSCRIPTION ? "gpt-image-2" : undefined,
 			usedFor: ["act"],
 		} as ApiProfile
 		render(

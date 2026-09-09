@@ -169,7 +169,7 @@ e2e(
 )
 
 e2e(
-	"Image generation - Current Profile routes OpenAI Responses generation and ref-based edit",
+	"Image generation - GPT Subscription routes OpenAI Responses generation and ref-based edit",
 	async ({ dlineDir, dlineDocsDir, helper, openVSCode, server, userDataDir, workspaceDir }, testInfo) => {
 		e2e.setTimeout(180_000)
 		await configureCurrentCapableImageProfile(dlineDir)
@@ -285,34 +285,35 @@ e2e(
 			await expect(imageSource).toHaveValue(String(ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED))
 			await expect(imageSource.getByRole("option", { name: "None", exact: true })).toBeEnabled()
 			await expect(imageSource.getByRole("option", { name: "Independent", exact: true })).toHaveCount(0)
-			await expect(imageSource.getByRole("option", { name: "Current", exact: true })).toBeEnabled()
-			await imageSource.selectOption({ label: "Current" })
-			await expect(imageSource).toHaveValue(String(ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT))
+			await expect(imageSource.getByRole("option", { name: "GPT Subscription", exact: true })).toBeEnabled()
+			await imageSource.selectOption({ label: "GPT Subscription" })
+			await expect(imageSource).toHaveValue(String(ImageGenerationSource.IMAGE_GENERATION_SOURCE_GPT_SUBSCRIPTION))
 			const imageModel = profileCard.getByRole("combobox", { name: "Image model", exact: true })
-			await expect(imageModel).toHaveValue("gpt-image-2")
+			await expect(imageModel).toHaveValue("gpt-image-2.5")
 			await expect(imageModel.getByRole("option", { name: "GPT Image 1", exact: true })).toBeEnabled()
 			await expect(imageModel.getByRole("option", { name: "GPT Image 2", exact: true })).toBeEnabled()
-			await expect(imageModel.getByRole("option", { name: "GPT Image 2 (Subscription)", exact: true })).toBeEnabled()
+			await expect(imageModel.getByRole("option", { name: "GPT Image 2.5", exact: true })).toBeEnabled()
+			await expect(imageModel.getByRole("option", { name: "GPT Image 2 (Subscription)", exact: true })).toHaveCount(0)
 			await imageModel.selectOption("gpt-image-1")
 			await expect(imageModel).toHaveValue("gpt-image-1")
-			await imageModel.selectOption("gpt-image-2-sub")
-			await expect(imageModel).toHaveValue("gpt-image-2-sub")
+			await imageModel.selectOption("gpt-image-2.5")
+			await expect(imageModel).toHaveValue("gpt-image-2.5")
 			const profilesPath = path.join(dlineDir, "data", "settings", "api_profiles.json")
 			await E2ETestHelper.waitUntil(async () => {
 				const profiles = JSON.parse(await readFile(profilesPath, "utf8")) as Array<Record<string, unknown>>
 				return profiles.some(
 					(profile) =>
 						profile.name === E2E_PROFILE_NAMES.mockOpenAiResponses &&
-						profile.imageSource === "IMAGE_GENERATION_SOURCE_CURRENT" &&
-						profile.imageModelId === "gpt-image-2-sub",
+						profile.imageSource === "IMAGE_GENERATION_SOURCE_GPT_SUBSCRIPTION" &&
+						profile.imageModelId === "gpt-image-2.5",
 				)
 			})
 			const persistedProfiles = JSON.parse(await readFile(profilesPath, "utf8")) as Array<Record<string, unknown>>
 			const persistedProfile = persistedProfiles.find((profile) => profile.name === E2E_PROFILE_NAMES.mockOpenAiResponses)
 			expect(persistedProfile).toMatchObject({
 				modelId: "gpt-5.6-sol",
-				imageSource: "IMAGE_GENERATION_SOURCE_CURRENT",
-				imageModelId: "gpt-image-2-sub",
+				imageSource: "IMAGE_GENERATION_SOURCE_GPT_SUBSCRIPTION",
+				imageModelId: "gpt-image-2.5",
 			})
 			expect((persistedProfile?.openai as Record<string, unknown> | undefined)?.apiFormat).toBeUndefined()
 			expect(persistedProfile?.usedFor).not.toContain("image")
@@ -348,7 +349,7 @@ e2e(
 			await setImageAndProjectReadAutoApproval(sidebar)
 			await sendTask(
 				sidebar,
-				"Generate one image with the Current OpenAI Responses Profile, edit it using the returned ref, inspect the image from its returned path, and complete.",
+				"Generate one image with the GPT Subscription OpenAI Responses Profile, edit it using the returned ref, inspect the image from its returned path, and complete.",
 			)
 			const contextPath = await E2ETestHelper.waitForValue(async () => {
 				const contextFiles = await findFiles(path.join(dlineDocsDir, "tasks"), "context.json")

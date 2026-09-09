@@ -1,5 +1,5 @@
 import type { ImageArtifact } from "@core/artifacts/TaskArtifactStore"
-import { ImageGenerationSource, type ApiProfile } from "@shared/proto/dline/profile"
+import { type ApiProfile, ImageGenerationSource } from "@shared/proto/dline/profile"
 import { describe, expect, it, vi } from "vitest"
 import type { ImageGenerationAdapter, ImageGenerationRequest } from "../contracts"
 import { ImageGenerationAdapterRegistry } from "../ImageGenerationAdapterRegistry"
@@ -36,7 +36,7 @@ function request(requestId: string): ImageGenerationRequest {
 
 function resolvedProfile(overrides: Partial<NonNullable<ApiProfile["imageGeneration"]>> = {}): ResolvedImageProfile {
 	return {
-		source: ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT,
+		source: ImageGenerationSource.IMAGE_GENERATION_SOURCE_GPT_SUBSCRIPTION,
 		adapterId: "openai",
 		profile: {
 			id: "profile-1",
@@ -88,7 +88,9 @@ describe("ImageGenerationService execution limits", () => {
 				type: "completed" as const,
 				requestId: imageRequest.requestId,
 				timestampMs: 1,
-				outputs: [{ id: "output-1", source: { kind: "bytes" as const, bytes: new Uint8Array([1]), mimeType: "image/png" } }],
+				outputs: [
+					{ id: "output-1", source: { kind: "bytes" as const, bytes: new Uint8Array([1]), mimeType: "image/png" } },
+				],
 				usage: { imageCount: 1 },
 			}
 		})
@@ -131,7 +133,10 @@ describe("ImageGenerationService execution limits", () => {
 		const runtime = service(adapter, resolvedProfile({ maxConcurrentRequests: 1 }))
 		const first = runtime.service.generate(request("request-1"), { signal: new AbortController().signal })
 		await entered
-		const reboundService = runtime.service.withProfileResolver({ resolve: () => resolvedProfile(), hasAvailableProfile: () => true })
+		const reboundService = runtime.service.withProfileResolver({
+			resolve: () => resolvedProfile(),
+			hasAvailableProfile: () => true,
+		})
 		const second = reboundService.generate(request("request-2"), { signal: new AbortController().signal })
 		const secondExpectation = expect(second).rejects.toMatchObject({ code: "concurrency_limit_exceeded" })
 		releaseFirst?.()
@@ -148,7 +153,9 @@ describe("ImageGenerationService execution limits", () => {
 			const adapter: ImageGenerationAdapter = {
 				async *generate(imageRequest, context) {
 					adapterSignal = context.signal
-					await new Promise<void>((resolve) => context.signal.addEventListener("abort", () => resolve(), { once: true }))
+					await new Promise<void>((resolve) =>
+						context.signal.addEventListener("abort", () => resolve(), { once: true }),
+					)
 					yield {
 						type: "cancelled",
 						requestId: imageRequest.requestId,
@@ -180,7 +187,9 @@ describe("ImageGenerationService execution limits", () => {
 			const adapter: ImageGenerationAdapter = {
 				async *generate(imageRequest, context) {
 					adapterSignal = context.signal
-					await new Promise<void>((resolve) => context.signal.addEventListener("abort", () => resolve(), { once: true }))
+					await new Promise<void>((resolve) =>
+						context.signal.addEventListener("abort", () => resolve(), { once: true }),
+					)
 					yield {
 						type: "cancelled",
 						requestId: imageRequest.requestId,

@@ -186,7 +186,7 @@ describe("getApiProfiles", () => {
 			imageModelId: "gpt-image-2",
 		})
 
-		expect(profile.imageSource).to.equal(ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT)
+		expect(profile.imageSource).to.equal(ImageGenerationSource.IMAGE_GENERATION_SOURCE_GPT_SUBSCRIPTION)
 		expect(profile.imageModelId).to.equal("gpt-image-2")
 	})
 
@@ -200,9 +200,24 @@ describe("getApiProfiles", () => {
 			imageModelId: "gpt-image-1",
 		})
 
-		expect(profile.imageSource).to.equal(ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT)
+		expect(profile.imageSource).to.equal(ImageGenerationSource.IMAGE_GENERATION_SOURCE_GPT_SUBSCRIPTION)
 		expect(profile.imageModelId).to.equal("gpt-image-1")
 		expect(profile.imageProfileId).to.equal(undefined)
+	})
+
+	it("migrates the legacy subscription alias to the shared gpt-image-2.5 default", () => {
+		const profile = normalizeApiProfile({
+			id: "legacy-subscription-alias",
+			name: "Legacy Subscription Alias",
+			provider: "openai-codex",
+			modelId: "gpt-5",
+			imageSource: "IMAGE_GENERATION_SOURCE_CURRENT",
+			imageModelId: "gpt-image-2-sub",
+		})
+
+		expect(profile.imageSource).to.equal(ImageGenerationSource.IMAGE_GENERATION_SOURCE_GPT_SUBSCRIPTION)
+		expect(profile.imageModelId).to.equal("gpt-image-2.5")
+		expect(profile.schemaVersion).to.equal(2)
 	})
 
 	it("keeps a legacy missing image source without image bindings as None", () => {
@@ -259,7 +274,7 @@ describe("getApiProfiles", () => {
 		})
 
 		expect(profile.anthropic?.disabledServerTools).to.deep.equal([])
-		expect(profile.schemaVersion).to.equal(1)
+		expect(profile.schemaVersion).to.equal(2)
 	})
 
 	it("keeps hosted tool disables chosen after the reset", () => {
@@ -273,7 +288,7 @@ describe("getApiProfiles", () => {
 		})
 
 		expect(profile.anthropic?.disabledServerTools).to.deep.equal([ServerTool.WEB_SEARCH])
-		expect(profile.schemaVersion).to.equal(1)
+		expect(profile.schemaVersion).to.equal(2)
 	})
 
 	it("persists historical Profile names for name-only Task migration", () => {
@@ -1021,7 +1036,7 @@ describe("getApiProfiles", () => {
 		}>
 
 		expect(profiles.find((profile) => profile.id === "explicit-image-profile")?.imageSource).to.equal(
-			ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT,
+			ImageGenerationSource.IMAGE_GENERATION_SOURCE_GPT_SUBSCRIPTION,
 		)
 		expect(profiles.find((profile) => profile.id === "explicit-image-profile")?.imageModelId).to.equal("custom-image-model")
 		expect(profiles.find((profile) => profile.id === "default-image-profile")?.imageSource).to.equal(

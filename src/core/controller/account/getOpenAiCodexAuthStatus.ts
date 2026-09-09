@@ -4,6 +4,7 @@ import type { Controller } from ".."
 import {
 	logOpenAiCodexOAuthFailure,
 	requireOpenAiCodexProfile,
+	toOpenAiCodexAccount,
 	toOpenAiCodexAuthFlow,
 	toOpenAiCodexAuthStatus,
 	toOpenAiCodexFlowOutcome,
@@ -15,6 +16,7 @@ export async function getOpenAiCodexAuthStatus(
 ): Promise<OpenAiCodexAuthStatusResponse> {
 	const profile = await requireOpenAiCodexProfile(request.profileId)
 	try {
+		const context = await openAiCodexOAuthManager.getAccountIdentity(profile.id)
 		const status = await openAiCodexOAuthManager.getAuthStatus(profile.id)
 		const flow = openAiCodexOAuthManager.getActiveAuthorizationFlow(profile.id)
 		const outcome = openAiCodexOAuthManager.getLastAuthorizationFlowOutcome(profile.id)
@@ -24,6 +26,7 @@ export async function getOpenAiCodexAuthStatus(
 			flowId: flow?.flowId,
 			activeFlow: flow ? toOpenAiCodexAuthFlow(flow) : undefined,
 			lastFlowOutcome: outcome ? toOpenAiCodexFlowOutcome(outcome) : undefined,
+			account: toOpenAiCodexAccount(context),
 		})
 	} catch (error) {
 		logOpenAiCodexOAuthFailure("read status", error)

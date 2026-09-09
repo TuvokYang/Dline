@@ -21,6 +21,7 @@ import {
 import { openExternal } from "@/utils/env"
 import { resolveOpenAiCodexRuntimeConfig } from "./runtime-config"
 import {
+	type OpenAiCodexAccountIdentity,
 	type OpenAiCodexCredentialContext,
 	type OpenAiCodexProfileAuthStatus,
 	OpenAiCodexProfileSessionRegistry,
@@ -122,6 +123,12 @@ export class OpenAiCodexOAuthManager {
 		const context = await this.sessions.getCredentialContext(profileId)
 		await this.publishReauthenticationRequiredIfNeeded(profileId, context)
 		return context
+	}
+
+	async getAccountIdentity(profileId: string): Promise<OpenAiCodexAccountIdentity | null> {
+		await this.ensureLegacyMigration()
+		if (this.isLegacyShared(profileId)) return null
+		return this.sessions.getAccountIdentity(profileId)
 	}
 
 	async forceRefreshCredentialContext(profileId: string): Promise<OpenAiCodexCredentialContext | null> {

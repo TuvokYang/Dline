@@ -98,6 +98,8 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 		billingMode: "subscription",
 		models: openAiCodexModels,
 		defaultModelId: firstKey(openAiCodexModels),
+		imageModels: openAIImageModels,
+		defaultImageModelId: openAIDefaultImageModelId,
 	},
 	deepseek: {
 		provider: "deepseek",

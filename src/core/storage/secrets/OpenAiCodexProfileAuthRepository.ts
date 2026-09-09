@@ -8,15 +8,26 @@ import { getOpenAiCodexProfileAuthPath } from "./OpenAiCodexProfileAuthPath"
 const MINIMUM_VALID_EXPIRY_MS = 1_000_000_000_000
 const RENAME_RETRY_DELAYS_MS = [10, 25, 50] as const
 const RETRYABLE_RENAME_CODES = new Set(["EPERM", "EACCES", "EBUSY"])
-const KNOWN_CREDENTIAL_KEYS = new Set(["type", "access_token", "refresh_token", "expires", "email", "accountId"])
+const KNOWN_CREDENTIAL_KEYS = new Set([
+	"type",
+	"access_token",
+	"refresh_token",
+	"expires",
+	"displayName",
+	"email",
+	"accountId",
+	"accountType",
+])
 
 export interface OpenAiOAuthCredentials {
 	type?: string
 	access_token: string
 	refresh_token?: string
 	expires: number
+	displayName?: string
 	email?: string
 	accountId?: string
+	accountType?: string
 }
 
 export type OpenAiCodexProfileAuthReadResult =
@@ -66,8 +77,10 @@ export function parseOpenAiOAuthCredentials(value: unknown): OpenAiOAuthCredenti
 		...(refreshToken !== undefined ? { refresh_token: refreshToken } : {}),
 		expires: expires as number,
 		...(typeof value.type === "string" ? { type: value.type } : {}),
+		...(typeof value.displayName === "string" ? { displayName: value.displayName } : {}),
 		...(typeof value.email === "string" ? { email: value.email } : {}),
 		...(typeof value.accountId === "string" ? { accountId: value.accountId } : {}),
+		...(typeof value.accountType === "string" ? { accountType: value.accountType } : {}),
 	}
 }
 
@@ -77,8 +90,10 @@ function credentialsEqual(left: OpenAiOAuthCredentials, right: OpenAiOAuthCreden
 		left.access_token === right.access_token &&
 		left.refresh_token === right.refresh_token &&
 		left.expires === right.expires &&
+		left.displayName === right.displayName &&
 		left.email === right.email &&
-		left.accountId === right.accountId
+		left.accountId === right.accountId &&
+		left.accountType === right.accountType
 	)
 }
 
@@ -88,8 +103,10 @@ function serializeCredential(credential: OpenAiOAuthCredentials): Record<string,
 		access_token: credential.access_token,
 		...(credential.refresh_token !== undefined ? { refresh_token: credential.refresh_token } : {}),
 		expires: credential.expires,
+		...(credential.displayName !== undefined ? { displayName: credential.displayName } : {}),
 		...(credential.email !== undefined ? { email: credential.email } : {}),
 		...(credential.accountId !== undefined ? { accountId: credential.accountId } : {}),
+		...(credential.accountType !== undefined ? { accountType: credential.accountType } : {}),
 	}
 }
 

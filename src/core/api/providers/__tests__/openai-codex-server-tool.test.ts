@@ -23,6 +23,8 @@ function createHandler(): OpenAiCodexHandler {
 	return new OpenAiCodexHandler({
 		profile: ApiProfile.create({ id: "profile-a", provider: "openai-codex", modelId: "gpt-5.6-sol" }),
 		mode: "act",
+		workspaceId: "workspace-a",
+		ulid: "task-a",
 	})
 }
 
@@ -85,6 +87,64 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 		])
 		expect(fallbackRequestBody?.tools).to.deep.equal(requestBody?.tools)
 		expect(fallbackRequestBody?.include).to.deep.equal(requestBody?.include)
+	})
+
+	it("uses stable workspace and task identity for every Codex transport", () => {
+		const handler = createHandler()
+		const headers = (handler as any).buildCodexHeaders({
+			accessToken: "access-token",
+			expires: 1_900_000_000_000,
+			accountId: "account-a",
+		}) as Record<string, string>
+
+		expect(headers).to.deep.include({
+			"session-id": "workspace-a",
+			"thread-id": "task-a",
+			"x-client-request-id": "task-a",
+			"ChatGPT-Account-Id": "account-a",
+		})
+		expect(headers).not.to.have.property("session_id")
+		expect(headers).not.to.have.property("conversation_id")
+	})
+
+	it("projects one automatic prompt cache key without explicit cache controls", () => {
+		const handler = createHandler()
+		const model = handler.getModel()
+		const first = (handler as any).buildRequestBody(model, [], "stable system", localTools, undefined, {
+			taskNamespace: "task-a",
+		}) as Record<string, unknown>
+		const appended = (handler as any).buildRequestBody(
+			model,
+			[{ role: "user", content: [] }],
+			"stable system",
+			localTools,
+			undefined,
+			{
+				taskNamespace: "task-a",
+			},
+		) as Record<string, unknown>
+		const otherTask = (handler as any).buildRequestBody(model, [], "stable system", localTools, undefined, {
+			taskNamespace: "task-b",
+		}) as Record<string, unknown>
+
+		expect(first.prompt_cache_key).to.match(/^dline_cache_[0-9a-f]{32}$/)
+		expect(appended.prompt_cache_key).to.equal(first.prompt_cache_key)
+		expect(otherTask.prompt_cache_key).not.to.equal(first.prompt_cache_key)
+		expect(first.prompt_cache_options).to.equal(undefined)
+		expect(JSON.stringify(first)).not.to.contain("prompt_cache_breakpoint")
+	})
+
+	it("keeps a remotely discovered Codex model id instead of falling back to the bundled default", () => {
+		const handler = new OpenAiCodexHandler({
+			profile: ApiProfile.create({ id: "profile-remote", provider: "openai-codex", modelId: "gpt-codex-remote" }),
+			mode: "act",
+			workspaceId: "workspace-a",
+			ulid: "task-a",
+		})
+
+		expect(handler.getModel()).to.deep.include({ id: "gpt-codex-remote" })
+		expect(handler.getModel().info).to.deep.include({ id: "gpt-codex-remote" })
+		expect(handler.getModel().info.capabilities?.supportsPromptCache).to.equal(true)
 	})
 
 	it("projects the request-scoped compaction cap into primary and fallback Responses bodies", () => {

@@ -16,6 +16,8 @@ export interface DiscoverProviderModelsOptions {
 	/** Write the result to the provider catalog and reload the registry entry. */
 	readonly persist?: boolean
 	readonly signal?: AbortSignal
+	/** Preserve the provider error for callers that must distinguish failure from an empty catalog. */
+	readonly throwOnError?: boolean
 }
 
 /** Concurrent callers for one provider share a single request. */
@@ -38,7 +40,7 @@ export async function discoverProviderModels(
 
 	// Only requests that share both the provider and the persistence intent are
 	// interchangeable; a preview must not satisfy a caller expecting a write.
-	const key = `${providerId}:${options?.persist === true ? "persist" : "preview"}`
+	const key = `${providerId}:${resolved.profileId ?? "default"}:${options?.persist === true ? "persist" : "preview"}`
 	const pending = inFlight.get(key)
 	if (pending) {
 		return pending
@@ -60,9 +62,8 @@ export async function discoverProviderModels(
 			}
 			return models
 		} catch (error) {
-			// Callers decide how a failed listing surfaces; reporting it here as an
-			// error would duplicate their own handling for the same failure.
 			Logger.warn(`[${providerId}] Model discovery failed: ${error instanceof Error ? error.message : String(error)}`)
+			if (options?.throwOnError) throw error
 			return {}
 		} finally {
 			inFlight.delete(key)

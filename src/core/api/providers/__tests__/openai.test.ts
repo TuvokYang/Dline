@@ -1302,7 +1302,7 @@ describe("OpenAiCodexHandler account usage", () => {
 				},
 				{
 					type: "weekly",
-					label: "Weekly",
+					label: "7 day",
 					used: 60,
 					limit: 100,
 					resetAt: new Date(1_800_500_000 * 1_000).toISOString(),

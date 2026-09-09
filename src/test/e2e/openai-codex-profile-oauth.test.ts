@@ -22,6 +22,14 @@ interface CodexRequest {
 	accountId?: string
 }
 
+interface ModelRequest extends CodexRequest {
+	clientVersion?: string
+}
+
+interface ResetCreditRequest extends CodexRequest {
+	body: Record<string, unknown>
+}
+
 interface StoredProfile {
 	id: string
 	name: string
@@ -40,6 +48,10 @@ class CodexOAuthE2EServer {
 	private readonly callbacks: string[] = []
 	readonly authorizationRequests: string[] = []
 	readonly codexRequests: CodexRequest[] = []
+	readonly modelRequests: ModelRequest[] = []
+	readonly usageRequests: CodexRequest[] = []
+	readonly resetCreditRequests: ResetCreditRequest[] = []
+	private usageResponse: unknown = { rate_limit: {}, credits: { balance: 0 } }
 	tokenRequestCount = 0
 	baseUrl = ""
 
@@ -66,6 +78,10 @@ class CodexOAuthE2EServer {
 		this.scenarios.push(scenario)
 	}
 
+	setUsageResponse(response: unknown): void {
+		this.usageResponse = response
+	}
+
 	latestCallback(): string | undefined {
 		return this.callbacks.at(-1)
 	}
@@ -89,8 +105,31 @@ class CodexOAuthE2EServer {
 				this.codex(request, response)
 				return
 			}
+			if (request.method === "GET" && url.pathname === "/codex/models") {
+				this.models(url, request, response)
+				return
+			}
 			if (request.method === "GET" && url.pathname === "/usage") {
-				this.json(response, 200, { rate_limit: {}, credits: { balance: 0 } })
+				this.usageRequests.push({
+					authorization: typeof request.headers.authorization === "string" ? request.headers.authorization : undefined,
+					accountId:
+						typeof request.headers["chatgpt-account-id"] === "string"
+							? request.headers["chatgpt-account-id"]
+							: undefined,
+				})
+				this.json(response, 200, this.usageResponse)
+				return
+			}
+			if (request.method === "POST" && url.pathname === "/rate-limit-reset-credits/consume") {
+				this.resetCreditRequests.push({
+					authorization: typeof request.headers.authorization === "string" ? request.headers.authorization : undefined,
+					accountId:
+						typeof request.headers["chatgpt-account-id"] === "string"
+							? request.headers["chatgpt-account-id"]
+							: undefined,
+					body: JSON.parse(await this.readBody(request)) as Record<string, unknown>,
+				})
+				this.json(response, 200, { result: "reset", windows_reset: ["primary", "secondary"] })
 				return
 			}
 			this.json(response, 404, { error: "not_found" })
@@ -154,6 +193,23 @@ class CodexOAuthE2EServer {
 			refresh_token: scenario.refreshToken,
 			expires_in: 3600,
 			id_token: this.jwt({ chatgpt_account_id: scenario.accountId }),
+		})
+	}
+
+	private models(url: URL, request: IncomingMessage, response: ServerResponse): void {
+		const authorization = typeof request.headers.authorization === "string" ? request.headers.authorization : undefined
+		const accountId =
+			typeof request.headers["chatgpt-account-id"] === "string" ? request.headers["chatgpt-account-id"] : undefined
+		this.modelRequests.push({ authorization, accountId, clientVersion: url.searchParams.get("client_version") ?? undefined })
+		this.json(response, 200, {
+			models: [
+				{
+					slug: "gpt-codex-remote-e2e",
+					display_name: "Codex Remote E2E",
+					supported_in_api: true,
+					visibility: "list",
+				},
+			],
 		})
 	}
 
@@ -355,6 +411,134 @@ function assertNoRuntimeSecrets(value: string, scenarios: readonly OAuthScenario
 		}
 	}
 }
+
+e2e(
+	"OpenAI Codex OAuth remote models appear in the Profile model picker",
+	async ({ dlineDir, helper, openVSCode, workspaceDir }) => {
+		e2e.setTimeout(120_000)
+		const server = new CodexOAuthE2EServer()
+		await server.start()
+		const profile = codexProfile("codex-profile-models", "Codex Remote Models")
+		const accessToken = randomUUID()
+		const accountId = "account-models"
+		await addCodexProfiles(dlineDir, [profile])
+		const authPath = path.join(dlineDir, "data", "secrets", getOpenAiCodexProfileAuthFileName(profile.id))
+		await writeFile(
+			authPath,
+			`${JSON.stringify({
+				type: "openai-codex",
+				access_token: accessToken,
+				expires: Date.now() + 3_600_000,
+				accountId,
+			})}\n`,
+			"utf8",
+		)
+		let app: ElectronApplication | undefined
+
+		try {
+			const ready = await openReadySidebar(openVSCode, workspaceDir, helper, codexEnvironment(server, "manual"))
+			app = ready.app
+			await helper.signin(ready.sidebar)
+			await openSettings(ready.page, ready.sidebar)
+			const card = await expandProfile(ready.sidebar, profile.name)
+			await expect(card.getByText("ChatGPT: Signed in", { exact: true })).toBeVisible({ timeout: 30_000 })
+			const modelLabel = card.getByText("Model", { exact: true }).first()
+			await modelLabel.scrollIntoViewIfNeeded()
+			await modelLabel.click()
+			await expect.poll(() => server.modelRequests.length).toBeGreaterThan(0)
+			await expect(card.getByText("gpt-codex-remote-e2e", { exact: true })).toBeVisible({ timeout: 30_000 })
+			expect(server.modelRequests.at(-1)).toMatchObject({
+				authorization: `Bearer ${accessToken}`,
+				accountId,
+			})
+			expect(server.modelRequests.at(-1)?.clientVersion).toBeTruthy()
+		} finally {
+			await app?.close().catch(() => undefined)
+			await server.stop()
+		}
+	},
+)
+
+e2e(
+	"OpenAI Codex usage shows the effective window and confirms reset-card consumption",
+	async ({ dlineDir, helper, openVSCode, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(120_000)
+		const server = new CodexOAuthE2EServer()
+		await server.start()
+		const profile = codexProfile("codex-profile-usage", "Codex Usage")
+		const accessToken = randomUUID()
+		const accountId = "account-usage"
+		server.setUsageResponse({
+			plan_type: "pro",
+			rate_limit: {
+				allowed: true,
+				limit_reached: false,
+				primary_window: { used_percent: 80, limit_window_seconds: 18_000, reset_at: 1_800_000_000 },
+				secondary_window: { used_percent: 30, limit_window_seconds: 604_800, reset_at: 1_800_500_000 },
+			},
+			credits: { balance: "0.00" },
+			rate_limit_reset_credits: { available_count: 1 },
+		})
+		await addCodexProfiles(dlineDir, [profile])
+		const authPath = path.join(dlineDir, "data", "secrets", getOpenAiCodexProfileAuthFileName(profile.id))
+		await writeFile(
+			authPath,
+			`${JSON.stringify({
+				type: "openai-codex",
+				access_token: accessToken,
+				expires: Date.now() + 3_600_000,
+				accountId,
+				displayName: "Codex E2E User",
+				email: "codex-e2e@example.test",
+				accountType: "pro",
+			})}\n`,
+			"utf8",
+		)
+		let app: ElectronApplication | undefined
+
+		try {
+			const ready = await openReadySidebar(openVSCode, workspaceDir, helper, codexEnvironment(server, "manual"))
+			app = ready.app
+			await helper.signin(ready.sidebar)
+			await openSettings(ready.page, ready.sidebar)
+			const card = await expandProfile(ready.sidebar, profile.name)
+			const account = card.getByLabel("Signed-in ChatGPT account")
+			await expect(account.getByText("Codex E2E User", { exact: true })).toBeVisible({ timeout: 30_000 })
+			await expect(account.getByText("codex-e2e@example.test", { exact: true })).toBeVisible()
+			await expect(account.getByText("Pro", { exact: true })).toBeVisible()
+			await expect.poll(() => server.usageRequests.length).toBeGreaterThan(0)
+			expect(server.usageRequests.at(-1)).toEqual({ authorization: `Bearer ${accessToken}`, accountId })
+
+			const summary = card.getByRole("button", { name: "5 hour 20%" })
+			await expect(summary).toBeVisible({ timeout: 30_000 })
+			await summary.click()
+			await expect(card.getByText("20% remaining", { exact: true })).toBeVisible()
+			await expect(card.getByText("70% remaining", { exact: true })).toBeVisible()
+			await expect(card.getByText("Reset cards: 1", { exact: true })).toBeVisible()
+
+			await card.getByRole("button", { name: "Reset limits" }).click()
+			const dialog = ready.sidebar.getByRole("dialog", { name: "Use a rate-limit reset card?" })
+			await expect(dialog).toBeVisible()
+			expect(server.resetCreditRequests).toHaveLength(0)
+			await dialog.getByRole("button", { name: "Cancel" }).click()
+			await expect(dialog).not.toBeVisible()
+			expect(server.resetCreditRequests).toHaveLength(0)
+
+			await card.getByRole("button", { name: "Reset limits" }).click()
+			await dialog.getByRole("button", { name: "Use reset card" }).click()
+			await expect.poll(() => server.resetCreditRequests.length).toBe(1)
+			const resetRequest = server.resetCreditRequests[0]
+			expect(resetRequest).toMatchObject({ authorization: `Bearer ${accessToken}`, accountId })
+			expect(Object.keys(resetRequest.body)).toEqual(["redeem_request_id"])
+			expect(resetRequest.body.redeem_request_id).toEqual(expect.any(String))
+			await expect(card.getByText("Reset completed for primary and secondary.", { exact: true })).toBeVisible()
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app?.close().catch(() => undefined)
+			await server.stop()
+		}
+	},
+)
 
 e2e(
 	"OpenAI Codex OAuth keeps two Profiles isolated across restart, requests and targeted lifecycle changes",

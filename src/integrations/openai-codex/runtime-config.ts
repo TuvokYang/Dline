@@ -2,6 +2,8 @@ export const OPENAI_CODEX_PRODUCTION_RUNTIME_CONFIG = {
 	apiBaseUrl: "https://chatgpt.com/backend-api/codex",
 	responsesWebsocketUrl: "wss://chatgpt.com/backend-api/codex/responses",
 	usageUrl: "https://chatgpt.com/backend-api/wham/usage",
+	resetCreditsUrl: "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+	consumeResetCreditUrl: "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume",
 } as const
 
 export type OpenAiCodexE2EOAuthMode = "automatic" | "manual"
@@ -10,6 +12,8 @@ export interface OpenAiCodexRuntimeConfig {
 	apiBaseUrl: string
 	responsesWebsocketUrl: string
 	usageUrl: string
+	resetCreditsUrl: string
+	consumeResetCreditUrl: string
 	e2eOAuth?: {
 		authorizationEndpoint: string
 		tokenEndpoint: string
@@ -42,6 +46,13 @@ function normalizedUrl(url: URL): string {
 function appendPath(base: URL, segment: string): string {
 	const url = new URL(base)
 	url.pathname = `${url.pathname.replace(/\/$/, "")}/${segment}`
+	url.search = ""
+	return normalizedUrl(url)
+}
+
+function replaceLastPathSegment(urlValue: string, segment: string): string {
+	const url = new URL(urlValue)
+	url.pathname = `${url.pathname.replace(/\/[^/]*\/?$/, "")}/${segment}`
 	url.search = ""
 	return normalizedUrl(url)
 }
@@ -84,12 +95,27 @@ export function resolveOpenAiCodexRuntimeConfig(env: NodeJS.ProcessEnv = process
 	const usageUrl = env.DLINE_E2E_OPENAI_CODEX_USAGE_URL
 		? normalizedUrl(loopbackHttpUrl("DLINE_E2E_OPENAI_CODEX_USAGE_URL", env.DLINE_E2E_OPENAI_CODEX_USAGE_URL))
 		: OPENAI_CODEX_PRODUCTION_RUNTIME_CONFIG.usageUrl
+	const resetCreditsUrl = env.DLINE_E2E_OPENAI_CODEX_RESET_CREDITS_URL
+		? normalizedUrl(loopbackHttpUrl("DLINE_E2E_OPENAI_CODEX_RESET_CREDITS_URL", env.DLINE_E2E_OPENAI_CODEX_RESET_CREDITS_URL))
+		: env.DLINE_E2E_OPENAI_CODEX_USAGE_URL
+			? replaceLastPathSegment(usageUrl, "rate-limit-reset-credits")
+			: OPENAI_CODEX_PRODUCTION_RUNTIME_CONFIG.resetCreditsUrl
+	const consumeResetCreditUrl = env.DLINE_E2E_OPENAI_CODEX_CONSUME_RESET_CREDIT_URL
+		? normalizedUrl(
+				loopbackHttpUrl(
+					"DLINE_E2E_OPENAI_CODEX_CONSUME_RESET_CREDIT_URL",
+					env.DLINE_E2E_OPENAI_CODEX_CONSUME_RESET_CREDIT_URL,
+				),
+			)
+		: `${resetCreditsUrl}/consume`
 	const oauthBase = env.DLINE_E2E_OPENAI_CODEX_OAUTH_BASE_URL
 
 	return {
 		apiBaseUrl,
 		responsesWebsocketUrl: OPENAI_CODEX_PRODUCTION_RUNTIME_CONFIG.responsesWebsocketUrl,
 		usageUrl,
+		resetCreditsUrl,
+		consumeResetCreditUrl,
 		...(oauthBase
 			? {
 					e2eOAuth: {

@@ -6,6 +6,7 @@ import {
 	logOpenAiCodexOAuthFailure,
 	requireOpenAiCodexFlowId,
 	requireOpenAiCodexProfile,
+	toOpenAiCodexAccount,
 	toOpenAiCodexAuthStatus,
 } from "./openAiCodexProfileTarget"
 
@@ -21,8 +22,13 @@ export async function completeOpenAiCodexCallbackUri(
 			flowId,
 			callbackUri: request.callbackUri,
 		})
+		const context = await openAiCodexOAuthManager.getAccountIdentity(profile.id)
 		const status = await openAiCodexOAuthManager.getAuthStatus(profile.id)
-		return OpenAiCodexAuthStatusResponse.create({ profileId: profile.id, status: toOpenAiCodexAuthStatus(status) })
+		return OpenAiCodexAuthStatusResponse.create({
+			profileId: profile.id,
+			status: toOpenAiCodexAuthStatus(status),
+			account: toOpenAiCodexAccount(context),
+		})
 	} catch (error) {
 		logOpenAiCodexOAuthFailure("complete callback", error)
 		if (error instanceof OAuthFlowError && error.code === "FLOW_TIMED_OUT") {

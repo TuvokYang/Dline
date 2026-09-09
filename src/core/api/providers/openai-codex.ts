@@ -6,18 +6,19 @@ import OpenAI from "openai"
 import type { ChatCompletionTool } from "openai/resources/chat/completions"
 import * as os from "os"
 import { MessageEvent as UndiciMessageEvent, WebSocket as UndiciWebSocket } from "undici"
-import { v7 as uuidv7 } from "uuid"
 import { type OpenAiCodexCredentialContext, openAiCodexOAuthManager } from "@/integrations/openai-codex/oauth"
 import { resolveOpenAiCodexRuntimeConfig } from "@/integrations/openai-codex/runtime-config"
+import { openAiCodexUsageClient, toAccountUsage } from "@/integrations/openai-codex/usage"
+import { ExtensionRegistryInfo } from "@/registry"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { featureFlagsService } from "@/services/feature-flags"
 import { ClineStorageMessage } from "@/shared/messages/content"
-import { fetch } from "@/shared/net"
 import { ApiFormat, ServerTool } from "@/shared/proto/dline/models/metadata"
 import { ExperimentalFeatureFlag } from "@/shared/services/feature-flags/feature-flags"
 import { Logger } from "@/shared/services/Logger"
 import { AccountUsage, ApiHandler, ApiHandlerContext, type ApiRequestOptions } from "../"
 import { isOutputLimitExceededError, OutputLimitExceededError } from "../stream/OutputLimitExceededError"
+import { projectOpenAIResponsesPromptCache } from "../transform/openai-prompt-cache"
 import { convertToOpenAIResponsesInput } from "../transform/openai-response-format"
 import {
 	createResponsesRegistry,
@@ -26,8 +27,8 @@ import {
 } from "../transform/responses-identity-registry"
 import { ApiStream, ApiStreamUsageChunk } from "../transform/stream"
 import { mapResponsesWebSearchEvent } from "../utils/responses_api_support"
+import { openAiCodexModelInfoSaneDefaults } from "./models/openai-codex"
 
-const CODEX_USAGE_TIMEOUT_MS = 10_000
 const SAFE_CODEX_ERROR_CODES = new Set([
 	"authentication_error",
 	"invalid_request_error",
@@ -41,22 +42,6 @@ const SAFE_CODEX_ERROR_CODES = new Set([
 	"websocket_error",
 	"websocket_parse_error",
 ])
-
-interface CodexUsageWindow {
-	used_percent?: number
-	limit_window_seconds?: number
-	reset_at?: number
-}
-
-interface CodexUsageResponse {
-	rate_limit?: {
-		primary_window?: CodexUsageWindow
-		secondary_window?: CodexUsageWindow
-	}
-	credits?: {
-		balance?: string | number
-	}
-}
 
 /**
  * OpenAiCodexHandler - Uses OpenAI Responses API with OAuth authentication
@@ -73,8 +58,6 @@ export class OpenAiCodexHandler implements ApiHandler {
 	private responsesWs: UndiciWebSocket | undefined
 	private responsesWsCredentialContext: OpenAiCodexCredentialContext | undefined
 	private websocketRequestInFlight = false
-	// Session ID for the Codex API (persists for the lifetime of the handler)
-	private readonly sessionId: string
 	// Abort controller for cancelling ongoing requests
 	private abortController?: AbortController
 	private accountUsageController?: AbortController
@@ -88,7 +71,6 @@ export class OpenAiCodexHandler implements ApiHandler {
 	constructor(private ctx: ApiHandlerContext) {
 		if (!ctx.profile.id?.trim()) throw new Error("OpenAI Codex requires a non-empty Profile ID.")
 		this.profileId = ctx.profile.id
-		this.sessionId = uuidv7()
 	}
 
 	private get config() {
@@ -109,6 +91,26 @@ export class OpenAiCodexHandler implements ApiHandler {
 	}
 	private get serviceTier() {
 		return this.config?.serviceTierEnabled === false ? undefined : normalizeOpenAiServiceTier(this.config?.serviceTier)
+	}
+	private get userAgent(): string {
+		return `dline/${ExtensionRegistryInfo.version} (${os.platform()} ${os.release()}; ${os.arch()}) node/${process.version.slice(1)}`
+	}
+
+	private buildCodexHeaders(credential: OpenAiCodexCredentialContext): Record<string, string> {
+		const headers: Record<string, string> = {
+			originator: "dline",
+			"User-Agent": this.userAgent,
+			...(credential.accountId ? { "ChatGPT-Account-Id": credential.accountId } : {}),
+			...buildExternalBasicHeaders(),
+		}
+		if (this.ctx.workspaceId) {
+			headers["session-id"] = this.ctx.workspaceId
+		}
+		if (this.ctx.ulid) {
+			headers["thread-id"] = this.ctx.ulid
+			headers["x-client-request-id"] = this.ctx.ulid
+		}
+		return headers
 	}
 
 	private beginRuntimeOperation(): () => void {
@@ -185,107 +187,15 @@ export class OpenAiCodexHandler implements ApiHandler {
 		return apiFormat === ApiFormat.OPENAI_RESPONSES || apiFormat === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE
 	}
 
-	private usageQuota(window: CodexUsageWindow | undefined) {
-		if (!window || typeof window.used_percent !== "number") {
-			return undefined
-		}
-
-		const seconds = window.limit_window_seconds ?? 0
-		const type =
-			seconds >= 27 * 24 * 60 * 60
-				? "monthly"
-				: seconds >= 6 * 24 * 60 * 60
-					? "weekly"
-					: seconds >= 20 * 60 * 60
-						? "daily"
-						: seconds === 5 * 60 * 60
-							? "5hour"
-							: "custom"
-		const label =
-			type === "monthly"
-				? "Monthly"
-				: type === "weekly"
-					? "Weekly"
-					: type === "daily"
-						? "Daily"
-						: type === "5hour"
-							? "5 hour"
-							: seconds >= 60 * 60
-								? `${Math.round(seconds / (60 * 60))}h`
-								: `${Math.max(1, Math.round(seconds / 60))}m`
-		const resetAt =
-			typeof window.reset_at === "number" && window.reset_at > 0
-				? new Date(window.reset_at * 1_000).toISOString()
-				: undefined
-
-		return {
-			type,
-			label,
-			used: Math.max(0, Math.min(100, window.used_percent)),
-			limit: 100,
-			resetAt,
-		}
-	}
-
 	/** Fetch current ChatGPT Codex quota windows for this OAuth account. */
 	async getAccountUsage(): Promise<AccountUsage | undefined> {
 		const releaseRuntime = this.beginRuntimeOperation()
 		this.accountUsageController?.abort()
 		const controller = new AbortController()
 		this.accountUsageController = controller
-		const timeout = setTimeout(() => controller.abort(), CODEX_USAGE_TIMEOUT_MS)
-
 		try {
-			let credential = await openAiCodexOAuthManager.getCredentialContext(this.profileId)
-			if (!credential) {
-				return undefined
-			}
-
-			for (let attempt = 0; attempt < 2; attempt++) {
-				const response = await fetch(this.runtimeConfig.usageUrl, {
-					headers: {
-						Authorization: `Bearer ${credential.accessToken}`,
-						originator: "dline",
-						"User-Agent": `dline/${process.env.npm_package_version || "1.0.0"}`,
-						...(credential.accountId ? { "ChatGPT-Account-Id": credential.accountId } : {}),
-						...buildExternalBasicHeaders(),
-					},
-					signal: controller.signal,
-				})
-
-				if (response.status === 401 && attempt === 0) {
-					const refreshed = await openAiCodexOAuthManager.forceRefreshCredentialContext(this.profileId)
-					if (!refreshed) {
-						return undefined
-					}
-					credential = refreshed
-					continue
-				}
-				if (!response.ok) {
-					throw new Error(`Codex usage request failed: ${response.status}`)
-				}
-
-				const payload = (await response.json()) as CodexUsageResponse
-				const quotas = [
-					this.usageQuota(payload.rate_limit?.primary_window),
-					this.usageQuota(payload.rate_limit?.secondary_window),
-				].filter((quota): quota is NonNullable<typeof quota> => quota !== undefined)
-				const balanceValue = payload.credits?.balance
-				const balance = balanceValue === undefined || balanceValue === null ? Number.NaN : Number(balanceValue)
-				if (quotas.length === 0 && !Number.isFinite(balance)) {
-					return undefined
-				}
-
-				return {
-					currency: Number.isFinite(balance) ? "USD" : "",
-					...(Number.isFinite(balance) ? { remainingBalance: balance } : {}),
-					quotas,
-					isAvailable: true,
-				}
-			}
-			return undefined
+			return toAccountUsage(await openAiCodexUsageClient.getUsage(this.profileId, { signal: controller.signal }))
 		} finally {
-			clearTimeout(timeout)
 			if (this.accountUsageController === controller) {
 				this.accountUsageController = undefined
 			}
@@ -414,17 +324,37 @@ export class OpenAiCodexHandler implements ApiHandler {
 		const includeReasoning = enableThinking && reasoningEffort !== "none"
 		const hostedWebSearch = options?.serverTools?.includes(ServerTool.WEB_SEARCH) === true
 		const maxOutputTokens = options?.generation?.purpose === "compaction" ? options.generation.maxOutputTokens : undefined
+		const responseTools: OpenAI.Responses.Tool[] = (tools ?? [])
+			.filter((tool) => tool.type === "function")
+			.filter((tool) => !hostedWebSearch || tool.function.name !== "web_search")
+			.map((tool) => ({
+				type: "function" as const,
+				name: tool.function.name,
+				description: tool.function.description,
+				parameters: tool.function.parameters ?? null,
+				strict: tool.function.strict ?? true,
+			}))
+		if (hostedWebSearch) responseTools.push({ type: "web_search" })
+		const promptCache = projectOpenAIResponsesPromptCache({
+			modelId: model.id,
+			systemPrompt,
+			input: formattedInput as OpenAI.Responses.ResponseInput,
+			tools: responseTools,
+			taskNamespace: options?.taskNamespace,
+		})
 		const include = [
 			...(includeReasoning ? ["reasoning.encrypted_content"] : []),
 			...(hostedWebSearch ? ["web_search_call.results", "web_search_call.action.sources"] : []),
 		]
 
-		const body: any = {
+		return {
 			model: model.id,
-			input: formattedInput,
+			...(promptCache.instructions === undefined ? {} : { instructions: promptCache.instructions }),
+			input: promptCache.input,
+			prompt_cache_key: promptCache.promptCacheKey,
 			stream: true,
 			store: false,
-			instructions: systemPrompt,
+			...(responseTools.length > 0 ? { tools: responseTools } : {}),
 			...(this.serviceTier ? { service_tier: this.serviceTier } : {}),
 			...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
 			...(maxOutputTokens === undefined ? {} : { max_output_tokens: maxOutputTokens }),
@@ -438,26 +368,6 @@ export class OpenAiCodexHandler implements ApiHandler {
 					}
 				: {}),
 		}
-
-		// Add tools if provided
-		// Pass through strict value from tool (MCP/custom tools have strict: false, built-in tools default to true)
-		if (tools && tools.length > 0) {
-			body.tools = tools
-				.filter((tool: any) => tool?.type === "function")
-				.filter((tool: any) => !hostedWebSearch || tool.function.name !== "web_search")
-				.map((tool: any) => ({
-					type: "function",
-					name: tool.function.name,
-					description: tool.function.description,
-					parameters: tool.function.parameters,
-					strict: tool.function.strict ?? true,
-				}))
-		}
-		if (hostedWebSearch) {
-			body.tools = [...(body.tools ?? []), { type: "web_search" }]
-		}
-
-		return body
 	}
 
 	private async *executeRequest(
@@ -471,14 +381,8 @@ export class OpenAiCodexHandler implements ApiHandler {
 		this.abortController = new AbortController()
 
 		try {
-			// Build Codex-specific headers from the same snapshot as Authorization.
-			const codexHeaders: Record<string, string> = {
-				originator: "dline",
-				session_id: this.sessionId,
-				"User-Agent": `dline/${process.env.npm_package_version || "1.0.0"} (${os.platform()} ${os.release()}; ${os.arch()}) node/${process.version.slice(1)}`,
-				...(credential.accountId ? { "ChatGPT-Account-Id": credential.accountId } : {}),
-				...buildExternalBasicHeaders(),
-			}
+			// Build Codex-specific headers from the same credential and task identity snapshot.
+			const codexHeaders = this.buildCodexHeaders(credential)
 
 			if (useWebsocketMode) {
 				try {
@@ -796,18 +700,10 @@ export class OpenAiCodexHandler implements ApiHandler {
 	): ApiStream {
 		const url = `${this.runtimeConfig.apiBaseUrl}/responses`
 
-		// Build headers with required Codex-specific fields
 		const headers: Record<string, string> = {
 			"Content-Type": "application/json",
 			Authorization: `Bearer ${credential.accessToken}`,
-			originator: "dline",
-			session_id: this.sessionId,
-			"User-Agent": `dline/${process.env.npm_package_version || "1.0.0"} (${os.platform()} ${os.release()}; ${os.arch()}) node/${process.version.slice(1)}`,
-		}
-
-		// Add ChatGPT-Account-Id if available
-		if (credential.accountId) {
-			headers["ChatGPT-Account-Id"] = credential.accountId
+			...this.buildCodexHeaders(credential),
 		}
 
 		try {
@@ -1045,11 +941,21 @@ export class OpenAiCodexHandler implements ApiHandler {
 	}
 
 	getModel(): { id: OpenAiCodexModelId; info: ModelInfo } {
-		const modelId = this.modelId
-
-		const id = modelId && modelId in openAiCodexModels ? (modelId as OpenAiCodexModelId) : openAiCodexDefaultModelId
-
-		const info: ModelInfo = openAiCodexModels[id]
+		const id = (this.modelId || openAiCodexDefaultModelId) as OpenAiCodexModelId
+		const bundled = openAiCodexModels[id] ?? { ...openAiCodexModelInfoSaneDefaults, id }
+		const override = this.modelInfo
+		const info: ModelInfo = override
+			? {
+					...bundled,
+					...override,
+					id,
+					capabilities:
+						bundled.capabilities || override.capabilities
+							? { ...bundled.capabilities, ...override.capabilities }
+							: undefined,
+					pricing: bundled.pricing || override.pricing ? { ...bundled.pricing, ...override.pricing } : undefined,
+				}
+			: bundled
 
 		return { id, info }
 	}

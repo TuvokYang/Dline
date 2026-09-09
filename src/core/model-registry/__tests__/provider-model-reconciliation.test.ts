@@ -150,6 +150,25 @@ describe("reconcileProviderModels overlay-remote", () => {
 	})
 })
 
+describe("reconcileProviderModels refresh-built-ins", () => {
+	it("removes retired built-ins while preserving explicit and legacy user models", () => {
+		const stored = config({
+			"retired-built-in": { id: "retired-built-in", name: "Retired", userDefined: false },
+			"explicit-user": { id: "explicit-user", name: "Explicit", userDefined: true },
+			"legacy-user": { id: "legacy-user", name: "Legacy" },
+		})
+		const seed = config({
+			"current-model": { id: "current-model", name: "Current" },
+		})
+
+		const merged = reconcileProviderModels(seed, stored, "refresh-built-ins")
+
+		expect(Object.keys(merged.models).sort()).toEqual(["current-model", "explicit-user", "legacy-user"])
+		expect(merged.models["explicit-user"].userDefined).toBe(true)
+		expect(merged.models["legacy-user"].userDefined).toBe(true)
+	})
+})
+
 describe("reconcileProviderModels replace", () => {
 	it("drops stored models so that vendor-derived catalogs stay authoritative", () => {
 		const stored = config({

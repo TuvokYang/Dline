@@ -8,7 +8,7 @@ import {
 	type OpenAiOAuthCredentials,
 } from "@/core/storage/secrets"
 import { OpenAiCodexOAuthManager } from "./oauth"
-import { OpenAiCodexOAuthStrategy, OpenAiCodexOAuthTokenError } from "./strategy"
+import { OpenAiCodexOAuthStrategy, OpenAiCodexOAuthTokenError, resolveOpenAiCodexAccessTokenAccountId } from "./strategy"
 
 const NOW = 1_900_000_000_000
 
@@ -20,6 +20,7 @@ function credentials(owner: string): OpenAiOAuthCredentials {
 		expires: NOW + 3_600_000,
 		email: `${owner}@example.test`,
 		accountId: `${owner}-account`,
+		accountType: "pro",
 	}
 }
 
@@ -129,9 +130,17 @@ describe("OpenAI Codex OAuth strategy and Profile storage", () => {
 			async (_input: string | URL | Request, _init?: RequestInit) =>
 				new Response(
 					JSON.stringify({
-						access_token: "new-access",
+						access_token: jwt({
+							"https://api.openai.com/auth": { chatgpt_account_id: "account-from-access-token" },
+							chatgpt_account_id: "wrong-top-level-account",
+						}),
 						refresh_token: "new-refresh",
-						id_token: jwt({ "https://api.openai.com/auth": { chatgpt_account_id: "account-from-jwt" } }),
+						id_token: jwt({
+							"https://api.openai.com/auth": {
+								chatgpt_account_id: "wrong-id-token-account",
+								chatgpt_plan_type: "pro",
+							},
+						}),
 						expires_in: 3600,
 						email: "owner@example.test",
 					}),
@@ -163,16 +172,51 @@ describe("OpenAI Codex OAuth strategy and Profile storage", () => {
 			}),
 		).resolves.toEqual({
 			type: "openai-codex",
-			access_token: "new-access",
+			access_token: jwt({
+				"https://api.openai.com/auth": { chatgpt_account_id: "account-from-access-token" },
+				chatgpt_account_id: "wrong-top-level-account",
+			}),
 			refresh_token: "new-refresh",
 			expires: NOW + 3_600_000,
 			email: "owner@example.test",
-			accountId: "account-from-jwt",
+			accountId: "account-from-access-token",
+			accountType: "pro",
 		})
 		const requestBody = String(fetchImpl.mock.calls[0]?.[1]?.body)
 		expect(requestBody).toContain("code=authorization-code")
 		expect(requestBody).toContain("code_verifier=verifier")
 		expect(requestBody).not.toContain("csrf-state")
+	})
+
+	it("uses the official access-token account claim precedence", () => {
+		expect(
+			resolveOpenAiCodexAccessTokenAccountId(
+				jwt({
+					"https://api.openai.com/auth": { chatgpt_account_id: "nested-account" },
+					organizations: [{ id: "default-organization", is_default: true }],
+					chatgpt_account_id: "top-level-account",
+				}),
+			),
+		).toEqual({ accountId: "nested-account", source: "access-token-auth" })
+		expect(
+			resolveOpenAiCodexAccessTokenAccountId(
+				jwt({
+					organizations: [
+						{ id: "first-non-default", is_default: false },
+						{ id: "default-organization", is_default: true },
+					],
+					chatgpt_account_id: "top-level-account",
+				}),
+			),
+		).toEqual({ accountId: "default-organization", source: "access-token-default-organization" })
+		expect(
+			resolveOpenAiCodexAccessTokenAccountId(
+				jwt({
+					organizations: [{ id: "first-non-default", is_default: false }],
+					chatgpt_account_id: "top-level-account",
+				}),
+			),
+		).toEqual({ accountId: "top-level-account", source: "access-token-top-level" })
 	})
 
 	it("rotates refresh credentials while preserving reusable strategy metadata", async () => {

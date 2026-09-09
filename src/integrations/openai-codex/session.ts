@@ -3,7 +3,13 @@ import {
 	type OpenAiOAuthCredentials,
 	parseOpenAiOAuthCredentials,
 } from "@/core/storage/secrets/OpenAiCodexProfileAuthRepository"
-import { isOpenAiCodexCredentialExpired, OpenAiCodexOAuthTokenError } from "./strategy"
+import { Logger } from "@/shared/services/Logger"
+import {
+	isOpenAiCodexCredentialExpired,
+	OpenAiCodexOAuthTokenError,
+	resolveOpenAiCodexAccessTokenAccountId,
+	resolveOpenAiCodexStoredAccountIdentity,
+} from "./strategy"
 
 export type OpenAiCodexProfileAuthStatus =
 	| "missing"
@@ -17,6 +23,13 @@ export interface OpenAiCodexCredentialContext {
 	accessToken: string
 	expires: number
 	accountId?: string
+}
+
+export interface OpenAiCodexAccountIdentity {
+	accountId?: string
+	displayName?: string
+	email?: string
+	accountType?: string
 }
 
 export interface OpenAiCodexRefreshStrategy {
@@ -42,11 +55,25 @@ export interface OpenAiCodexProfileSessionRegistryOptions {
 }
 
 function toContext(credential: OpenAiOAuthCredentials): OpenAiCodexCredentialContext {
+	const accessTokenAccount = resolveOpenAiCodexAccessTokenAccountId(credential.access_token)
+	const accountId = accessTokenAccount.accountId ?? credential.accountId
+	const accountIdSource = accessTokenAccount.accountId ? accessTokenAccount.source : credential.accountId ? "stored" : "missing"
+	const storedAccountIdMatchesAccessToken =
+		credential.accountId !== undefined && accessTokenAccount.accountId !== undefined
+			? credential.accountId === accessTokenAccount.accountId
+			: undefined
+	Logger.debug(
+		`[OpenAiCodexSession] Account context resolved source=${accountIdSource} storedAccountIdMatchesAccessToken=${storedAccountIdMatchesAccessToken ?? "unknown"}`,
+	)
 	return {
 		accessToken: credential.access_token,
 		expires: credential.expires,
-		...(credential.accountId !== undefined ? { accountId: credential.accountId } : {}),
+		...(accountId !== undefined ? { accountId } : {}),
 	}
+}
+
+function toIdentity(credential: OpenAiOAuthCredentials): OpenAiCodexAccountIdentity {
+	return resolveOpenAiCodexStoredAccountIdentity(credential)
 }
 
 export class OpenAiCodexProfileSessionRegistry {
@@ -89,6 +116,12 @@ export class OpenAiCodexProfileSessionRegistry {
 		}
 		this.reauthenticationRequired.delete(profileId)
 		return toContext(current.credential)
+	}
+
+	async getAccountIdentity(profileId: string): Promise<OpenAiCodexAccountIdentity | null> {
+		this.requireProfileId(profileId)
+		const current = await this.repository.read(profileId)
+		return current.status === "valid" ? toIdentity(current.credential) : null
 	}
 
 	async forceRefreshCredentialContext(profileId: string): Promise<OpenAiCodexCredentialContext | null> {

@@ -101,8 +101,8 @@ function overlayRemoteModels(remote: ProviderModelsConfig, stored: ProviderModel
 
 /**
  * Reconcile a persisted provider catalog with the current built-in metadata.
- * Explicit and unknown user models are preserved; known built-ins are either
- * refreshed on disk or only enriched in memory, depending on the caller.
+ * Explicit and legacy-unmarked user models are preserved; known built-ins are
+ * refreshed, and retired models explicitly marked as built-in are removed.
  */
 export function reconcileProviderModels(
 	seed: ProviderModelsConfig,
@@ -153,7 +153,7 @@ export function reconcileProviderModels(
 	}
 
 	for (const [modelId, storedModel] of Object.entries(stored.models)) {
-		if (seed.models[modelId] !== undefined) {
+		if (seed.models[modelId] !== undefined || storedModel.userDefined === false) {
 			continue
 		}
 		models[modelId] = { ...storedModel, userDefined: true }

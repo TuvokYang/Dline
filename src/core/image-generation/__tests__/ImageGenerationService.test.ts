@@ -1,7 +1,12 @@
 import type { ImageArtifact } from "@core/artifacts/TaskArtifactStore"
-import { ImageGenerationSource, type ApiProfile } from "@shared/proto/dline/profile"
+import { type ApiProfile, ImageGenerationSource } from "@shared/proto/dline/profile"
 import { describe, expect, it, vi } from "vitest"
-import type { ImageGenerationEvent, ImageGenerationExecutionContext, ImageGenerationRequest, ImageProviderOutput } from "../contracts"
+import type {
+	ImageGenerationEvent,
+	ImageGenerationExecutionContext,
+	ImageGenerationRequest,
+	ImageProviderOutput,
+} from "../contracts"
 import { ImageGenerationAdapterRegistry } from "../ImageGenerationAdapterRegistry"
 import { ImageGenerationPolicy } from "../ImageGenerationPolicy"
 import { ImageGenerationService } from "../ImageGenerationService"
@@ -31,7 +36,7 @@ const artifact: ImageArtifact = {
 }
 
 const resolvedProfile: ResolvedImageProfile = {
-	source: ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT,
+	source: ImageGenerationSource.IMAGE_GENERATION_SOURCE_GPT_SUBSCRIPTION,
 	adapterId: "openai",
 	profile: {
 		id: "profile-1",
@@ -133,11 +138,23 @@ describe("ImageGenerationService", () => {
 
 	it("reserves before the provider call and settles before committing artifacts", async () => {
 		const registry = new ImageGenerationAdapterRegistry()
-		const providerGenerate = vi.fn(async function* (imageRequest: ImageGenerationRequest): AsyncGenerator<ImageGenerationEvent> {
-			yield { type: "completed", requestId: imageRequest.requestId, timestampMs: 20, outputs: [output], usage: { imageCount: 1 } }
+		const providerGenerate = vi.fn(async function* (
+			imageRequest: ImageGenerationRequest,
+		): AsyncGenerator<ImageGenerationEvent> {
+			yield {
+				type: "completed",
+				requestId: imageRequest.requestId,
+				timestampMs: 20,
+				outputs: [output],
+				usage: { imageCount: 1 },
+			}
 		})
 		registry.register("openai", () => ({ generate: providerGenerate }))
-		const budgetLedger = { reserve: vi.fn(async () => undefined), settle: vi.fn(async () => undefined), release: vi.fn(async () => undefined) }
+		const budgetLedger = {
+			reserve: vi.fn(async () => undefined),
+			settle: vi.fn(async () => undefined),
+			release: vi.fn(async () => undefined),
+		}
 		const persistProviderOutputs = vi.fn(async () => [artifact])
 		const service = new ImageGenerationService({
 			profileResolver: { resolve: () => budgetedProfile(), hasAvailableProfile: () => true },
@@ -166,9 +183,17 @@ describe("ImageGenerationService", () => {
 		const registry = new ImageGenerationAdapterRegistry()
 		registry.register(
 			"openai",
-			() => new FakeImageGenerationAdapter({ outputs: [], failure: { code: "provider_error", message: "failed", retryable: true } }),
+			() =>
+				new FakeImageGenerationAdapter({
+					outputs: [],
+					failure: { code: "provider_error", message: "failed", retryable: true },
+				}),
 		)
-		const budgetLedger = { reserve: vi.fn(async () => undefined), settle: vi.fn(async () => undefined), release: vi.fn(async () => undefined) }
+		const budgetLedger = {
+			reserve: vi.fn(async () => undefined),
+			settle: vi.fn(async () => undefined),
+			release: vi.fn(async () => undefined),
+		}
 		const persistProviderOutputs = vi.fn()
 		const service = new ImageGenerationService({
 			profileResolver: { resolve: () => budgetedProfile(), hasAvailableProfile: () => true },
@@ -178,7 +203,9 @@ describe("ImageGenerationService", () => {
 			budgetLedger,
 		})
 
-		await expect(service.generate(request(), { signal: new AbortController().signal })).rejects.toMatchObject({ code: "provider_error" })
+		await expect(service.generate(request(), { signal: new AbortController().signal })).rejects.toMatchObject({
+			code: "provider_error",
+		})
 		expect(budgetLedger.reserve).toHaveBeenCalledOnce()
 		expect(budgetLedger.release).toHaveBeenCalledWith("request-1")
 		expect(budgetLedger.settle).not.toHaveBeenCalled()
@@ -192,7 +219,9 @@ describe("ImageGenerationService", () => {
 			registry.register("openai", () => ({
 				async *generate(imageRequest: ImageGenerationRequest, context: ImageGenerationExecutionContext) {
 					yield { type: "queued", requestId: imageRequest.requestId, timestampMs: 1 } as const
-					await new Promise<void>((resolve) => context.signal.addEventListener("abort", () => resolve(), { once: true }))
+					await new Promise<void>((resolve) =>
+						context.signal.addEventListener("abort", () => resolve(), { once: true }),
+					)
 					yield {
 						type: "cancelled",
 						requestId: imageRequest.requestId,
@@ -230,7 +259,11 @@ describe("ImageGenerationService", () => {
 	it("keeps a settled charge when artifact persistence fails after provider completion", async () => {
 		const registry = new ImageGenerationAdapterRegistry()
 		registry.register("openai", () => new FakeImageGenerationAdapter({ outputs: [output] }))
-		const budgetLedger = { reserve: vi.fn(async () => undefined), settle: vi.fn(async () => undefined), release: vi.fn(async () => undefined) }
+		const budgetLedger = {
+			reserve: vi.fn(async () => undefined),
+			settle: vi.fn(async () => undefined),
+			release: vi.fn(async () => undefined),
+		}
 		const persistenceError = new Error("artifact commit failed")
 		const service = new ImageGenerationService({
 			profileResolver: { resolve: () => budgetedProfile(), hasAvailableProfile: () => true },
@@ -247,7 +280,10 @@ describe("ImageGenerationService", () => {
 
 	it("projects preview events without exposing provider base64 or URL payloads", async () => {
 		const registry = new ImageGenerationAdapterRegistry()
-		registry.register("openai", () => new FakeImageGenerationAdapter({ outputs: [output], previewOutputs: [output], now: () => 20 }))
+		registry.register(
+			"openai",
+			() => new FakeImageGenerationAdapter({ outputs: [output], previewOutputs: [output], now: () => 20 }),
+		)
 		const onProgress = vi.fn()
 		const persistPreview = vi.fn(async (_requestId: string, sequence: number) => ({
 			id: `image-preview:sha256:${String(sequence).repeat(64)}`,

@@ -1,17 +1,23 @@
 import {
+	OpenAiCodexAccount,
 	OpenAiCodexAuthFlow,
 	OpenAiCodexAuthStatus,
 	OpenAiCodexBrowserOpenStatus,
 	OpenAiCodexFlowOutcome,
 	OpenAiCodexFlowStatus,
+	OpenAiCodexRateLimitResetOutcome,
+	OpenAiCodexRateLimitResetResult,
+	OpenAiCodexUsageResponse,
 } from "@shared/proto/dline/account"
 import type { ApiProfile } from "@shared/proto/dline/profile"
 import { readApiProfilesFresh } from "@/core/controller/file/getApiProfiles"
 import type {
+	OpenAiCodexAccountIdentity,
 	OpenAiCodexAuthorizationFlow,
 	OpenAiCodexAuthorizationFlowOutcome,
 	OpenAiCodexProfileAuthStatus,
 } from "@/integrations/openai-codex/oauth"
+import type { OpenAiCodexResetCreditResult, OpenAiCodexUsageSnapshot } from "@/integrations/openai-codex/usage"
 import { OAuthFlowError } from "@/services/oauth"
 import { Logger } from "@/shared/services/Logger"
 
@@ -50,6 +56,53 @@ export function toOpenAiCodexAuthStatus(status: OpenAiCodexProfileAuthStatus): O
 	}
 }
 
+export function toOpenAiCodexAccount(context: OpenAiCodexAccountIdentity | null): OpenAiCodexAccount | undefined {
+	if (!context || (!context.accountId && !context.displayName && !context.email && !context.accountType)) return undefined
+	return OpenAiCodexAccount.create({
+		accountId: context.accountId ?? "",
+		displayName: context.displayName,
+		email: context.email,
+		accountType: context.accountType,
+	})
+}
+
+export function toOpenAiCodexUsageResponse(
+	profileId: string,
+	usage: OpenAiCodexUsageSnapshot | undefined,
+): OpenAiCodexUsageResponse {
+	return OpenAiCodexUsageResponse.create({
+		profileId,
+		planType: usage?.planType,
+		windows:
+			usage?.windows.map((window) => ({
+				type: window.type,
+				label: window.label,
+				usedPercent: window.usedPercent,
+				remainingPercent: window.remainingPercent,
+				limitWindowSeconds: window.limitWindowSeconds,
+				resetAtMs: window.resetAtMs,
+			})) ?? [],
+		creditsBalance: usage?.creditsBalance,
+		resetCreditsAvailableCount: usage?.resetCreditsAvailableCount ?? 0,
+		allowed: usage?.allowed,
+		limitReached: usage?.limitReached,
+		isAvailable: usage !== undefined,
+	})
+}
+
+export function toOpenAiCodexRateLimitResetResult(
+	profileId: string,
+	result: OpenAiCodexResetCreditResult,
+): OpenAiCodexRateLimitResetResult {
+	const outcome = {
+		reset: OpenAiCodexRateLimitResetOutcome.OPEN_AI_CODEX_RATE_LIMIT_RESET_OUTCOME_RESET,
+		nothing_to_reset: OpenAiCodexRateLimitResetOutcome.OPEN_AI_CODEX_RATE_LIMIT_RESET_OUTCOME_NOTHING_TO_RESET,
+		no_credit: OpenAiCodexRateLimitResetOutcome.OPEN_AI_CODEX_RATE_LIMIT_RESET_OUTCOME_NO_CREDIT,
+		already_redeemed: OpenAiCodexRateLimitResetOutcome.OPEN_AI_CODEX_RATE_LIMIT_RESET_OUTCOME_ALREADY_REDEEMED,
+	}[result.outcome]
+	return OpenAiCodexRateLimitResetResult.create({ profileId, outcome, windowsReset: [...result.windowsReset] })
+}
+
 export function toOpenAiCodexAuthFlow(flow: OpenAiCodexAuthorizationFlow): OpenAiCodexAuthFlow {
 	return OpenAiCodexAuthFlow.create({
 		profileId: flow.profileId,
@@ -82,4 +135,15 @@ export function toOpenAiCodexFlowOutcome(outcome: OpenAiCodexAuthorizationFlowOu
 export function logOpenAiCodexOAuthFailure(action: string, error: unknown): void {
 	const code = error instanceof OAuthFlowError ? error.code : "UNKNOWN"
 	Logger.error(`[OpenAiCodexOAuth] ${action} failed (${code}).`)
+}
+
+export function logOpenAiCodexAccountRequestFailure(action: string, error: unknown): void {
+	const status =
+		typeof error === "object" &&
+		error !== null &&
+		"status" in error &&
+		Number.isInteger((error as { status?: unknown }).status)
+			? (error as { status: number }).status
+			: undefined
+	Logger.error(`[OpenAiCodexAccount] ${action} failed${status === undefined ? "" : ` with status ${status}`}.`)
 }

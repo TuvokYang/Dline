@@ -2,7 +2,12 @@ import { Buffer } from "node:buffer"
 import { OpenAiCodexAuthStatusResponse, type OpenAiCodexOAuthJsonRequest } from "@shared/proto/dline/account"
 import { openAiCodexOAuthManager } from "@/integrations/openai-codex/oauth"
 import type { Controller } from ".."
-import { logOpenAiCodexOAuthFailure, requireOpenAiCodexProfile, toOpenAiCodexAuthStatus } from "./openAiCodexProfileTarget"
+import {
+	logOpenAiCodexOAuthFailure,
+	requireOpenAiCodexProfile,
+	toOpenAiCodexAccount,
+	toOpenAiCodexAuthStatus,
+} from "./openAiCodexProfileTarget"
 
 const MAX_OAUTH_JSON_BYTES = 64 * 1024
 
@@ -17,8 +22,13 @@ export async function importOpenAiCodexCredentialJson(
 		}
 		const credential: unknown = JSON.parse(request.oauthJson)
 		await openAiCodexOAuthManager.importCredentials(profile.id, credential)
+		const context = await openAiCodexOAuthManager.getAccountIdentity(profile.id)
 		const status = await openAiCodexOAuthManager.getAuthStatus(profile.id)
-		return OpenAiCodexAuthStatusResponse.create({ profileId: profile.id, status: toOpenAiCodexAuthStatus(status) })
+		return OpenAiCodexAuthStatusResponse.create({
+			profileId: profile.id,
+			status: toOpenAiCodexAuthStatus(status),
+			account: toOpenAiCodexAccount(context),
+		})
 	} catch (error) {
 		logOpenAiCodexOAuthFailure("import credential", error)
 		throw new Error("The OpenAI Codex OAuth credential could not be imported.")

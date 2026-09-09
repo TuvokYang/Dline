@@ -19,6 +19,7 @@ import {
 	setApiKey,
 	setProviderSecretsBatch,
 } from "@core/storage/secrets"
+import { GPT_IMAGE_2_5_MODEL_ID, GPT_IMAGE_2_SUBSCRIPTION_MODEL_ID } from "@shared/image-generation"
 import { EmptyRequest } from "@shared/proto/dline/common"
 import type { ModelCapabilities, ServerTool } from "@shared/proto/dline/models/metadata"
 import { ApiProfile, ApiProfilesResponse, ImageGenerationSource } from "@shared/proto/dline/profile"
@@ -57,8 +58,9 @@ const API_PROFILES_FILE = "api_profiles.json"
  *
  * 1: clear hosted-tool disables that a legacy empty `capabilities.tools` was
  *    misread into.
+ * 2: migrate image source naming and the legacy subscription model alias.
  */
-const CURRENT_PROFILE_SCHEMA_VERSION = 1
+const CURRENT_PROFILE_SCHEMA_VERSION = 2
 
 /**
  * Bring one stored profile up to the current storage revision.
@@ -71,12 +73,13 @@ const CURRENT_PROFILE_SCHEMA_VERSION = 1
  * choices people make afterwards.
  */
 function upgradeProfileSchema(profile: ApiProfile): boolean {
-	if ((profile.schemaVersion ?? 0) >= CURRENT_PROFILE_SCHEMA_VERSION) return false
+	const revision = profile.schemaVersion ?? 0
+	if (revision >= CURRENT_PROFILE_SCHEMA_VERSION) return false
 
-	const providerKey = PROFILE_PROVIDER_KEYS[profile.provider]
-	const config = providerKey ? (profile[providerKey] as { disabledServerTools?: ServerTool[] } | undefined) : undefined
-	if (config?.disabledServerTools?.length) {
-		config.disabledServerTools = []
+	if (revision < 1) {
+		const providerKey = PROFILE_PROVIDER_KEYS[profile.provider]
+		const config = providerKey ? (profile[providerKey] as { disabledServerTools?: ServerTool[] } | undefined) : undefined
+		if (config?.disabledServerTools?.length) config.disabledServerTools = []
 	}
 	profile.schemaVersion = CURRENT_PROFILE_SCHEMA_VERSION
 	return true
@@ -232,16 +235,21 @@ function readProfilesFromJson(data: unknown): Omit<ParsedApiProfiles, "recovered
 }
 
 function clearImageBindings(profile: ApiProfile): boolean {
-	if (
-		profile.imageSource !== ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED &&
-		profile.imageSource !== ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED
-	) {
-		return false
+	if (profile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_INDEPENDENT) return false
+	let changed = false
+	if (profile.imageProfileId !== undefined) {
+		profile.imageProfileId = undefined
+		changed = true
 	}
-	if (profile.imageProfileId === undefined && profile.imageModelId === undefined) return false
-	profile.imageProfileId = undefined
-	profile.imageModelId = undefined
-	return true
+	if (
+		(profile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_HOSTED ||
+			profile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED) &&
+		profile.imageModelId !== undefined
+	) {
+		profile.imageModelId = undefined
+		changed = true
+	}
+	return changed
 }
 
 /**
@@ -291,11 +299,20 @@ function migrateLegacyServerToolOverride(profile: ApiProfile): boolean {
 }
 
 function normalizeApiProfileWithMigration(profile: unknown): { profile: ApiProfile; migrated: boolean } {
-	const normalized = ApiProfile.fromJSON(profile ?? {})
+	let profileInput = profile
 	let migrated = false
-	let hasExplicitImageSource = false
 	if (profile && typeof profile === "object") {
 		const rawProfile = profile as Record<string, unknown>
+		const rawImageSource = rawProfile.imageSource ?? rawProfile.image_source
+		if (rawImageSource === "IMAGE_GENERATION_SOURCE_CURRENT") {
+			profileInput = { ...rawProfile, imageSource: "IMAGE_GENERATION_SOURCE_GPT_SUBSCRIPTION" }
+			migrated = true
+		}
+	}
+	const normalized = ApiProfile.fromJSON(profileInput ?? {})
+	let hasExplicitImageSource = false
+	if (profileInput && typeof profileInput === "object") {
+		const rawProfile = profileInput as Record<string, unknown>
 		hasExplicitImageSource = Object.hasOwn(rawProfile, "imageSource") || Object.hasOwn(rawProfile, "image_source")
 		if (!Object.hasOwn(rawProfile, "enabled")) {
 			normalized.enabled = true
@@ -370,8 +387,12 @@ function normalizeApiProfileWithMigration(profile: unknown): { profile: ApiProfi
 	}
 	if (!hasExplicitImageSource) {
 		normalized.imageSource = normalized.imageModelId
-			? ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT
+			? ImageGenerationSource.IMAGE_GENERATION_SOURCE_GPT_SUBSCRIPTION
 			: ImageGenerationSource.IMAGE_GENERATION_SOURCE_UNSPECIFIED
+		migrated = true
+	}
+	if (normalized.imageModelId === GPT_IMAGE_2_SUBSCRIPTION_MODEL_ID) {
+		normalized.imageModelId = GPT_IMAGE_2_5_MODEL_ID
 		migrated = true
 	}
 	if (clearImageBindings(normalized)) migrated = true
@@ -478,7 +499,8 @@ export function applyRegistryModelDefaults(profiles: ApiProfile[]): boolean {
 		}
 
 		if (
-			profile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT &&
+			(profile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_GPT_SUBSCRIPTION ||
+				profile.imageSource === ImageGenerationSource.IMAGE_GENERATION_SOURCE_GPT_API) &&
 			!profile.imageModelId &&
 			providerModels?.defaultImageModelId
 		) {

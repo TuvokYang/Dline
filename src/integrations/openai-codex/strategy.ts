@@ -114,30 +114,92 @@ function parseJwtClaims(token: string): Record<string, unknown> | undefined {
 	}
 }
 
-function accountIdFromClaims(claims: Record<string, unknown>): string | undefined {
-	if (typeof claims.chatgpt_account_id === "string" && claims.chatgpt_account_id.length > 0) {
-		return claims.chatgpt_account_id
-	}
-	const auth = claims["https://api.openai.com/auth"]
-	if (isRecord(auth) && typeof auth.chatgpt_account_id === "string" && auth.chatgpt_account_id.length > 0) {
-		return auth.chatgpt_account_id
-	}
-	const organizations = claims.organizations
-	if (Array.isArray(organizations) && isRecord(organizations[0])) {
-		return optionalString(organizations[0].id)
-	}
-	return undefined
+export type OpenAiCodexAccountIdSource =
+	| "access-token-auth"
+	| "access-token-default-organization"
+	| "access-token-top-level"
+	| "missing"
+
+export interface OpenAiCodexAccessTokenAccountId {
+	readonly accountId?: string
+	readonly source: OpenAiCodexAccountIdSource
 }
 
-function extractAccountId(tokens: Pick<TokenResponse, "accessToken" | "idToken">): string | undefined {
+function accountIdFromClaims(claims: Record<string, unknown>): OpenAiCodexAccessTokenAccountId {
+	const auth = claims["https://api.openai.com/auth"]
+	const authAccountId = isRecord(auth) ? optionalString(auth.chatgpt_account_id) : undefined
+	if (authAccountId) {
+		return { accountId: authAccountId, source: "access-token-auth" }
+	}
+
+	const organizations = claims.organizations
+	if (Array.isArray(organizations)) {
+		const defaultOrganization = organizations.find(
+			(organization) => isRecord(organization) && organization.is_default === true,
+		)
+		if (isRecord(defaultOrganization)) {
+			const defaultOrganizationId = optionalString(defaultOrganization.id)
+			if (defaultOrganizationId) {
+				return { accountId: defaultOrganizationId, source: "access-token-default-organization" }
+			}
+		}
+	}
+
+	const topLevelAccountId = optionalString(claims.chatgpt_account_id)
+	return topLevelAccountId ? { accountId: topLevelAccountId, source: "access-token-top-level" } : { source: "missing" }
+}
+
+/** Resolve the account header exactly as the official Codex client does. */
+export function resolveOpenAiCodexAccessTokenAccountId(accessToken: string): OpenAiCodexAccessTokenAccountId {
+	const claims = parseJwtClaims(accessToken)
+	return claims ? accountIdFromClaims(claims) : { source: "missing" }
+}
+
+interface OpenAiCodexTokenIdentity {
+	accountId?: string
+	displayName?: string
+	email?: string
+	accountType?: string
+}
+
+function identityFromClaims(claims: Record<string, unknown>): OpenAiCodexTokenIdentity {
+	const profile = claims["https://api.openai.com/profile"]
+	const auth = claims["https://api.openai.com/auth"]
+	return {
+		displayName:
+			optionalString(claims.name) ??
+			(isRecord(profile) ? optionalString(profile.name) : undefined) ??
+			optionalString(claims.preferred_username),
+		email: optionalString(claims.email) ?? (isRecord(profile) ? optionalString(profile.email) : undefined),
+		accountType: isRecord(auth) ? optionalString(auth.chatgpt_plan_type) : undefined,
+	}
+}
+
+function extractTokenIdentity(tokens: Pick<TokenResponse, "accessToken" | "idToken">): OpenAiCodexTokenIdentity {
+	const { accountId } = resolveOpenAiCodexAccessTokenAccountId(tokens.accessToken)
+	let displayName: string | undefined
+	let email: string | undefined
+	let accountType: string | undefined
 	for (const token of [tokens.idToken, tokens.accessToken]) {
 		if (!token) continue
 		const claims = parseJwtClaims(token)
 		if (!claims) continue
-		const accountId = accountIdFromClaims(claims)
-		if (accountId) return accountId
+		const identity = identityFromClaims(claims)
+		displayName ??= identity.displayName
+		email ??= identity.email
+		accountType ??= identity.accountType
 	}
-	return undefined
+	return { accountId, displayName, email, accountType }
+}
+
+export function resolveOpenAiCodexStoredAccountIdentity(credential: OpenAiOAuthCredentials): OpenAiCodexTokenIdentity {
+	const tokenIdentity = extractTokenIdentity({ accessToken: credential.access_token })
+	return {
+		accountId: tokenIdentity.accountId ?? credential.accountId,
+		displayName: credential.displayName ?? tokenIdentity.displayName,
+		email: credential.email ?? tokenIdentity.email,
+		accountType: credential.accountType ?? tokenIdentity.accountType,
+	}
 }
 
 export class OpenAiCodexOAuthStrategy implements OAuthAuthorizationStrategy<OpenAiOAuthCredentials> {
@@ -188,13 +250,16 @@ export class OpenAiCodexOAuthStrategy implements OAuthAuthorizationStrategy<Open
 			}),
 			"exchange",
 		)
+		const identity = extractTokenIdentity(tokens)
 		return parseOpenAiOAuthCredentials({
 			type: "openai-codex",
 			access_token: tokens.accessToken,
 			...(tokens.refreshToken !== undefined ? { refresh_token: tokens.refreshToken } : {}),
 			expires: this.expiryFrom(tokens.expiresInSeconds),
-			email: tokens.email,
-			accountId: extractAccountId(tokens),
+			displayName: identity.displayName,
+			email: tokens.email ?? identity.email,
+			accountId: identity.accountId,
+			accountType: identity.accountType,
 		})
 	}
 
@@ -214,13 +279,16 @@ export class OpenAiCodexOAuthStrategy implements OAuthAuthorizationStrategy<Open
 			}),
 			"refresh",
 		)
+		const identity = extractTokenIdentity(tokens)
 		return parseOpenAiOAuthCredentials({
 			...(current.type !== undefined ? { type: current.type } : {}),
 			access_token: tokens.accessToken,
 			refresh_token: tokens.refreshToken ?? current.refresh_token,
 			expires: this.expiryFrom(tokens.expiresInSeconds),
-			email: tokens.email ?? current.email,
-			accountId: extractAccountId(tokens) ?? current.accountId,
+			displayName: identity.displayName ?? current.displayName,
+			email: tokens.email ?? identity.email ?? current.email,
+			accountId: identity.accountId ?? current.accountId,
+			accountType: identity.accountType ?? current.accountType,
 		})
 	}
 

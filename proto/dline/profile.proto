@@ -33,9 +33,12 @@ import "dline/provider/dify.proto";
 
 enum ImageGenerationSource {
   IMAGE_GENERATION_SOURCE_UNSPECIFIED = 0;
-  IMAGE_GENERATION_SOURCE_CURRENT = 1;
+  IMAGE_GENERATION_SOURCE_GPT_SUBSCRIPTION = 1;
   IMAGE_GENERATION_SOURCE_INDEPENDENT = 2;
   IMAGE_GENERATION_SOURCE_HOSTED = 3;
+  IMAGE_GENERATION_SOURCE_GPT_API = 4;
+
+  reserved "IMAGE_GENERATION_SOURCE_CURRENT";
 }
 
 /** Common safety and cost limits for image generation through one profile. */

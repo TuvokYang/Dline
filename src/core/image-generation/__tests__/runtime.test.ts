@@ -1,6 +1,6 @@
 import type { StateManager } from "@core/storage/StateManager"
 import { ApiFormat } from "@shared/proto/dline/models/metadata"
-import { ImageGenerationSource, type ApiProfile } from "@shared/proto/dline/profile"
+import { type ApiProfile, ImageGenerationSource } from "@shared/proto/dline/profile"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const mocks = vi.hoisted(() => ({
@@ -27,7 +27,7 @@ const taskProfile = {
 	provider: "openai",
 	modelId: "custom-responses-model",
 	imageModelId: "gpt-image-2",
-	imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT,
+	imageSource: ImageGenerationSource.IMAGE_GENERATION_SOURCE_GPT_SUBSCRIPTION,
 	openai: { apiFormat: ApiFormat.OPENAI_RESPONSES },
 	usedFor: ["act"],
 	enabled: true,
@@ -106,9 +106,7 @@ describe("image generation runtime binding", () => {
 	it("uses the canonical global feature gate instead of a Task-overridable settings value", () => {
 		const stateManager = createStateManager(false)
 
-		expect(
-			hasAvailableImageProfile(stateManager, { taskId: "task-a", getCurrentMode: () => "act" }),
-		).toBe(false)
+		expect(hasAvailableImageProfile(stateManager, { taskId: "task-a", getCurrentMode: () => "act" })).toBe(false)
 		expect(stateManager.getCanonicalSettingsKey).toHaveBeenCalledWith("imageGenerationEnabled")
 		expect(stateManager.getGlobalSettingsKey).not.toHaveBeenCalled()
 	})

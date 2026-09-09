@@ -7,6 +7,7 @@ import type { StateManager } from "@core/storage/StateManager"
 import { GeminiImageGenerationAdapter } from "./adapters/GeminiImageGenerationAdapter"
 import { OpenAIHostedImageGenerationAdapter } from "./adapters/OpenAIHostedImageGenerationAdapter"
 import { OpenAIImageGenerationAdapter } from "./adapters/OpenAIImageGenerationAdapter"
+import { OpenAiCodexHostedResponsesClient } from "./adapters/OpenAiCodexHostedResponsesClient"
 import { ImageGenerationAdapterRegistry } from "./ImageGenerationAdapterRegistry"
 import { ImageGenerationBudgetLedger } from "./ImageGenerationBudgetLedger"
 import { ImageGenerationPolicy } from "./ImageGenerationPolicy"
@@ -21,6 +22,7 @@ export interface ImageGenerationRuntime {
 
 export interface ImageGenerationTaskBinding {
 	taskId: string
+	ulid?: string
 	getCurrentMode: () => "plan" | "act"
 }
 
@@ -93,6 +95,18 @@ export function createImageGenerationRuntime(options: CreateImageGenerationRunti
 	const adapterRegistry = new ImageGenerationAdapterRegistry()
 	adapterRegistry.register("openai", (config) => new OpenAIImageGenerationAdapter(config))
 	adapterRegistry.register(OPENAI_HOSTED_IMAGE_ADAPTER_ID, (config) => new OpenAIHostedImageGenerationAdapter(config))
+	adapterRegistry.register(
+		"openai-codex",
+		(config) =>
+			new OpenAIHostedImageGenerationAdapter({
+				...config,
+				client: new OpenAiCodexHostedResponsesClient({
+					profileId: config.profile.id,
+					workspaceId: options.stateManager.getApiConfigurationForTask(options.taskId).workspaceId,
+					threadId: options.ulid ?? options.taskId,
+				}),
+			}),
+	)
 	adapterRegistry.register("gemini", (config) => new GeminiImageGenerationAdapter(config))
 	const artifactResolver = createTaskArtifactResolver(options.taskId, { urlDownloader: options.urlDownloader })
 	const previewStore = createTaskImagePreviewStore(options.taskId)

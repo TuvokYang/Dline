@@ -234,7 +234,7 @@ describe("resolveHostedImageGenerationPlan", () => {
 	it("never projects image generation into the main conversation request", () => {
 		for (const input of [
 			base,
-			{ ...base, source: ImageGenerationSource.IMAGE_GENERATION_SOURCE_CURRENT },
+			{ ...base, source: ImageGenerationSource.IMAGE_GENERATION_SOURCE_GPT_SUBSCRIPTION },
 			{ ...base, modelInfo: { capabilities: { tools: [] } } },
 			{ ...base, selectedApiFormat: ApiFormat.OPENAI_CHAT },
 			{ ...base, remoteAdapterAvailable: false },

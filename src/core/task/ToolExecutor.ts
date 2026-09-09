@@ -578,6 +578,7 @@ export class ToolExecutor {
 		this.autoApprover = new AutoApprove(this.stateManager, this.taskId)
 		this.imageGenerationService = createImageGenerationRuntime({
 			taskId: this.taskId,
+			ulid: this.ulid,
 			stateManager: this.stateManager,
 			getCurrentMode: this.getMode,
 		}).service

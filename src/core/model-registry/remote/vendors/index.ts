@@ -18,6 +18,7 @@ import { lmStudioModelSource } from "./lmstudio"
 import { ocaModelSource } from "./oca"
 import { ollamaModelSource } from "./ollama"
 import { openAiModelSource } from "./openai"
+import { openAiCodexModelSource } from "./openai-codex"
 import { openRouterModelSource } from "./openrouter"
 import { requestyModelSource } from "./requesty"
 import { sapAiCoreModelSource } from "./sapaicore"
@@ -37,6 +38,7 @@ export const MODEL_SOURCES: readonly ProviderRemoteSource[] = [
 	ocaModelSource,
 	ollamaModelSource,
 	openAiModelSource,
+	openAiCodexModelSource,
 	openRouterModelSource,
 	requestyModelSource,
 	sapAiCoreModelSource,

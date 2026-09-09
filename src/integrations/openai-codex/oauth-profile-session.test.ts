@@ -22,6 +22,10 @@ function credential(owner: string, expires = NOW + 3_600_000): OpenAiOAuthCreden
 	}
 }
 
+function jwt(payload: Record<string, unknown>): string {
+	return `${Buffer.from("{}").toString("base64url")}.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.signature`
+}
+
 function credentialWithoutRefresh(owner: string, expires = NOW + 3_600_000): OpenAiOAuthCredentials {
 	return {
 		type: "openai-codex",
@@ -78,6 +82,21 @@ describe("OpenAI Codex Profile OAuth session registry", () => {
 			accessToken: "b-access",
 			expires: NOW + 3_600_000,
 			accountId: "b-account",
+		})
+	})
+
+	it("prefers the official access-token account identity over a stale stored account ID", async () => {
+		await repository.save("profile-a", {
+			...credential("a"),
+			access_token: jwt({ "https://api.openai.com/auth": { chatgpt_account_id: "access-token-account" } }),
+			accountId: "stale-stored-account",
+		})
+		const sessions = registry(vi.fn())
+
+		await expect(sessions.getCredentialContext("profile-a")).resolves.toEqual({
+			accessToken: jwt({ "https://api.openai.com/auth": { chatgpt_account_id: "access-token-account" } }),
+			expires: NOW + 3_600_000,
+			accountId: "access-token-account",
 		})
 	})
 

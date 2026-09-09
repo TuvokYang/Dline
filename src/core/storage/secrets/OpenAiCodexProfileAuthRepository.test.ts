@@ -17,6 +17,7 @@ const credentials: OpenAiOAuthCredentials = {
 	expires: 1_900_000_000_000,
 	email: "profile@example.test",
 	accountId: "account-a",
+	accountType: "team",
 }
 
 describe("OpenAiCodexProfileAuthRepository", () => {

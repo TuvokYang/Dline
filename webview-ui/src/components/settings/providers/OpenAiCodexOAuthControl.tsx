@@ -1,6 +1,6 @@
 import { OpenAiCodexAuthStatus } from "@shared/proto/dline/account"
 import { CheckCircle2Icon, CircleDashedIcon, LoaderIcon, TriangleAlertIcon } from "lucide-react"
-import type { ReactNode } from "react"
+import { type ReactNode, useEffect } from "react"
 import { ProfileActionRow, ProfileNotice, ProfileSection } from "../profile-ui"
 import { OpenAiCodexOAuthDialog } from "./OpenAiCodexOAuthDialog"
 import { isOpenAiCodexAuthenticated, useOpenAiCodexOAuthFlow } from "./useOpenAiCodexOAuthFlow"
@@ -62,6 +62,22 @@ function statusPresentation(status: OpenAiCodexAuthStatus): StatusPresentation {
 	}
 }
 
+function accountTypeLabel(value: string | undefined): string | undefined {
+	const normalized = value?.trim().toLowerCase()
+	if (!normalized || normalized === "unknown") return undefined
+	return (
+		{
+			free: "Free",
+			plus: "Plus",
+			pro: "Pro",
+			team: "Team",
+			business: "Business",
+			enterprise: "Enterprise",
+			edu: "Edu",
+		}[normalized] ?? value?.trim()
+	)
+}
+
 function statusIcon(status: OpenAiCodexAuthStatus, severity: StatusSeverity, checking: boolean): ReactNode {
 	if (checking) return <LoaderIcon className="size-3.5 animate-spin" />
 	if (severity === "attention") return <TriangleAlertIcon className="size-3.5 text-editor-warning-foreground" />
@@ -69,7 +85,13 @@ function statusIcon(status: OpenAiCodexAuthStatus, severity: StatusSeverity, che
 	return <CircleDashedIcon className="size-3.5" />
 }
 
-export function OpenAiCodexOAuthControl({ profileId }: { profileId: string }) {
+export function OpenAiCodexOAuthControl({
+	profileId,
+	onAuthenticatedChange,
+}: {
+	profileId: string
+	onAuthenticatedChange?: (authenticated: boolean) => void
+}) {
 	const flow = useOpenAiCodexOAuthFlow(profileId)
 	const authenticated = isOpenAiCodexAuthenticated(flow.status)
 	const presentation = statusPresentation(flow.status)
@@ -78,6 +100,13 @@ export function OpenAiCodexOAuthControl({ profileId }: { profileId: string }) {
 	const label = inProgress ? "Signing in" : presentation.label
 	const actionsDisabled = flow.busy || inProgress
 	const blockingError = flow.statusError ?? (flow.dialog.phase === "closed" ? flow.actionError : undefined)
+	const accountName = flow.account?.displayName?.trim()
+	const accountEmail = flow.account?.email?.trim()
+	const accountType = accountTypeLabel(flow.account?.accountType)
+
+	useEffect(() => {
+		onAuthenticatedChange?.(authenticated)
+	}, [authenticated, onAuthenticatedChange])
 
 	return (
 		<ProfileSection aria-label="ChatGPT account">
@@ -107,6 +136,21 @@ export function OpenAiCodexOAuthControl({ profileId }: { profileId: string }) {
 					) : null}
 				</span>
 			</ProfileActionRow>
+			{authenticated && (accountName || accountEmail || accountType) ? (
+				<div aria-label="Signed-in ChatGPT account" className="min-w-0 px-2 text-xs text-description">
+					<div className="flex min-w-0 items-center gap-2">
+						<span className="truncate font-medium text-foreground">
+							{accountName ?? accountEmail ?? "ChatGPT account"}
+						</span>
+						{accountType ? (
+							<span className="shrink-0 rounded-full border border-editor-widget-border bg-toolbar-hover/50 px-1.5 py-0.5 text-[10px] font-medium text-foreground">
+								{accountType}
+							</span>
+						) : null}
+					</div>
+					{accountEmail && accountEmail !== accountName ? <div className="truncate">{accountEmail}</div> : null}
+				</div>
+			) : null}
 			{presentation.severity === "attention" && !inProgress ? (
 				<ProfileNotice variant="warning">{presentation.guidance}</ProfileNotice>
 			) : null}

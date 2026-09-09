@@ -12,6 +12,8 @@ import type { ProviderModelReconciliationMode } from "../provider-model-reconcil
 
 /** Everything a source needs in order to reach a vendor. */
 export interface ProviderRemoteContext {
+	/** Stable Profile identity used by sources that own Profile-scoped credentials. */
+	readonly profileId?: string
 	/** Absent when the vendor lists its catalog without authentication. */
 	readonly apiKey?: string
 	/** Absent when the vendor exposes a single fixed endpoint. */

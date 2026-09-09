@@ -58,6 +58,12 @@ service AccountService {
   // Returns the current OAuth status for one OpenAI Codex Profile.
   rpc getOpenAiCodexAuthStatus(OpenAiCodexProfileRequest) returns (OpenAiCodexAuthStatusResponse);
 
+  // Returns Profile-scoped ChatGPT Codex quota and reset-credit availability.
+  rpc getOpenAiCodexUsage(OpenAiCodexProfileRequest) returns (OpenAiCodexUsageResponse);
+
+  // Consumes one available rate-limit reset credit after explicit user confirmation.
+  rpc consumeOpenAiCodexRateLimitResetCredit(OpenAiCodexProfileRequest) returns (OpenAiCodexRateLimitResetResult);
+
   // Completes an existing flow from the full localhost callback URI.
   rpc completeOpenAiCodexCallbackUri(OpenAiCodexCallbackUriRequest) returns (OpenAiCodexAuthStatusResponse);
 
@@ -140,12 +146,54 @@ message OpenAiCodexFlowOutcome {
   int64 ended_at_ms = 4;
 }
 
+message OpenAiCodexAccount {
+  string account_id = 1;
+  optional string display_name = 2;
+  optional string email = 3;
+  optional string account_type = 4;
+}
+
 message OpenAiCodexAuthStatusResponse {
   string profile_id = 1;
   OpenAiCodexAuthStatus status = 2;
   string flow_id = 3;
   OpenAiCodexAuthFlow active_flow = 4;
   OpenAiCodexFlowOutcome last_flow_outcome = 5;
+  OpenAiCodexAccount account = 6;
+}
+
+message OpenAiCodexUsageWindow {
+  string type = 1;
+  string label = 2;
+  double used_percent = 3;
+  double remaining_percent = 4;
+  int64 limit_window_seconds = 5;
+  optional int64 reset_at_ms = 6;
+}
+
+message OpenAiCodexUsageResponse {
+  string profile_id = 1;
+  optional string plan_type = 2;
+  repeated OpenAiCodexUsageWindow windows = 3;
+  optional double credits_balance = 4;
+  uint32 reset_credits_available_count = 5;
+  optional bool allowed = 6;
+  optional bool limit_reached = 7;
+  bool is_available = 8;
+}
+
+enum OpenAiCodexRateLimitResetOutcome {
+  OPEN_AI_CODEX_RATE_LIMIT_RESET_OUTCOME_UNSPECIFIED = 0;
+  OPEN_AI_CODEX_RATE_LIMIT_RESET_OUTCOME_RESET = 1;
+  OPEN_AI_CODEX_RATE_LIMIT_RESET_OUTCOME_NOTHING_TO_RESET = 2;
+  OPEN_AI_CODEX_RATE_LIMIT_RESET_OUTCOME_NO_CREDIT = 3;
+  OPEN_AI_CODEX_RATE_LIMIT_RESET_OUTCOME_ALREADY_REDEEMED = 4;
+}
+
+message OpenAiCodexRateLimitResetResult {
+  string profile_id = 1;
+  OpenAiCodexRateLimitResetOutcome outcome = 2;
+  repeated string windows_reset = 3;
 }
 
 message AuthStateChangedRequest {
