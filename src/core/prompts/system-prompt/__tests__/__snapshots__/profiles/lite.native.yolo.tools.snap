@@ -259,7 +259,7 @@
         "properties": {
           "command": {
             "type": "string",
-            "description": "The CLI command to execute. This should be valid for the current operating system. Ensure the command is properly formatted and does not contain any harmful instructions. Do not use the ~ character or $HOME to refer to the home directory. Do not prepend cd solely to select the execution directory; use workdirectory instead."
+            "description": "The CLI command to execute. Write it in the syntax of the shell reported under SYSTEM INFORMATION, not in whichever shell syntax comes to mind first: heredocs, piping into text filters, conditional chaining, inline environment variables and quoting all differ between shells, and a mismatch fails outright rather than degrading. When a command fails on syntax, re-check it against the reported shell before retrying. Ensure the command is properly formatted and does not contain any harmful instructions. Do not use the ~ character or $HOME to refer to the home directory. Do not prepend cd solely to select the execution directory; use workdirectory instead."
           },
           "workdirectory": {
             "type": "string",

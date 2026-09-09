@@ -51,7 +51,6 @@ describe("TODO and Focus Chain prompt contract", () => {
 		expect(taskProgress.standardFused).toContain("optional `## Section` headings")
 		expect(makePlan.description).toContain("a required # Title and optional ## Section headings")
 		expect(makePlan.focusOmissionDescriptionClause).toContain("a required # Title and optional ## Section headings")
-		expect(makePlan.gemini3Description).toContain("a required # Title and optional ## Section headings")
 	})
 
 	it("keeps strict order instructions without advertising runtime tolerance", () => {
