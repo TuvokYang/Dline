@@ -1,10 +1,7 @@
 import { InMemoryLogRecordExporter, SimpleLogRecordProcessor } from "@opentelemetry/sdk-logs"
-import {
-	ATTR_SERVICE_INSTANCE_ID,
-	ATTR_SERVICE_NAME,
-} from "@opentelemetry/semantic-conventions/incubating"
+import { ATTR_SERVICE_INSTANCE_ID, ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions/incubating"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { USAGE_SCOPE_NAME, RUNTIME_SCOPE_NAME } from "../scopes"
+import { RUNTIME_SCOPE_NAME, USAGE_SCOPE_NAME } from "../scopes"
 import {
 	attachScopedProcessors,
 	configureSharedTelemetryResource,
@@ -60,12 +57,8 @@ describe("shared logger provider", () => {
 	})
 
 	it("hands both subsystems the same provider instance", () => {
-		const first = attachScopedProcessors(USAGE_SCOPE_NAME, "product", [
-			new SimpleLogRecordProcessor(productExporter),
-		])
-		const second = attachScopedProcessors(RUNTIME_SCOPE_NAME, "runtime", [
-			new SimpleLogRecordProcessor(runtimeExporter),
-		])
+		const first = attachScopedProcessors(USAGE_SCOPE_NAME, "product", [new SimpleLogRecordProcessor(productExporter)])
+		const second = attachScopedProcessors(RUNTIME_SCOPE_NAME, "runtime", [new SimpleLogRecordProcessor(runtimeExporter)])
 
 		expect(second).toBe(first)
 	})
@@ -117,9 +110,7 @@ describe("shared logger provider", () => {
 		// be active; keying routes by scope alone would let the second silently
 		// disconnect the first.
 		const organization = new InMemoryLogRecordExporter()
-		attachScopedProcessors(USAGE_SCOPE_NAME, "user-collector", [
-			new SimpleLogRecordProcessor(productExporter),
-		])
+		attachScopedProcessors(USAGE_SCOPE_NAME, "user-collector", [new SimpleLogRecordProcessor(productExporter)])
 		attachScopedProcessors(USAGE_SCOPE_NAME, "org-collector", [new SimpleLogRecordProcessor(organization)])
 
 		getSharedLoggerProvider()?.getLogger(USAGE_SCOPE_NAME).emit({ body: "product.event" })

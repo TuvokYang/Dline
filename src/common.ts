@@ -17,7 +17,7 @@ import { ErrorService } from "./services/error"
 import { featureFlagsService } from "./services/feature-flags"
 import { getDistinctId } from "./services/logging/distinctId"
 import { DlineRuntimeFileManager } from "./services/runtime-files"
-import { telemetryService } from "./services/telemetry"
+import { disposeTelemetryService, telemetryService } from "./services/telemetry"
 import { recordPerfPhase } from "./services/telemetry/instrumentation/duration-recorder"
 import { PerfDomain } from "./services/telemetry/instrumentation/perf-domains"
 import { PostHogClientProvider } from "./services/telemetry/providers/posthog/PostHogClientProvider"
@@ -269,7 +269,13 @@ export async function tearDown(): Promise<void> {
 
 	AgentConfigLoader.getInstance()?.dispose()
 	PostHogClientProvider.getInstance().dispose()
-	telemetryService.dispose()
+	// Awaited so provider construction cannot outlive its owner and leave
+	// sockets or timers with nothing to close them.
+	try {
+		await disposeTelemetryService()
+	} catch (error) {
+		Logger.error("[Dline] Telemetry shutdown failed:", error)
+	}
 	ErrorService.get().dispose()
 	featureFlagsService.dispose()
 

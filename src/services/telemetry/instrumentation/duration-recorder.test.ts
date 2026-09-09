@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createRuntimeTelemetryBus, setRuntimeTelemetryBus } from "../runtime/index"
 import type { RuntimeEventBus } from "../runtime/runtime-event-bus"
+import { installRuntimeSignalPipeline, resetRuntimeSignalPipeline } from "../runtime/signal-pipeline"
 import { RuntimeEventPriority } from "../runtime/types"
 import {
 	configurePerfRecorder,
@@ -19,11 +20,16 @@ describe("duration recorder", () => {
 	beforeEach(() => {
 		bus = createRuntimeTelemetryBus()
 		previousBus = setRuntimeTelemetryBus(bus)
+		// The recorder reaches the bus through the pipeline port, so a test
+		// that only installs a bus would leave its signals in the bootstrap
+		// buffer with nowhere to go.
+		installRuntimeSignalPipeline(bus, () => true)
 		resetPerfRecorder()
 	})
 
 	afterEach(() => {
 		setRuntimeTelemetryBus(previousBus)
+		resetRuntimeSignalPipeline()
 		resetPerfRecorder()
 	})
 

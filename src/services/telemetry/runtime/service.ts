@@ -1,5 +1,5 @@
-import { RuntimeEventBus } from "./runtime-event-bus"
 import type { RuntimeTelemetryScope } from "./context"
+import { RuntimeEventBus } from "./runtime-event-bus"
 import {
 	RuntimeEventPriority,
 	type RuntimeEventSubscriber,

@@ -1,5 +1,5 @@
-import { SeverityNumber } from "@opentelemetry/api-logs"
 import type { AnyValue, LogAttributes } from "@opentelemetry/api-logs"
+import { SeverityNumber } from "@opentelemetry/api-logs"
 import { RuntimeEventPriority, type RuntimeTelemetryEvent } from "./types"
 
 /**

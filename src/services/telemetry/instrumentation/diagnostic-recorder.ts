@@ -1,7 +1,5 @@
-import { getRuntimeTelemetryBus } from "../runtime/index"
-import { RuntimeEventPriority, type RuntimeTelemetryContext } from "../runtime/types"
+import { emitSignal, isSignalRecordingEnabled, type SignalContext } from "../service/pipeline-port"
 import { type DiagnosticDomain, type DiagnosticKind, type DiagnosticOutcome, diagnosticEventName } from "./diagnostic-events"
-import { isPerfRecordingEnabled } from "./duration-recorder"
 
 /**
  * Single entry point for recording a runtime diagnostic.
@@ -33,12 +31,12 @@ export function recordDiagnostic<D extends DiagnosticDomain>(
 	kind: DiagnosticKind<D>,
 	outcome: DiagnosticOutcome,
 	dimensions?: DiagnosticDimensions,
-	context?: Partial<RuntimeTelemetryContext>,
+	context?: SignalContext,
 ): void {
-	if (!isPerfRecordingEnabled()) return
-	getRuntimeTelemetryBus().record({
+	if (!isSignalRecordingEnabled()) return
+	emitSignal({
 		name: diagnosticEventName(domain, kind),
-		priority: RuntimeEventPriority.Debug,
+		level: "debug",
 		attributes: { ...dimensions, outcome },
 		context,
 	})
@@ -52,5 +50,5 @@ export function recordDiagnostic<D extends DiagnosticDomain>(
  * entirely rather than computing values the recorder will discard.
  */
 export function isDiagnosticRecordingEnabled(): boolean {
-	return isPerfRecordingEnabled()
+	return isSignalRecordingEnabled()
 }

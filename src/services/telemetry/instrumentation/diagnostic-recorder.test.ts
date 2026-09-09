@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { createRuntimeTelemetryBus, setRuntimeTelemetryBus } from "../runtime/index"
 import type { RuntimeEventBus } from "../runtime/runtime-event-bus"
+import { installRuntimeSignalPipeline, resetRuntimeSignalPipeline } from "../runtime/signal-pipeline"
 import { RuntimeEventPriority } from "../runtime/types"
 import {
 	DIAGNOSTIC_KINDS,
@@ -44,11 +45,15 @@ describe("diagnostic recorder", () => {
 	beforeEach(() => {
 		bus = createRuntimeTelemetryBus()
 		previousBus = setRuntimeTelemetryBus(bus)
+		// Diagnostics travel the same port as performance phases, so the test
+		// needs a pipeline installed over its bus for anything to arrive.
+		installRuntimeSignalPipeline(bus, () => true)
 		resetPerfRecorder()
 	})
 
 	afterEach(() => {
 		setRuntimeTelemetryBus(previousBus)
+		resetRuntimeSignalPipeline()
 		resetPerfRecorder()
 	})
 

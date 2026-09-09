@@ -1,9 +1,6 @@
 import { SeverityNumber } from "@opentelemetry/api-logs"
 import { InMemoryLogRecordExporter, SimpleLogRecordProcessor } from "@opentelemetry/sdk-logs"
-import {
-	ATTR_SERVICE_INSTANCE_ID,
-	ATTR_SERVICE_NAME,
-} from "@opentelemetry/semantic-conventions/incubating"
+import { ATTR_SERVICE_INSTANCE_ID, ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions/incubating"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { resetSharedLoggerProviderForTesting } from "@/services/telemetry/otel/shared-logger-provider"
 import { EXCEPTION_ATTRIBUTE_KEYS, RUNTIME_ATTRIBUTE_KEYS, RUNTIME_SCOPE_NAME } from "../../otel-semantics"

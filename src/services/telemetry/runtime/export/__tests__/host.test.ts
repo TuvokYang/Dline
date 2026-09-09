@@ -23,6 +23,22 @@ import { RuntimeTelemetryLifecycle } from "../../lifecycle"
 
 const SESSION_ID = "host-session"
 
+/**
+ * A pipeline with no export processor.
+ *
+ * These cases read the diagnostic source, never the collector, so attaching a
+ * live OTLP exporter would only make every disposal that has events to flush
+ * wait out an export timeout against an endpoint nothing is listening on.
+ */
+function makeLifecycle(dataDir: string, sessionId: string): RuntimeTelemetryLifecycle {
+	return new RuntimeTelemetryLifecycle({
+		dataDir,
+		sessionId,
+		samplerIntervalMs: 0,
+		processorFactory: () => undefined,
+	})
+}
+
 function stubDiagnosis(id: string): RootCauseDiagnosis {
 	return {
 		incidentId: id,
@@ -59,11 +75,7 @@ describe("runtime telemetry host", () => {
 	})
 
 	it("exposes the installed pipeline's session and buffered events", async () => {
-		const lifecycle = new RuntimeTelemetryLifecycle({
-			dataDir,
-			sessionId: SESSION_ID,
-			samplerIntervalMs: 0,
-		})
+		const lifecycle = makeLifecycle(dataDir, SESSION_ID)
 		setRuntimeTelemetryLifecycle(lifecycle)
 
 		try {
@@ -79,8 +91,8 @@ describe("runtime telemetry host", () => {
 	})
 
 	it("returns the previous pipeline so a caller can tell it is orphaning one", async () => {
-		const first = new RuntimeTelemetryLifecycle({ dataDir, sessionId: "first", samplerIntervalMs: 0 })
-		const second = new RuntimeTelemetryLifecycle({ dataDir, sessionId: "second", samplerIntervalMs: 0 })
+		const first = makeLifecycle(dataDir, "first")
+		const second = makeLifecycle(dataDir, "second")
 
 		try {
 			expect(setRuntimeTelemetryLifecycle(first)).toBeUndefined()
@@ -93,7 +105,7 @@ describe("runtime telemetry host", () => {
 	})
 
 	it("collects diagnoses independently of the pipeline so an export can carry them", async () => {
-		const lifecycle = new RuntimeTelemetryLifecycle({ dataDir, sessionId: SESSION_ID, samplerIntervalMs: 0 })
+		const lifecycle = makeLifecycle(dataDir, SESSION_ID)
 		setRuntimeTelemetryLifecycle(lifecycle)
 
 		try {

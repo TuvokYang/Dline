@@ -1,7 +1,7 @@
 import { EmptyRequest } from "@shared/proto/dline/common"
 import { TestConnectionResult } from "@shared/proto/dline/state"
 import { REMOTE_CONFIG_OTEL_PROVIDER_ID } from "@/core/storage/remote-config/utils"
-import { telemetryService } from "@/services/telemetry"
+import { getTelemetryService } from "@/services/telemetry"
 import { Logger } from "@/shared/services/Logger"
 import { Controller } from ".."
 
@@ -13,7 +13,11 @@ import { Controller } from ".."
  */
 export async function testOtelConnection(_controller: Controller, _: EmptyRequest): Promise<TestConnectionResult> {
 	try {
-		const providers = await telemetryService.getProviders()
+		// Awaits attachment: reading providers off the synchronous proxy could
+		// observe an empty list mid-construction and report the collector as
+		// unconfigured when it is merely not built yet.
+		const service = await getTelemetryService()
+		const providers = service.getProviders()
 		const otelProvider = providers.find((p) => p.name === REMOTE_CONFIG_OTEL_PROVIDER_ID)
 
 		if (!otelProvider) {

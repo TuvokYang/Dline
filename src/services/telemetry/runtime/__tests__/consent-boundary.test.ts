@@ -4,10 +4,7 @@ import path from "node:path"
 import { InMemoryLogRecordExporter, SimpleLogRecordProcessor } from "@opentelemetry/sdk-logs"
 import type { TelemetrySetting } from "@shared/TelemetrySetting"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import {
-	getSharedLoggerProvider,
-	resetSharedLoggerProviderForTesting,
-} from "@/services/telemetry/otel/shared-logger-provider"
+import { getSharedLoggerProvider, resetSharedLoggerProviderForTesting } from "@/services/telemetry/otel/shared-logger-provider"
 import { RuntimeTelemetryLifecycle } from "../lifecycle"
 
 /**

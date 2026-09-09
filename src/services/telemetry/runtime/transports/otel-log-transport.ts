@@ -161,9 +161,7 @@ export class OtelLogTransport {
 			detachScope(RUNTIME_SCOPE_NAME, ROUTE_OWNER_ID)
 			// The scope's own processors are this transport's to close; the
 			// router no longer references them after the detach above.
-			await Promise.all(
-				this.processors.map((processor) => processor.shutdown().catch(() => undefined)),
-			)
+			await Promise.all(this.processors.map((processor) => processor.shutdown().catch(() => undefined)))
 		}
 	}
 

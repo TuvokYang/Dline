@@ -203,9 +203,9 @@ import {
 	StandaloneTerminalManager,
 } from "@/integrations/terminal"
 import { ClineErrorType, ErrorService } from "@/services/error"
+import { telemetryService } from "@/services/telemetry"
 import { recordPerfPhase } from "@/services/telemetry/instrumentation/duration-recorder"
 import { PerfDomain } from "@/services/telemetry/instrumentation/perf-domains"
-import { telemetryService } from "@/services/telemetry"
 import { ClineClient } from "@/shared/cline"
 import {
 	ClineAssistantContent,
@@ -8801,7 +8801,7 @@ export class Task {
 					cacheReadTokens: finalUsage.cacheReadTokens,
 					thoughtsTokens: finalUsage.thoughtsTokens,
 				})
-				await telemetryService.captureTokenUsage(
+				telemetryService.captureTokenUsage(
 					this.ulid,
 					finalUsage.inputTokens,
 					finalUsage.outputTokens,

@@ -5,10 +5,9 @@ import { Empty, EmptyRequest } from "@shared/proto/dline/common"
 import { OpenRouterCompatibleModelInfo } from "@shared/proto/dline/models"
 import { toProtobufModelInfo } from "@shared/proto-conversions/models/typeConversion"
 import { readMcpMarketplaceCatalogFromCache } from "@/core/storage/disk"
-import { telemetryService } from "@/services/telemetry"
+import { getTelemetryService } from "@/services/telemetry"
 import { Logger } from "@/shared/services/Logger"
 import { GlobalStateAndSettings } from "@/shared/storage/state-keys"
-import { isReportingAllowed } from "@/shared/TelemetrySetting"
 import type { Controller } from "../index"
 import { sendMcpMarketplaceCatalogEvent } from "../mcp/subscribeToMcpMarketplaceCatalog"
 import { refreshBasetenModels } from "../models/refreshBasetenModels"
@@ -111,10 +110,11 @@ export async function initializeWebview(controller: Controller, _request: EmptyR
 		// Silently refresh MCP marketplace catalog
 		controller.refreshMcpMarketplace(true /* sendCatalogEvent */)
 
-		// Initialize telemetry service with the user's usage reporting consent.
-		// An undecided user has not consented.
-		const usageReportingSetting = controller.stateManager.getGlobalSettingsKey("usageReportingSetting")
-		telemetryService.updateTelemetryState(isReportingAllowed(usageReportingSetting))
+		// Ensure providers and host identity are attached now that the webview
+		// is live, then tell the user if the host is suppressing the reporting
+		// they already agreed to — a user who opted in during an earlier
+		// session never passes through the settings path again.
+		void getTelemetryService().then(() => controller.warnIfHostTelemetryDisabled())
 
 		return Empty.create({})
 	} catch (error) {

@@ -1,5 +1,10 @@
-import { getRuntimeTelemetryBus } from "../runtime/index"
-import { RuntimeEventPriority, type RuntimeTelemetryContext } from "../runtime/types"
+import {
+	configureSignalRecording,
+	emitSignal,
+	isSignalRecordingEnabled,
+	resetSignalRecording,
+	type SignalContext,
+} from "../service/pipeline-port"
 import { type PerfDomain, type PerfPhase, perfEventName } from "./perf-domains"
 
 /**
@@ -12,6 +17,9 @@ import { type PerfDomain, type PerfPhase, perfEventName } from "./perf-domains"
  * impose when it is switched off. Here, `startPerfPhase` returns a shared
  * no-op handle while telemetry is disabled, so the disabled path performs no
  * clock read, no object allocation, and no string interpolation.
+ *
+ * Measurements leave through the pipeline port rather than a runtime queue, so
+ * this module stays independent of whichever pipeline is installed.
  */
 
 /** Dimensions attached to a measurement. Values must stay non-identifying. */
@@ -40,7 +48,6 @@ type Clock = () => number
 type EnabledPredicate = () => boolean
 
 let clock: Clock = () => performance.now()
-let isEnabled: EnabledPredicate = () => true
 
 /**
  * Configure the recorder.
@@ -48,22 +55,24 @@ let isEnabled: EnabledPredicate = () => true
  * `enabled` is a predicate rather than a boolean because the user can change
  * the telemetry setting while the extension host is running; capturing the
  * value once would strand every call site on the setting that happened to be
- * active at module load.
+ * active at module load. It is stored on the shared port so performance,
+ * diagnostic, and domain recorders answer to one switch instead of drifting
+ * apart.
  */
 export function configurePerfRecorder(options: { enabled?: EnabledPredicate; now?: Clock }): void {
-	if (options.enabled) isEnabled = options.enabled
+	if (options.enabled) configureSignalRecording({ enabled: options.enabled })
 	if (options.now) clock = options.now
 }
 
 /** Restore the defaults. Intended for tests. */
 export function resetPerfRecorder(): void {
 	clock = () => performance.now()
-	isEnabled = () => true
+	resetSignalRecording()
 }
 
 /** Whether measurements are currently being recorded. */
 export function isPerfRecordingEnabled(): boolean {
-	return isEnabled()
+	return isSignalRecordingEnabled()
 }
 
 class ActivePerfPhase implements PerfPhaseHandle {
@@ -73,7 +82,7 @@ class ActivePerfPhase implements PerfPhaseHandle {
 	constructor(
 		private readonly name: string,
 		private readonly startedAt: number,
-		private readonly context: Partial<RuntimeTelemetryContext> | undefined,
+		private readonly context: SignalContext | undefined,
 		private readonly baseDimensions: PerfDimensions | undefined,
 	) {}
 
@@ -81,9 +90,9 @@ class ActivePerfPhase implements PerfPhaseHandle {
 		if (this.stopped) return
 		this.stopped = true
 		const durationMs = Math.round(clock() - this.startedAt)
-		getRuntimeTelemetryBus().record({
+		emitSignal({
 			name: this.name,
-			priority: RuntimeEventPriority.Performance,
+			level: "performance",
 			attributes: { ...this.baseDimensions, ...dimensions, durationMs },
 			context: this.context,
 		})
@@ -101,9 +110,9 @@ export function startPerfPhase<D extends PerfDomain>(
 	domain: D,
 	phase: PerfPhase<D>,
 	dimensions?: PerfDimensions,
-	context?: Partial<RuntimeTelemetryContext>,
+	context?: SignalContext,
 ): PerfPhaseHandle {
-	if (!isEnabled()) return INERT_HANDLE
+	if (!isSignalRecordingEnabled()) return INERT_HANDLE
 	return new ActivePerfPhase(perfEventName(domain, phase), clock(), context, dimensions)
 }
 
@@ -119,12 +128,12 @@ export function recordPerfPhase<D extends PerfDomain>(
 	phase: PerfPhase<D>,
 	durationMs: number,
 	dimensions?: PerfDimensions,
-	context?: Partial<RuntimeTelemetryContext>,
+	context?: SignalContext,
 ): void {
-	if (!isEnabled()) return
-	getRuntimeTelemetryBus().record({
+	if (!isSignalRecordingEnabled()) return
+	emitSignal({
 		name: perfEventName(domain, phase),
-		priority: RuntimeEventPriority.Performance,
+		level: "performance",
 		attributes: { ...dimensions, durationMs: Math.round(durationMs) },
 		context,
 	})
@@ -140,12 +149,12 @@ export function markPerfPhase<D extends PerfDomain>(
 	domain: D,
 	phase: PerfPhase<D>,
 	dimensions?: PerfDimensions,
-	context?: Partial<RuntimeTelemetryContext>,
+	context?: SignalContext,
 ): void {
-	if (!isEnabled()) return
-	getRuntimeTelemetryBus().record({
+	if (!isSignalRecordingEnabled()) return
+	emitSignal({
 		name: perfEventName(domain, phase),
-		priority: RuntimeEventPriority.Debug,
+		level: "debug",
 		attributes: dimensions,
 		context,
 	})

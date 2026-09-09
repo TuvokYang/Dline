@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { RuntimeContentPolicy } from "./content-policy"
-import { normalizeRuntimeError } from "./error-normalizer"
 import { RuntimeTelemetryContextHolder } from "./context"
+import { normalizeRuntimeError } from "./error-normalizer"
 import {
 	RuntimeDropAccounting,
 	RuntimeDropReason,

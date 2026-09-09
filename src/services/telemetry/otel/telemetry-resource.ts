@@ -1,9 +1,5 @@
 import { Resource } from "@opentelemetry/resources"
-import {
-	ATTR_SERVICE_INSTANCE_ID,
-	ATTR_SERVICE_NAME,
-	ATTR_SERVICE_VERSION,
-} from "@opentelemetry/semantic-conventions/incubating"
+import { ATTR_SERVICE_INSTANCE_ID, ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions/incubating"
 import { ExtensionRegistryInfo } from "@/registry"
 
 /**

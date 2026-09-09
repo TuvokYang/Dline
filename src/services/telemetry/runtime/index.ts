@@ -11,6 +11,7 @@ export {
 	type RootCauseDiagnosis,
 } from "./analysis/root-cause-types"
 export { AttributeRejection, RuntimeContentPolicy, runtimeContentPolicyLimits } from "./content-policy"
+export { RuntimeTelemetryContextHolder, type RuntimeTelemetryScope } from "./context"
 export { normalizeRuntimeError } from "./error-normalizer"
 export { type BuildIdentity, readBuildIdentity, UNKNOWN_BUILD_ID } from "./export/build-identity"
 export { BundleArchiveError, type BundleArchiveResult, writeBundleArchive } from "./export/bundle-archive-writer"
@@ -40,6 +41,7 @@ export {
 	exportDiagnosticBundle,
 	type RawArtifactConsent,
 } from "./export/diagnostic-exporter"
+export { RuntimeTelemetryLifecycle, type RuntimeTelemetryLifecycleOptions } from "./lifecycle"
 export {
 	RUNTIME_METRICS,
 	RuntimeSampler,
@@ -76,8 +78,6 @@ export {
 	type ScenarioReplayReport,
 } from "./reproduction/scenario-runner"
 export { RuntimeEventBus, type RuntimeEventBusOptions } from "./runtime-event-bus"
-export { RuntimeTelemetryContextHolder, type RuntimeTelemetryScope } from "./context"
-export { RuntimeTelemetryLifecycle, type RuntimeTelemetryLifecycleOptions } from "./lifecycle"
 export { RuntimeTelemetryService, type RuntimeTelemetryServiceOptions } from "./service"
 export {
 	OtelLogTransport,

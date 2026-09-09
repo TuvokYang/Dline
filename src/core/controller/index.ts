@@ -1008,14 +1008,56 @@ export class Controller {
 		}
 
 		this.stateManager.setGlobalState("usageReportingSetting", usageReportingSetting)
-		telemetryService.updateTelemetryState(isOptedIn)
 
 		// Capture opt-in event AFTER updating (so telemetry is enabled to receive it)
 		if (!wasOptedIn && isOptedIn) {
 			telemetryService.captureUserOptIn()
 		}
 
+		// The method re-reads the stored consent, so it decides for itself
+		// whether a prompt is warranted.
+		void this.warnIfHostTelemetryDisabled()
+
 		await this.postStateToWebview()
+	}
+
+	/**
+	 * Tells the user when their opt-in cannot take effect.
+	 *
+	 * The host's telemetry level overrides the extension's setting, so a user
+	 * who opts in on a host with telemetry disabled would otherwise see a
+	 * setting that silently does nothing. The prompt lives here rather than in
+	 * the telemetry service because host UI is a Controller responsibility.
+	 *
+	 * Called both when consent changes and when a webview initializes: a user
+	 * who opted in during an earlier session never passes through the setting
+	 * path again, so checking only there would leave them permanently
+	 * unaware that the host is suppressing what they agreed to.
+	 */
+	async warnIfHostTelemetryDisabled(): Promise<void> {
+		try {
+			if (!isReportingAllowed(this.stateManager.getGlobalSettingsKey("usageReportingSetting"))) {
+				return
+			}
+
+			if (!(await telemetryService.isHostTelemetryDisabled())) {
+				return
+			}
+
+			const response = await HostProvider.window.showMessage({
+				type: ShowMessageType.WARNING,
+				message:
+					"Anonymous Cline error and usage reporting is enabled, but IDE telemetry is disabled. To enable error and usage reporting for this extension, enable telemetry in IDE settings.",
+				options: { items: ["Open Settings"] },
+			})
+
+			if (response.selectedOption === "Open Settings") {
+				await HostProvider.window.openSettings({ query: "telemetry.telemetryLevel" })
+			}
+		} catch (error) {
+			// A notification that cannot be shown must not fail the setting change.
+			Logger.error("[Controller] Failed to check host telemetry level:", error)
+		}
 	}
 
 	/**

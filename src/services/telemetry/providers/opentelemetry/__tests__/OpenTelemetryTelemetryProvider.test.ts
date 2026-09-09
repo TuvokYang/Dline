@@ -1,6 +1,6 @@
 import { InMemoryLogRecordExporter, LoggerProvider, SimpleLogRecordProcessor } from "@opentelemetry/sdk-logs"
-import { afterEach, beforeEach, describe, it, vi } from "vitest"
 import { expect } from "chai"
+import { afterEach, beforeEach, describe, it, vi } from "vitest"
 // sinon import removed
 import type { ClineAccountUserInfo } from "@/services/auth/AuthService"
 import * as distinctIdModule from "@/services/logging/distinctId"

@@ -1,12 +1,13 @@
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import type { TelemetrySetting } from "@shared/TelemetrySetting"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { activateRuntimeTelemetry, deactivateRuntimeTelemetry } from "../../activation"
 import { DiagnosisConfidence, RootCauseCategory, type RootCauseDiagnosis } from "../../analysis/root-cause-types"
+import { getDiagnosticSource, getRuntimeTelemetryLifecycle, recordRuntimeDiagnosis } from "../../host"
 import { getRuntimeTelemetryBus, recordRuntimePhase, setRuntimeTelemetryBus } from "../../index"
 import type { RuntimeEventBus } from "../../runtime-event-bus"
-import { activateRuntimeTelemetry, deactivateRuntimeTelemetry } from "../../activation"
-import { getDiagnosticSource, getRuntimeTelemetryLifecycle, recordRuntimeDiagnosis } from "../../host"
 
 /**
  * RTD-004 — activation is what makes the pipeline observable from the host.
@@ -16,6 +17,23 @@ import { getDiagnosticSource, getRuntimeTelemetryLifecycle, recordRuntimeDiagnos
  * still pass every unit test of its own parts while exporting nothing the
  * extension actually measured.
  */
+
+/**
+ * Activation without a live collector.
+ *
+ * Attaching no export processor keeps the transport inert, so a shutdown that
+ * has events to flush completes immediately instead of waiting out an OTLP
+ * export against an endpoint nothing is listening on. These cases assert on
+ * the diagnostic source rather than on what was shipped, so removing the
+ * exporter removes only latency, not coverage.
+ */
+function activate(options: { dataDir: string; telemetrySetting: TelemetrySetting; sessionId?: string }) {
+	return activateRuntimeTelemetry({
+		...options,
+		processorFactory: () => undefined,
+		samplerIntervalMs: 0,
+	})
+}
 
 function stubDiagnosis(id: string): RootCauseDiagnosis {
 	return {
@@ -49,7 +67,7 @@ describe("runtime telemetry activation", () => {
 	})
 
 	it("drains the process-wide bus so existing producers reach the export", async () => {
-		await activateRuntimeTelemetry({ dataDir, telemetrySetting: "enabled", sessionId: "activation-session" })
+		await activate({ dataDir, telemetrySetting: "enabled", sessionId: "activation-session" })
 		recordRuntimePhase("activation.probe", 7, { component: "runtime", operation: "probe" })
 
 		const source = getDiagnosticSource()
@@ -66,21 +84,21 @@ describe("runtime telemetry activation", () => {
 	})
 
 	it("honours a declined consent by keeping the pipeline stopped", async () => {
-		const lifecycle = await activateRuntimeTelemetry({ dataDir, telemetrySetting: "disabled" })
+		const lifecycle = await activate({ dataDir, telemetrySetting: "disabled" })
 
 		expect(lifecycle.isEnabled).toBe(false)
 		expect(getRuntimeTelemetryLifecycle()).toBe(lifecycle)
 	})
 
 	it("treats an undecided user as not yet consented", async () => {
-		const lifecycle = await activateRuntimeTelemetry({ dataDir, telemetrySetting: "unset" })
+		const lifecycle = await activate({ dataDir, telemetrySetting: "unset" })
 
 		expect(lifecycle.isEnabled).toBe(false)
 	})
 
 	it("replaces an installed pipeline instead of leaving two draining one bus", async () => {
-		const first = await activateRuntimeTelemetry({ dataDir, telemetrySetting: "enabled", sessionId: "first" })
-		const second = await activateRuntimeTelemetry({ dataDir, telemetrySetting: "enabled", sessionId: "second" })
+		const first = await activate({ dataDir, telemetrySetting: "enabled", sessionId: "first" })
+		const second = await activate({ dataDir, telemetrySetting: "enabled", sessionId: "second" })
 
 		expect(first).not.toBe(second)
 		expect(getRuntimeTelemetryLifecycle()).toBe(second)
@@ -96,7 +114,7 @@ describe("runtime telemetry activation", () => {
 	})
 
 	it("uninstalls the pipeline and drops diagnoses on shutdown", async () => {
-		await activateRuntimeTelemetry({ dataDir, telemetrySetting: "enabled" })
+		await activate({ dataDir, telemetrySetting: "enabled" })
 		recordRuntimeDiagnosis(stubDiagnosis("incident-1"))
 		expect(getDiagnosticSource()?.diagnoses()).toHaveLength(1)
 
