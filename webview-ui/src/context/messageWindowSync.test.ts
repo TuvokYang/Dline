@@ -1,7 +1,7 @@
 import type { ClineMessage } from "@shared/ExtensionMessage"
 import { describe, expect, it } from "vitest"
 
-import { isMessageWindowOverfull, reconcileMessageWindow } from "./messageWindowSync"
+import { canAppendRealtimeMessage, isMessageWindowOverfull, reconcileMessageWindow } from "./messageWindowSync"
 
 /**
  * Build a minimal message identified by its timestamp.
@@ -15,6 +15,19 @@ function message(ts: number, partial?: boolean): ClineMessage {
 }
 
 describe("reconcileMessageWindow", () => {
+	it("adopts the fetched absolute start when the local window is empty", () => {
+		const fetchedMessages = [message(1001), message(1002)]
+
+		const result = reconcileMessageWindow(
+			{ messages: [], startIndex: 0 },
+			{ messages: fetchedMessages, startIndex: 1001, total: 1201 },
+		)
+
+		expect(result.messages).toBe(fetchedMessages)
+		expect(result.startIndex).toBe(1001)
+		expect(result.removed).toBe(false)
+	})
+
 	it("drops a message the backend removed inside the fetched span", () => {
 		const result = reconcileMessageWindow(
 			{ messages: [message(1), message(2), message(3)], startIndex: 0 },
@@ -44,6 +57,20 @@ describe("reconcileMessageWindow", () => {
 		)
 
 		expect(result.messages.map((entry) => entry.ts)).toEqual([1, 2, 5, 6])
+		expect(result.removed).toBe(false)
+	})
+
+	it("refuses to merge disjoint windows into a fake contiguous slice", () => {
+		const local = { messages: [message(1), message(2)], startIndex: 0 }
+
+		const result = reconcileMessageWindow(local, {
+			messages: [message(900), message(901)],
+			startIndex: 900,
+			total: 1_000,
+		})
+
+		expect(result.messages).toBe(local.messages)
+		expect(result.startIndex).toBe(0)
 		expect(result.removed).toBe(false)
 	})
 
@@ -98,6 +125,17 @@ describe("reconcileMessageWindow", () => {
 
 		expect(result.messages).toBe(local.messages)
 		expect(result.removed).toBe(false)
+	})
+})
+
+describe("canAppendRealtimeMessage", () => {
+	it("accepts the live tail when state is current or one message ahead", () => {
+		expect(canAppendRealtimeMessage(200, 800, 1_000)).toBe(true)
+		expect(canAppendRealtimeMessage(200, 800, 1_001)).toBe(true)
+	})
+
+	it("rejects a realtime tail append into an older browsing window", () => {
+		expect(canAppendRealtimeMessage(200, 0, 1_000)).toBe(false)
 	})
 })
 

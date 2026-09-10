@@ -182,6 +182,7 @@ export function useScrollBehavior(
 			debounce(() => {
 				requestProgrammaticScroll({
 					run: () => performScrollToBottom("smooth"),
+					priority: "user",
 				})
 			}, 30),
 		[performScrollToBottom, requestProgrammaticScroll],
@@ -191,6 +192,7 @@ export function useScrollBehavior(
 	const scrollToBottomAuto = useCallback(() => {
 		requestProgrammaticScroll({
 			run: () => performScrollToBottom("auto"),
+			priority: "passive",
 			isStillWanted: () => !disableAutoScrollRef.current && document.visibilityState !== "hidden",
 		})
 	}, [performScrollToBottom, requestProgrammaticScroll])
@@ -214,6 +216,7 @@ export function useScrollBehavior(
 
 			requestProgrammaticScroll({
 				run: () => performScrollToBottom("auto"),
+				priority: retryAfterLayout ? "layout" : "passive",
 				retryDelaysMs: retryAfterLayout ? LAYOUT_SETTLE_RETRY_MS : undefined,
 				// The user can grab the scrollbar between two attempts; re-checking
 				// here is what stops a queued retry from yanking the view back.
@@ -279,6 +282,7 @@ export function useScrollBehavior(
 							offset: -stickyHeaderOffset,
 						})
 					},
+					priority: "user",
 				})
 			}
 		},
@@ -370,15 +374,19 @@ export function useScrollBehavior(
 		}
 	}, [messages.length])
 
-	const handleWheel = useCallback((event: Event) => {
-		const wheelEvent = event as WheelEvent
-		if (wheelEvent.deltaY && wheelEvent.deltaY < 0) {
-			if (scrollContainerRef.current?.contains(wheelEvent.target as Node)) {
-				// user scrolled up
-				disableAutoScrollRef.current = true
+	const handleWheel = useCallback(
+		(event: Event) => {
+			const wheelEvent = event as WheelEvent
+			if (wheelEvent.deltaY && wheelEvent.deltaY < 0) {
+				if (scrollContainerRef.current?.contains(wheelEvent.target as Node)) {
+					// User intent outranks every pending layout/follow retry.
+					disableAutoScrollRef.current = true
+					cancelProgrammaticScroll()
+				}
 			}
-		}
-	}, [])
+		},
+		[cancelProgrammaticScroll],
+	)
 	useEvent("wheel", handleWheel, window, { passive: true }) // passive improves scrolling performance
 
 	// When webview becomes visible again (user switches back to this tab),

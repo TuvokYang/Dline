@@ -55,8 +55,22 @@ export function reconcileMessageWindow(local: LocalMessageWindow, fetched: Fetch
 		return { messages: local.messages, startIndex: local.startIndex, removed: false }
 	}
 
+	if (local.messages.length === 0) {
+		return { messages: fetched.messages, startIndex: fetched.startIndex, removed: false }
+	}
+
 	const coveredFrom = fetched.startIndex
 	const coveredTo = fetched.startIndex + fetched.messages.length - 1
+	const localEndExclusive = local.startIndex + local.messages.length
+	const fetchedEndExclusive = fetched.startIndex + fetched.messages.length
+	const windowsTouch = fetched.startIndex <= localEndExclusive && fetchedEndExclusive >= local.startIndex
+	if (local.messages.length > 0 && !windowsTouch) {
+		// A disjoint fetch cannot be represented by the contiguous-window contract.
+		// Keeping the current window is safer than inventing absolute indexes for
+		// the gap; callers that intend a jump must replace the window explicitly.
+		return { messages: local.messages, startIndex: local.startIndex, removed: false }
+	}
+
 	const authoritativeTs = new Set(fetched.messages.map((message) => message.ts))
 	const oldestFetchedTs = fetched.messages[0].ts
 	const newestFetchedTs = fetched.messages[fetched.messages.length - 1].ts
@@ -123,4 +137,16 @@ export function reconcileMessageWindow(local: LocalMessageWindow, fetched: Fetch
  */
 export function isMessageWindowOverfull(localLength: number, localStartIndex: number, total: number): boolean {
 	return localStartIndex + localLength > total
+}
+
+/**
+ * Report whether a realtime tail message may be appended to the current window.
+ *
+ * State and partial-message streams can arrive in either order, so a window that
+ * ends one item before the reported total is still the live tail. A window with
+ * a larger gap is an older browsing slice and must not receive a tail message.
+ */
+export function canAppendRealtimeMessage(localLength: number, localStartIndex: number, total: number): boolean {
+	const localEndExclusive = localStartIndex + localLength
+	return localEndExclusive >= Math.max(0, total - 1)
 }

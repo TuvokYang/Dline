@@ -6,6 +6,8 @@ import type { ChatState, MessageHandlers, ScrollBehavior } from "../../types/cha
 import { MessagesArea } from "./MessagesArea"
 
 interface VirtuosoTestProps {
+	atBottomStateChange?: (atBottom: boolean) => void
+	initialTopMostItemIndex?: number | { index: number; align: "end" | "start" | "center" }
 	rangeChanged?: (range: { startIndex: number; endIndex: number }) => void
 }
 
@@ -154,18 +156,21 @@ describe("MessagesArea sliding-window integration", () => {
 		vi.useRealTimers()
 	})
 
-	it("follows a loaded absolute bottom even when the window starts after zero", () => {
+	it("initializes a loaded tail at the absolute bottom without a visible retry chain", () => {
 		mocks.initialMessages = createMessages(800, 200)
 		mocks.initialFirstItemIndex = 800
 		mocks.totalMessageCount = 1000
 		const scrollBehavior = renderMessagesArea()
 
-		expect(scrollBehavior.requestProgrammaticScroll).toHaveBeenCalledTimes(1)
+		expect(mocks.virtuosoProps?.initialTopMostItemIndex).toEqual({ index: 199, align: "end" })
+		expect(scrollBehavior.requestProgrammaticScroll).not.toHaveBeenCalled()
 	})
 
 	it("does not lose a boundary fetch when two ranges arrive within the old throttle window", async () => {
 		mocks.fetchMessage.mockResolvedValue({ messages: [], startIndex: 0 })
-		renderMessagesArea()
+		const scrollBehavior = createScrollBehavior()
+		renderMessagesArea(scrollBehavior)
+		fireEvent.wheel(screen.getByTestId("virtuoso"), { deltaY: -100 })
 
 		act(() => {
 			mocks.virtuosoProps?.rangeChanged({ startIndex: 150, endIndex: 250 })
@@ -184,7 +189,9 @@ describe("MessagesArea sliding-window integration", () => {
 		mocks.fetchMessage
 			.mockResolvedValueOnce({ messages: createMessages(250, 50), startIndex: 250 })
 			.mockResolvedValueOnce({ messages: [], startIndex: 50 })
-		renderMessagesArea()
+		const scrollBehavior = createScrollBehavior()
+		renderMessagesArea(scrollBehavior)
+		fireEvent.wheel(screen.getByTestId("virtuoso"), { deltaY: -100 })
 
 		act(() => {
 			mocks.virtuosoProps?.rangeChanged({ startIndex: 0, endIndex: 20 })
@@ -197,7 +204,34 @@ describe("MessagesArea sliding-window integration", () => {
 		expect(mocks.fetchMessage.mock.calls[1][0]).toMatchObject({ referenceIndex: 50, count: 200 })
 	})
 
-	it("trims from the last visible absolute range after scrolling becomes idle", () => {
+	it("does not surrender browsing ownership to a transient at-bottom report", () => {
+		mocks.initialMessages = createMessages(800, 200)
+		mocks.initialFirstItemIndex = 800
+		mocks.totalMessageCount = 1000
+		const scrollBehavior = renderMessagesArea()
+
+		fireEvent.wheel(screen.getByTestId("virtuoso"), { deltaY: -100 })
+		expect(scrollBehavior.disableAutoScrollRef.current).toBe(true)
+
+		act(() => {
+			mocks.virtuosoProps?.atBottomStateChange?.(true)
+		})
+
+		expect(scrollBehavior.disableAutoScrollRef.current).toBe(true)
+	})
+
+	it("does not preload leading history while auto-follow is active", () => {
+		mocks.fetchMessage.mockResolvedValue({ messages: [], startIndex: 0 })
+		renderMessagesArea()
+
+		act(() => {
+			mocks.virtuosoProps?.rangeChanged({ startIndex: 0, endIndex: 20 })
+		})
+
+		expect(mocks.fetchMessage).not.toHaveBeenCalled()
+	})
+
+	it("keeps the loaded window stable after scrolling becomes idle", () => {
 		vi.useFakeTimers()
 		mocks.initialMessages = createMessages(100, 700)
 		mocks.initialFirstItemIndex = 100
@@ -212,14 +246,9 @@ describe("MessagesArea sliding-window integration", () => {
 		fireEvent.scroll(screen.getByTestId("virtuoso"))
 
 		act(() => {
-			vi.advanceTimersByTime(299)
+			vi.advanceTimersByTime(1_000)
 		})
+		expect(mocks.currentFirstItemIndex).toBe(100)
 		expect(mocks.currentMessages).toHaveLength(700)
-
-		act(() => {
-			vi.advanceTimersByTime(1)
-		})
-		expect(mocks.currentFirstItemIndex).toBe(320)
-		expect(mocks.currentMessages).toHaveLength(480)
 	})
 })

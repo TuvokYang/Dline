@@ -42,7 +42,7 @@ import {
 	TaskServiceClient,
 	UiServiceClient,
 } from "../services/grpc-client"
-import { isMessageWindowOverfull, reconcileMessageWindow } from "./messageWindowSync"
+import { canAppendRealtimeMessage, isMessageWindowOverfull, reconcileMessageWindow } from "./messageWindowSync"
 
 const getTaskViewKey = (taskId?: string, taskTitleMessageTs?: number) =>
 	taskId ?? (taskTitleMessageTs != null ? `task-title:${taskTitleMessageTs}` : undefined)
@@ -427,10 +427,19 @@ export const ExtensionStateContextProvider: React.FC<{
 	// Fetch callbacks resolve after their scheduling render, so reconciliation
 	// has to read the window start from a ref rather than the captured value.
 	const firstItemIndexRef = useRef(0)
+	const totalMessageCountRef = useRef(0)
 	const bootstrapResolvedRef = useRef(false)
 	clineMessagesRef.current = clineMessages
 	firstItemIndexRef.current = firstItemIndex
+	totalMessageCountRef.current = state.totalMessageCount ?? 0
 	if (clineMessages.length > 0) bootstrapResolvedRef.current = true
+
+	const commitMessageWindow = useCallback((messages: ClineMessage[], startIndex: number) => {
+		clineMessagesRef.current = messages
+		firstItemIndexRef.current = startIndex
+		setClineMessages(messages)
+		setFirstItemIndex(startIndex)
+	}, [])
 
 	const prevTotalRef = useRef(0)
 	const refetchLockRef = useRef(false)
@@ -448,6 +457,7 @@ export const ExtensionStateContextProvider: React.FC<{
 	const projectedInteractionAnchorPresent = projectedInteraction
 		? hasExactInteractionAnchor(clineMessages, projectedInteraction)
 		: true
+	const localTailMessage = clineMessages.at(-1)
 
 	// Reset when task is cleared, bootstrap on task switch, and reconcile gaps
 	// when a durable tail message arrives without its realtime event.
@@ -501,20 +511,14 @@ export const ExtensionStateContextProvider: React.FC<{
 					}
 					if (converted.length > 0) bootstrapResolvedRef.current = true
 					const startIndex = Math.max(0, resp.startIndex)
-					let reconciledStartIndex = startIndex
-					setClineMessages((prev) => {
-						const reconciled = applyFetchedMessageWindow(
-							prev,
-							firstItemIndexRef.current,
-							converted,
-							startIndex,
-							responseTotal,
-						)
-						reconciledStartIndex = reconciled.startIndex
-						return reconciled.messages
-					})
-					firstItemIndexRef.current = reconciledStartIndex
-					setFirstItemIndex(reconciledStartIndex)
+					const reconciled = applyFetchedMessageWindow(
+						clineMessagesRef.current,
+						firstItemIndexRef.current,
+						converted,
+						startIndex,
+						responseTotal,
+					)
+					commitMessageWindow(reconciled.messages, reconciled.startIndex)
 					if (expectedInteraction && !hasExactInteractionAnchor(converted, expectedInteraction)) {
 						if (startIndex > 0) {
 							await fetchAttempt(Math.max(0, startIndex - 200), false)
@@ -578,9 +582,9 @@ export const ExtensionStateContextProvider: React.FC<{
 			return
 		}
 		const knownEndIndex = firstItemIndex + clineMessages.length
-		const localTail = clineMessages.at(-1)
+		const windowCoveredPreviousTail = knownEndIndex >= prevTotalRef.current
 		const durableTailMayHaveReplacedPartial =
-			total > prevTotalRef.current && knownEndIndex === total && localTail?.partial === true
+			total > prevTotalRef.current && knownEndIndex === total && localTailMessage?.partial === true
 		if (durableTailMayHaveReplacedPartial && !refetchLockRef.current) {
 			const scheduledTaskViewKey = currentTaskViewKeyRef.current
 			refetchLockRef.current = true
@@ -591,38 +595,39 @@ export const ExtensionStateContextProvider: React.FC<{
 					}
 					const converted = resp.messages.map((message) => convertProtoToClineMessage(message))
 					const startIndex = Math.max(0, resp.startIndex)
-					firstItemIndexRef.current = startIndex
-					setClineMessages(converted)
-					setFirstItemIndex(startIndex)
+					const reconciled = applyFetchedMessageWindow(
+						clineMessagesRef.current,
+						firstItemIndexRef.current,
+						converted,
+						startIndex,
+						Number(resp.totalCount ?? 0),
+					)
+					commitMessageWindow(reconciled.messages, reconciled.startIndex)
 				})
 				.catch(() => {})
 				.finally(() => {
 					refetchLockRef.current = false
 				})
-		} else if (knownEndIndex < total && !refetchLockRef.current) {
+		} else if (knownEndIndex < total && windowCoveredPreviousTail && !refetchLockRef.current) {
 			const scheduledTaskViewKey = currentTaskViewKeyRef.current
 			refetchLockRef.current = true
-			TaskServiceClient.fetchMessage(FetchMessageRequest.create({ referenceIndex: -1, count: 200 }))
+			TaskServiceClient.fetchMessage(
+				FetchMessageRequest.create({ referenceIndex: knownEndIndex, count: Math.min(200, total - knownEndIndex) }),
+			)
 				.then((resp) => {
 					if (currentTaskViewKeyRef.current !== scheduledTaskViewKey) {
 						return
 					}
 					const converted = resp.messages.map((message) => convertProtoToClineMessage(message))
 					const startIndex = Math.max(0, resp.startIndex)
-					let reconciledStartIndex = startIndex
-					setClineMessages((prev) => {
-						const reconciled = applyFetchedMessageWindow(
-							prev,
-							firstItemIndexRef.current,
-							converted,
-							startIndex,
-							Number(resp.totalCount ?? 0),
-						)
-						reconciledStartIndex = reconciled.startIndex
-						return reconciled.messages
-					})
-					firstItemIndexRef.current = reconciledStartIndex
-					setFirstItemIndex(reconciledStartIndex)
+					const reconciled = applyFetchedMessageWindow(
+						clineMessagesRef.current,
+						firstItemIndexRef.current,
+						converted,
+						startIndex,
+						Number(resp.totalCount ?? 0),
+					)
+					commitMessageWindow(reconciled.messages, reconciled.startIndex)
 				})
 				.catch(() => {})
 				.finally(() => {
@@ -655,9 +660,7 @@ export const ExtensionStateContextProvider: React.FC<{
 						}
 						const converted = resp.messages.map((m) => convertProtoToClineMessage(m))
 						const startIndex = Math.max(0, resp.startIndex)
-						firstItemIndexRef.current = startIndex
-						setClineMessages(converted)
-						setFirstItemIndex(startIndex)
+						commitMessageWindow(converted, startIndex)
 					})
 					.catch(() => {})
 					.finally(() => {
@@ -682,7 +685,9 @@ export const ExtensionStateContextProvider: React.FC<{
 		projectedInteraction,
 		projectedInteractionAnchorPresent,
 		clineMessages.length,
+		localTailMessage,
 		firstItemIndex,
+		commitMessageWindow,
 	])
 
 	useEffect(() => {
@@ -754,6 +759,7 @@ export const ExtensionStateContextProvider: React.FC<{
 
 	// Subscribe to state updates and UI events using the gRPC streaming API
 	useEffect(() => {
+		void hydrationAttempt
 		// Set up state subscription
 		stateSubscriptionRef.current = StateServiceClient.subscribeToState(EmptyRequest.create({}), {
 			onResponse: (response) => {
@@ -942,6 +948,12 @@ export const ExtensionStateContextProvider: React.FC<{
 					setClineMessages((prev) => {
 						const existingIndex = prev.findIndex((msg) => msg.ts === partialMessage.ts)
 						if (existingIndex >= 0 && prev[existingIndex].partial !== true && partialMessage.partial === true) {
+							return prev
+						}
+						if (
+							existingIndex < 0 &&
+							!canAppendRealtimeMessage(prev.length, firstItemIndexRef.current, totalMessageCountRef.current)
+						) {
 							return prev
 						}
 						return mergeClineMessagesByTs(prev, [partialMessage])

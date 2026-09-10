@@ -17,7 +17,6 @@ import {
 	isWholeConversationLoaded,
 	type MessageWindow,
 	planWindowExtensions,
-	planWindowTrim,
 	type VisibleMessageRange,
 } from "../../utils/messageWindowPlan"
 import { buildMessageRowKey, getBottomFollowIntent, mergeMessageWindow } from "../../utils/messageWindowUtils"
@@ -32,6 +31,7 @@ const LOAD_COUNT = DEFAULT_MESSAGE_WINDOW_LIMITS.loadCount
  * plenty of messages can be only a few rows away from its edge.
  */
 const ROW_LOAD_THRESHOLD = 8
+const USER_SCROLL_INTENT_TTL_MS = 750
 
 /** Sentinel value to prevent Virtuoso zero-sized-element warnings when data is empty */
 // @ts-expect-error — Virtuoso sentinel; only ts/type needed, full ClineMessage shape not required
@@ -61,6 +61,8 @@ type PendingAnchor = {
 }
 
 type ScrollEdge = "top" | "bottom"
+type UserScrollIntent = { direction: "up" | "down"; recordedAt: number }
+type BrowsingViewportAnchor = { ts: number; top: number }
 
 export const MessagesArea: React.FC<MessagesAreaProps> = ({
 	task,
@@ -81,8 +83,11 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 	const latestVisibleMessageRangeRef = useRef<VisibleMessageRange | null>(null)
 	const latestExtensionRangeRef = useRef<VisibleMessageRange | null>(null)
 	const latestVisibleAnchorTsRef = useRef<number | null>(null)
-	const isUserScrollingRef = useRef(false)
-	const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+	const userScrollIntentRef = useRef<UserScrollIntent | null>(null)
+	const browsingViewportAnchorRef = useRef<BrowsingViewportAnchor | null>(null)
+	const browsingAnchorRestorePendingRef = useRef(false)
+	const browsingAnchorRestoreFrameRef = useRef<number | null>(null)
+	const renderedMessageWindowRef = useRef(clineMessages)
 	const windowVersionRef = useRef(0)
 	const edgeJumpInFlightRef = useRef<ScrollEdge | null>(null)
 
@@ -98,13 +103,16 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 	// Cache the last visible messages snapshot so Virtuoso data stays stable while hidden
 	const cachedVisibleMessagesRef = useRef<(ClineMessage | ClineMessage[])[]>([])
 
-	useEffect(() => {
-		firstItemIndexRef.current = firstItemIndex
-	}, [firstItemIndex])
-
-	useEffect(() => {
-		clineMessagesLengthRef.current = clineMessages.length
-	}, [clineMessages.length])
+	// Layout effects run before passive effects. Keep these mirrors current during
+	// render so initial async hydration can calculate the real loaded bottom.
+	firstItemIndexRef.current = firstItemIndex
+	clineMessagesLengthRef.current = clineMessages.length
+	if (renderedMessageWindowRef.current !== clineMessages) {
+		if (scrollBehavior.disableAutoScrollRef.current && browsingViewportAnchorRef.current) {
+			browsingAnchorRestorePendingRef.current = true
+		}
+		renderedMessageWindowRef.current = clineMessages
+	}
 
 	const lastRawMessage = useMemo(() => clineMessages.at(-1), [clineMessages])
 	const lastMessageSignature = useMemo(() => {
@@ -114,9 +122,27 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 
 	// Reset auto-scroll flag when entering a new task so the view scrolls
 	// to the bottom instead of staying wherever the previous task left it.
-	useEffect(() => {
+	useLayoutEffect(() => {
+		void task.ts
 		scrollBehavior.disableAutoScrollRef.current = false
-	}, [scrollBehavior.disableAutoScrollRef])
+		windowVersionRef.current += 1
+		inflightRef.current.clear()
+		pendingAnchorRef.current = null
+		pendingEdgeScrollRef.current = null
+		latestVisibleMessageRangeRef.current = null
+		latestExtensionRangeRef.current = null
+		latestVisibleAnchorTsRef.current = null
+		userScrollIntentRef.current = null
+		browsingViewportAnchorRef.current = null
+		browsingAnchorRestorePendingRef.current = false
+		if (browsingAnchorRestoreFrameRef.current !== null) {
+			cancelAnimationFrame(browsingAnchorRestoreFrameRef.current)
+			browsingAnchorRestoreFrameRef.current = null
+		}
+		lastMessageSignatureRef.current = ""
+		cachedVisibleMessagesRef.current = []
+		scrollBehavior.cancelProgrammaticScroll()
+	}, [task.ts, scrollBehavior.cancelProgrammaticScroll, scrollBehavior.disableAutoScrollRef])
 
 	const {
 		virtuosoRef,
@@ -129,7 +155,6 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		requestProgrammaticScroll,
 		cancelProgrammaticScroll,
 		scrolledPastUserMessage,
-		isAtBottom,
 		isAtBottomRef,
 		showScrollToBottom,
 	} = scrollBehavior
@@ -186,6 +211,88 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 			}
 		})
 	}, [groupedMessages, messageIndexByTs, firstItemIndex])
+
+	const captureBrowsingViewportAnchor = useCallback(
+		(startIndex: number, endIndex: number) => {
+			if (!disableAutoScrollRef.current || browsingAnchorRestorePendingRef.current) return
+			const anchorRow = renderRows[Math.floor((startIndex + endIndex) / 2)]
+			const anchorTs = anchorRow?.endMessageTs
+			if (anchorTs == null) return
+
+			const container = scrollContainerRef.current
+			const scroller = container?.querySelector<HTMLElement>('[data-virtuoso-scroller="true"]')
+			const elements = container?.querySelectorAll<HTMLElement>(`[data-message-ts="${anchorTs}"]`)
+			if (!scroller || !elements) return
+
+			const scrollerRect = scroller.getBoundingClientRect()
+			const element = [...elements].find((candidate) => {
+				const rect = candidate.getBoundingClientRect()
+				return rect.bottom > scrollerRect.top && rect.top < scrollerRect.bottom
+			})
+			if (!element) return
+
+			browsingViewportAnchorRef.current = {
+				ts: anchorTs,
+				top: element.getBoundingClientRect().top - scrollerRect.top,
+			}
+		},
+		[disableAutoScrollRef, renderRows, scrollContainerRef],
+	)
+
+	const restoreBrowsingViewportAnchor = useCallback(() => {
+		if (!browsingAnchorRestorePendingRef.current) return
+		if (!disableAutoScrollRef.current) {
+			browsingAnchorRestorePendingRef.current = false
+			browsingViewportAnchorRef.current = null
+			return
+		}
+
+		const anchor = browsingViewportAnchorRef.current
+		const container = scrollContainerRef.current
+		const scroller = container?.querySelector<HTMLElement>('[data-virtuoso-scroller="true"]')
+		const elements = anchor ? container?.querySelectorAll<HTMLElement>(`[data-message-ts="${anchor.ts}"]`) : undefined
+		if (!anchor || !scroller || !elements) return
+
+		const scrollerRect = scroller.getBoundingClientRect()
+		const element = [...elements].find((candidate) => {
+			const rect = candidate.getBoundingClientRect()
+			return rect.bottom > scrollerRect.top - 150 && rect.top < scrollerRect.bottom + 150
+		})
+		if (!element) return
+
+		const currentTop = element.getBoundingClientRect().top - scrollerRect.top
+		const delta = currentTop - anchor.top
+		if (Math.abs(delta) > 0.5) {
+			virtuosoRef.current?.scrollBy({ top: delta, behavior: "auto" })
+		}
+		browsingAnchorRestorePendingRef.current = false
+	}, [disableAutoScrollRef, scrollContainerRef, virtuosoRef])
+
+	const scheduleBrowsingViewportAnchorRestore = useCallback(() => {
+		if (!browsingAnchorRestorePendingRef.current) return
+		if (browsingAnchorRestoreFrameRef.current !== null) {
+			cancelAnimationFrame(browsingAnchorRestoreFrameRef.current)
+		}
+		browsingAnchorRestoreFrameRef.current = requestAnimationFrame(() => {
+			browsingAnchorRestoreFrameRef.current = null
+			restoreBrowsingViewportAnchor()
+		})
+	}, [restoreBrowsingViewportAnchor])
+
+	useEffect(
+		() => () => {
+			if (browsingAnchorRestoreFrameRef.current !== null) {
+				cancelAnimationFrame(browsingAnchorRestoreFrameRef.current)
+			}
+		},
+		[],
+	)
+
+	useLayoutEffect(() => {
+		if (browsingAnchorRestorePendingRef.current) {
+			scheduleBrowsingViewportAnchorRestore()
+		}
+	})
 
 	const visibleGroupedMessages = useMemo<(ClineMessage | ClineMessage[])[]>(() => {
 		// When the webview is hidden (user switched to another tab), return the
@@ -291,6 +398,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 					}
 					scrollToRowOffset(index, align, behavior)
 				},
+				priority: retryAfterLayout ? "layout" : "passive",
 				// Streaming issues this on nearly every chunk. Retrying each of them
 				// stacked hundreds of deferred scrolls and produced the bounce, so
 				// only an explicit jump asks for the settle chain.
@@ -345,7 +453,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 			lastMessageContentChanged,
 		})
 
-		if (intent === "follow") {
+		if (intent === "follow" && previousSignature !== "") {
 			scrollToLoadedEdge("bottom", "auto")
 		}
 	}, [currentMessageWindow, disableAutoScrollRef, lastRawMessage?.ts, lastMessageSignature, scrollToLoadedEdge])
@@ -624,12 +732,17 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 			}
 			latestVisibleMessageRangeRef.current = visible
 			latestVisibleAnchorTsRef.current = firstVisibleRow.startMessageTs ?? null
+			captureBrowsingViewportAnchor(localStart, localEnd)
 			const allLoaded = isWholeConversationLoaded(window)
+			setShowScrollToBottom(disableAutoScrollRef.current || !allLoaded)
 
-			// The button state describes what the user can currently reach, so it
-			// has to follow every range report. Throttling it together with the
-			// fetch scheduling left the control stale mid-scroll.
-			setShowScrollToBottom(disableAutoScrollRef.current || !allLoaded || visible.lastMessageIndex < window.total - 1)
+			// Range changes also fire while Virtuoso is establishing the initial
+			// auto-follow position. Only explicit browsing intent may grow history;
+			// otherwise those layout events eagerly fetch every leading page.
+			if (!disableAutoScrollRef.current) {
+				latestExtensionRangeRef.current = null
+				return
+			}
 
 			if (allLoaded) {
 				latestExtensionRangeRef.current = null
@@ -649,7 +762,14 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 			latestExtensionRangeRef.current = rowUrgency
 			requestWindowExtensions(rowUrgency, latestVisibleAnchorTsRef.current)
 		},
-		[currentMessageWindow, renderRows, disableAutoScrollRef, setShowScrollToBottom, requestWindowExtensions],
+		[
+			captureBrowsingViewportAnchor,
+			currentMessageWindow,
+			renderRows,
+			disableAutoScrollRef,
+			setShowScrollToBottom,
+			requestWindowExtensions,
+		],
 	)
 
 	// A merge can leave the viewport inside the load threshold. Re-plan from the
@@ -663,39 +783,12 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		requestWindowExtensions(visible, latestVisibleAnchorTsRef.current)
 	}, [clineMessages.length, firstItemIndex, requestWindowExtensions])
 
-	const applyIdleTrim = useCallback(() => {
-		if (isUserScrollingRef.current) return
-		if (clineMessagesLengthRef.current === 0) return
-
-		const visible = latestVisibleMessageRangeRef.current
-		if (!visible) return
-
-		const window = currentMessageWindow()
-		if (isWholeConversationLoaded(window)) return
-
-		const trim = planWindowTrim(window, visible)
-		if (!trim) return
-
-		if (trim.side === "leading") {
-			const anchorTs = latestVisibleAnchorTsRef.current
-			if (anchorTs != null) {
-				pendingAnchorRef.current = { ts: anchorTs, align: "start" }
-			}
-
-			firstItemIndexRef.current = trim.nextStart
-			clineMessagesLengthRef.current = trim.nextLength
-			setFirstItemIndex(trim.nextStart)
-			setClineMessages((prev) => prev.slice(Math.min(trim.count, prev.length)))
-			return
-		}
-
-		clineMessagesLengthRef.current = trim.nextLength
-		setClineMessages((prev) => prev.slice(0, Math.min(trim.nextLength, prev.length)))
-	}, [currentMessageWindow, setClineMessages, setFirstItemIndex])
+	const virtuosoInstanceKey = `${task.ts}:${clineMessages.length === 0 ? "empty" : "loaded"}`
 
 	// Floating button: scroll listener for visibility + wheel listener for direction.
 	// Attached to Virtuoso inner scroller, not the outer scrollContainerRef.
 	useEffect(() => {
+		void virtuosoInstanceKey
 		const container = scrollContainerRef.current
 		if (!container) return
 
@@ -711,49 +804,39 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		}
 
 		const onScroll = () => {
-			isUserScrollingRef.current = true
-			if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current)
-			scrollTimerRef.current = setTimeout(() => {
-				isUserScrollingRef.current = false
-				applyIdleTrim()
-			}, 300)
-
 			showButton()
 		}
 
 		// Wheel event carries deltaY — use it to determine scroll direction
 		const onWheel = (e: WheelEvent) => {
 			if (Math.abs(e.deltaY) < 5) return // ignore micro-scrolls / trackpad noise
-			setFloatingBtnDir(e.deltaY < 0 ? "top" : "bottom")
+			const direction = e.deltaY < 0 ? "up" : "down"
+			userScrollIntentRef.current = { direction, recordedAt: Date.now() }
+			if (direction === "up") {
+				// Capture browsing intent before Virtuoso publishes the resulting
+				// range; otherwise one large wheel can reach the loaded top while the
+				// range callback still believes auto-follow owns the viewport.
+				disableAutoScrollRef.current = true
+				cancelProgrammaticScroll()
+			}
+			setFloatingBtnDir(direction === "up" ? "top" : "bottom")
 			showButton()
 		}
 
-		const raf = requestAnimationFrame(() => {
-			const el = container.querySelector('[data-virtuoso-scroller="true"]') as HTMLElement | null
-			if (el) {
-				el.addEventListener("scroll", onScroll, { passive: true })
-				el.addEventListener("wheel", onWheel, { passive: true })
-			}
-		})
+		const el = container.querySelector('[data-virtuoso-scroller="true"]') as HTMLElement | null
+		if (el) {
+			el.addEventListener("scroll", onScroll, { passive: true })
+			el.addEventListener("wheel", onWheel, { passive: true })
+		}
 
 		return () => {
-			cancelAnimationFrame(raf)
-			const el = container.querySelector('[data-virtuoso-scroller="true"]') as HTMLElement | null
 			if (el) {
 				el.removeEventListener("scroll", onScroll)
 				el.removeEventListener("wheel", onWheel)
 			}
-			if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current)
 			if (hideBtnTimerRef.current) clearTimeout(hideBtnTimerRef.current)
 		}
-	}, [applyIdleTrim, scrollContainerRef, isAtBottomRef])
-
-	// Re-evaluate trim after a merge or window replacement. If that render
-	// happened during scrolling, the idle timer above performs the deferred run.
-	useEffect(() => {
-		if (firstItemIndexRef.current !== firstItemIndex || clineMessagesLengthRef.current !== clineMessages.length) return
-		applyIdleTrim()
-	}, [applyIdleTrim, clineMessages.length, firstItemIndex])
+	}, [cancelProgrammaticScroll, disableAutoScrollRef, scrollContainerRef, isAtBottomRef, virtuosoInstanceKey])
 
 	return (
 		<div className="overflow-hidden flex flex-col h-full relative">
@@ -773,20 +856,21 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 				<Virtuoso
 					atBottomStateChange={(atBottom) => {
 						setIsAtBottom(atBottom)
-						// Keep ref in sync so scroll handlers read the latest value immediately
 						isAtBottomRef.current = atBottom
 
-						const total = totalMessageCount ?? clineMessagesLengthRef.current
-						const absoluteBottomLoaded = firstItemIndexRef.current + clineMessagesLengthRef.current >= total
-
-						// Reset auto-scroll only at the real conversation bottom, not merely
-						// the bottom of the currently loaded sliding window.
-						if (atBottom && absoluteBottomLoaded) {
+						const window = currentMessageWindow()
+						const absoluteBottomLoaded = window.start + window.length >= window.total
+						const userScrollIntent = userScrollIntentRef.current
+						const userReachedBottom =
+							atBottom &&
+							userScrollIntent?.direction === "down" &&
+							Date.now() - userScrollIntent.recordedAt <= USER_SCROLL_INTENT_TTL_MS
+						if (absoluteBottomLoaded && userReachedBottom) {
 							disableAutoScrollRef.current = false
+							userScrollIntentRef.current = null
 						}
 
-						const shouldShowScrollToBottom = !absoluteBottomLoaded || (disableAutoScrollRef.current && !atBottom)
-						setShowScrollToBottom(shouldShowScrollToBottom)
+						setShowScrollToBottom(!absoluteBottomLoaded || disableAutoScrollRef.current)
 
 						if (atBottom && !absoluteBottomLoaded) {
 							setFloatingBtnDir("bottom")
@@ -800,17 +884,19 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 					data={visibleGroupedMessages}
 					firstItemIndex={0}
 					increaseViewportBy={{ top: 100, bottom: 100 }}
-					initialTopMostItemIndex={Math.max(visibleGroupedMessages.length - 1, 0)}
+					initialTopMostItemIndex={{ index: Math.max(visibleGroupedMessages.length - 1, 0), align: "end" }}
 					itemContent={itemContent}
-					key={task.ts}
+					itemsRendered={scheduleBrowsingViewportAnchorRestore}
+					key={virtuosoInstanceKey}
 					rangeChanged={handleRangeChanged}
 					ref={virtuosoRef}
 					style={{ overflowAnchor: "none" }}
 					totalCount={visibleGroupedMessages.length}
+					totalListHeightChanged={scheduleBrowsingViewportAnchorRestore}
 				/>
 
 				{/* Floating scroll direction button — appears on scroll, auto-hides after 5s idle */}
-				{(!isAtBottom || showScrollToBottom) && (
+				{showScrollToBottom && (
 					<div
 						className={cn(
 							"absolute bottom-4 right-4 z-20 transition-all duration-300 ease-out",
@@ -826,9 +912,11 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 							)}
 							onClick={() => {
 								if (floatingBtnDir === "bottom") {
+									userScrollIntentRef.current = null
 									disableAutoScrollRef.current = false
 									void jumpToEdge("bottom")
 								} else {
+									userScrollIntentRef.current = { direction: "up", recordedAt: Date.now() }
 									disableAutoScrollRef.current = true
 									void jumpToEdge("top")
 								}

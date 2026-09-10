@@ -8,14 +8,26 @@
  * chains kept re-targeting Virtuoso while the user was still scrolling, which
  * is what produced the visible bounce and the "list refuses to move" feeling.
  *
- * Routing every request through one arbiter makes the newest intent win and
- * guarantees at most one pending chain exists at a time.
+ * Routing every request through one arbiter guarantees at most one pending
+ * chain exists at a time. Priorities prevent passive row-growth updates from
+ * cancelling an explicit navigation or a layout-settle chain.
  */
+
+/** Relative importance of a programmatic scroll request. */
+export type ScrollRequestPriority = "passive" | "layout" | "user"
+
+const SCROLL_PRIORITY_RANK: Record<ScrollRequestPriority, number> = {
+	passive: 0,
+	layout: 1,
+	user: 2,
+}
 
 /** Scroll request accepted by the arbiter. */
 export interface ScrollRequest {
 	/** Runs the actual scroll. Called once per attempt. */
 	run: () => void
+	/** Prevents a lower-priority request from replacing this chain. */
+	priority?: ScrollRequestPriority
 	/**
 	 * Extra attempts after the initial frame, in milliseconds.
 	 *
@@ -44,8 +56,11 @@ export interface ScrollArbiter {
 export function createScrollArbiter(): ScrollArbiter {
 	let frameId: number | null = null
 	let timers: ReturnType<typeof setTimeout>[] = []
+	let activePriority: ScrollRequestPriority | null = null
+	let requestVersion = 0
 
 	const cancel = (): void => {
+		requestVersion += 1
 		if (frameId !== null) {
 			cancelAnimationFrame(frameId)
 			frameId = null
@@ -54,17 +69,33 @@ export function createScrollArbiter(): ScrollArbiter {
 			clearTimeout(timer)
 		}
 		timers = []
+		activePriority = null
 	}
 
 	const request = (scrollRequest: ScrollRequest): void => {
+		const priority = scrollRequest.priority ?? "passive"
+		if (activePriority !== null && SCROLL_PRIORITY_RANK[priority] < SCROLL_PRIORITY_RANK[activePriority]) {
+			return
+		}
+
 		cancel()
+		activePriority = priority
+		const version = requestVersion
+		const retryDelaysMs = scrollRequest.retryDelaysMs ?? []
+		let remainingAttempts = retryDelaysMs.length + 1
 
 		const attempt = () => {
+			if (version !== requestVersion) return
 			if (scrollRequest.isStillWanted && !scrollRequest.isStillWanted()) {
 				cancel()
 				return
 			}
 			scrollRequest.run()
+			remainingAttempts -= 1
+			if (remainingAttempts === 0 && version === requestVersion) {
+				activePriority = null
+				timers = []
+			}
 		}
 
 		frameId = requestAnimationFrame(() => {
@@ -72,7 +103,6 @@ export function createScrollArbiter(): ScrollArbiter {
 			attempt()
 		})
 
-		const retryDelaysMs = scrollRequest.retryDelaysMs ?? []
 		if (retryDelaysMs.length > 0) {
 			timers = retryDelaysMs.map((delay) => setTimeout(attempt, delay))
 		}
