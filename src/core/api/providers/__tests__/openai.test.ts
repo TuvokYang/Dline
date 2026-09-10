@@ -886,11 +886,11 @@ describe("OpenAiHandler", () => {
 			expect(requestBody.prompt_cache_key).to.be.a("string").and.not.equal("")
 			expect(requestBody.prompt_cache_options).to.equal(undefined)
 			expect(requestBody.service_tier).to.equal("priority")
-			expect(requestBody.max_output_tokens).to.equal(16_384)
+			expect(requestBody).not.to.have.property("max_output_tokens")
 			expect(requestBody.reasoning).to.deep.equal({ effort: "high", summary: "auto" })
 		})
 
-		it("uses the request-scoped compaction cap for Responses", async () => {
+		it("omits max_output_tokens from request-scoped compaction Responses", async () => {
 			const handler = new OpenAiHandler({
 				profile: ApiProfile.create({
 					provider: "openai",
@@ -917,7 +917,7 @@ describe("OpenAiHandler", () => {
 
 			const requestBody = responsesCreate.mock.calls[0]?.[0] as Record<string, unknown>
 			const requestOptions = responsesCreate.mock.calls[0]?.[1] as { headers?: Record<string, string> }
-			expect(requestBody.max_output_tokens).to.equal(30_000)
+			expect(requestBody).not.to.have.property("max_output_tokens")
 			expect(requestOptions.headers).to.deep.equal({
 				"session-id": "dline_workspace_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 				"thread-id": "task-compaction",

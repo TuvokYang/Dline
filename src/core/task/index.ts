@@ -851,6 +851,24 @@ export class Task {
 						this.resetMistakeLimitState()
 					}
 					const runtimeState = this.taskRuntime.getState()
+					const retryBaseContent = effect.retryContent?.length ? cloneDeep(effect.retryContent) : undefined
+					const normalizedRetryContent =
+						retryBaseContent && runtimeState.turn
+							? [
+									...collectResumeTurnContent({
+										blocks: runtimeState.turn.blocks,
+										assistantApiIndex: runtimeState.turn.assistantApiIndex,
+										apiHistory: this.messageStateHandler.apiConversationHistory,
+										uiHistory: this.messageStateHandler.clineMessages,
+										pendingContent: retryBaseContent,
+										synthesizeMissing: "all",
+									}),
+									...retryBaseContent.filter((item) => item.type !== "tool_result"),
+								]
+							: retryBaseContent
+					const retryFeedbackContent = normalizedRetryContent
+						? await buildUserFeedbackContent(effect.draft?.text, effect.draft?.images, effect.draft?.files)
+						: []
 					const content =
 						effect.contentTransform === "mistake_limit"
 							? await buildMistakeLimitContinuationContent({
@@ -864,9 +882,12 @@ export class Task {
 										files: effect.draft?.files,
 									},
 								})
-							: await this.buildResumeApiContent(effect.draft)
+							: normalizedRetryContent
+								? [...normalizedRetryContent, ...retryFeedbackContent]
+								: await this.buildResumeApiContent(effect.draft)
 					await this.recursivelyMakeClineRequests(content, false, {
-						reuseRequestAccounting: effect.contentTransform === "mistake_limit",
+						reuseRequestAccounting:
+							effect.contentTransform === "mistake_limit" || Boolean(effect.retryContent?.length),
 					})
 				},
 				async (effect) => {
@@ -939,6 +960,12 @@ export class Task {
 			),
 		)
 		this.interactionCoordinator = new InteractionCoordinator(this.taskRuntime, {
+			isPersistedApiRequest: (apiIndex) => {
+				const message = this.messageStateHandler.apiConversationHistory[apiIndex]
+				return message?.role === "user" && Array.isArray(message.content)
+			},
+			resolveLegacyRetryContent: (apiIndex, interactionId) =>
+				this.resolveLegacyEphemeralRetryContent(apiIndex, interactionId),
 			onAwaitingUserDurable: ({ turnId, interactionId }) => {
 				this.completeProviderExecutionAtAwaitingUser(turnId, interactionId)
 				// The interaction is durable and its waiter is installed, so retained
@@ -1481,6 +1508,33 @@ export class Task {
 			ulid: this.ulid,
 			onStreamEstimatedTokens: (tokens) => this.apiRateMetricsService.recordEstimatedTokens(tokens),
 		}
+	}
+
+	private async resolveLegacyEphemeralRetryContent(
+		apiIndex: number,
+		interactionId: string,
+	): Promise<ClineContent[] | undefined> {
+		const messages = this.messageStateHandler.clineMessages
+		const errorAskIndex = findLastIndex(
+			messages,
+			(message) => message.type === "ask" && message.ask === "api_req_failed" && message.interactionId === interactionId,
+		)
+		if (errorAskIndex < 0) return undefined
+		for (let index = errorAskIndex - 1; index >= 0; index--) {
+			const message = messages[index]
+			if (message.conversationHistoryIndex !== apiIndex) continue
+			if (message.type === "say" && message.say === "user_feedback") {
+				const content = await buildUserFeedbackContent(message.text, message.images, message.files)
+				return content.length > 0 ? content : undefined
+			}
+			if (
+				message.type === "ask" &&
+				(message.ask === "resume_task" || message.ask === "resume_completed_task" || message.ask === "api_req_failed")
+			) {
+				break
+			}
+		}
+		return undefined
 	}
 
 	private async buildResumeApiContent(draft?: InteractionDraft): Promise<ClineContent[]> {
@@ -3619,6 +3673,7 @@ export class Task {
 		apiIndex: number,
 		errorMessage: string,
 		requestScope: RequestApiScope,
+		retryContent: ClineContent[],
 	): Promise<void> {
 		const fittingState = this.taskState.targetWindowFittingState
 		if (fittingState) {
@@ -3649,6 +3704,7 @@ export class Task {
 				apiIndex,
 				presentation: errorMessage,
 				persistedRequest: false,
+				retryContent: cloneDeep(retryContent),
 			})
 			return
 		}
@@ -3707,6 +3763,8 @@ export class Task {
 			interactionId: retryId,
 			apiIndex,
 			presentation: errorMessage,
+			persistedRequest: false,
+			retryContent: cloneDeep(retryContent),
 		})
 	}
 
@@ -4627,6 +4685,7 @@ export class Task {
 		apiIndex: number
 		presentation: string
 		persistedRequest?: boolean
+		retryContent?: ClineContent[]
 	}) {
 		return this.interactionCoordinator.recover(input)
 	}
@@ -9342,7 +9401,7 @@ export class Task {
 						return true
 					}
 					if (this.taskState.isInternalContextCompactionRequest) {
-						await this.recoverAutomaticCompactionFailure(apiIndex, errorMessage, requestScope)
+						await this.recoverAutomaticCompactionFailure(apiIndex, errorMessage, requestScope, userContent)
 						return true
 					}
 					const isStreamingSpendLimitError = clineError.isErrorType(ClineErrorType.SpendLimit)
@@ -9625,7 +9684,7 @@ export class Task {
 				if (this.taskState.isInternalContextCompactionRequest) {
 					await this.discardFailedCompactionAttempt(apiIndex)
 					await finalizeApiReqMsg("streaming_failed", errorMessage)
-					await this.recoverAutomaticCompactionFailure(apiIndex, errorMessage, requestScope)
+					await this.recoverAutomaticCompactionFailure(apiIndex, errorMessage, requestScope, userContent)
 					return true
 				}
 

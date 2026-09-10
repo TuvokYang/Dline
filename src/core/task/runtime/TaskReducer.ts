@@ -1,3 +1,4 @@
+import type { ClineContent } from "@shared/messages"
 import { BlockPhase } from "../BlockPhaseMachine"
 import { hostedWebApprovalId } from "../interaction/HostedWebApproval"
 import { reduceInteraction } from "../interaction/InteractionReducer"
@@ -848,7 +849,13 @@ function reduceInteractionResponse(
 function openingInteraction(
 	state: TaskRuntimeState,
 	revision: number,
-	input: { turnId: string; interactionId: string; kind: "resume" | "error_retry" | "mistake_limit" | "completion" },
+	input: {
+		turnId: string
+		interactionId: string
+		kind: "resume" | "error_retry" | "mistake_limit" | "completion"
+		persistedRequest?: boolean
+		retryContent?: ClineContent[]
+	},
 ): NonNullable<TaskRuntimeState["interaction"]> {
 	return {
 		taskId: state.taskId,
@@ -857,6 +864,10 @@ function openingInteraction(
 		kind: input.kind,
 		status: "opening",
 		createdRevision: revision,
+		...(input.kind === "error_retry" && input.persistedRequest !== undefined
+			? { persistedRequest: input.persistedRequest }
+			: {}),
+		...(input.kind === "error_retry" && input.retryContent?.length ? { retryContent: input.retryContent } : {}),
 	}
 }
 
@@ -997,6 +1008,9 @@ function reduceRecovery(
 					apiIndex: event.apiIndex,
 					draft: event.draft,
 					persistedRequest: event.persistedRequest !== false,
+					...((event.retryContent ?? state.interaction.retryContent)?.length
+						? { retryContent: event.retryContent ?? state.interaction.retryContent }
+						: {}),
 				},
 				{ id: effectId(revision, 3), type: "PERSIST_SNAPSHOT" },
 			],
@@ -1313,9 +1327,11 @@ function reduceFailure(state: TaskRuntimeState, event: Extract<TaskEvent, { type
 			? failedContinuation
 			: undefined
 	const awaitingAnchoredInteraction =
-		(event.effectType === "POST_TASK_VIEW" || event.effectType === "PERSIST_SNAPSHOT") &&
 		currentInteraction?.status === "awaiting" &&
-		currentInteraction.anchor?.messageType === "ask"
+		currentInteraction.anchor?.messageType === "ask" &&
+		(event.effectType === "POST_TASK_VIEW" ||
+			event.effectType === "PERSIST_SNAPSHOT" ||
+			currentInteraction.createdRevision > event.originRevision)
 			? currentInteraction
 			: undefined
 	const preservedInteraction = retryableInteraction ?? awaitingAnchoredInteraction

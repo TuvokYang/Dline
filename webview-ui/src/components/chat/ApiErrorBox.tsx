@@ -27,6 +27,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value)
 }
 
+function parseSerializedError(value?: string): Record<string, unknown> | undefined {
+	if (!value) return undefined
+	try {
+		const parsed: unknown = JSON.parse(value)
+		return isRecord(parsed) ? parsed : undefined
+	} catch {
+		return undefined
+	}
+}
+
+function readableErrorValue(value: unknown): string | undefined {
+	const direct = primitiveDisplayValue(value)
+	if (direct !== undefined) return direct
+	if (!isRecord(value)) return undefined
+
+	const message = readString(value.message)
+	if (message) return message
+	const detail = readableErrorValue(value.detail)
+	if (detail) return detail
+
+	try {
+		return JSON.stringify(value)
+	} catch {
+		return undefined
+	}
+}
+
 function displayLabel(key: string): string {
 	return key
 		.replaceAll(/([a-z0-9])([A-Z])/g, "$1 $2")
@@ -92,18 +119,27 @@ function collectAdditionalDetails(
 
 /** Parse the serialized provider error into the fields users need to act on it. */
 export function parseApiErrorDetails(serializedError?: string): ApiErrorDetails {
+	const directRecord = parseSerializedError(serializedError)
 	const parsed = ClineError.parse(serializedError)
-	const details: unknown = parsed?._error?.details
+	const details: unknown =
+		parsed?._error?.details ??
+		directRecord?.details ??
+		directRecord?.error ??
+		(directRecord?.detail !== undefined ? { detail: directRecord.detail } : undefined)
 	const detailRecord = isRecord(details) ? details : undefined
-	const status = parsed?._error?.status ?? readNumber(detailRecord?.status)
-	const code = readString(parsed?._error?.code) ?? readString(detailRecord?.code)
-	const providerId = readString(parsed?.providerId) ?? readString(parsed?._error?.providerId)
-	const modelId = readString(parsed?.modelId) ?? readString(parsed?._error?.modelId)
-	const requestId = readString(parsed?._error?.request_id)
+	const status = parsed?._error?.status ?? readNumber(directRecord?.status) ?? readNumber(detailRecord?.status)
+	const code = readString(parsed?._error?.code) ?? readString(directRecord?.code) ?? readString(detailRecord?.code)
+	const providerId =
+		readString(parsed?.providerId) ?? readString(parsed?._error?.providerId) ?? readString(directRecord?.providerId)
+	const modelId = readString(parsed?.modelId) ?? readString(parsed?._error?.modelId) ?? readString(directRecord?.modelId)
+	const requestId = readString(parsed?._error?.request_id) ?? readString(directRecord?.request_id)
 	const message =
 		readString(detailRecord?.message) ??
+		readableErrorValue(directRecord?.detail) ??
+		readString(directRecord?.message) ??
 		readString(parsed?._error?.message) ??
 		readString(parsed?.message) ??
+		readableErrorValue(directRecord) ??
 		serializedError ??
 		"Unknown API error"
 	const knownValues = new Set(
@@ -116,7 +152,7 @@ export function parseApiErrorDetails(serializedError?: string): ApiErrorDetails 
 		providerId,
 		modelId,
 		requestId,
-		additionalDetails: collectAdditionalDetails(details, knownValues),
+		additionalDetails: collectAdditionalDetails(details ?? directRecord, knownValues),
 	}
 }
 

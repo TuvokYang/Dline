@@ -844,6 +844,34 @@ describe("reconcileResume", () => {
 		expect(result.diagnostics).not.toContainEqual(expect.objectContaining({ code: "missing_interaction_continuation" }))
 	})
 
+	it("restores a cancelling reload snapshot to its durable error retry phase", () => {
+		const interactionId = "error-retry-cancelling"
+		const snapshot = snapshotWithStandaloneInteraction(interactionId, "error_retry")
+		snapshot.phase = TaskPhase.CANCELLING
+		snapshot.cancellation = { source: "system", fromPhase: TaskPhase.AWAITING_APPROVAL }
+		snapshot.interaction = {
+			...snapshot.interaction!,
+			status: "awaiting",
+			persistedRequest: false,
+			acceptedResponse: undefined,
+		}
+
+		const result = reconcileResume(fullInput([apiUser()], [interactionAsk("api_req_failed", interactionId, 0)], snapshot))
+
+		expect(result.entry).toMatchObject({
+			type: "show_error_recovery",
+			interactionId,
+		})
+		expect(result.snapshot.phase).toBe(TaskPhase.AWAITING_APPROVAL)
+		expect(result.snapshot.cancellation).toBeUndefined()
+		expect(result.snapshot.interaction).toMatchObject({
+			interactionId,
+			kind: "error_retry",
+			status: "awaiting",
+			persistedRequest: false,
+		})
+	})
+
 	it.each([
 		["qna_respond", "qna_respond"],
 		["completion_result", "attempt_completion"],

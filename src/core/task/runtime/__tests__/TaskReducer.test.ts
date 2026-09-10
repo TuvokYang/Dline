@@ -824,6 +824,44 @@ describe("reduceTask lifecycle events", () => {
 		expect(result.effects.map((effect) => effect.type)).toEqual(["POST_TASK_VIEW"])
 	})
 
+	it("does not let an older terminated effect replace a newer awaiting error retry", () => {
+		const state = {
+			...stateAt(TaskPhase.AWAITING_APPROVAL),
+			revision: 12,
+			interaction: {
+				taskId: "task-1",
+				turnId: "turn-1",
+				interactionId: "retry-1",
+				kind: "error_retry" as const,
+				status: "awaiting" as const,
+				createdRevision: 11,
+				persistedRequest: false,
+				anchor: { messageTs: 123, messageType: "ask" as const },
+			},
+		}
+		const result = reduceTask(state, {
+			type: "EFFECT_FAILED",
+			effectId: "effect-api",
+			effectType: "START_API",
+			originRevision: 10,
+			message: "task_terminated",
+		})
+
+		expect(result).toMatchObject({
+			accepted: true,
+			next: {
+				phase: TaskPhase.AWAITING_APPROVAL,
+				interaction: {
+					interactionId: "retry-1",
+					kind: "error_retry",
+					status: "awaiting",
+					persistedRequest: false,
+				},
+			},
+		})
+		expect(result.effects.map((effect) => effect.type)).toEqual(["PERSIST_SNAPSHOT", "POST_TASK_VIEW"])
+	})
+
 	it.each([
 		{
 			kind: "resume" as const,

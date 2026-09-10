@@ -1,3 +1,4 @@
+import type { ClineContent } from "@shared/messages"
 import type { BlockLifecycle } from "../BlockPhaseMachine"
 import type { InteractionKind } from "../interaction/Interaction"
 import type { ActiveInteraction } from "../interaction/InteractionReducer"
@@ -76,6 +77,8 @@ export type TaskEvent =
 			draft: InteractionDraft
 			/** Whether the failed request already has a durable user message at apiIndex. */
 			persistedRequest?: boolean
+			/** Ephemeral request content captured before it could be appended to API history. */
+			retryContent?: ClineContent[]
 	  }
 	| { type: "MISTAKE_LIMIT_CONTINUE_REQUESTED"; apiIndex: number; draft: InteractionDraft }
 	| { type: "API_RETRY_SCHEDULED"; apiIndex: number }
@@ -84,6 +87,10 @@ export type TaskEvent =
 			turnId: string
 			interactionId: string
 			presentation: string
+			/** Whether the failed request already has a durable user message at apiIndex. */
+			persistedRequest?: boolean
+			/** Ephemeral request content captured before it could be appended to API history. */
+			retryContent?: ClineContent[]
 	  }
 	| {
 			type: "MISTAKE_LIMIT_REACHED"

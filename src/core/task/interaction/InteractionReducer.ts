@@ -1,4 +1,5 @@
 import type { ClineAsk } from "@shared/ExtensionMessage"
+import type { ClineContent } from "@shared/messages"
 import type { InteractionKind } from "./Interaction"
 import { getInteraction } from "./InteractionRegistry"
 import type { InteractionResponse, InteractionResponseErrorCode } from "./InteractionResponse"
@@ -22,6 +23,10 @@ export interface ActiveInteraction {
 	kind: InteractionKind
 	status: "opening" | "awaiting" | "resolving"
 	createdRevision: number
+	/** Whether an error retry owns a durable user request that can be replayed by apiIndex. */
+	persistedRequest?: boolean
+	/** Ephemeral request content that had not reached API history when the request failed. */
+	retryContent?: ClineContent[]
 	anchor?: InteractionAnchor
 	acceptedResponse?: InteractionResponse
 }

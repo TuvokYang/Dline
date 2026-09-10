@@ -1,4 +1,5 @@
 import type { ClineSay } from "@shared/ExtensionMessage"
+import type { ClineContent } from "@shared/messages"
 import type { ClineAskResponse } from "@shared/WebviewMessage"
 import type { InteractionDraft } from "../interaction/InteractionResponse"
 import type { NewTaskHandoff } from "../new-task/new-task-handoff"
@@ -50,6 +51,8 @@ export interface StartApiEffect {
 	contentTransform?: "mistake_limit"
 	/** Resume one request whose complete user message is already durable at apiIndex. */
 	persistedRequest?: boolean
+	/** Replay one failed request whose user content had not reached API history. */
+	retryContent?: ClineContent[]
 }
 
 /** Execute one canonical tool lifecycle identity. */

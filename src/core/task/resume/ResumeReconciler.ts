@@ -1,5 +1,6 @@
 import type { ClineAsk, ClineMessage } from "@shared/ExtensionMessage"
 import type { ClineStorageMessage } from "@shared/messages"
+import cloneDeep from "clone-deep"
 import { BlockPhase } from "../BlockPhaseMachine"
 import type { InteractionKind } from "../interaction/Interaction"
 import { getInteraction } from "../interaction/InteractionRegistry"
@@ -255,6 +256,10 @@ function bindPersistedInteraction(snapshot: TaskSnapshot, message: ClineMessage,
 		kind,
 		status,
 		createdRevision: existing?.createdRevision ?? snapshot.revision ?? 0,
+		...(kind === "error_retry" && existing?.persistedRequest !== undefined
+			? { persistedRequest: existing.persistedRequest }
+			: {}),
+		...(kind === "error_retry" && existing?.retryContent ? { retryContent: cloneDeep(existing.retryContent) } : {}),
 		// A completed task rebinds through `resume_completed_task` while still
 		// driving the `completion` kind, so the kind cannot name its entry ask.
 		// Persist the ask actually presented for the Webview to match against.
@@ -412,7 +417,17 @@ function reconcilePersistedInteraction(
 
 function stopWithoutChangingInteraction(snapshot: TaskSnapshot): void {
 	snapshot.cancellation = undefined
-	if (snapshot.interaction) return
+	if (snapshot.interaction) {
+		if (snapshot.phase === TaskPhase.CANCELLING) {
+			snapshot.phase =
+				snapshot.interaction.kind === "resume"
+					? TaskPhase.PAUSED
+					: snapshot.interaction.kind === "completion"
+						? TaskPhase.COMPLETED
+						: TaskPhase.AWAITING_APPROVAL
+		}
+		return
+	}
 	if (snapshot.phase === TaskPhase.COMPLETED && snapshot.completion) return
 	snapshot.phase = TaskPhase.PAUSED
 }

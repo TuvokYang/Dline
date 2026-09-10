@@ -1,3 +1,4 @@
+import type { ClineContent } from "@shared/messages"
 import type { TaskEvent } from "../runtime/TaskEvent"
 import type { TaskDispatchResult, TaskRuntime } from "../runtime/TaskRuntime"
 import type { InteractionKind } from "./Interaction"
@@ -31,6 +32,8 @@ export interface RetryInteractionRequest {
 	presentation: string
 	/** Whether the failed request already has a durable user message at apiIndex. */
 	persistedRequest?: boolean
+	/** Ephemeral request content captured before it could be appended to API history. */
+	retryContent?: ClineContent[]
 }
 
 /** Request used to present and resolve one mistake-limit transaction. */
@@ -56,6 +59,10 @@ export interface AwaitingUserDurableBoundary {
 
 export interface InteractionCoordinatorOptions {
 	readonly onAwaitingUserDurable?: (boundary: AwaitingUserDurableBoundary) => void
+	/** Resolve legacy error-retry snapshots that predate persisted retry-source state. */
+	readonly isPersistedApiRequest?: (apiIndex: number) => boolean
+	/** Rebuild legacy ephemeral retry content from durable task UI state. */
+	readonly resolveLegacyRetryContent?: (apiIndex: number, interactionId: string) => Promise<ClineContent[] | undefined>
 }
 
 /** Context passed to the Task-owned continuation for a restored handler interaction. */
@@ -371,8 +378,16 @@ export class InteractionCoordinator {
 					throw new Error("Detached continuation is not registered for completion feedback")
 				}
 				return this.commitHandlerResponse(interaction, response, generation, detachedContinuation)
-			case "error_retry":
-				return this.commitErrorRetryResponse(response, this.runtime.getState().anchor.apiIndex)
+			case "error_retry": {
+				const apiIndex = this.runtime.getState().anchor.apiIndex
+				const persistedRequest = interaction.persistedRequest ?? this.options.isPersistedApiRequest?.(apiIndex) ?? true
+				const retryContent =
+					interaction.retryContent ??
+					(persistedRequest
+						? undefined
+						: await this.options.resolveLegacyRetryContent?.(apiIndex, interaction.interactionId))
+				return this.commitErrorRetryResponse(response, apiIndex, persistedRequest, retryContent)
+			}
 			case "mistake_limit":
 				return this.commitMistakeLimitResponse(response, this.runtime.getState().anchor.apiIndex)
 			default:
@@ -480,6 +495,7 @@ export class InteractionCoordinator {
 		response: InteractionResponse,
 		apiIndex: number,
 		persistedRequest = true,
+		retryContent?: ClineContent[],
 	): Promise<InteractionOutcome> {
 		const continuation: TaskEvent =
 			response.actionId === "start_new_task"
@@ -492,6 +508,7 @@ export class InteractionCoordinator {
 						apiIndex,
 						draft: response.draft ?? { text: "", images: [], files: [] },
 						persistedRequest,
+						...(retryContent?.length ? { retryContent } : {}),
 					}
 		const committed = await this.runtime.dispatchAtAdmission(continuation)
 		if (!committed.accepted) {
@@ -546,7 +563,7 @@ export class InteractionCoordinator {
 				(response.draft.text.trim().length > 0 || response.draft.images.length > 0 || response.draft.files.length > 0),
 		)
 		const persistedRequest = hasContinuationDraft ? false : request.persistedRequest !== false
-		return this.commitErrorRetryResponse(response, request.apiIndex, persistedRequest)
+		return this.commitErrorRetryResponse(response, request.apiIndex, persistedRequest, request.retryContent)
 	}
 
 	/** Present a mistake-limit recovery and commit the selected footer action. */

@@ -444,10 +444,6 @@ export class OpenAiHandler implements ApiHandler {
 		const enableThinking = this.config?.reasoning?.enableThinking ?? true
 		const reasoningEffort = normalizeOpenaiReasoningEffort(this.reasoningEffort)
 		const temperature = model.info.capabilities?.temperature ?? this.config?.temperature
-		const maxOutputTokens =
-			options?.generation?.purpose === "compaction"
-				? options.generation.maxOutputTokens
-				: model.info.capabilities?.maxTokens
 		const buildParams = (mode: OpenAIPromptCacheProjectionMode): OpenAI.Responses.ResponseCreateParamsStreaming => {
 			const promptCache = projectOpenAIResponsesPromptCache({
 				modelId: model.id,
@@ -474,7 +470,6 @@ export class OpenAiHandler implements ApiHandler {
 					? { reasoning: { effort: reasoningEffort as ChatCompletionReasoningEffort, summary: "auto" } }
 					: {}),
 				...(!enableThinking && typeof temperature === "number" ? { temperature } : {}),
-				...(typeof maxOutputTokens === "number" && maxOutputTokens > 0 ? { max_output_tokens: maxOutputTokens } : {}),
 			}
 		}
 

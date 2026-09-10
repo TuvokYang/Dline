@@ -330,7 +330,6 @@ export class OpenAiCodexHandler implements ApiHandler {
 		const reasoningEffort = normalizeOpenaiReasoningEffort(this.reasoningEffort)
 		const includeReasoning = enableThinking && reasoningEffort !== "none"
 		const hostedWebSearch = options?.serverTools?.includes(ServerTool.WEB_SEARCH) === true
-		const maxOutputTokens = options?.generation?.purpose === "compaction" ? options.generation.maxOutputTokens : undefined
 		const responseTools: OpenAI.Responses.Tool[] = (tools ?? [])
 			.filter((tool) => tool.type === "function")
 			.filter((tool) => !hostedWebSearch || tool.function.name !== "web_search")
@@ -364,7 +363,9 @@ export class OpenAiCodexHandler implements ApiHandler {
 			...(responseTools.length > 0 ? { tools: responseTools } : {}),
 			...(this.serviceTier ? { service_tier: this.serviceTier } : {}),
 			...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
-			...(maxOutputTokens === undefined ? {} : { max_output_tokens: maxOutputTokens }),
+			// The ChatGPT Codex Responses endpoint rejects `max_output_tokens`.
+			// Compaction still uses its output cap for local fitting and budgeting,
+			// but the transport must omit this unsupported request parameter.
 			...(include.length > 0 ? { include } : {}),
 			...(includeReasoning
 				? {

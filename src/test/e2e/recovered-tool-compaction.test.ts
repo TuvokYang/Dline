@@ -405,16 +405,39 @@ e2e(
 			expect(server.getRequestCount("openai-compatible-responses")).toBe(2)
 			const outputBeforeRetry = E2ETestHelper.readDlineOutputIfPresent(userDataDir) ?? ""
 			expect(outputBeforeRetry).not.toContain("hydrated_interaction_mismatch")
+			const retryBeforeReload = footer.getByText("Retry", { exact: true })
+			await expect(retryBeforeReload).toBeVisible()
+			await expect(retryBeforeReload).toBeEnabled()
+			const retrySnapshotPath = path.join(dlineDocsDir, "tasks", taskId, "snapshot.json")
+			await expect
+				.poll(async () => {
+					const snapshot = JSON.parse(await readFile(retrySnapshotPath, "utf8")) as PersistedRecord
+					const interaction = snapshot.interaction as PersistedRecord | undefined
+					return `${String(interaction?.kind)}:${String(interaction?.status)}`
+				})
+				.toBe("error_retry:awaiting")
+			const legacySnapshot = JSON.parse(await readFile(retrySnapshotPath, "utf8")) as PersistedRecord
+			const legacyInteraction = legacySnapshot.interaction as PersistedRecord
+			delete legacyInteraction.persistedRequest
+			delete legacyInteraction.retryContent
+			await writeFile(retrySnapshotPath, `${JSON.stringify(legacySnapshot, null, 2)}\n`, "utf8")
 
-			const retryButton = footer.getByText("Retry", { exact: true })
-			await expect(retryButton).toBeVisible()
+			// Reload the extension host after the terminal compaction failure so the
+			// in-memory replay recipe is gone while the active error interaction remains.
+			await E2ETestHelper.runCommandPalette(resumed.page, "Developer: Reload Window")
+			helper.clearCachedFrame()
+			const retried = await openSidebar(resumedApp, helper)
+			await reopenTask(retried.page, retried.sidebar, setupTask)
+			const retryFooter = retried.sidebar.getByRole("contentinfo")
+			const retryButton = retryFooter.getByText("Retry", { exact: true })
+			await expect(retryButton).toBeVisible({ timeout: 30_000 })
 			await expect(retryButton).toBeEnabled()
 			await retryButton.click()
-			await expect(resumed.sidebar.getByText("E2E_RECOVERED_RESUME_RETRY_OK", { exact: false }).last()).toBeVisible({
+			await expect(retried.sidebar.getByText("E2E_RECOVERED_RESUME_RETRY_OK", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
 			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(4)
-			await expect(resumed.sidebar.getByTestId("error-retry-box")).toHaveCount(0)
+			await expect(retried.sidebar.getByTestId("error-retry-box")).toHaveCount(0)
 			const outputAfterRetry = await E2ETestHelper.readDlineOutput(userDataDir)
 			expect(outputAfterRetry).not.toContain("hydrated_interaction_mismatch")
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)

@@ -376,7 +376,7 @@ describe("Task request API boundary", () => {
 		)
 		const automaticCleanup = method.indexOf("await this.discardFailedCompactionAttempt(apiIndex)", invalidOutput)
 		const automaticRecovery = method.indexOf(
-			"await this.recoverAutomaticCompactionFailure(apiIndex, errorMessage, requestScope)",
+			"await this.recoverAutomaticCompactionFailure(apiIndex, errorMessage, requestScope, userContent)",
 			automaticCleanup,
 		)
 		const manualCleanup = method.indexOf("await this.discardFailedManualCompactionAttempt(apiIndex)", automaticRecovery)

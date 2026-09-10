@@ -1,4 +1,5 @@
 import type { ClineAsk } from "@shared/ExtensionMessage"
+import cloneDeep from "clone-deep"
 import type { BlockLifecycle } from "./BlockPhaseMachine"
 import type { QueuedInputEntry } from "./input-queue/InputQueue"
 import type { ActiveInteraction } from "./interaction/InteractionReducer"
@@ -299,6 +300,7 @@ function cloneInteraction(interaction: ActiveInteraction): ActiveInteraction {
 		taskId,
 		turnId,
 		interactionId,
+		...(interaction.retryContent ? { retryContent: cloneDeep(interaction.retryContent) } : {}),
 		...(interaction.anchor ? { anchor: { ...interaction.anchor } } : {}),
 		...(acceptedResponse ? { acceptedResponse } : {}),
 	}

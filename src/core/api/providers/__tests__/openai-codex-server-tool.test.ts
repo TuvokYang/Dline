@@ -181,7 +181,7 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 		expect(handler.getModel().info.capabilities?.supportsPromptCache).to.equal(true)
 	})
 
-	it("projects the request-scoped compaction cap into primary and fallback Responses bodies", () => {
+	it("omits the unsupported request-scoped compaction cap from primary and fallback Responses bodies", () => {
 		const handler = createHandler()
 		const options = { generation: { purpose: "compaction", maxOutputTokens: 30_000 } } as any
 		const body = (handler as any).buildRequestBody(
@@ -201,8 +201,8 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 			options,
 		) as Record<string, unknown>
 
-		expect(body.max_output_tokens).to.equal(30_000)
-		expect(fallback.max_output_tokens).to.equal(30_000)
+		expect(body).not.to.have.property("max_output_tokens")
+		expect(fallback).not.to.have.property("max_output_tokens")
 	})
 
 	it("projects hosted Web Search when no local functions are present", () => {

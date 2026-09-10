@@ -113,4 +113,32 @@ describe("ApiErrorBox", () => {
 		expect(screen.queryByTestId("api-error-box-provider")).not.toBeInTheDocument()
 		expect(screen.queryByRole("button", { name: "Copy error" })).not.toBeInTheDocument()
 	})
+
+	it("renders a provider detail string instead of object coercion", () => {
+		render(<ApiErrorBox error={JSON.stringify({ detail: "Unsupported parameter: max_output_tokens" })} />)
+
+		expect(screen.getByTestId("api-error-box-message")).toHaveTextContent("Unsupported parameter: max_output_tokens")
+		expect(screen.queryByText("[object Object]")).not.toBeInTheDocument()
+	})
+
+	it("renders a nested provider detail message and its diagnostic fields", () => {
+		render(
+			<ApiErrorBox
+				error={JSON.stringify({
+					detail: {
+						message: "No tool output found for function call fc_missing_result.",
+						type: "invalid_request_error",
+						param: "input",
+					},
+				})}
+			/>,
+		)
+
+		expect(screen.getByTestId("api-error-box-message")).toHaveTextContent(
+			"No tool output found for function call fc_missing_result.",
+		)
+		expect(screen.getByTestId("api-error-box-detail-detail-type")).toHaveTextContent("invalid_request_error")
+		expect(screen.getByTestId("api-error-box-detail-detail-param")).toHaveTextContent("input")
+		expect(screen.queryByText("[object Object]")).not.toBeInTheDocument()
+	})
 })
