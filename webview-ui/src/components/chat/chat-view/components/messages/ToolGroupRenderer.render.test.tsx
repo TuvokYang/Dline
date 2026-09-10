@@ -28,7 +28,7 @@ describe("ToolGroupRenderer rows", () => {
 			files: 3,
 		})
 
-		expect(screen.getByText('"ToolExecutor" in …/core/task/ToolExecutor.ts (12 refs · 3 files)')).toBeInTheDocument()
+		expect(screen.getByText('"ToolExecutor" in src/core/task/ToolExecutor.ts (12 refs · 3 files)')).toBeInTheDocument()
 	})
 
 	it("still labels a reference lookup when the symbol could not be resolved", () => {
@@ -53,7 +53,7 @@ describe("ToolGroupRenderer rows", () => {
 		).toBeInTheDocument()
 	})
 
-	it("shortens a long read path in the row", () => {
+	it("keeps the complete path and lets the 80% row apply width-aware ellipsis", () => {
 		renderTool({
 			tool: "readFile",
 			path: "src/core/task/tools/handlers/ReadFileToolHandler.ts",
@@ -61,6 +61,8 @@ describe("ToolGroupRenderer rows", () => {
 			readLineEnd: 416,
 		})
 
-		expect(screen.getByText("…/tools/handlers/ReadFileToolHandler.ts · lines 125-416")).toBeInTheDocument()
+		const text = screen.getByText("src/core/task/tools/handlers/ReadFileToolHandler.ts · lines 125-416")
+		expect(text).toHaveClass("min-w-0", "overflow-hidden", "text-ellipsis")
+		expect(text.closest("button")).toHaveClass("w-4/5")
 	})
 })

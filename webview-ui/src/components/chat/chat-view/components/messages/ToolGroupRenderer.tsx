@@ -16,13 +16,12 @@ interface ToolGroupRendererProps {
 }
 
 /**
- * One tool entry rendered two ways: a compact line that fits the chat column,
- * and the full text shown on hover.
+ * One tool entry rendered in the width-constrained row and in full on hover.
  */
 export interface ToolItemText {
-	/** Shortened for the row; paths keep their tail so the file name stays visible. */
+	/** Complete row text; layout applies ellipsis only when the available width requires it. */
 	displayText: string
-	/** Untruncated text for the tooltip, safe to select and copy. */
+	/** Complete tooltip text, safe to select and copy. */
 	tooltipText: string
 }
 
@@ -42,24 +41,8 @@ const EXPANDABLE_TOOLS = new Set([
 	"findReferences",
 ])
 
-/** Path segments kept when shortening a path for the row. */
-const PATH_TAIL_SEGMENTS = 3
 /** Search terms shown before collapsing the rest into "+N". */
 const SEARCH_TERM_LIMIT = 3
-
-/**
- * Shorten a path by keeping its trailing segments, so the file name stays readable.
- * A dropped head is marked with a leading ellipsis; a trailing slash is preserved
- * to keep directories distinguishable from files.
- */
-export function truncatePathHead(path: string, maxSegments = PATH_TAIL_SEGMENTS): string {
-	const segments = path.split("/").filter(Boolean)
-	if (segments.length <= maxSegments) {
-		return path
-	}
-	const trailingSlash = path.endsWith("/") ? "/" : ""
-	return `…/${segments.slice(-maxSegments).join("/")}${trailingSlash}`
-}
 
 /**
  * Split an alternation regex into readable terms.
@@ -110,7 +93,7 @@ export function formatSearchDisplay(tool: ClineSayTool): ToolItemText {
 	const scale = formatScale(tool.count, tool.files, "match", tool.truncated)
 
 	return {
-		displayText: `${terms.displayText} in ${truncatePathHead(cleanedPath)}/${pattern}${scale}`,
+		displayText: `${terms.displayText} in ${cleanedPath}/${pattern}${scale}`,
 		tooltipText: `${terms.tooltipText} in ${cleanedPath}/${pattern}${scale}`,
 	}
 }
@@ -126,7 +109,7 @@ export function formatReferencesDisplay(tool: ClineSayTool): ToolItemText {
 	const scale = formatScale(tool.count, tool.files, "ref")
 
 	return {
-		displayText: `${target} in ${truncatePathHead(cleanedPath)}${scale}`,
+		displayText: `${target} in ${cleanedPath}${scale}`,
 		tooltipText: `${target} in ${cleanedPath}${scale}`,
 	}
 }
@@ -138,7 +121,6 @@ export function formatReferencesDisplay(tool: ClineSayTool): ToolItemText {
  */
 export function getActivityText(tool: ClineSayTool): ToolItemText | null {
 	const cleanedPath = cleanPathPrefix(tool.path || "")
-	const shortPath = truncatePathHead(cleanedPath)
 
 	switch (tool.tool) {
 		case "readFile": {
@@ -148,13 +130,13 @@ export function getActivityText(tool: ClineSayTool): ToolItemText | null {
 			const lineHint =
 				tool.readLineStart != null && tool.readLineEnd != null ? ` (lines ${tool.readLineStart}-${tool.readLineEnd})` : ""
 			return {
-				displayText: `Reading ${shortPath}${lineHint}...`,
+				displayText: `Reading ${cleanedPath}${lineHint}...`,
 				tooltipText: `Reading ${cleanedPath}${lineHint}`,
 			}
 		}
 		case "listFilesTopLevel":
 		case "listFilesRecursive":
-			return tool.path ? { displayText: `Exploring ${shortPath}/...`, tooltipText: `Exploring ${cleanedPath}/` } : null
+			return tool.path ? { displayText: `Exploring ${cleanedPath}/...`, tooltipText: `Exploring ${cleanedPath}/` } : null
 		case "searchFiles": {
 			if (!tool.regex || !tool.path) {
 				return null
@@ -168,12 +150,12 @@ export function getActivityText(tool: ClineSayTool): ToolItemText | null {
 		case "findReferences":
 			return tool.path
 				? {
-						displayText: `Finding references in ${shortPath}...`,
+						displayText: `Finding references in ${cleanedPath}...`,
 						tooltipText: `Finding references in ${cleanedPath}`,
 					}
 				: null
 		case "listCodeDefinitionNames":
-			return tool.path ? { displayText: `Analyzing ${shortPath}/...`, tooltipText: `Analyzing ${cleanedPath}/` } : null
+			return tool.path ? { displayText: `Analyzing ${cleanedPath}/...`, tooltipText: `Analyzing ${cleanedPath}/` } : null
 		default:
 			return null
 	}
@@ -358,7 +340,7 @@ function ToolItemRow({ icon: Icon, text, isActive, ariaExpanded, onActivate }: T
 				<Button
 					aria-expanded={ariaExpanded}
 					className={cn(
-						"flex items-center gap-[3px] text-[13px] text-description py-[1px] min-w-0 max-w-full px-0 leading-tight -my-0.5",
+						"flex w-4/5 items-center gap-[3px] text-[13px] text-description py-[1px] min-w-0 max-w-full px-0 leading-tight -my-0.5",
 						isActive ? "" : "cursor-pointer hover:text-link",
 					)}
 					disabled={isActive}
@@ -448,10 +430,10 @@ export interface ToolDisplayInfo extends ToolItemText {
 	label: string
 }
 
-/** Text for a path-only entry: shortened in the row, complete in the tooltip. */
+/** Text for a path-only entry; the row clips it according to the available width. */
 function pathOnlyText(path: string): ToolItemText {
 	const cleaned = cleanPathPrefix(path)
-	return { displayText: truncatePathHead(cleaned), tooltipText: cleaned }
+	return { displayText: cleaned, tooltipText: cleaned }
 }
 
 /**
@@ -473,7 +455,7 @@ export function getToolDisplayInfo(tool: ClineSayTool): ToolDisplayInfo | null {
 				icon,
 				path: filePath,
 				label: "read",
-				displayText: `${truncatePathHead(cleaned)}${lineNote}`,
+				displayText: `${cleaned}${lineNote}`,
 				tooltipText: `${cleaned}${lineNote}`,
 			}
 		}

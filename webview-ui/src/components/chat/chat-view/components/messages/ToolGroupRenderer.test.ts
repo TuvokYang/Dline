@@ -7,7 +7,6 @@ import {
 	getActivityText,
 	getToolDisplayInfo,
 	getToolGroupSummaryFromParsedTools,
-	truncatePathHead,
 } from "./ToolGroupRenderer"
 
 const readToolMessage = (
@@ -63,34 +62,6 @@ describe("getToolGroupSummaryFromParsedTools", () => {
 		])
 
 		expect(getToolGroupSummaryFromParsedTools(tools.map((tool) => tool.parsedTool))).toBe("Dline read 1 file")
-	})
-})
-
-describe("truncatePathHead", () => {
-	it("leaves a short path untouched", () => {
-		expect(truncatePathHead("src/shared/api.ts")).toBe("src/shared/api.ts")
-	})
-
-	it("keeps the trailing segments and marks the dropped head", () => {
-		expect(truncatePathHead("src/core/task/tools/handlers/ReadFileToolHandler.ts")).toBe(
-			"…/tools/handlers/ReadFileToolHandler.ts",
-		)
-	})
-
-	it("preserves a trailing slash so directories stay recognizable", () => {
-		expect(truncatePathHead("src/core/prompts/i18n/en/")).toBe("…/prompts/i18n/en/")
-	})
-
-	it("returns a single-segment path unchanged", () => {
-		expect(truncatePathHead("package.json")).toBe("package.json")
-	})
-
-	it("returns an empty path unchanged", () => {
-		expect(truncatePathHead("")).toBe("")
-	})
-
-	it("honors a custom segment budget", () => {
-		expect(truncatePathHead("a/b/c/d/e.ts", 2)).toBe("…/d/e.ts")
 	})
 })
 
@@ -163,7 +134,7 @@ describe("getToolDisplayInfo", () => {
 		} as ClineSayTool
 
 		expect(getToolDisplayInfo(tool)).toMatchObject({
-			displayText: '"ToolExecutor" in …/core/task/ToolExecutor.ts (12 refs · 3 files)',
+			displayText: '"ToolExecutor" in src/core/task/ToolExecutor.ts (12 refs · 3 files)',
 			tooltipText: '"ToolExecutor" in src/core/task/ToolExecutor.ts (12 refs · 3 files)',
 		})
 	})
@@ -200,7 +171,7 @@ describe("getToolDisplayInfo", () => {
 		expect(getToolDisplayInfo(tool)?.displayText).toBe('"toolResult" in src/')
 	})
 
-	it("shortens a read path but keeps the line range", () => {
+	it("keeps a complete read path and its line range for width-aware clipping", () => {
 		const tool = {
 			tool: "readFile",
 			path: "src/core/task/tools/handlers/ReadFileToolHandler.ts",
@@ -209,7 +180,7 @@ describe("getToolDisplayInfo", () => {
 		} as ClineSayTool
 
 		expect(getToolDisplayInfo(tool)).toMatchObject({
-			displayText: "…/tools/handlers/ReadFileToolHandler.ts · lines 125-416",
+			displayText: "src/core/task/tools/handlers/ReadFileToolHandler.ts · lines 125-416",
 			tooltipText: "src/core/task/tools/handlers/ReadFileToolHandler.ts · lines 125-416",
 		})
 	})
@@ -218,7 +189,7 @@ describe("getToolDisplayInfo", () => {
 		const tool = { tool: "listFilesRecursive", path: "src/core/task/tools" } as ClineSayTool
 
 		expect(getToolDisplayInfo(tool)).toMatchObject({
-			displayText: "…/core/task/tools/",
+			displayText: "src/core/task/tools/",
 			tooltipText: "src/core/task/tools/",
 		})
 	})
@@ -233,7 +204,7 @@ describe("getActivityText", () => {
 		const tool = { tool: "findReferences", path: "src/core/task/ToolExecutor.ts" } as ClineSayTool
 
 		expect(getActivityText(tool)).toEqual({
-			displayText: "Finding references in …/core/task/ToolExecutor.ts...",
+			displayText: "Finding references in src/core/task/ToolExecutor.ts...",
 			tooltipText: "Finding references in src/core/task/ToolExecutor.ts",
 		})
 	})
