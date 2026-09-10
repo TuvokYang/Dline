@@ -32,6 +32,7 @@ function emptyPriorityCounters(): Record<RuntimeEventPriority, number> {
 		[RuntimeEventPriority.Debug]: 0,
 		[RuntimeEventPriority.Info]: 0,
 		[RuntimeEventPriority.Performance]: 0,
+		[RuntimeEventPriority.PerformanceAnomaly]: 0,
 		[RuntimeEventPriority.Error]: 0,
 		[RuntimeEventPriority.Invariant]: 0,
 	}

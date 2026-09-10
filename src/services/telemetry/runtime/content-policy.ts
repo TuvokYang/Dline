@@ -1,5 +1,8 @@
 import { createHmac, randomBytes } from "node:crypto"
+import { TELEMETRY_MASK_VALUE } from "../service/pipeline-port"
 import type { RuntimeAttributes, RuntimeAttributeValue } from "./types"
+
+export { TELEMETRY_MASK_VALUE } from "../service/pipeline-port"
 
 /**
  * Content policy for runtime telemetry attributes.
@@ -10,28 +13,38 @@ import type { RuntimeAttributes, RuntimeAttributeValue } from "./types"
  * truncated command line is still a command line.
  */
 
-/** Attribute names that always denote user or tool content. */
-const FORBIDDEN_KEYS = new Set([
+const CONTENT_KEYS = new Set([
 	"args",
 	"arguments",
 	"body",
 	"cmd",
+	"code",
 	"command",
 	"commandline",
 	"completion",
 	"content",
+	"contents",
 	"diff",
 	"filecontent",
 	"input",
+	"instructions",
+	"errormessage",
+	"exceptionmessage",
+	"loggermessage",
 	"message",
+	"messages",
+	"modeloutput",
 	"output",
 	"params",
 	"patch",
 	"payload",
 	"prompt",
 	"query",
+	"reply",
 	"response",
 	"result",
+	"script",
+	"snippet",
 	"stderr",
 	"stdin",
 	"stdout",
@@ -40,27 +53,86 @@ const FORBIDDEN_KEYS = new Set([
 	"title",
 ])
 
-/**
- * Maximum length of a retained string attribute.
- *
- * Identifiers, phase names, and outcomes are all far shorter than this; a
- * longer value means a producer is smuggling content through a permitted key.
- */
-const MAX_ATTRIBUTE_LENGTH = 120
+const CREDENTIAL_KEYS = new Set([
+	"accesstoken",
+	"apikey",
+	"authorization",
+	"clientsecret",
+	"cookie",
+	"credential",
+	"idtoken",
+	"oauth",
+	"oauthcredential",
+	"oauthtoken",
+	"password",
+	"privatekey",
+	"proxyauthorization",
+	"refreshtoken",
+	"secret",
+	"setcookie",
+	"token",
+	"xapikey",
+])
 
-/** Maximum number of attributes retained on a single event. */
-const MAX_ATTRIBUTE_COUNT = 32
+const IDENTITY_KEYS = new Set([
+	"alias",
+	"controllerid",
+	"distinctid",
+	"displayname",
+	"email",
+	"firstname",
+	"lastname",
+	"memberid",
+	"organizationid",
+	"organizationname",
+	"taskid",
+	"ulid",
+	"userid",
+	"username",
+	"workspaceid",
+])
 
-/**
- * Maximum number of distinct values remembered per attribute name.
- *
- * Beyond this the attribute is behaving like an identifier rather than a
- * dimension, and keeping it would let a backend reconstruct per-user series.
- */
+const HIGH_CARDINALITY_EXEMPT_SEGMENTS = new Set([
+	"apiformat",
+	"capabilities",
+	"capability",
+	"cache",
+	"cost",
+	"count",
+	"duration",
+	"extensionversion",
+	"model",
+	"modelid",
+	"modellist",
+	"models",
+	"outcome",
+	"phase",
+	"platformversion",
+	"provider",
+	"snapshot",
+	"stage",
+	"state",
+	"status",
+	"tokens",
+	"vscodeversion",
+])
+
+const PROTOTYPE_KEYS = new Set(["__proto__", "constructor", "prototype"])
+const CREDENTIAL_VALUE_PATTERN = /\b(?:Bearer|Basic)\s+[^\s"'}]+|\b(?:sk|pk|ghp|github_pat)_[A-Za-z0-9_-]{12,}/i
+
+/** Long safe identifiers such as model IDs and capability names remain queryable. */
+const MAX_ATTRIBUTE_LENGTH = 512
+/** Enough room for bounded model/capability lists and snapshot state without order-dependent loss. */
+const MAX_ATTRIBUTE_COUNT = 128
+const MAX_ARRAY_ITEMS = 32
+const MAX_DEPTH = 10
 const MAX_CARDINALITY = 200
 
 export enum AttributeRejection {
 	ForbiddenKey = "forbidden_key",
+	MaskedContent = "masked_content",
+	MaskedCredential = "masked_credential",
+	MaskedIdentity = "masked_identity",
 	UnsupportedType = "unsupported_type",
 	TooLong = "too_long",
 	TooManyAttributes = "too_many_attributes",
@@ -72,8 +144,44 @@ export interface AttributePolicyResult {
 	readonly rejections: ReadonlyMap<string, AttributeRejection>
 }
 
-function normalizeKey(key: string): string {
+function normalizeKeyPart(key: string): string {
 	return key.toLowerCase().replaceAll("-", "").replaceAll("_", "")
+}
+
+function keySegments(key: string): readonly string[] {
+	return key.split(".").filter(Boolean).map(normalizeKeyPart)
+}
+
+function sensitiveRejection(key: string): AttributeRejection | undefined {
+	const segments = keySegments(key)
+	const numericUsageDimension = segments.some((segment) => ["cache", "cost", "token", "tokens", "tokenusage"].includes(segment))
+	for (const segment of segments) {
+		if (CREDENTIAL_KEYS.has(segment)) return AttributeRejection.MaskedCredential
+		if (IDENTITY_KEYS.has(segment)) return AttributeRejection.MaskedIdentity
+		if (CONTENT_KEYS.has(segment)) {
+			if (numericUsageDimension && (segment === "input" || segment === "output")) continue
+			return AttributeRejection.MaskedContent
+		}
+	}
+	return undefined
+}
+
+function isHighCardinalityExempt(key: string): boolean {
+	return keySegments(key).some(
+		(segment) =>
+			HIGH_CARDINALITY_EXEMPT_SEGMENTS.has(segment) ||
+			segment.includes("model") ||
+			segment.includes("version") ||
+			segment.includes("token") ||
+			segment.includes("snapshot") ||
+			segment.includes("capabilit"),
+	)
+}
+
+interface FlattenedAttribute {
+	readonly key: string
+	readonly value: unknown
+	readonly forcedRejection?: AttributeRejection
 }
 
 /**
@@ -102,27 +210,33 @@ export class RuntimeContentPolicy {
 		return createHmac("sha256", this.fingerprintKey).update(value).digest("hex").slice(0, 16)
 	}
 
-	/** Apply the attribute contract, returning the retained subset. */
+	/** Apply the attribute contract, preserving field shape while masking sensitive values. */
 	apply(input: Readonly<Record<string, unknown>> | undefined): AttributePolicyResult {
 		const attributes: Record<string, RuntimeAttributeValue> = {}
 		const rejections = new Map<string, AttributeRejection>()
 		if (!input) return { attributes, rejections }
 
+		const flattened: FlattenedAttribute[] = []
+		const seen = new WeakSet<object>()
+		for (const [key, value] of Object.entries(input)) this.flatten(key, value, flattened, seen, 0)
+
 		let retained = 0
-		for (const [key, value] of Object.entries(input)) {
-			if (FORBIDDEN_KEYS.has(normalizeKey(key))) {
-				rejections.set(key, AttributeRejection.ForbiddenKey)
-				continue
-			}
+		for (const { key, value, forcedRejection } of flattened) {
 			if (retained >= MAX_ATTRIBUTE_COUNT) {
 				rejections.set(key, AttributeRejection.TooManyAttributes)
+				continue
+			}
+			if (forcedRejection) {
+				attributes[key] = TELEMETRY_MASK_VALUE
+				rejections.set(key, forcedRejection)
+				retained += 1
 				continue
 			}
 
 			const rejection = this.admit(key, value, attributes)
 			if (rejection) {
+				attributes[key] = TELEMETRY_MASK_VALUE
 				rejections.set(key, rejection)
-				continue
 			}
 			retained += 1
 		}
@@ -133,6 +247,52 @@ export class RuntimeContentPolicy {
 	/** Reset cardinality tracking. Used when a session ends. */
 	reset(): void {
 		this.observedValues.clear()
+	}
+
+	private flatten(key: string, value: unknown, output: FlattenedAttribute[], seen: WeakSet<object>, depth: number): void {
+		const masked = sensitiveRejection(key)
+		if (masked) {
+			output.push({ key, value: TELEMETRY_MASK_VALUE, forcedRejection: masked })
+			return
+		}
+		if (value === null || value === undefined) {
+			output.push({ key, value: String(value) })
+			return
+		}
+		if (typeof value !== "object") {
+			output.push({ key, value })
+			return
+		}
+		if (seen.has(value) || depth >= MAX_DEPTH) {
+			output.push({ key, value: TELEMETRY_MASK_VALUE, forcedRejection: AttributeRejection.UnsupportedType })
+			return
+		}
+		seen.add(value)
+
+		if (value instanceof Date) {
+			output.push({ key, value: value.toISOString() })
+			return
+		}
+		if (value instanceof Error) {
+			output.push({ key: `${key}.name`, value: value.name })
+			output.push({ key: `${key}.message`, value: TELEMETRY_MASK_VALUE, forcedRejection: AttributeRejection.MaskedContent })
+			const record = value as Error & { code?: unknown; status?: unknown }
+			if (record.code !== undefined) this.flatten(`${key}.code`, record.code, output, seen, depth + 1)
+			if (record.status !== undefined) this.flatten(`${key}.status`, record.status, output, seen, depth + 1)
+			return
+		}
+		if (Array.isArray(value)) {
+			for (let index = 0; index < Math.min(value.length, MAX_ARRAY_ITEMS); index++) {
+				this.flatten(`${key}.${index}`, value[index], output, seen, depth + 1)
+			}
+			if (value.length > MAX_ARRAY_ITEMS) output.push({ key: `${key}.truncated`, value: true })
+			return
+		}
+
+		for (const [nestedKey, nestedValue] of Object.entries(value)) {
+			if (PROTOTYPE_KEYS.has(nestedKey)) continue
+			this.flatten(`${key}.${nestedKey}`, nestedValue, output, seen, depth + 1)
+		}
 	}
 
 	private admit(
@@ -152,12 +312,9 @@ export class RuntimeContentPolicy {
 		if (typeof value !== "string") {
 			return AttributeRejection.UnsupportedType
 		}
-		if (value.length > MAX_ATTRIBUTE_LENGTH) {
-			return AttributeRejection.TooLong
-		}
-		if (this.exceedsCardinality(key, value)) {
-			return AttributeRejection.HighCardinality
-		}
+		if (value.length > MAX_ATTRIBUTE_LENGTH) return AttributeRejection.TooLong
+		if (CREDENTIAL_VALUE_PATTERN.test(value)) return AttributeRejection.MaskedCredential
+		if (!isHighCardinalityExempt(key) && this.exceedsCardinality(key, value)) return AttributeRejection.HighCardinality
 
 		attributes[key] = value
 		return undefined
@@ -179,5 +336,7 @@ export class RuntimeContentPolicy {
 export const runtimeContentPolicyLimits = {
 	MAX_ATTRIBUTE_LENGTH,
 	MAX_ATTRIBUTE_COUNT,
+	MAX_ARRAY_ITEMS,
+	MAX_DEPTH,
 	MAX_CARDINALITY,
 } as const

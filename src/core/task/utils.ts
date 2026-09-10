@@ -1,6 +1,7 @@
 import { ApiHandler } from "@core/api"
 import { findLastIndex } from "@shared/array"
 import { showApprovalNotification } from "@/integrations/notifications"
+import { calculateApiUsageStatistics } from "@/shared/api-usage"
 import { ClineApiReqCancelReason, ClineApiReqInfo } from "@/shared/ExtensionMessage"
 import { calculateApiCostAnthropic } from "@/utils/cost"
 import { MessageStateHandler } from "./message-state"
@@ -46,8 +47,8 @@ export const updateApiReqMsg = async (params: UpdateApiReqMsgParams): Promise<vo
 	delete currentApiReqInfo.retryStatus // Clear retry status when request is finalized
 
 	const modelInfo = params.api.getModel().info
-	const totalInputTokens = params.inputTokens + (params.cacheWriteTokens || 0) + (params.cacheReadTokens || 0)
-	const cacheHitRate = params.cacheHitRate ?? (totalInputTokens > 0 ? (params.cacheReadTokens / totalInputTokens) * 100 : 0)
+	const { cacheHitRatePercent } = calculateApiUsageStatistics(params)
+	const cacheHitRate = params.cacheHitRate ?? cacheHitRatePercent
 
 	const hasReliableContextTokens = Number.isFinite(params.contextTokens) && params.contextTokens > 0
 	await params.messageStateHandler.updateClineMessage(currentApiReqIndex, {

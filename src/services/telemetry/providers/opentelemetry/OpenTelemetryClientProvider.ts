@@ -1,5 +1,3 @@
-import { metrics } from "@opentelemetry/api"
-import { logs } from "@opentelemetry/api-logs"
 import type { Resource } from "@opentelemetry/resources"
 import { BatchLogRecordProcessor, type LoggerProvider, type LogRecordProcessor } from "@opentelemetry/sdk-logs"
 import { MeterProvider } from "@opentelemetry/sdk-metrics"
@@ -49,22 +47,22 @@ export class OpenTelemetryClientProvider {
 
 		// Only log endpoint in debug mode (security: avoid exposing infrastructure details)
 		if (isDebugMode) {
-			Logger.log("[OTEL DEBUG] ========== OpenTelemetry Initialization ==========")
-			Logger.log(`[OTEL DEBUG] Configuration:`)
-			Logger.log(`[OTEL DEBUG]   - Metrics Exporter: ${this.config.metricsExporter || "none"}`)
-			Logger.log(`[OTEL DEBUG]   - Logs Exporter: ${this.config.logsExporter || "none"}`)
-			Logger.log(`[OTEL DEBUG]   - OTLP Protocol: ${this.config.otlpProtocol || "grpc (default)"}`)
+			Logger.debug("[OTEL DEBUG] ========== OpenTelemetry Initialization ==========")
+			Logger.debug(`[OTEL DEBUG] Configuration:`)
+			Logger.debug(`[OTEL DEBUG]   - Metrics Exporter: ${this.config.metricsExporter || "none"}`)
+			Logger.debug(`[OTEL DEBUG]   - Logs Exporter: ${this.config.logsExporter || "none"}`)
+			Logger.debug(`[OTEL DEBUG]   - OTLP Protocol: ${this.config.otlpProtocol || "grpc (default)"}`)
 
-			Logger.log(`[OTEL DEBUG]   - OTLP Endpoint: ${this.config.otlpEndpoint || "not set"}`)
-			Logger.log(`[OTEL DEBUG]   - OTLP Insecure: ${this.config.otlpInsecure || false}`)
-			Logger.log(`[OTEL DEBUG]   - Metric Export Interval: ${this.config.metricExportInterval || 60000}ms`)
+			Logger.debug(`[OTEL DEBUG]   - OTLP Endpoint: ${this.config.otlpEndpoint || "not set"}`)
+			Logger.debug(`[OTEL DEBUG]   - OTLP Insecure: ${this.config.otlpInsecure || false}`)
+			Logger.debug(`[OTEL DEBUG]   - Metric Export Interval: ${this.config.metricExportInterval || 60000}ms`)
 		}
 
 		if (isDebugMode && config.otlpHeaders) {
 			const headerCount = Object.keys(config.otlpHeaders).length
 			// In debug mode, show that headers are configured and their total length
-			Logger.log(`[OTEL DEBUG]   - OTLP Headers: ${headerCount} headers configured`)
-			Logger.log("[OTEL DEBUG] ================================================")
+			Logger.debug(`[OTEL DEBUG]   - OTLP Headers: ${headerCount} headers configured`)
+			Logger.debug("[OTEL DEBUG] ================================================")
 		}
 
 		// One resource describes the whole extension host, so product
@@ -82,7 +80,7 @@ export class OpenTelemetryClientProvider {
 			this.loggerProvider = this.createLoggerProvider(resource)
 		}
 
-		Logger.log("[OTEL DEBUG] OpenTelemetry initialization complete")
+		Logger.debug("[OTEL DEBUG] OpenTelemetry initialization complete")
 	}
 
 	private createMeterProvider(resource: Resource): MeterProvider {
@@ -91,7 +89,7 @@ export class OpenTelemetryClientProvider {
 		const interval = this.config?.metricExportInterval || 60000
 		const timeout = Math.min(Math.floor(interval * 0.8), 30000)
 
-		Logger.log(`[OTEL] Creating MeterProvider with exporters: ${exporters.join(", ")}`)
+		Logger.debug(`[OTEL] Creating MeterProvider with exporters: ${exporters.join(", ")}`)
 
 		for (const exporterType of exporters) {
 			try {
@@ -99,7 +97,7 @@ export class OpenTelemetryClientProvider {
 					case "console": {
 						const reader = createConsoleMetricReader(interval, timeout)
 						readers.push(reader)
-						Logger.log(`[OTEL] Console metrics reader created (interval: ${interval}ms)`)
+						Logger.debug(`[OTEL] Console metrics reader created (interval: ${interval}ms)`)
 						break
 					}
 					case "otlp": {
@@ -112,7 +110,7 @@ export class OpenTelemetryClientProvider {
 							const reader = createOTLPMetricReader(protocol, endpoint, insecure, interval, timeout, headers)
 							if (reader) {
 								readers.push(reader)
-								Logger.log(`[OTEL] OTLP metrics reader created (${protocol}, interval: ${interval}ms)`)
+								Logger.debug(`[OTEL] OTLP metrics reader created (${protocol}, interval: ${interval}ms)`)
 							}
 						} else {
 							Logger.warn("[OTEL] OTLP metrics exporter requires an endpoint")
@@ -136,9 +134,8 @@ export class OpenTelemetryClientProvider {
 			readers,
 		})
 
-		// Set as global meter provider
-		metrics.setGlobalMeterProvider(meterProvider)
-		Logger.log(`[OTEL] MeterProvider initialized with ${readers.length} reader(s)`)
+		// Dline uses injected providers rather than process-global OTel state.
+		Logger.debug(`[OTEL] MeterProvider initialized with ${readers.length} reader(s)`)
 
 		return meterProvider
 	}
@@ -147,7 +144,7 @@ export class OpenTelemetryClientProvider {
 		const exporters = this.config?.logsExporter?.split(",").map((type) => type.trim()) ?? []
 		const processors: LogRecordProcessor[] = []
 
-		Logger.log(`[OTEL] Creating LoggerProvider with exporters: ${exporters.join(", ")}`)
+		Logger.debug(`[OTEL] Creating LoggerProvider with exporters: ${exporters.join(", ")}`)
 
 		for (const exporterType of exporters) {
 			try {
@@ -156,7 +153,7 @@ export class OpenTelemetryClientProvider {
 				switch (exporterType) {
 					case "console":
 						exporter = createConsoleLogExporter()
-						Logger.log("[OTEL] Console logs exporter created")
+						Logger.debug("[OTEL] Console logs exporter created")
 						break
 					case "otlp": {
 						const protocol = this.config?.otlpLogsProtocol || this.config?.otlpProtocol || "grpc"
@@ -167,7 +164,7 @@ export class OpenTelemetryClientProvider {
 						if (endpoint) {
 							exporter = createOTLPLogExporter(protocol, endpoint, insecure, headers)
 							if (exporter) {
-								Logger.log(`[OTEL] OTLP logs exporter created (${protocol})`)
+								Logger.debug(`[OTEL] OTLP logs exporter created (${protocol})`)
 							}
 						} else {
 							Logger.warn("[OTEL] OTLP logs exporter requires an endpoint")
@@ -188,7 +185,7 @@ export class OpenTelemetryClientProvider {
 					processors.push(new BatchLogRecordProcessor(exporter, batchConfig))
 					this.logProcessors = processors
 
-					Logger.log(
+					Logger.debug(
 						`[OTEL] Log batch processor configured: maxQueue=${batchConfig.maxQueueSize}, batchSize=${batchConfig.maxExportBatchSize}, timeout=${batchConfig.scheduledDelayMillis}ms`,
 					)
 				}
@@ -204,11 +201,15 @@ export class OpenTelemetryClientProvider {
 		// say — does not displace the first.
 		const loggerProvider = attachScopedProcessors(USAGE_SCOPE_NAME, this.routeOwnerId, processors)
 
-		// Set as global logger provider
-		logs.setGlobalLoggerProvider(loggerProvider)
-		Logger.log("[OTEL] LoggerProvider initialized")
+		// Dline uses the shared scoped provider directly; global registration is
+		// first-wins and cannot be safely rebound after a consent-driven restart.
+		Logger.debug("[OTEL] LoggerProvider initialized")
 
 		return loggerProvider
+	}
+
+	public async forceFlush(): Promise<void> {
+		await Promise.all([this.meterProvider?.forceFlush(), ...this.logProcessors.map((processor) => processor.forceFlush())])
 	}
 
 	public async dispose(): Promise<void> {

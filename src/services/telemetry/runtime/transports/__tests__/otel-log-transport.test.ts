@@ -3,6 +3,7 @@ import { InMemoryLogRecordExporter, SimpleLogRecordProcessor } from "@openteleme
 import { ATTR_SERVICE_INSTANCE_ID, ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions/incubating"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { resetSharedLoggerProviderForTesting } from "@/services/telemetry/otel/shared-logger-provider"
+import { TELEMETRY_MASK_VALUE } from "../../content-policy"
 import { EXCEPTION_ATTRIBUTE_KEYS, RUNTIME_ATTRIBUTE_KEYS, RUNTIME_SCOPE_NAME } from "../../otel-semantics"
 import { RuntimeEventPriority, type RuntimeTelemetryEvent } from "../../types"
 import { OtelLogTransport } from "../otel-log-transport"
@@ -99,7 +100,7 @@ describe("OtelLogTransport", () => {
 		expect(attributes[RUNTIME_ATTRIBUTE_KEYS.sequence]).toBe(7)
 	})
 
-	it("maps errors onto the exception semantic conventions", () => {
+	it("keeps exception type and fingerprint while masking message content", () => {
 		transport.enqueue(
 			event({
 				error: { name: "AxiosError", message: "timeout", fingerprint: "abc123" },
@@ -108,7 +109,8 @@ describe("OtelLogTransport", () => {
 
 		const { attributes } = exporter.getFinishedLogRecords()[0]
 		expect(attributes[EXCEPTION_ATTRIBUTE_KEYS.type]).toBe("AxiosError")
-		expect(attributes[EXCEPTION_ATTRIBUTE_KEYS.message]).toBe("timeout")
+		expect(attributes[EXCEPTION_ATTRIBUTE_KEYS.message]).toBe(TELEMETRY_MASK_VALUE)
+		expect(attributes[EXCEPTION_ATTRIBUTE_KEYS.fingerprint]).toBe("abc123")
 	})
 
 	it("stops emitting after disposal", async () => {

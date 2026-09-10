@@ -1,5 +1,6 @@
 import type { AnyValue, LogAttributes } from "@opentelemetry/api-logs"
 import { SeverityNumber } from "@opentelemetry/api-logs"
+import { TELEMETRY_MASK_VALUE } from "./content-policy"
 import { RuntimeEventPriority, type RuntimeTelemetryEvent } from "./types"
 
 /**
@@ -67,6 +68,8 @@ export function toSeverityNumber(priority: RuntimeEventPriority): SeverityNumber
 		case RuntimeEventPriority.Info:
 			return SeverityNumber.INFO
 		case RuntimeEventPriority.Performance:
+			return SeverityNumber.INFO
+		case RuntimeEventPriority.PerformanceAnomaly:
 			return SeverityNumber.WARN
 		case RuntimeEventPriority.Error:
 			return SeverityNumber.ERROR
@@ -83,6 +86,8 @@ export function toSeverityText(priority: RuntimeEventPriority): string {
 		case RuntimeEventPriority.Info:
 			return "INFO"
 		case RuntimeEventPriority.Performance:
+			return "INFO"
+		case RuntimeEventPriority.PerformanceAnomaly:
 			return "WARN"
 		case RuntimeEventPriority.Error:
 			return "ERROR"
@@ -100,7 +105,7 @@ export function toSeverityText(priority: RuntimeEventPriority): string {
 export function fromSeverityNumber(severity: SeverityNumber): RuntimeEventPriority {
 	if (severity >= SeverityNumber.FATAL) return RuntimeEventPriority.Invariant
 	if (severity >= SeverityNumber.ERROR) return RuntimeEventPriority.Error
-	if (severity >= SeverityNumber.WARN) return RuntimeEventPriority.Performance
+	if (severity >= SeverityNumber.WARN) return RuntimeEventPriority.PerformanceAnomaly
 	if (severity >= SeverityNumber.INFO) return RuntimeEventPriority.Info
 	return RuntimeEventPriority.Debug
 }
@@ -165,14 +170,14 @@ export function toLogAttributes(event: RuntimeTelemetryEvent): LogAttributes {
 	}
 
 	const { taskId, controllerId, workspaceId } = event.context
-	if (taskId !== undefined) attributes[RUNTIME_ATTRIBUTE_KEYS.taskId] = taskId
-	if (controllerId !== undefined) attributes[RUNTIME_ATTRIBUTE_KEYS.controllerId] = controllerId
-	if (workspaceId !== undefined) attributes[RUNTIME_ATTRIBUTE_KEYS.workspaceId] = workspaceId
+	if (taskId !== undefined) attributes[RUNTIME_ATTRIBUTE_KEYS.taskId] = TELEMETRY_MASK_VALUE
+	if (controllerId !== undefined) attributes[RUNTIME_ATTRIBUTE_KEYS.controllerId] = TELEMETRY_MASK_VALUE
+	if (workspaceId !== undefined) attributes[RUNTIME_ATTRIBUTE_KEYS.workspaceId] = TELEMETRY_MASK_VALUE
 
 	if (event.error) {
 		const { name, message, code, status, sourceFrame, fingerprint } = event.error
 		attributes[EXCEPTION_ATTRIBUTE_KEYS.type] = name
-		attributes[EXCEPTION_ATTRIBUTE_KEYS.message] = message
+		attributes[EXCEPTION_ATTRIBUTE_KEYS.message] = TELEMETRY_MASK_VALUE
 		attributes[EXCEPTION_ATTRIBUTE_KEYS.fingerprint] = fingerprint
 		if (code !== undefined) attributes[EXCEPTION_ATTRIBUTE_KEYS.code] = code
 		if (status !== undefined) attributes[EXCEPTION_ATTRIBUTE_KEYS.status] = status

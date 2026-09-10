@@ -22,6 +22,7 @@ import { recordPerfPhase } from "./services/telemetry/instrumentation/duration-r
 import { PerfDomain } from "./services/telemetry/instrumentation/perf-domains"
 import { PostHogClientProvider } from "./services/telemetry/providers/posthog/PostHogClientProvider"
 import { activateRuntimeTelemetry, deactivateRuntimeTelemetry } from "./services/telemetry/runtime/activation"
+import { forwardRuntimeEvent } from "./services/telemetry/runtime/provider-event-bridge"
 import { cleanupTestMode } from "./services/test/TestMode"
 import { ShowMessageType } from "./shared/proto/dline/host/window"
 import { syncWorker } from "./shared/services/worker/sync"
@@ -160,6 +161,7 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 			// Runtime diagnostics support error investigation, so they follow the
 			// error-reporting consent rather than product analytics consent.
 			telemetrySetting: stateManager.getGlobalSettingsKey("errorReportingSetting") ?? "unset",
+			onEvent: (event) => forwardRuntimeEvent(event, telemetryService),
 		})
 	} catch (error) {
 		Logger.error("[Dline] Failed to start runtime telemetry:", error)
@@ -276,7 +278,7 @@ export async function tearDown(): Promise<void> {
 	} catch (error) {
 		Logger.error("[Dline] Telemetry shutdown failed:", error)
 	}
-	ErrorService.get().dispose()
+	await ErrorService.get().dispose()
 	featureFlagsService.dispose()
 
 	// Flush once before controller disposal so edits made by Settings controls are

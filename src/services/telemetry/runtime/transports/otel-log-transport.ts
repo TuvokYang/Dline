@@ -67,9 +67,11 @@ export interface OtelLogTransportOptions {
 }
 
 export interface OtelLogTransportStats {
+	/** Events synchronously admitted to the OTel logger; not proof of collector delivery. */
 	readonly sentEvents: number
+	/** Local emit/flush operations that threw; exporter callback failures use delivery accounting. */
 	readonly failedBatches: number
-	/** Events discarded because the queue was already full. */
+	/** Events rejected because this compatibility transport was inert or already disposed. */
 	readonly droppedEvents: number
 }
 
@@ -110,8 +112,8 @@ export class OtelLogTransport {
 	 * Hand one event to the SDK.
 	 *
 	 * Emission is synchronous and non-blocking: the processor buffers and the
-	 * exporter runs on its own schedule, so a producer never waits on the
-	 * collector.
+	 * exporter runs on its own schedule, so `sentEvents` records SDK admission,
+	 * not collector delivery. Export outcomes are counted at the exporter callback.
 	 */
 	enqueue(event: RuntimeTelemetryEvent): void {
 		if (this.disposed || !this.logger) {
@@ -193,6 +195,7 @@ export class OtelLogTransport {
 			// nor meaningful.
 			true,
 			options.headers,
+			options.exportTimeoutMs ?? DEFAULT_EXPORT_TIMEOUT_MS,
 		)
 		if (!exporter) return undefined
 

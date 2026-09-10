@@ -22,7 +22,7 @@ export type TelemetryMetadata = {
 	 * is different than the `platform` because there are many variants of VSCode and JetBrains but they
 	 * all use the same extension or plugin.
 	 */
-	cline_type: string
+	dline_type: string
 	/** The name of the host IDE or environment e.g. VSCode, Cursor, IntelliJ Professional Edition, etc. */
 	platform: string
 	/** The version of the host environment */

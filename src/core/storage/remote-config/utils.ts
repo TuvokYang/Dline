@@ -6,6 +6,7 @@ import { AuthService } from "@/services/auth/AuthService"
 import { getDistinctId } from "@/services/logging/distinctId"
 import { type McpHub } from "@/services/mcp/McpHub"
 import { telemetryService } from "@/services/telemetry"
+import { adaptLegacyTelemetryProvider } from "@/services/telemetry/providers/LegacyTelemetryProviderAdapter"
 import { OpenTelemetryClientProvider } from "@/services/telemetry/providers/opentelemetry/OpenTelemetryClientProvider"
 import { OpenTelemetryTelemetryProvider } from "@/services/telemetry/providers/opentelemetry/OpenTelemetryTelemetryProvider"
 import { type TelemetryService } from "@/services/telemetry/TelemetryService"
@@ -45,14 +46,11 @@ export function transformRemoteConfigToStateShape(remoteConfig: RemoteConfig): P
 	const transformed: Partial<RemoteConfigFields> = {}
 
 	// Map top-level settings
-	// The organization answers a single question, so it governs both consents.
-	// It cannot grant them on the user's behalf either: an organization that
-	// permits reporting still leaves the choice to the user, so the permissive
-	// case maps to "unset" rather than to "enabled".
-	if (remoteConfig.telemetryEnabled !== undefined) {
-		const organizationSetting = remoteConfig.telemetryEnabled ? "unset" : "disabled"
-		transformed.usageReportingSetting = organizationSetting
-		transformed.errorReportingSetting = organizationSetting
+	// Organization policy may tighten consent but cannot grant or reset it.
+	// Omitting both fields for `true` preserves the user's existing choice.
+	if (remoteConfig.telemetryEnabled === false) {
+		transformed.usageReportingSetting = "disabled"
+		transformed.errorReportingSetting = "disabled"
 	}
 	if (remoteConfig.mcpMarketplaceEnabled !== undefined) {
 		transformed.mcpMarketplaceEnabled = remoteConfig.mcpMarketplaceEnabled
@@ -202,17 +200,23 @@ export function transformRemoteConfigToStateShape(remoteConfig: RemoteConfig): P
 export const REMOTE_CONFIG_OTEL_PROVIDER_ID = "OpenTelemetryRemoteConfiguredProvider"
 async function applyRemoteOTELConfig(transformed: Partial<RemoteConfigFields>, telemetryService: TelemetryService) {
 	try {
+		await telemetryService.removeProvider(REMOTE_CONFIG_OTEL_PROVIDER_ID)
 		const otelConfig = remoteConfigToOtelConfig(transformed)
 		if (isOpenTelemetryConfigValid(otelConfig)) {
 			const client = new OpenTelemetryClientProvider(otelConfig)
 
 			if (client.meterProvider || client.loggerProvider) {
+				const provider = await new OpenTelemetryTelemetryProvider(client.meterProvider, client.loggerProvider, {
+					name: REMOTE_CONFIG_OTEL_PROVIDER_ID,
+					owner: client,
+				}).initialize()
 				telemetryService.addProvider(
-					await new OpenTelemetryTelemetryProvider(client.meterProvider, client.loggerProvider, {
-						name: REMOTE_CONFIG_OTEL_PROVIDER_ID,
-						bypassUserSettings: true,
-					}).initialize(),
+					adaptLegacyTelemetryProvider(provider, {
+						sink: { kind: "remote", origin: "organization", channels: ["usage"] },
+					}),
 				)
+			} else {
+				await client.dispose()
 			}
 		}
 	} catch (err) {
@@ -238,7 +242,7 @@ export function clearRemoteConfig() {
 		const stateManager = StateManager.get()
 
 		stateManager.clearRemoteConfig()
-		telemetryService.removeProvider(REMOTE_CONFIG_OTEL_PROVIDER_ID)
+		void telemetryService.removeProvider(REMOTE_CONFIG_OTEL_PROVIDER_ID)
 		// the remote config cline rules toggle state is stored in global state
 		stateManager.setGlobalState("remoteRulesToggles", {})
 		stateManager.setGlobalState("remoteWorkflowToggles", {})
@@ -300,7 +304,7 @@ export async function applyRemoteConfig(
 	stateManager.setGlobalState("remoteWorkflowToggles", syncedWorkflowToggles)
 	stateManager.setGlobalState("remoteSkillsToggles", syncedSkillToggles)
 
-	telemetryService.removeProvider(REMOTE_CONFIG_OTEL_PROVIDER_ID)
+	await telemetryService.removeProvider(REMOTE_CONFIG_OTEL_PROVIDER_ID)
 
 	// Profile-driven: provider selection is determined by profile names,
 	// not by flat provider fields. Remote config no longer overrides providers.

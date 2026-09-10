@@ -14,9 +14,9 @@ export type TelemetrySetting = "unset" | "enabled" | "disabled"
  * and are stored, gated and transported independently.
  */
 export interface ReportingConsents {
-	/** Product analytics, and the local runtime diagnostics that accompany it. */
+	/** Product analytics events and metrics. */
 	readonly usage: TelemetrySetting
-	/** Crash and exception reports. */
+	/** Crash, exception, and local runtime diagnostic signals. */
 	readonly error: TelemetrySetting
 }
 

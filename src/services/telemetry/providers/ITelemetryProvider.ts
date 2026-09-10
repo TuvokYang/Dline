@@ -86,7 +86,7 @@ export interface ITelemetryProvider {
 	/**
 	 * Record a counter metric (cumulative value that only increases)
 	 * Providers that don't support metrics may implement this as a no-op.
-	 * @param name Metric name (e.g., "cline.tokens.input")
+	 * @param name Metric name (e.g., "dline.tokens.input")
 	 * @param value Amount to increment by (default 1)
 	 * @param attributes Optional metric attributes including userId, ulid (JSON-serializable)
 	 */
@@ -95,7 +95,7 @@ export interface ITelemetryProvider {
 	/**
 	 * Record a histogram metric (distribution of values for percentile analysis)
 	 * Providers that don't support metrics may implement this as a no-op.
-	 * @param name Metric name (e.g., "cline.api.duration_seconds")
+	 * @param name Metric name (e.g., "dline.api.duration_seconds")
 	 * @param value Value to record
 	 * @param attributes Optional metric attributes including userId, ulid (JSON-serializable)
 	 */
@@ -104,7 +104,7 @@ export interface ITelemetryProvider {
 	/**
 	 * Record a gauge metric (point-in-time value that can go up or down)
 	 * Providers that don't support metrics may implement this as a no-op.
-	 * @param name Metric name (e.g., "cline.workspace.active_roots")
+	 * @param name Metric name (e.g., "dline.workspace.active_roots")
 	 * @param value Current value, or null to retire the series identified by name + attributes
 	 * @param attributes Optional metric attributes including userId, ulid (JSON-serializable). When retiring a series pass the same attribute set that was used when recording it.
 	 */

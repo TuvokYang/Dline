@@ -73,7 +73,7 @@ async function openSettings(page: Page, sidebar: Frame): Promise<void> {
 
 function diagnosticsConsentCheckbox(sidebar: Frame) {
 	// Runtime diagnostics follow the error consent, not product analytics consent.
-	return sidebar.getByText("Allow error reporting", { exact: true })
+	return sidebar.getByTestId("error-reporting-setting-checkbox")
 }
 
 /** The persisted consent value, or undefined before it has been written. */
@@ -90,7 +90,9 @@ function persistedErrorReportingSetting(dlineDir: string): string | undefined {
  * profile starts unchecked and a single click opts in.
  */
 async function grantDiagnosticsConsent(dlineDir: string, sidebar: Frame): Promise<void> {
-	await diagnosticsConsentCheckbox(sidebar).click()
+	const checkbox = diagnosticsConsentCheckbox(sidebar)
+	await checkbox.click()
+	await expect(checkbox).toBeChecked()
 	await expect.poll(() => persistedErrorReportingSetting(dlineDir), { timeout: 15_000 }).toBe("enabled")
 }
 

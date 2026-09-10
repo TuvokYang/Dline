@@ -19,6 +19,7 @@ import { BrowserSession } from "@services/browser/BrowserSession"
 import { UrlContentFetcher } from "@services/browser/UrlContentFetcher"
 import { McpHub } from "@services/mcp/McpHub"
 import { DlineRuntimeFileManager } from "@services/runtime-files/DlineRuntimeFileManager"
+import { startSignalSpan } from "@services/telemetry/service/pipeline-port"
 import { DEFAULT_API_PROVIDER } from "@shared/api"
 import {
 	describeCodeExecutionOperation,
@@ -705,7 +706,24 @@ export class ToolExecutor {
 	 * Main entry point for tool execution - called by Task class
 	 */
 	public async executeTool(block: ToolUse): Promise<void> {
-		await this.execute(block)
+		const span = startSignalSpan({
+			name: "tool.execution",
+			attributes: {
+				tool: block.name,
+				task_id: this.asToolConfig().ulid ?? "",
+				is_native: block.isNativeToolCall === true,
+				is_partial: block.partial === true,
+			},
+		})
+		try {
+			const handled = await this.execute(block)
+			span.setAttribute("handled", handled)
+			span.end(handled ? "success" : "failure")
+		} catch (error) {
+			span.recordException(error)
+			span.end("failure")
+			throw error
+		}
 	}
 
 	/** Consume one directive only after the owning runtime block has committed completion. */

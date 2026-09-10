@@ -27,8 +27,16 @@ import {
 import { UiEventRecorder } from "./events/ui-recorder"
 import { UserEventRecorder } from "./events/user-recorder"
 import { WorkspaceEventRecorder } from "./events/workspace-recorder"
+import type {
+	TelemetryChannel,
+	TelemetryProviderInput,
+	TelemetrySeverity,
+	TelemetrySpanHandle,
+	TelemetrySpanStartOptions,
+} from "./providers/capabilities"
 import type { ITelemetryProvider, TelemetryProperties } from "./providers/ITelemetryProvider"
 import { TelemetryCategoryPolicy } from "./service/category-policy"
+import { TelemetryChannelPolicy } from "./service/channel-policy"
 import { TelemetryProviderRegistry } from "./service/provider-registry"
 import { TelemetrySignalDispatcher } from "./service/signal-dispatcher"
 import { TelemetryProviderFactory } from "./TelemetryProviderFactory"
@@ -103,7 +111,7 @@ export class TelemetryService {
 			extension_version: extensionVersion,
 			platform: "unknown",
 			platform_version: "unknown",
-			cline_type: "unknown",
+			dline_type: "unknown",
 			os_type: os.platform(),
 			os_version: os.version(),
 			is_remote_workspace: false,
@@ -119,12 +127,18 @@ export class TelemetryService {
 	 *   providers exist rather than being dropped into an empty registry.
 	 */
 	constructor(
-		providers: ITelemetryProvider[],
+		providers: TelemetryProviderInput[],
 		telemetryMetadata: TelemetryMetadata,
-		options: { readonly deferProviders?: boolean } = {},
+		options: { readonly deferProviders?: boolean; readonly channelPolicy?: TelemetryChannelPolicy } = {},
 	) {
 		this.context = new TelemetryContext(telemetryMetadata)
-		this.registry = new TelemetryProviderRegistry(providers, { ready: !options.deferProviders })
+		const channelPolicy =
+			options.channelPolicy ??
+			(options.deferProviders ? TelemetryChannelPolicy.fromStateManager() : TelemetryChannelPolicy.allowAll())
+		this.registry = new TelemetryProviderRegistry(providers, {
+			ready: !options.deferProviders,
+			policy: channelPolicy,
+		})
 		this.categories = new TelemetryCategoryPolicy()
 		this.dispatcher = new TelemetrySignalDispatcher(this.context, this.registry, this.categories)
 
@@ -175,7 +189,7 @@ export class TelemetryService {
 				extension_version: extensionVersion,
 				platform: hostVersion.platform || "unknown",
 				platform_version: hostVersion.version || "unknown",
-				cline_type: hostVersion.clineType || "unknown",
+				dline_type: hostVersion.clineType || "unknown",
 				os_type: os.platform(),
 				os_version: os.version(),
 				// `remoteName` is normalized by the host bridge to `undefined` for local workspaces.
@@ -198,12 +212,36 @@ export class TelemetryService {
 		this.registry.markReady()
 	}
 
-	public addProvider(provider: ITelemetryProvider) {
+	public addProvider(provider: TelemetryProviderInput): void {
 		this.registry.add(provider)
 	}
 
-	public removeProvider(name: string) {
-		this.registry.remove(name)
+	public removeProvider(name: string): Promise<void> {
+		return this.registry.remove(name)
+	}
+
+	public startSpan(options: TelemetrySpanStartOptions, channel: TelemetryChannel = "runtime"): TelemetrySpanHandle {
+		return this.registry.startSpan(options, channel)
+	}
+
+	public recordHistogram(
+		name: string,
+		value: number,
+		attributes?: TelemetryProperties,
+		description?: string,
+		channel: TelemetryChannel = "runtime",
+	): void {
+		this.registry.recordHistogram(name, value, () => attributes ?? {}, description, false, channel, "info")
+	}
+
+	public recordGauge(
+		name: string,
+		value: number | null,
+		attributes?: TelemetryProperties,
+		description?: string,
+		channel: TelemetryChannel = "runtime",
+	): void {
+		this.registry.recordGauge(name, value, () => attributes ?? {}, description, false, channel, "info")
 	}
 
 	/**
@@ -228,6 +266,11 @@ export class TelemetryService {
 	 */
 	public capture(event: { event: string; properties?: TelemetryProperties }): void {
 		this.dispatcher.captureEvent(event.event, event.properties)
+	}
+
+	/** Route one content-safe runtime event through the error-consent channel. */
+	public captureRuntimeEvent(event: string, properties: TelemetryProperties, severity: TelemetrySeverity): void {
+		this.registry.logEvent(event, () => this.context.eventProperties(properties), false, "runtime", severity)
 	}
 
 	/**

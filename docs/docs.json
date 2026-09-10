@@ -161,7 +161,8 @@
 					{
 						"group": "Troubleshooting",
 						"pages": [
-							"troubleshooting/networking-and-proxies"
+							"troubleshooting/networking-and-proxies",
+							"troubleshooting/telemetry"
 						]
 					}
 				]

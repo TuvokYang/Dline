@@ -96,6 +96,21 @@ export interface OpenTelemetryClientValidConfig extends OpenTelemetryClientConfi
 	enabled: true
 }
 
+/** Default local collector shared by usage, runtime diagnostics, and traces. */
+export const DEFAULT_LOOPBACK_OTLP_ENDPOINT = "http://127.0.0.1:4318"
+
+/** Default usage sink; consent is enforced by the telemetry channel policy. */
+export function createDefaultLoopbackOpenTelemetryConfig(): OpenTelemetryClientValidConfig {
+	return {
+		enabled: true,
+		metricsExporter: "otlp",
+		logsExporter: "otlp",
+		otlpProtocol: "http/protobuf",
+		otlpEndpoint: DEFAULT_LOOPBACK_OTLP_ENDPOINT,
+		otlpInsecure: true,
+	}
+}
+
 const isTestEnv = envFlagEnabled(process.env.E2E_TEST) || envFlagEnabled(process.env.IS_TEST)
 
 export function remoteConfigToOtelConfig(settings: Partial<RemoteConfigFields>): OpenTelemetryClientConfig {

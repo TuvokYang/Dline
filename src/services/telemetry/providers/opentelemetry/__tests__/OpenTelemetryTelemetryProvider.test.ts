@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, it, vi } from "vitest"
 // sinon import removed
 import type { ClineAccountUserInfo } from "@/services/auth/AuthService"
 import * as distinctIdModule from "@/services/logging/distinctId"
+import { TELEMETRY_MASK_VALUE } from "../../../runtime/content-policy"
 import { OpenTelemetryTelemetryProvider } from "../OpenTelemetryTelemetryProvider"
 
 function makeUserInfo(
@@ -43,7 +44,6 @@ describe("OpenTelemetryTelemetryProvider.identifyUser", () => {
 
 		provider = new OpenTelemetryTelemetryProvider(null, loggerProvider, {
 			name: "test-otel",
-			bypassUserSettings: true,
 		})
 
 		getDistinctIdStub = vi.spyOn(distinctIdModule, "getDistinctId")
@@ -67,12 +67,12 @@ describe("OpenTelemetryTelemetryProvider.identifyUser", () => {
 
 		// Should include org attributes
 		const attrs = records[0].attributes
-		expect(attrs.user_id).to.equal("user-1")
-		expect(attrs.organization_id).to.equal("org-a")
-		expect(attrs.organization_name).to.equal("Org A")
-		expect(attrs.member_id).to.equal("member-1")
+		expect(attrs.user_id).to.equal(TELEMETRY_MASK_VALUE)
+		expect(attrs.organization_id).to.equal(TELEMETRY_MASK_VALUE)
+		expect(attrs.organization_name).to.equal(TELEMETRY_MASK_VALUE)
+		expect(attrs.member_id).to.equal(TELEMETRY_MASK_VALUE)
 		expect(attrs.member_role).to.equal("admin")
-		expect(attrs.alias).to.equal("machine-id-123")
+		expect(attrs.alias).to.equal(TELEMETRY_MASK_VALUE)
 
 		// Should update distinct ID
 		expect(setDistinctIdStub.mock.calls.length, "Should call setDistinctId once").to.equal(1)
@@ -101,10 +101,10 @@ describe("OpenTelemetryTelemetryProvider.identifyUser", () => {
 		expect(logRecords[0].body).to.equal("test_event")
 
 		const attrs = logRecords[0].attributes
-		expect(attrs.organization_id, "organization_id should be present in subsequent logs").to.equal("org-a")
-		expect(attrs.organization_name, "organization_name should be present").to.equal("Org A")
-		expect(attrs.member_id, "member_id should be present").to.equal("member-1")
-		expect(attrs.user_id, "user_id should be present").to.equal("user-1")
+		expect(attrs.organization_id, "organization_id should be masked in subsequent logs").to.equal(TELEMETRY_MASK_VALUE)
+		expect(attrs.organization_name, "organization_name should be masked").to.equal(TELEMETRY_MASK_VALUE)
+		expect(attrs.member_id, "member_id should be masked").to.equal(TELEMETRY_MASK_VALUE)
+		expect(attrs.user_id, "user_id should be masked").to.equal(TELEMETRY_MASK_VALUE)
 	})
 
 	it("should refresh org attributes when active org changes (same user ID)", () => {
@@ -118,8 +118,8 @@ describe("OpenTelemetryTelemetryProvider.identifyUser", () => {
 		provider.log("event_with_org_a")
 		let records = logExporter.getFinishedLogRecords()
 		expect(records.length).to.equal(1)
-		expect(records[0].attributes.organization_id).to.equal("org-a")
-		expect(records[0].attributes.organization_name).to.equal("Org A")
+		expect(records[0].attributes.organization_id).to.equal(TELEMETRY_MASK_VALUE)
+		expect(records[0].attributes.organization_name).to.equal(TELEMETRY_MASK_VALUE)
 
 		// Clear exporter for next assertion
 		logExporter.reset()
@@ -143,9 +143,9 @@ describe("OpenTelemetryTelemetryProvider.identifyUser", () => {
 		provider.log("event_with_org_b")
 		records = logExporter.getFinishedLogRecords()
 		expect(records.length).to.equal(1)
-		expect(records[0].attributes.organization_id, "Should reflect new org ID").to.equal("org-b")
-		expect(records[0].attributes.organization_name, "Should reflect new org name").to.equal("Org B")
-		expect(records[0].attributes.member_id, "Should reflect new member ID").to.equal("member-2")
+		expect(records[0].attributes.organization_id, "Organization ID should stay masked").to.equal(TELEMETRY_MASK_VALUE)
+		expect(records[0].attributes.organization_name, "Organization name should stay masked").to.equal(TELEMETRY_MASK_VALUE)
+		expect(records[0].attributes.member_id, "Member ID should stay masked").to.equal(TELEMETRY_MASK_VALUE)
 		expect(records[0].attributes.member_role, "Should reflect new role").to.equal("viewer")
 	})
 
@@ -167,8 +167,8 @@ describe("OpenTelemetryTelemetryProvider.identifyUser", () => {
 		expect(records.length).to.equal(1)
 
 		const attrs = records[0].attributes
-		expect(attrs.user_id).to.equal("user-1")
-		expect(attrs.user_name).to.equal("Solo User")
+		expect(attrs.user_id).to.equal(TELEMETRY_MASK_VALUE)
+		expect(attrs.user_name).to.equal(TELEMETRY_MASK_VALUE)
 		expect(attrs.organization_id, "organization_id should not be present").to.equal(undefined)
 		expect(attrs.organization_name, "organization_name should not be present").to.equal(undefined)
 		expect(attrs.member_id, "member_id should not be present").to.equal(undefined)
@@ -181,7 +181,7 @@ describe("OpenTelemetryTelemetryProvider.identifyUser", () => {
 		provider.identifyUser(makeUserInfo())
 		provider.log("with_org")
 		let records = logExporter.getFinishedLogRecords()
-		expect(records[0].attributes.organization_id).to.equal("org-a")
+		expect(records[0].attributes.organization_id).to.equal(TELEMETRY_MASK_VALUE)
 
 		logExporter.reset()
 
@@ -220,6 +220,19 @@ describe("OpenTelemetryTelemetryProvider.identifyUser", () => {
 		expect(records.length).to.equal(1)
 		expect(records[0].attributes.extension_version).to.equal("1.2.3")
 		expect(records[0].attributes.custom_prop).to.equal("hello")
-		expect(records[0].attributes.organization_id).to.equal("org-a")
+		expect(records[0].attributes.organization_id).to.equal(TELEMETRY_MASK_VALUE)
+	})
+
+	it("includes distinct_id for every consented usage, error, and runtime event channel", () => {
+		getDistinctIdStub.mockReturnValue("machine-id-123")
+
+		provider.log("usage_event", { telemetry_channel: "usage", provider: "openai-codex" })
+		provider.log("runtime_event", { telemetry_channel: "runtime", modelId: "gpt-5.3-codex" })
+		provider.log("error_event", { telemetry_channel: "error", apiFormat: "openai-responses" })
+
+		const records = logExporter.getFinishedLogRecords()
+		expect(records[0].attributes.distinct_id).to.equal("machine-id-123")
+		expect(records[1].attributes.distinct_id).to.equal("machine-id-123")
+		expect(records[2].attributes.distinct_id).to.equal("machine-id-123")
 	})
 })

@@ -340,13 +340,13 @@ Diagnostic and connection testing events.
 
 | Event | Description | Key Attributes |
 |-------|-------------|----------------|
-| `cline.test.connection` | OTEL connection test event from "Test OTEL Connection" flow | success, exporter_type, endpoint |
+| `dline.test.connection` | OTEL connection test event from "Test OTEL Connection" flow | success, exporter_type, endpoint |
 
-### Example: cline.test.connection
+### Example: dline.test.connection
 
 ```json
 {
-  "event": "cline.test.connection",
+  "event": "dline.test.connection",
   "timestamp": "2026-03-05T15:30:00Z",
   "attributes": {
     "success": true,
@@ -507,7 +507,7 @@ Create custom Datadog dashboards using these events:
         "type": "timeseries",
         "requests": [
           {
-            "q": "sum:cline.task.completed{*}.as_count()",
+            "q": "sum:dline.task.completed{*}.as_count()",
             "display_type": "bars"
           }
         ],
@@ -519,7 +519,7 @@ Create custom Datadog dashboards using these events:
         "type": "query_value",
         "requests": [
           {
-            "q": "sum:cline.task.tokens{*}",
+            "q": "sum:dline.task.tokens{*}",
             "aggregator": "sum"
           }
         ],

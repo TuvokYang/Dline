@@ -31,7 +31,7 @@ import { RuntimeEventPriority } from "./types"
 const PRIORITY_BY_LEVEL: Record<SignalLevel, RuntimeEventPriority> = {
 	debug: RuntimeEventPriority.Debug,
 	info: RuntimeEventPriority.Info,
-	performance: RuntimeEventPriority.Performance,
+	performance: RuntimeEventPriority.PerformanceSample,
 	error: RuntimeEventPriority.Error,
 	invariant: RuntimeEventPriority.Invariant,
 }

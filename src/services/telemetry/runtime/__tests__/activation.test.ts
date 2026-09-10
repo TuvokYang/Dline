@@ -36,7 +36,7 @@ function activate(telemetrySetting: TelemetrySetting, dataDir: string) {
 		dataDir,
 		telemetrySetting,
 		sessionId: SESSION_ID,
-		processorFactory: () => undefined,
+		onEvent: () => {},
 		samplerIntervalMs: 0,
 	})
 }

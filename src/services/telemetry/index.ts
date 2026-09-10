@@ -1,7 +1,20 @@
 export type {
+	EventTelemetryCapability,
+	JournalTelemetryCapability,
+	MetricTelemetryCapability,
+	TelemetryChannel,
+	TelemetryProviderBase,
+	TelemetryProviderCapability,
+	TelemetryProviderRegistration,
+	TelemetrySeverity,
+	TelemetrySinkDescriptor,
+	TraceTelemetryCapability,
+} from "./providers/capabilities"
+export type {
 	ITelemetryProvider,
 	TelemetrySettings,
 } from "./providers/ITelemetryProvider"
+export { adaptLegacyTelemetryProvider } from "./providers/LegacyTelemetryProviderAdapter"
 export { PostHogTelemetryProvider } from "./providers/posthog/PostHogTelemetryProvider"
 export {
 	type TelemetryProviderConfig,
@@ -23,6 +36,7 @@ export {
 } from "./TelemetryService"
 
 import { Logger } from "@/shared/services/Logger"
+import { installObservabilityPipeline } from "./service/pipeline-port"
 import { TelemetryService } from "./TelemetryService"
 
 /**
@@ -64,6 +78,13 @@ export function getTelemetryServiceSync(): TelemetryService {
 			deferProviders: !_shutDown,
 		})
 		_telemetryServiceInstance = service
+		installObservabilityPipeline({
+			recordHistogram: (name, value, attributes, description) =>
+				service.recordHistogram(name, value, attributes, description, "runtime"),
+			recordGauge: (name, value, attributes, description) =>
+				service.recordGauge(name, value, attributes, description, "runtime"),
+			startSpan: (options) => service.startSpan(options, "runtime"),
+		})
 		if (!_shutDown) {
 			_providerAttachment = attachDeferredDependencies(service)
 		}
@@ -112,6 +133,7 @@ export async function disposeTelemetryService(): Promise<void> {
 	// Set before the awaits so a call arriving mid-shutdown cannot start a new
 	// attachment that would outlive this one.
 	_shutDown = true
+	installObservabilityPipeline(undefined)
 
 	const service = _telemetryServiceInstance
 	if (!service) {
@@ -136,6 +158,7 @@ export async function disposeTelemetryService(): Promise<void> {
 export function resetTelemetryService(): void {
 	_telemetryServiceInstance = null
 	_providerAttachment = null
+	installObservabilityPipeline(undefined)
 	_shutDown = false
 }
 

@@ -67,7 +67,7 @@ class FakeProvider implements ITelemetryProvider {
 function createTelemetryService(provider: FakeProvider, overrides: Partial<TelemetryMetadata> = {}): TelemetryService {
 	return new TelemetryService([provider], {
 		extension_version: "test",
-		cline_type: "cline-unit-tests",
+		dline_type: "dline-unit-tests",
 		platform: "test-platform",
 		platform_version: "1.0.0",
 		os_type: "darwin",
@@ -87,7 +87,12 @@ describe("TelemetryService metrics", () => {
 
 		assert.deepStrictEqual(
 			provider.counters.map((entry) => entry.name),
-			[TelemetryService.METRICS.TASK.TOKENS_INPUT_TOTAL, TelemetryService.METRICS.TASK.TOKENS_OUTPUT_TOTAL],
+			[
+				TelemetryService.METRICS.API.REQUESTS_TOTAL,
+				TelemetryService.METRICS.TASK.TOKENS_TOTAL,
+				TelemetryService.METRICS.TASK.TOKENS_INPUT_TOTAL,
+				TelemetryService.METRICS.TASK.TOKENS_OUTPUT_TOTAL,
+			],
 		)
 		assert.deepStrictEqual(
 			provider.histograms.map((entry) => entry.name),
@@ -114,8 +119,11 @@ describe("TelemetryService metrics", () => {
 		assert.deepStrictEqual(
 			provider.counters.map((entry) => entry.name),
 			[
+				TelemetryService.METRICS.API.REQUESTS_TOTAL,
+				TelemetryService.METRICS.TASK.TOKENS_TOTAL,
 				TelemetryService.METRICS.TASK.TOKENS_INPUT_TOTAL,
 				TelemetryService.METRICS.TASK.TOKENS_OUTPUT_TOTAL,
+				TelemetryService.METRICS.CACHE.INPUT_TOTAL,
 				TelemetryService.METRICS.CACHE.WRITE_TOTAL,
 				TelemetryService.METRICS.CACHE.READ_TOTAL,
 				TelemetryService.METRICS.TASK.COST_TOTAL,
@@ -126,6 +134,7 @@ describe("TelemetryService metrics", () => {
 			[
 				TelemetryService.METRICS.TASK.TOKENS_INPUT_PER_RESPONSE,
 				TelemetryService.METRICS.TASK.TOKENS_OUTPUT_PER_RESPONSE,
+				TelemetryService.METRICS.CACHE.HIT_RATE_PERCENT,
 				TelemetryService.METRICS.CACHE.WRITE_PER_EVENT,
 				TelemetryService.METRICS.CACHE.READ_PER_EVENT,
 				TelemetryService.METRICS.TASK.COST_PER_EVENT,
@@ -169,7 +178,12 @@ describe("TelemetryService metrics", () => {
 
 		assert.deepStrictEqual(
 			provider.counters.map((entry) => entry.name),
-			[TelemetryService.METRICS.TASK.TOKENS_INPUT_TOTAL, TelemetryService.METRICS.TASK.TOKENS_OUTPUT_TOTAL],
+			[
+				TelemetryService.METRICS.API.REQUESTS_TOTAL,
+				TelemetryService.METRICS.TASK.TOKENS_TOTAL,
+				TelemetryService.METRICS.TASK.TOKENS_INPUT_TOTAL,
+				TelemetryService.METRICS.TASK.TOKENS_OUTPUT_TOTAL,
+			],
 		)
 		assert.deepStrictEqual(
 			provider.histograms.map((entry) => entry.name),
@@ -184,15 +198,29 @@ describe("TelemetryService metrics", () => {
 		service.captureTokenUsage("task-1", 120, 80, "anthropic", "model-a", {
 			cacheWriteTokens: 50,
 			cacheReadTokens: 30,
+			thoughtsTokens: 20,
+			apiFormat: ApiFormat.ANTHROPIC_CHAT,
 			totalCost: 0.42,
+			cacheUsageReported: true,
+			requestsPerMinute: 6,
+			tokensPerMinute: 18_000,
+			features: { hooks: true, subagents: false },
 		})
 
 		const tokenEvent = provider.logs.find((entry) => entry.event === "task.tokens")
 		assert.ok(tokenEvent)
 		assert.strictEqual(tokenEvent?.properties?.provider, "anthropic")
 		assert.strictEqual(tokenEvent?.properties?.model, "model-a")
+		assert.strictEqual(tokenEvent?.properties?.modelId, "model-a")
+		assert.strictEqual(tokenEvent?.properties?.apiFormatName, "ANTHROPIC_CHAT")
 		assert.strictEqual(tokenEvent?.properties?.cacheWriteTokens, 50)
 		assert.strictEqual(tokenEvent?.properties?.cacheReadTokens, 30)
+		assert.strictEqual(tokenEvent?.properties?.totalTokens, 300)
+		assert.strictEqual(tokenEvent?.properties?.cacheHit, true)
+		assert.strictEqual(tokenEvent?.properties?.cacheHitRate, 15)
+		assert.strictEqual(tokenEvent?.properties?.requestsPerMinute, 6)
+		assert.strictEqual(tokenEvent?.properties?.tokensPerMinute, 18_000)
+		assert.deepStrictEqual(tokenEvent?.properties?.features, { hooks: true, subagents: false })
 		assert.strictEqual(tokenEvent?.properties?.totalCost, 0.42)
 	})
 
@@ -229,7 +257,7 @@ describe("TelemetryService metrics", () => {
 				TelemetryService.METRICS.TASK.COST_TOTAL,
 			],
 		)
-		const costEntry = provider.counters.find((entry) => entry.name === "cline.cost.total")
+		const costEntry = provider.counters.find((entry) => entry.name === "dline.cost.total")
 		assert.ok(costEntry)
 		assert.strictEqual(costEntry?.attributes.ulid, "task-2")
 		assert.strictEqual(costEntry?.attributes.provider, "openai")
@@ -260,7 +288,7 @@ describe("TelemetryService metrics", () => {
 		const service = createTelemetryService(provider)
 
 		service.captureWorkspaceInitialized(3, ["Git"], 500)
-		const initialSeries = provider.gauges.get("cline.workspace.active_roots")
+		const initialSeries = provider.gauges.get("dline.workspace.active_roots")
 		assert.ok(initialSeries)
 		assert.strictEqual(initialSeries.size, 1)
 		const [initialEntry] = Array.from(initialSeries.values())
@@ -269,7 +297,7 @@ describe("TelemetryService metrics", () => {
 		assert.strictEqual(initialEntry.attributes.extension_version, "test")
 
 		service.captureWorkspaceInitialized(1, ["Git"], 200)
-		const updatedSeries = provider.gauges.get("cline.workspace.active_roots")
+		const updatedSeries = provider.gauges.get("dline.workspace.active_roots")
 		assert.ok(updatedSeries)
 		assert.strictEqual(updatedSeries.size, 1)
 		const [updatedEntry] = Array.from(updatedSeries.values())

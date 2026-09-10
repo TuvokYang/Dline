@@ -1,5 +1,6 @@
 import { ApiFormat, apiFormatToJSON } from "@shared/proto/dline/models/metadata"
 import type { TaskFeedbackType } from "@shared/WebviewMessage"
+import { calculateApiUsageStatistics } from "@/shared/api-usage"
 import { Logger } from "@/shared/services/Logger"
 import type { Mode } from "@/shared/storage/types"
 import type { TelemetrySignalSink } from "../service/signal-sink"
@@ -16,7 +17,13 @@ export interface TokenUsage {
 	tokensOut?: number
 	cacheWriteTokens?: number
 	cacheReadTokens?: number
+	thoughtsTokens?: number
+	apiFormat?: ApiFormat
 	totalCost?: number
+	cacheUsageReported?: boolean
+	requestsPerMinute?: number
+	tokensPerMinute?: number
+	features?: Readonly<Record<string, boolean>>
 }
 
 /**
@@ -187,36 +194,76 @@ export class TaskEventRecorder extends DomainRecorder {
 		model: string,
 		options?: TokenUsage,
 	): void {
+		const statistics = calculateApiUsageStatistics({
+			inputTokens: tokensIn,
+			outputTokens: tokensOut,
+			cacheWriteTokens: options?.cacheWriteTokens,
+			cacheReadTokens: options?.cacheReadTokens,
+			thoughtsTokens: options?.thoughtsTokens,
+		})
+		const cacheUsageReported =
+			options?.cacheUsageReported ?? (options?.cacheWriteTokens !== undefined || options?.cacheReadTokens !== undefined)
+		const apiFormatName = options?.apiFormat !== undefined ? apiFormatToJSON(options.apiFormat) : undefined
+
 		this.sink.captureEvent(TELEMETRY_EVENTS.TASK.TOKEN_USAGE, {
 			ulid,
 			tokensIn,
 			tokensOut,
 			provider,
 			model,
+			modelId: model,
 			...options,
+			apiFormatName,
+			totalTokens: statistics.totalTokens,
+			...(cacheUsageReported
+				? {
+						cacheHit: statistics.cacheHit,
+						cacheHitRate: statistics.cacheHitRatePercent,
+					}
+				: {}),
 		})
 
-		const attributes = { ulid, provider, model }
+		const attributes = { ulid, provider, model, apiFormat: apiFormatName }
+		this.sink.recordCounter(TELEMETRY_METRICS.API.REQUESTS_TOTAL, 1, attributes, "Completed provider requests")
+		this.sink.recordCounter(
+			TELEMETRY_METRICS.TASK.TOKENS_TOTAL,
+			statistics.totalTokens,
+			attributes,
+			"Total provider tokens including input, output, cache, and reasoning",
+		)
 
 		if (Number.isFinite(tokensIn)) {
-			const value = tokensIn ?? 0
-			this.sink.recordCounter(TELEMETRY_METRICS.TASK.TOKENS_INPUT_TOTAL, value, attributes)
-			this.sink.recordHistogram(TELEMETRY_METRICS.TASK.TOKENS_INPUT_PER_RESPONSE, value, attributes)
+			this.sink.recordCounter(TELEMETRY_METRICS.TASK.TOKENS_INPUT_TOTAL, tokensIn, attributes)
+			this.sink.recordHistogram(TELEMETRY_METRICS.TASK.TOKENS_INPUT_PER_RESPONSE, tokensIn, attributes)
 		}
 
 		if (Number.isFinite(tokensOut)) {
-			const value = tokensOut ?? 0
-			this.sink.recordCounter(TELEMETRY_METRICS.TASK.TOKENS_OUTPUT_TOTAL, value, attributes)
-			this.sink.recordHistogram(TELEMETRY_METRICS.TASK.TOKENS_OUTPUT_PER_RESPONSE, value, attributes)
+			this.sink.recordCounter(TELEMETRY_METRICS.TASK.TOKENS_OUTPUT_TOTAL, tokensOut, attributes)
+			this.sink.recordHistogram(TELEMETRY_METRICS.TASK.TOKENS_OUTPUT_PER_RESPONSE, tokensOut, attributes)
 		}
 
-		if (Number.isFinite(options?.cacheWriteTokens)) {
+		if (cacheUsageReported) {
+			this.sink.recordCounter(
+				TELEMETRY_METRICS.CACHE.INPUT_TOTAL,
+				statistics.totalInputTokens,
+				attributes,
+				"Input-side tokens eligible for prompt caching",
+			)
+			this.sink.recordHistogram(
+				TELEMETRY_METRICS.CACHE.HIT_RATE_PERCENT,
+				statistics.cacheHitRatePercent,
+				attributes,
+				"Token-weighted prompt cache hit percentage per provider request",
+			)
+		}
+
+		if (cacheUsageReported && Number.isFinite(options?.cacheWriteTokens)) {
 			const cacheWriteTokens = options?.cacheWriteTokens ?? 0
 			this.sink.recordCounter(TELEMETRY_METRICS.CACHE.WRITE_TOTAL, cacheWriteTokens, attributes)
 			this.sink.recordHistogram(TELEMETRY_METRICS.CACHE.WRITE_PER_EVENT, cacheWriteTokens, attributes)
 		}
 
-		if (Number.isFinite(options?.cacheReadTokens)) {
+		if (cacheUsageReported && Number.isFinite(options?.cacheReadTokens)) {
 			const cacheReadTokens = options?.cacheReadTokens ?? 0
 			this.sink.recordCounter(TELEMETRY_METRICS.CACHE.READ_TOTAL, cacheReadTokens, attributes)
 			this.sink.recordHistogram(TELEMETRY_METRICS.CACHE.READ_PER_EVENT, cacheReadTokens, attributes)

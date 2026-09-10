@@ -4,12 +4,15 @@ import {
 	type RuntimeTelemetryAuthorizationStatus,
 	TelemetryAuthorizationStore,
 } from "@/core/storage/secrets/TelemetryAuthorizationStore"
+import { RuntimeEventRecorder } from "../events/runtime"
+import { recordRuntimeGauge } from "../service/pipeline-port"
 import { DiagnosisPipeline } from "./analysis/diagnosis-pipeline"
 import type { RootCauseDiagnosis } from "./analysis/root-cause-types"
-import { RuntimeSampler } from "./performance/runtime-sampler"
+import { RUNTIME_METRICS, RuntimeSampler, type RuntimeSnapshot } from "./performance/runtime-sampler"
 import { DEFAULT_METRIC_BUDGETS, type PolicyVerdict, ThresholdPolicy } from "./performance/threshold-policy"
 import { RuntimeEventBus } from "./runtime-event-bus"
 import { RuntimeTelemetryService } from "./service"
+import { RuntimeSignalPipeline } from "./signal-pipeline"
 import { enforceJournalRetention } from "./transports/journal-retention"
 import { OtelLogTransport, type OtelLogTransportOptions, type OtelLogTransportStats } from "./transports/otel-log-transport"
 import { SessionJournal, type SessionJournalStats } from "./transports/session-journal"
@@ -90,6 +93,8 @@ export interface RuntimeTelemetryLifecycleOptions {
 	 * Tests pass their own sink to observe classification without a host.
 	 */
 	readonly onDiagnosis?: (diagnosis: RootCauseDiagnosis) => void
+	/** Canonical provider-registry sink used by the production composition root. */
+	readonly onEvent?: (event: RuntimeTelemetryEvent) => void
 	/**
 	 * Bus to drain.
 	 *
@@ -126,7 +131,12 @@ export class RuntimeTelemetryLifecycle {
 		this.bus = options.bus ?? new RuntimeEventBus({ sessionId: options.sessionId, capacity: options.capacity })
 		this.authorization = new TelemetryAuthorizationStore({ dataDir: options.dataDir })
 		this.sessionCapacity = options.capacity ?? DEFAULT_SESSION_EVENT_CAPACITY
-		this.service = new RuntimeTelemetryService({ bus: this.bus, enabled: () => this.enabled })
+		const signalPipeline = new RuntimeSignalPipeline(this.bus)
+		const recorder = new RuntimeEventRecorder({
+			enabled: () => this.enabled,
+			accept: (signal) => signalPipeline.accept(signal),
+		})
+		this.service = new RuntimeTelemetryService({ bus: this.bus, enabled: () => this.enabled, recorder })
 		this.policy = new ThresholdPolicy({ budgets: DEFAULT_METRIC_BUDGETS })
 	}
 
@@ -207,7 +217,8 @@ export class RuntimeTelemetryLifecycle {
 			// The journal is the durable record and the transport is
 			// best-effort, so a collector problem never blocks the disk write.
 			this.journal?.append(event)
-			this.transport?.enqueue(event)
+			if (this.options.onEvent) this.options.onEvent(event)
+			else this.transport?.enqueue(event)
 			this.retainForExport(event)
 		}
 		await Promise.all([this.journal?.flush(), this.transport?.flush()])
@@ -254,12 +265,16 @@ export class RuntimeTelemetryLifecycle {
 			flushIntervalMs: this.options.journalFlushIntervalMs,
 			maxBytes: this.options.journalMaxBytes,
 		})
-		this.transport = new OtelLogTransport({
-			sessionId: this.options.sessionId,
-			endpoint: this.options.otlpEndpoint ?? DEFAULT_OTLP_ENDPOINT,
-			protocol: this.options.otlpProtocol,
-			processorFactory: this.options.processorFactory,
-		})
+		// Standalone compatibility path. Production supplies `onEvent` and uses
+		// the capability registry, where local journal delivery is ordered first.
+		if (!this.options.onEvent) {
+			this.transport = new OtelLogTransport({
+				sessionId: this.options.sessionId,
+				endpoint: this.options.otlpEndpoint ?? DEFAULT_OTLP_ENDPOINT,
+				protocol: this.options.otlpProtocol,
+				processorFactory: this.options.processorFactory,
+			})
+		}
 		// Enable before starting the sampler: the service drops events while
 		// disabled, so a verdict arriving first would be silently discarded.
 		this.enabled = true
@@ -330,9 +345,17 @@ export class RuntimeTelemetryLifecycle {
 		this.sampler = new RuntimeSampler({
 			policy: this.policy,
 			intervalMs: this.options.samplerIntervalMs,
+			onSnapshot: (snapshot) => this.publishSnapshot(snapshot),
 			onVerdict: (verdict) => this.publishVerdict(verdict),
 		})
 		this.sampler.start()
+	}
+
+	private publishSnapshot(snapshot: RuntimeSnapshot): void {
+		recordRuntimeGauge(RUNTIME_METRICS.eventLoopDelayMs, snapshot.eventLoopDelayMs, "Event loop delay in milliseconds")
+		recordRuntimeGauge(RUNTIME_METRICS.cpuUtilizationRatio, snapshot.cpuUtilizationRatio, "CPU utilisation ratio")
+		recordRuntimeGauge(RUNTIME_METRICS.heapGrowthBytes, snapshot.heapGrowthBytes, "Heap growth in bytes")
+		recordRuntimeGauge(RUNTIME_METRICS.rssBytes, snapshot.rssBytes, "Resident set size in bytes")
 	}
 
 	private publishVerdict(verdict: PolicyVerdict): void {
@@ -340,7 +363,7 @@ export class RuntimeTelemetryLifecycle {
 			// The breached value is the duration for delay-like metrics and a
 			// ratio otherwise, so it is reported both as the phase duration and
 			// under its own metric name rather than being reinterpreted.
-			this.service.recordPhase(`${verdict.anomaly.metric}.breach`, verdict.anomaly.value, {
+			this.service.recordPerformanceAnomaly(`${verdict.anomaly.metric}.breach`, {
 				component: "runtime",
 				operation: "sample",
 				metric: verdict.anomaly.metric,

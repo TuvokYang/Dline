@@ -152,7 +152,7 @@ describe("SessionJournal content safety", () => {
 					name: "Error",
 					message: "request failed",
 					code: "ERR_BAD_RESPONSE",
-					fingerprint: "Error|ERR_BAD_RESPONSE|request failed|-",
+					fingerprint: "error-fingerprint",
 				},
 			}),
 		)
@@ -175,6 +175,8 @@ describe("SessionJournal content safety", () => {
 		const attributeKeys = record.attributes.map((entry: { key: string }) => entry.key)
 		expect(attributeKeys).toContain(RUNTIME_ATTRIBUTE_KEYS.sequence)
 		expect(attributeKeys).toContain(EXCEPTION_ATTRIBUTE_KEYS.type)
+		expect(JSON.stringify(record)).not.toContain("request failed")
+		expect(JSON.stringify(record)).toContain("*****")
 		// The session identifies the host run and belongs to the resource, so it
 		// must not be repeated on every record.
 		expect(attributeKeys).not.toContain("sessionId")

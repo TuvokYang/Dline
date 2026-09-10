@@ -69,9 +69,13 @@ export function attachScopedProcessors(
 export function detachScope(scopeName: string, ownerId: string): void {
 	router?.clearRoute(scopeName, ownerId)
 	if (router && router.scopeCount === 0) {
+		const released = provider
 		provider = undefined
 		router = undefined
 		sharedResource = undefined
+		// No routes remain, so shutdown cannot affect another subsystem. The
+		// detached owner closes its own processors separately.
+		void released?.shutdown().catch(() => undefined)
 	}
 }
 

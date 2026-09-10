@@ -27,13 +27,13 @@ export async function testOtelConnection(_controller: Controller, _: EmptyReques
 			})
 		}
 
-		otelProvider.log("cline.test.connection", {
+		otelProvider.log("dline.test.connection", {
 			test: true,
 			timestamp: new Date().toISOString(),
 			source: "remote_config_settings",
 		})
 
-		otelProvider.recordCounter("cline.test.connection", 1)
+		otelProvider.recordCounter("dline.test.connection", 1)
 
 		await otelProvider.forceFlush()
 

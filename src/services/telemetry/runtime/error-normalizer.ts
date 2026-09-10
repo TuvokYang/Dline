@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto"
 import { redactDiagnosticString } from "@/shared/services/logging/safe-diagnostic-value"
+import { TELEMETRY_MASK_VALUE } from "./content-policy"
 import type { NormalizedRuntimeError } from "./types"
 
 /**
@@ -88,30 +90,31 @@ function stripVolatile(value: string): string {
  */
 function buildFingerprint(name: string, code: string | undefined, message: string, sourceFrame: string | undefined): string {
 	const sourceFile = sourceFrame?.replace(/:\d+$/, "")
-	return [name, code ?? "-", stripVolatile(message), sourceFile ?? "-"].join("|")
+	const groupingMaterial = [name, code ?? "-", stripVolatile(message), sourceFile ?? "-"].join("|")
+	return createHash("sha256").update(groupingMaterial).digest("hex").slice(0, 16)
 }
 
 export function normalizeRuntimeError(value: unknown, depth = 0): NormalizedRuntimeError {
 	if (typeof value === "string") {
-		const message = truncate(value)
+		const fingerprintMessage = truncate(value)
 		return {
 			name: "Error",
-			message,
-			fingerprint: buildFingerprint("Error", undefined, message, undefined),
+			message: TELEMETRY_MASK_VALUE,
+			fingerprint: buildFingerprint("Error", undefined, fingerprintMessage, undefined),
 		}
 	}
 	if (value === null || typeof value !== "object") {
-		const message = truncate(String(value))
+		const fingerprintMessage = truncate(String(value))
 		return {
 			name: "NonError",
-			message,
-			fingerprint: buildFingerprint("NonError", undefined, message, undefined),
+			message: TELEMETRY_MASK_VALUE,
+			fingerprint: buildFingerprint("NonError", undefined, fingerprintMessage, undefined),
 		}
 	}
 
 	const fields = value as ErrorLikeFields
 	const name = readString(fields.name) ?? (value instanceof Error ? value.constructor.name : "Error")
-	const message = truncate(readString(fields.message) ?? "")
+	const fingerprintMessage = truncate(readString(fields.message) ?? "")
 	const code = readString(fields.code)
 	const status = readNumber(fields.status) ?? readNumber(fields.statusCode)
 	const sourceFrame = extractSourceFrame(readString(fields.stack))
@@ -121,11 +124,11 @@ export function normalizeRuntimeError(value: unknown, depth = 0): NormalizedRunt
 
 	return {
 		name,
-		message,
+		message: TELEMETRY_MASK_VALUE,
 		code,
 		status,
 		sourceFrame,
-		fingerprint: buildFingerprint(name, code, message, sourceFrame),
+		fingerprint: buildFingerprint(name, code, fingerprintMessage, sourceFrame),
 		cause,
 	}
 }

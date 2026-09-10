@@ -163,6 +163,43 @@ describe("telemetry module boundaries", () => {
 		}
 	})
 
+	it("does not expose parallel runtime owners or legacy OTLP activation config", async () => {
+		const source = await fs.readFile(path.join(TELEMETRY_ROOT, "runtime", "index.ts"), "utf8")
+		const activation = await fs.readFile(path.join(TELEMETRY_ROOT, "runtime", "activation.ts"), "utf8")
+
+		for (const retiredExport of ["RuntimeTelemetryService", "RuntimeTelemetryLifecycle", "OtelLogTransport"]) {
+			expect(source, `${retiredExport} must stay internal to the runtime package`).not.toContain(retiredExport)
+		}
+		for (const retiredConfig of ["otlpEndpoint", "otlpProtocol", "processorFactory"]) {
+			expect(activation, `${retiredConfig} must not configure a parallel runtime exporter`).not.toContain(retiredConfig)
+		}
+	})
+
+	it("routes production runtime events through the canonical registry", async () => {
+		const compositionRoot = await fs.readFile(path.join(process.cwd(), "src", "common.ts"), "utf8")
+
+		expect(compositionRoot).toContain("onEvent: (event) => forwardRuntimeEvent(event, telemetryService)")
+	})
+
+	it("keeps normal OpenTelemetry diagnostics at debug level", async () => {
+		const files = await productionFilesUnder(path.join(TELEMETRY_ROOT, "providers", "opentelemetry"))
+		expect(files.length).toBeGreaterThan(0)
+
+		for (const file of files) {
+			const source = await fs.readFile(file, "utf8")
+			expect(source, `${path.basename(file)} must not emit high-volume OTLP status at log level`).not.toContain(
+				"Logger.log(",
+			)
+		}
+	})
+
+	it("uses the Dline namespace for exported metric names", async () => {
+		const catalog = await fs.readFile(path.join(TELEMETRY_ROOT, "events", "catalog.ts"), "utf8")
+
+		expect(catalog).not.toMatch(/["']cline\.[a-z]/)
+		expect(catalog).toContain('"dline.grpc.response.size_bytes"')
+	})
+
 	it("keeps the pipeline port free of dependencies", async () => {
 		// The port is the shared contract; anything it imports becomes a
 		// dependency of every producer and pipeline in the package.

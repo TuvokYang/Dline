@@ -1,5 +1,6 @@
 import { SeverityNumber } from "@opentelemetry/api-logs"
 import { describe, expect, it } from "vitest"
+import { TELEMETRY_MASK_VALUE } from "../content-policy"
 import {
 	EXCEPTION_ATTRIBUTE_KEYS,
 	fromSeverityNumber,
@@ -37,7 +38,8 @@ describe("severity mapping", () => {
 	it("maps every priority onto the standard severity scale", () => {
 		expect(toSeverityNumber(RuntimeEventPriority.Debug)).toBe(SeverityNumber.DEBUG)
 		expect(toSeverityNumber(RuntimeEventPriority.Info)).toBe(SeverityNumber.INFO)
-		expect(toSeverityNumber(RuntimeEventPriority.Performance)).toBe(SeverityNumber.WARN)
+		expect(toSeverityNumber(RuntimeEventPriority.Performance)).toBe(SeverityNumber.INFO)
+		expect(toSeverityNumber(RuntimeEventPriority.PerformanceAnomaly)).toBe(SeverityNumber.WARN)
 		expect(toSeverityNumber(RuntimeEventPriority.Error)).toBe(SeverityNumber.ERROR)
 		expect(toSeverityNumber(RuntimeEventPriority.Invariant)).toBe(SeverityNumber.FATAL)
 	})
@@ -46,13 +48,20 @@ describe("severity mapping", () => {
 		const priorities = [
 			RuntimeEventPriority.Debug,
 			RuntimeEventPriority.Info,
-			RuntimeEventPriority.Performance,
+			RuntimeEventPriority.PerformanceAnomaly,
 			RuntimeEventPriority.Error,
 			RuntimeEventPriority.Invariant,
 		]
 		for (const priority of priorities) {
 			expect(fromSeverityNumber(toSeverityNumber(priority))).toBe(priority)
 		}
+	})
+
+	it("maps ordinary performance samples to INFO while preserving WARN for anomalies", () => {
+		expect(fromSeverityNumber(toSeverityNumber(RuntimeEventPriority.PerformanceSample))).toBe(RuntimeEventPriority.Info)
+		expect(fromSeverityNumber(toSeverityNumber(RuntimeEventPriority.PerformanceAnomaly))).toBe(
+			RuntimeEventPriority.PerformanceAnomaly,
+		)
 	})
 
 	it("ranks severities that fall between the named levels", () => {
@@ -109,10 +118,10 @@ describe("attribute mapping", () => {
 		expect(attributes).not.toHaveProperty(RUNTIME_ATTRIBUTE_KEYS.workspaceId)
 	})
 
-	it("publishes identity fields when present", () => {
+	it("publishes masked identity fields when present", () => {
 		const attributes = toLogAttributes(event({ context: { sessionId: "s", taskId: "task-7" } }))
 
-		expect(attributes[RUNTIME_ATTRIBUTE_KEYS.taskId]).toBe("task-7")
+		expect(attributes[RUNTIME_ATTRIBUTE_KEYS.taskId]).toBe(TELEMETRY_MASK_VALUE)
 	})
 
 	it("maps errors onto the exception semantic conventions", () => {
@@ -130,7 +139,7 @@ describe("attribute mapping", () => {
 		)
 
 		expect(attributes[EXCEPTION_ATTRIBUTE_KEYS.type]).toBe("AxiosError")
-		expect(attributes[EXCEPTION_ATTRIBUTE_KEYS.message]).toBe("timeout")
+		expect(attributes[EXCEPTION_ATTRIBUTE_KEYS.message]).toBe(TELEMETRY_MASK_VALUE)
 		expect(attributes[EXCEPTION_ATTRIBUTE_KEYS.stacktrace]).toBe("src/api/provider.ts:42")
 	})
 })

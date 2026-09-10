@@ -18,6 +18,9 @@
 /** Kind of fact a signal reports, independent of any queue implementation. */
 export type SignalLevel = "debug" | "info" | "performance" | "error" | "invariant"
 
+/** Stable field-preserving replacement for telemetry content, credentials and identities. */
+export const TELEMETRY_MASK_VALUE = "*****"
+
 /** Producer-supplied dimensions. The pipeline applies the content policy. */
 export type SignalAttributes = Readonly<Record<string, unknown>>
 
@@ -53,6 +56,30 @@ export interface SignalPipeline {
 	accept(signal: TelemetrySignal): void
 }
 
+/** Low-cardinality scalar attributes accepted by metric and trace backends. */
+export type ObservabilityAttributes = Readonly<Record<string, string | number | boolean>>
+
+export interface SignalSpanHandle {
+	readonly active: boolean
+	setAttribute(name: string, value: string | number | boolean): void
+	recordException(error: unknown): void
+	end(outcome?: "success" | "failure" | "cancelled", endTime?: number): void
+}
+
+export interface SignalSpanStartOptions {
+	readonly name: string
+	readonly attributes?: ObservabilityAttributes
+	readonly parent?: SignalSpanHandle
+	readonly startTime?: number
+}
+
+/** Standard metric/trace destination installed by the process telemetry owner. */
+export interface ObservabilityPipeline {
+	recordHistogram(name: string, value: number, attributes?: ObservabilityAttributes, description?: string): void
+	recordGauge(name: string, value: number | null, attributes?: ObservabilityAttributes, description?: string): void
+	startSpan(options: SignalSpanStartOptions): SignalSpanHandle
+}
+
 /**
  * Bound on the bootstrap buffer.
  *
@@ -68,10 +95,37 @@ export interface SignalPipeline {
 export const BOOTSTRAP_CAPACITY = 256
 
 let pipeline: SignalPipeline | undefined
+let observabilityPipeline: ObservabilityPipeline | undefined
 let recordingEnabled: () => boolean = () => true
 
 const bootstrapBuffer: TelemetrySignal[] = []
 let bootstrapDropped = 0
+
+type ObservabilityBootstrapRecord =
+	| {
+			readonly kind: "histogram"
+			readonly name: string
+			readonly value: number
+			readonly attributes?: ObservabilityAttributes
+			readonly description?: string
+	  }
+	| {
+			readonly kind: "gauge"
+			readonly name: string
+			readonly value: number | null
+			readonly attributes?: ObservabilityAttributes
+			readonly description?: string
+	  }
+	| {
+			readonly kind: "span"
+			readonly options: SignalSpanStartOptions
+			readonly attributes: ObservabilityAttributes
+			readonly error?: unknown
+			readonly outcome: "success" | "failure" | "cancelled"
+			readonly endTime?: number
+	  }
+
+const observabilityBootstrapBuffer: ObservabilityBootstrapRecord[] = []
 
 /**
  * Install the pipeline that receives subsequent signals.
@@ -92,6 +146,43 @@ export function installSignalPipeline(next: SignalPipeline | undefined): SignalP
 	const previous = pipeline
 	pipeline = next
 	return previous
+}
+
+/** Install or clear the standard metrics/traces destination. */
+export function installObservabilityPipeline(next: ObservabilityPipeline | undefined): ObservabilityPipeline | undefined {
+	const previous = observabilityPipeline
+	observabilityPipeline = next
+	if (next && observabilityBootstrapBuffer.length > 0) {
+		const held = observabilityBootstrapBuffer.splice(0)
+		if (recordingEnabled()) {
+			for (const record of held) replayObservabilityRecord(next, record)
+		}
+	}
+	return previous
+}
+
+/** Record one standard duration distribution when a destination is installed. */
+export function recordDurationHistogram(value: number, attributes: ObservabilityAttributes): void {
+	const record = {
+		kind: "histogram" as const,
+		name: "dline.runtime.operation.duration",
+		value,
+		attributes,
+		description: "Runtime operation duration in milliseconds",
+	}
+	if (observabilityPipeline) observabilityPipeline.recordHistogram(record.name, value, attributes, record.description)
+	else bufferObservabilityRecord(record)
+}
+
+/** Record one point-in-time runtime health value. */
+export function recordRuntimeGauge(name: string, value: number, description: string): void {
+	if (observabilityPipeline) observabilityPipeline.recordGauge(name, value, undefined, description)
+	else bufferObservabilityRecord({ kind: "gauge", name, value, description })
+}
+
+/** Start a real span when tracing is installed and authorised. */
+export function startSignalSpan(options: SignalSpanStartOptions): SignalSpanHandle {
+	return observabilityPipeline?.startSpan(options) ?? new BufferedSignalSpan(options)
 }
 
 /**
@@ -159,9 +250,68 @@ export function drainBootstrapSignals(): BootstrapSignalDrain {
 export function discardBootstrapSignals(): void {
 	bootstrapBuffer.length = 0
 	bootstrapDropped = 0
+	observabilityBootstrapBuffer.length = 0
 }
 
 /** How many signals are currently buffered. */
 export function bootstrapSignalCount(): number {
 	return bootstrapBuffer.length
+}
+
+export function observabilityBootstrapCount(): number {
+	return observabilityBootstrapBuffer.length
+}
+
+function bufferObservabilityRecord(record: ObservabilityBootstrapRecord): void {
+	if (observabilityBootstrapBuffer.length >= BOOTSTRAP_CAPACITY) observabilityBootstrapBuffer.shift()
+	observabilityBootstrapBuffer.push(record)
+}
+
+function replayObservabilityRecord(target: ObservabilityPipeline, record: ObservabilityBootstrapRecord): void {
+	switch (record.kind) {
+		case "histogram":
+			target.recordHistogram(record.name, record.value, record.attributes, record.description)
+			return
+		case "gauge":
+			target.recordGauge(record.name, record.value, record.attributes, record.description)
+			return
+		case "span": {
+			const span = target.startSpan({ ...record.options, attributes: record.attributes })
+			if (record.error !== undefined) span.recordException(record.error)
+			span.end(record.outcome, record.endTime)
+			return
+		}
+	}
+}
+
+class BufferedSignalSpan implements SignalSpanHandle {
+	readonly active = true
+	private readonly attributes: Record<string, string | number | boolean>
+	private error: unknown
+	private ended = false
+
+	constructor(private readonly options: SignalSpanStartOptions) {
+		this.attributes = { ...options.attributes }
+	}
+
+	setAttribute(name: string, value: string | number | boolean): void {
+		if (!this.ended) this.attributes[name] = value
+	}
+
+	recordException(error: unknown): void {
+		if (!this.ended) this.error = error
+	}
+
+	end(outcome: "success" | "failure" | "cancelled" = "success", endTime?: number): void {
+		if (this.ended) return
+		this.ended = true
+		bufferObservabilityRecord({
+			kind: "span",
+			options: this.options,
+			attributes: this.attributes,
+			error: this.error,
+			outcome,
+			endTime,
+		})
+	}
 }

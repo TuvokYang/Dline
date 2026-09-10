@@ -1,6 +1,4 @@
-import { ClineEndpoint } from "@/config"
 import { isPostHogConfigValid, PostHogClientConfig, posthogConfig } from "@/shared/services/config/posthog-config"
-import { Logger } from "@/shared/services/Logger"
 import { ClineError } from "./ClineError"
 import { IErrorProvider } from "./providers/IErrorProvider"
 import { PostHogErrorProvider } from "./providers/PostHogErrorProvider"
@@ -51,19 +49,12 @@ export class ErrorProviderFactory {
 	}
 
 	/**
-	 * Gets the default error provider configuration
-	 * @returns Default configuration using PostHog, or no-op for self-hosted mode
+	 * Gets the default compatibility provider configuration.
+	 * Remote error sinks must be registered explicitly through TelemetryService.
 	 */
 	public static getDefaultConfig(): ErrorProviderConfig {
-		// Use no-op provider in self-hosted mode to avoid external network calls
-		if (ClineEndpoint.isSelfHosted()) {
-			return {
-				type: "no-op",
-				config: posthogConfig,
-			}
-		}
 		return {
-			type: "posthog",
+			type: "no-op",
 			config: posthogConfig,
 		}
 	}
@@ -73,37 +64,28 @@ export class ErrorProviderFactory {
  * No-operation error provider for when error logging is disabled
  * or for testing purposes
  */
-class NoOpErrorProvider implements IErrorProvider {
-	async captureException(error: Error | ClineError, properties?: Record<string, unknown>): Promise<void> {
-		Logger.error("[NoOpErrorProvider] captureException called", { error: error.message || String(error), properties })
-	}
+export class NoOpErrorProvider implements IErrorProvider {
+	async captureException(_error: Error | ClineError, _properties?: Record<string, unknown>): Promise<void> {}
 
-	public logException(error: Error | ClineError, _properties?: Record<string, unknown>): void {
-		// Use Logger.error directly to avoid potential infinite recursion through Logger
-		Logger.error("[NoOpErrorProvider]", error.message || String(error))
-	}
+	public logException(_error: Error | ClineError, _properties?: Record<string, unknown>): void {}
 
 	public logMessage(
-		message: string,
-		level?: "error" | "warning" | "log" | "debug" | "info",
-		properties?: Record<string, unknown>,
-	): void {
-		Logger.log("[NoOpErrorProvider]", { message, level, properties })
-	}
+		_message: string,
+		_level?: "error" | "warning" | "log" | "debug" | "info",
+		_properties?: Record<string, unknown>,
+	): void {}
 
 	public isEnabled(): boolean {
-		return true
+		return false
 	}
 
 	public getSettings() {
 		return {
-			enabled: true,
-			hostEnabled: true,
-			level: "all" as const,
+			enabled: false,
+			hostEnabled: false,
+			level: "off" as const,
 		}
 	}
 
-	public async dispose(): Promise<void> {
-		Logger.info("[NoOpErrorProvider] Disposing")
-	}
+	public async dispose(): Promise<void> {}
 }

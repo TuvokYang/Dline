@@ -12,8 +12,13 @@ import { Logger } from "@shared/services/Logger"
 import * as assert from "assert"
 import { afterAll, beforeAll, describe, it, vi, expect as vitestExpect } from "vitest"
 import { setVscodeHostProviderMock } from "../../test/host-provider-test-utils"
+import { isTelemetryProviderRegistration, type TelemetryProviderInput } from "./providers/capabilities"
 import { NoOpTelemetryProvider, TelemetryProviderFactory } from "./TelemetryProviderFactory"
 import { TelemetryMetadata, TelemetryService } from "./TelemetryService"
+
+async function disposeProviderInputs(inputs: readonly TelemetryProviderInput[]): Promise<void> {
+	await Promise.all(inputs.map((input) => (isTelemetryProviderRegistration(input) ? input.base.dispose() : input.dispose())))
+}
 
 describe("Telemetry system is abstracted and can easily switch between providers", () => {
 	// Setup and teardown for HostProvider mocking
@@ -42,7 +47,7 @@ describe("Telemetry system is abstracted and can easily switch between providers
 	}
 	const MOCK_METADATA: TelemetryMetadata = {
 		extension_version: "1.2.3",
-		cline_type: "cline-unit-test",
+		dline_type: "dline-unit-test",
 		platform: "Test-IDE",
 		platform_version: "9.8.7-abc",
 		os_type: "win32",
@@ -146,6 +151,8 @@ describe("Telemetry system is abstracted and can easily switch between providers
 					apiProvider: "openai",
 					openAiCompatibleDomain: undefined,
 					...MOCK_METADATA,
+					telemetry_channel: "usage",
+					telemetry_severity: "info",
 				},
 				"Task created event should include only the expected metadata properties",
 			)
@@ -217,6 +224,8 @@ describe("Telemetry system is abstracted and can easily switch between providers
 				apiProvider: "anthropic",
 				openAiCompatibleDomain: undefined,
 				...MOCK_METADATA,
+				telemetry_channel: "usage",
+				telemetry_severity: "info",
 			}
 			assert.deepStrictEqual(properties1, expectedProperties, "First provider should receive correct properties")
 			assert.deepStrictEqual(properties2, expectedProperties, "Second provider should receive correct properties")
@@ -240,32 +249,13 @@ describe("Telemetry system is abstracted and can easily switch between providers
 			await noOpProvider2.dispose()
 		})
 	})
-	describe("PostHog Provider", () => {
-		it("should create PostHog provider and track events", async () => {
-			console.log("=== Testing PostHog Provider ===")
-			const providers = await TelemetryProviderFactory.createProviders()
-			const posthogProvider = providers.find((p) => !(p instanceof NoOpTelemetryProvider)) || providers[0]
-
-			const posthogTelemetryService = new TelemetryService([posthogProvider], MOCK_METADATA)
-
-			// Test various telemetry methods
-			posthogTelemetryService.captureTaskCreated("task-123", "anthropic")
-			posthogTelemetryService.identifyAccount(MOCK_USER_INFO)
-			posthogTelemetryService.captureTaskCompleted("task-123")
-			posthogTelemetryService.captureModelSelected("claude-3", "anthropic", "task-123")
-
-			// Test provider methods directly
-			posthogProvider.log("test_event", { test: "property" })
-			posthogProvider.identifyUser(MOCK_USER_INFO, { additional: "data" })
-
-			// Verify provider state
-			const isEnabled = posthogProvider.isEnabled()
-			const settings = posthogProvider.getSettings()
-
-			console.log("PostHog Provider enabled:", isEnabled)
-			console.log("PostHog Provider settings:", settings)
-
-			await posthogProvider.dispose()
+	describe("Default Provider Composition", () => {
+		it("declares a loopback usage sink without constructing network resources", () => {
+			const [config] = TelemetryProviderFactory.getDefaultConfigs()
+			assert.strictEqual(config.type, "opentelemetry")
+			if (config.type !== "opentelemetry") throw new Error("Expected OpenTelemetry config")
+			assert.deepStrictEqual(config.sink.channels, ["usage", "runtime"])
+			assert.strictEqual(config.sink.kind, "loopback")
 		})
 	})
 
@@ -356,33 +346,20 @@ describe("Telemetry system is abstracted and can easily switch between providers
 	})
 
 	describe("Factory Configuration", () => {
-		it("should return only no-op configuration by default", () => {
+		it("should configure the default loopback OTLP provider", () => {
 			const configs = TelemetryProviderFactory.getDefaultConfigs()
 
-			assert.ok(configs.length > 0, "Should return at least one configuration")
-			assert.strictEqual(configs.length, 1, "Should return exactly one configuration")
-			assert.strictEqual(configs[0].type, "no-op", "Should return no-op configuration")
+			assert.strictEqual(configs.length, 1)
+			assert.strictEqual(configs[0].type, "opentelemetry")
+			if (configs[0].type !== "opentelemetry") throw new Error("Expected OpenTelemetry config")
+			assert.strictEqual(configs[0].sink.kind, "loopback")
+			assert.strictEqual(configs[0].sink.endpoint, "http://127.0.0.1:4318")
+			assert.deepStrictEqual(configs[0].sink.channels, ["usage", "runtime"])
 		})
 
-		it("should always return no-op configuration regardless of conditions", () => {
-			// Test multiple calls - should always return same no-op config
-			const configs1 = TelemetryProviderFactory.getDefaultConfigs()
-			const configs2 = TelemetryProviderFactory.getDefaultConfigs()
-
-			assert.strictEqual(configs1.length, 1, "First call should return exactly one config")
-			assert.strictEqual(configs1[0].type, "no-op", "First call should return no-op")
-			assert.strictEqual(configs2.length, 1, "Second call should return exactly one config")
-			assert.strictEqual(configs2[0].type, "no-op", "Second call should return no-op")
-		})
-
-		it("should create NoOpTelemetryProvider from factory", async () => {
-			const providers = await TelemetryProviderFactory.createProviders()
-
-			assert.ok(providers.length > 0, "Should return at least one provider")
-			assert.ok(providers[0] instanceof NoOpTelemetryProvider, "Should return NoOpTelemetryProvider instance")
-			assert.strictEqual(providers[0].isEnabled(), false, "NoOp provider should be disabled")
-
-			await Promise.all(providers.map((p) => p.dispose()))
+		it("does not use NoOp as the normal factory fallback", () => {
+			const configs = TelemetryProviderFactory.getDefaultConfigs()
+			assert.ok(configs.every((config) => config.type !== "no-op"))
 		})
 
 		it("should handle provider switching seamlessly", async () => {
@@ -395,7 +372,7 @@ describe("Telemetry system is abstracted and can easily switch between providers
 			telemetryService.captureTaskCreated("task-switch-1", "anthropic")
 			console.log("Captured event with available providers")
 
-			await Promise.all(providers.map((p) => p.dispose()))
+			await disposeProviderInputs(providers)
 
 			// Switch to No-Op provider
 			const noOpProvider = new NoOpTelemetryProvider()

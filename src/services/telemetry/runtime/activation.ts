@@ -1,4 +1,5 @@
 import type { TelemetrySetting } from "@shared/TelemetrySetting"
+import { getProcessTelemetrySessionId } from "../journal"
 import { clearRuntimeDiagnoses, recordRuntimeDiagnosis, setRuntimeTelemetryLifecycle } from "./host"
 import { createRuntimeTelemetryBus, setRuntimeTelemetryBus } from "./index"
 import { RuntimeTelemetryLifecycle, type RuntimeTelemetryLifecycleOptions } from "./lifecycle"
@@ -29,39 +30,18 @@ import {
  * makes a bundle impossible to line up with the journal it came from.
  */
 
-/** Identifies one extension host run; scopes the journal file and the export. */
-function createSessionId(now: Date): string {
-	const stamp = now.toISOString().replaceAll(/[:.]/g, "-")
-	// A random suffix keeps two hosts started in the same millisecond apart.
-	const suffix = Math.random().toString(36).slice(2, 8)
-	return `${stamp}-${suffix}`
-}
-
 export interface RuntimeTelemetryActivationOptions {
 	/** Root of the Dline data directory; the journal lives under `telemetry/`. */
 	readonly dataDir: string
 	/** The user's current reporting choice. */
 	readonly telemetrySetting: TelemetrySetting
 	readonly sessionId?: string
-	/** Collector base URL; the exporter appends the signal path. */
-	readonly otlpEndpoint?: string
-	/** `http/protobuf`, `http/json` or `grpc`; defaults to `http/protobuf`. */
-	readonly otlpProtocol?: string
-	/**
-	 * Replaces the transport's export processor.
-	 *
-	 * Forwarded rather than decided here because activation is the composition
-	 * root, not the owner of the transport contract. Without this seam the only
-	 * reachable configuration is a live OTLP exporter aimed at the default
-	 * collector, so anything that drives activation off a real host — a test, a
-	 * replay, an offline diagnostic run — pays a full export timeout on every
-	 * shutdown that has events to flush.
-	 */
-	readonly processorFactory?: RuntimeTelemetryLifecycleOptions["processorFactory"]
 	/** Runtime health sampling interval. Set to 0 to disable sampling entirely. */
 	readonly samplerIntervalMs?: number
 	/** Bus drain cadence. Set to 0 to drain only on stop. */
 	readonly drainIntervalMs?: number
+	/** Canonical provider-registry sink for runtime events. */
+	readonly onEvent?: RuntimeTelemetryLifecycleOptions["onEvent"]
 }
 
 /**
@@ -77,7 +57,7 @@ export async function activateRuntimeTelemetry(options: RuntimeTelemetryActivati
 	// previous one down before installing a successor.
 	await deactivateRuntimeTelemetry()
 
-	const sessionId = options.sessionId ?? createSessionId(new Date())
+	const sessionId = options.sessionId ?? getProcessTelemetrySessionId()
 	const bus = createRuntimeTelemetryBus({ sessionId })
 	setRuntimeTelemetryBus(bus)
 
@@ -85,11 +65,9 @@ export async function activateRuntimeTelemetry(options: RuntimeTelemetryActivati
 		dataDir: options.dataDir,
 		sessionId,
 		bus,
-		otlpEndpoint: options.otlpEndpoint,
-		otlpProtocol: options.otlpProtocol,
-		processorFactory: options.processorFactory,
 		samplerIntervalMs: options.samplerIntervalMs,
 		drainIntervalMs: options.drainIntervalMs,
+		onEvent: options.onEvent,
 		// Diagnoses go to the process-wide store the export reads, and are
 		// also recorded as events so the session journal carries the
 		// conclusion next to the evidence it was drawn from.

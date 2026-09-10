@@ -3,8 +3,9 @@
  * When ClineEndpoint.isSelfHosted() returns true, all PostHog functionality should be disabled.
  */
 
-import { afterEach, describe, it, vi } from "vitest"
 import * as assert from "assert"
+import { afterEach, describe, it, vi } from "vitest"
+
 // sinon import removed
 
 // Mock the missing generated module to prevent import chain failure
@@ -13,6 +14,7 @@ vi.mock("@generated/hosts/vscode/protobus-services", () => ({
 }))
 
 import { ClineEndpoint } from "@/config"
+import { Logger } from "@/shared/services/Logger"
 import { ErrorProviderFactory } from "../error/ErrorProviderFactory"
 import { FeatureFlagsProviderFactory } from "../feature-flags/FeatureFlagsProviderFactory"
 
@@ -53,24 +55,31 @@ describe("SelfHosted Mode - PostHog Disabling", () => {
 			assert.strictEqual(config.type, "no-op", "Should return no-op type in selfHosted mode")
 		})
 
-		it("should return posthog config when NOT in selfHosted mode", () => {
+		it("should keep the compatibility provider local when NOT in selfHosted mode", () => {
 			isSelfHostedStub = vi.spyOn(ClineEndpoint, "isSelfHosted").mockReturnValue(false)
 
 			const config = ErrorProviderFactory.getDefaultConfig()
 
-			assert.strictEqual(config.type, "posthog", "Should return posthog type when not in selfHosted mode")
+			assert.strictEqual(config.type, "no-op", "Remote error sinks must be registered through TelemetryService")
 		})
 
-		it("should create NoOp provider when in selfHosted mode", async () => {
+		it("should create a disabled provider with zero logging side effects", async () => {
 			isSelfHostedStub = vi.spyOn(ClineEndpoint, "isSelfHosted").mockReturnValue(true)
+			const messages: string[] = []
+			const unsubscribe = Logger.subscribe((message) => messages.push(message))
 
 			const config = ErrorProviderFactory.getDefaultConfig()
 			const provider = await ErrorProviderFactory.createProvider(config)
-
-			// NoOp provider should always be enabled
-			assert.strictEqual(provider.isEnabled(), true, "NoOp provider should report as enabled")
-
+			const error = new Error("no-op-canary")
+			await provider.captureException(error, { canary: "must-not-log" })
+			provider.logException(error, { canary: "must-not-log" })
+			provider.logMessage("must-not-log", "error", { canary: "must-not-log" })
 			await provider.dispose()
+			unsubscribe()
+
+			assert.strictEqual(provider.isEnabled(), false, "NoOp provider must report as disabled")
+			assert.deepStrictEqual(provider.getSettings(), { enabled: false, hostEnabled: false, level: "off" })
+			assert.deepStrictEqual(messages, [])
 		})
 	})
 

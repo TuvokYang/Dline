@@ -1,4 +1,5 @@
-import { Logger } from "@/shared/services/Logger"
+import { type ErrorEventRecorder, errorEventRecorder, installLoggerTelemetryBridge } from "@/services/telemetry/events/error"
+import { isSignalRecordingEnabled } from "@/services/telemetry/service/pipeline-port"
 import { ClineError } from "./ClineError"
 import { ErrorProviderFactory } from "./ErrorProviderFactory"
 import { IErrorProvider } from "./providers/IErrorProvider"
@@ -11,7 +12,9 @@ import { IErrorProvider } from "./providers/IErrorProvider"
 export class ErrorService {
 	private static instance: ErrorService | null = null
 
-	private provider: IErrorProvider
+	private readonly provider: IErrorProvider
+	private readonly recorder: ErrorEventRecorder
+	private readonly disposeLoggerBridge: () => void
 
 	/**
 	 * Sets up the ErrorService singleton.
@@ -36,17 +39,19 @@ export class ErrorService {
 		return ErrorService.instance
 	}
 
-	constructor(provider: IErrorProvider) {
+	constructor(provider: IErrorProvider, recorder: ErrorEventRecorder = errorEventRecorder) {
 		this.provider = provider
+		this.recorder = recorder
+		this.disposeLoggerBridge = installLoggerTelemetryBridge(recorder)
 	}
 
-	captureException(error: Error | ClineError, properties?: Record<string, unknown>) {
-		return this.provider.captureException(error, properties)
+	captureException(error: Error | ClineError, properties?: Record<string, unknown>): Promise<void> {
+		this.recorder.exception(error, properties)
+		return Promise.resolve()
 	}
 
 	public logException(error: Error | ClineError, properties?: Record<string, unknown>): void {
-		this.provider.logException(error, properties)
-		Logger.error("[ErrorService] Logging exception", error)
+		this.recorder.exception(error, properties)
 	}
 
 	public logMessage(
@@ -54,7 +59,7 @@ export class ErrorService {
 		level: "error" | "warning" | "log" | "debug" | "info" = "log",
 		properties?: Record<string, unknown>,
 	): void {
-		this.provider.logMessage(message, level, properties)
+		this.recorder.message(message, level, properties)
 	}
 
 	public toClineError(rawError: unknown, modelId?: string, providerId?: string): ClineError {
@@ -68,7 +73,7 @@ export class ErrorService {
 	 * @returns Boolean indicating whether error logging is enabled
 	 */
 	public isEnabled(): boolean {
-		return this.provider.isEnabled()
+		return isSignalRecordingEnabled()
 	}
 
 	/**
@@ -76,7 +81,8 @@ export class ErrorService {
 	 * @returns Current error logging settings
 	 */
 	public getSettings() {
-		return this.provider.getSettings()
+		const enabled = this.isEnabled()
+		return { enabled, hostEnabled: enabled, level: enabled ? ("all" as const) : ("off" as const) }
 	}
 
 	/**
@@ -91,6 +97,8 @@ export class ErrorService {
 	 * Clean up resources when the service is disposed
 	 */
 	public async dispose(): Promise<void> {
+		this.disposeLoggerBridge()
 		await this.provider.dispose()
+		if (ErrorService.instance === this) ErrorService.instance = null
 	}
 }

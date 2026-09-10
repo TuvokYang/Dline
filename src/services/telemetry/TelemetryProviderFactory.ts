@@ -1,8 +1,20 @@
-import { OpenTelemetryClientValidConfig } from "@/shared/services/config/otel-config"
+import { join } from "node:path"
+import { envFlagEnabled } from "@shared/env"
+import { getDlineDataDir } from "@/core/storage/disk"
+import type { ClineAccountUserInfo } from "@/services/auth/AuthService"
+import {
+	createDefaultLoopbackOpenTelemetryConfig,
+	DEFAULT_LOOPBACK_OTLP_ENDPOINT,
+	type OpenTelemetryClientValidConfig,
+} from "@/shared/services/config/otel-config"
 import { Logger } from "@/shared/services/Logger"
+import { createLocalJournalRegistration, getProcessTelemetrySessionId, LocalJournalProvider } from "./journal"
+import type { TelemetryProviderInput, TelemetryProviderRegistration, TelemetrySinkDescriptor } from "./providers/capabilities"
 import type { ITelemetryProvider, TelemetryProperties, TelemetrySettings } from "./providers/ITelemetryProvider"
+import { adaptLegacyTelemetryProvider } from "./providers/LegacyTelemetryProviderAdapter"
 import { OpenTelemetryClientProvider } from "./providers/opentelemetry/OpenTelemetryClientProvider"
 import { OpenTelemetryTelemetryProvider } from "./providers/opentelemetry/OpenTelemetryTelemetryProvider"
+import { OpenTelemetryTraceProvider } from "./providers/opentelemetry/OpenTelemetryTraceProvider"
 import { PostHogClientProvider } from "./providers/posthog/PostHogClientProvider"
 import { PostHogTelemetryProvider } from "./providers/posthog/PostHogTelemetryProvider"
 
@@ -16,14 +28,13 @@ export type TelemetryProviderType = "posthog" | "no-op" | "opentelemetry"
  */
 export type TelemetryProviderConfig =
 	| { type: "posthog"; apiKey?: string; host?: string }
-	/** OpenTelemetry collector
-	 * @param config - Config for this specific collector
-	 * @param bypassUserSettings - When true, telemetry is sent regardless of the user's Cline telemetry opt-in/opt-out settings.
-	 * This is used for:
-	 * 	- User-controlled collectors configured via environment variables (e.g., DLINE_OTEL_TELEMETRY_ENABLED).
-	 * 	- Organization-controlled collectors configured via remote config.
-	 */
-	| { type: "opentelemetry"; config: OpenTelemetryClientValidConfig; bypassUserSettings: boolean }
+	| {
+			type: "opentelemetry"
+			config: OpenTelemetryClientValidConfig
+			name?: string
+			sink: TelemetrySinkDescriptor
+	  }
+	/** Retained only for explicit tests; disabled production is an empty registry. */
 	| { type: "no-op" }
 
 /**
@@ -35,25 +46,34 @@ export class TelemetryProviderFactory {
 	 * Creates multiple telemetry providers based on configuration
 	 * Supports dual tracking during transition period
 	 */
-	public static async createProviders(): Promise<ITelemetryProvider[]> {
+	public static async createProviders(): Promise<TelemetryProviderInput[]> {
 		const configs = TelemetryProviderFactory.getDefaultConfigs()
-		const providers: ITelemetryProvider[] = []
+		const providers: TelemetryProviderRegistration[] = []
+
+		try {
+			const journal = await LocalJournalProvider.create({
+				directory: join(getDlineDataDir(), "telemetry", "sessions"),
+				sessionId: getProcessTelemetrySessionId(),
+			})
+			providers.push(createLocalJournalRegistration(journal))
+		} catch (error) {
+			Logger.internalError("TelemetryProviderFactory: Local journal provider could not be created", error)
+		}
 
 		for (const config of configs) {
 			try {
 				const provider = await TelemetryProviderFactory.createProvider(config)
-				providers.push(provider)
+				if (provider) providers.push(provider)
 			} catch (error) {
-				Logger.error(`Failed to create telemetry provider: ${config.type}`, error)
+				Logger.internalError(`Failed to create telemetry provider: ${config.type}`, error)
 			}
 		}
 
-		// Always have at least a no-op provider
-		if (providers.length === 0) {
-			providers.push(new NoOpTelemetryProvider())
-		}
-
-		Logger.info(`TelemetryProviderFactory: Created providers - ${providers.map((p) => p.name).join(", ")}`)
+		Logger.info(
+			providers.length > 0
+				? `TelemetryProviderFactory: Created providers - ${providers.map((entry) => entry.base.name).join(", ")}`
+				: "TelemetryProviderFactory: No telemetry providers configured",
+		)
 		return providers
 	}
 
@@ -62,34 +82,40 @@ export class TelemetryProviderFactory {
 	 * @param config Configuration for the telemetry provider
 	 * @returns ITelemetryProvider instance
 	 */
-	private static async createProvider(config: TelemetryProviderConfig): Promise<ITelemetryProvider> {
+	private static async createProvider(config: TelemetryProviderConfig): Promise<TelemetryProviderRegistration | null> {
 		switch (config.type) {
 			case "posthog": {
 				const sharedClient = PostHogClientProvider.getClient()
-				if (sharedClient) {
-					return await new PostHogTelemetryProvider(sharedClient).initialize()
-				}
-				return new NoOpTelemetryProvider()
+				if (!sharedClient) return null
+				const provider = await new PostHogTelemetryProvider(sharedClient).initialize()
+				return adaptLegacyTelemetryProvider(provider, {
+					sink: { kind: "remote", origin: "user", channels: ["usage"] },
+				})
 			}
 			case "opentelemetry": {
-				const otelConfig = config.config
-				if (!otelConfig) {
-					return new NoOpTelemetryProvider()
+				const client = new OpenTelemetryClientProvider(config.config)
+				if (!client.meterProvider && !client.loggerProvider) {
+					await client.dispose()
+					Logger.warn("TelemetryProviderFactory: OpenTelemetry exporters were not created")
+					return null
 				}
-				const client = new OpenTelemetryClientProvider(otelConfig)
-				if (client.meterProvider || client.loggerProvider) {
-					return await new OpenTelemetryTelemetryProvider(client.meterProvider, client.loggerProvider, {
-						bypassUserSettings: config.bypassUserSettings,
-					}).initialize()
-				}
-				Logger.info("TelemetryProviderFactory: OpenTelemetry providers not available")
-				return new NoOpTelemetryProvider()
+				const traceProvider = new OpenTelemetryTraceProvider(config.config.otlpEndpoint ?? DEFAULT_LOOPBACK_OTLP_ENDPOINT)
+				const provider = await new OpenTelemetryTelemetryProvider(client.meterProvider, client.loggerProvider, {
+					name: config.name,
+					owner: client,
+					traceProvider,
+				}).initialize()
+				const registration = adaptLegacyTelemetryProvider(provider, { sink: config.sink })
+				return { ...registration, capabilities: [...registration.capabilities, traceProvider] }
 			}
 			case "no-op":
-				return new NoOpTelemetryProvider()
-			default:
-				Logger.error(`Unsupported telemetry provider type: ${(config as { type?: string }).type ?? "unknown"}`)
-				return new NoOpTelemetryProvider()
+				return adaptLegacyTelemetryProvider(new NoOpTelemetryProvider(), {
+					sink: { kind: "test", origin: "test", channels: ["usage"] },
+				})
+			default: {
+				const unhandled: never = config
+				throw new Error(`Unsupported telemetry provider configuration: ${JSON.stringify(unhandled)}`)
+			}
 		}
 	}
 
@@ -98,8 +124,20 @@ export class TelemetryProviderFactory {
 	 * @returns Default configuration using available providers
 	 */
 	public static getDefaultConfigs(): TelemetryProviderConfig[] {
-		// All telemetry providers disabled - no data sent to any external server
-		return [{ type: "no-op" }]
+		return [
+			{
+				type: "opentelemetry",
+				name: "OpenTelemetryLoopbackProvider",
+				config: createDefaultLoopbackOpenTelemetryConfig(),
+				sink: {
+					kind: "loopback",
+					origin: "default",
+					channels: ["usage", "runtime"],
+					endpoint: DEFAULT_LOOPBACK_OTLP_ENDPOINT,
+					enhancement: envFlagEnabled(process.env.IS_DEV) ? "debug" : "standard",
+				},
+			},
+		]
 	}
 }
 
@@ -112,7 +150,7 @@ export class NoOpTelemetryProvider implements ITelemetryProvider {
 
 	log(_event: string, _properties?: TelemetryProperties): void {}
 	logRequired(_event: string, _properties?: TelemetryProperties): void {}
-	identifyUser(_userInfo: any, _properties?: TelemetryProperties): void {}
+	identifyUser(_userInfo: ClineAccountUserInfo, _properties?: TelemetryProperties): void {}
 	isEnabled(): boolean {
 		return false
 	}

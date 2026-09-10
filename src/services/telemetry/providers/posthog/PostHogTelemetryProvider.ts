@@ -1,12 +1,10 @@
 import { PostHog } from "posthog-node"
-import { StateManager } from "@/core/storage/StateManager"
 import { HostProvider } from "@/hosts/host-provider"
 import { getErrorLevelFromString } from "@/services/error"
 import { getDistinctId, setDistinctId } from "@/services/logging/distinctId"
 import { fetch } from "@/shared/net"
 import { Setting } from "@/shared/proto/dline/host"
 import { Logger } from "@/shared/services/Logger"
-import { isReportingAllowed } from "@/shared/TelemetrySetting"
 import { posthogConfig } from "../../../../shared/services/config/posthog-config"
 import type { ClineAccountUserInfo } from "../../../auth/AuthService"
 import type { ITelemetryProvider, TelemetryProperties, TelemetrySettings } from "../ITelemetryProvider"
@@ -18,7 +16,6 @@ export class PostHogTelemetryProvider implements ITelemetryProvider {
 	private client: PostHog
 	private telemetrySettings: TelemetrySettings
 	private isSharedClient: boolean
-	private optInCache: boolean
 
 	readonly name = "PostHogTelemetryProvider"
 
@@ -42,7 +39,6 @@ export class PostHogTelemetryProvider implements ITelemetryProvider {
 		}
 
 		// Initialize telemetry settings
-		this.optInCache = true
 		this.telemetrySettings = {
 			hostEnabled: true,
 			level: "all",
@@ -79,13 +75,7 @@ export class PostHogTelemetryProvider implements ITelemetryProvider {
 			return
 		}
 
-		// Filter events based on telemetry level
-		if (this.telemetrySettings.level === "error") {
-			if (!event.includes("error")) {
-				return
-			}
-		}
-
+		// Host-level severity filtering is applied centrally by channel policy.
 		this.client.capture({
 			distinctId: getDistinctId(),
 			event,
@@ -94,6 +84,7 @@ export class PostHogTelemetryProvider implements ITelemetryProvider {
 	}
 
 	public logRequired(event: string, properties?: TelemetryProperties): void {
+		if (!this.isEnabled()) return
 		this.client.capture({
 			distinctId: getDistinctId(),
 			event,
@@ -123,21 +114,7 @@ export class PostHogTelemetryProvider implements ITelemetryProvider {
 	}
 
 	public isEnabled(): boolean {
-		const isOptedIn = isReportingAllowed(StateManager.get().getGlobalSettingsKey("usageReportingSetting"))
-		const wasOptedIn = this.optInCache
-		try {
-			if (isOptedIn && !wasOptedIn) {
-				this.client.optIn()
-			}
-			if (!isOptedIn && wasOptedIn) {
-				this.client.optOut()
-			}
-		} catch (err) {
-			Logger.error("Failed to update the PostHog telemetry state", err)
-		}
-		this.optInCache = isOptedIn
-
-		return isOptedIn && this.telemetrySettings.hostEnabled
+		return this.telemetrySettings.hostEnabled && this.telemetrySettings.level !== "off"
 	}
 
 	public getSettings(): TelemetrySettings {
@@ -153,14 +130,14 @@ export class PostHogTelemetryProvider implements ITelemetryProvider {
 		_value: number,
 		_attributes?: TelemetryProperties,
 		_description?: string,
-		required = false,
+		_required = false,
 	): void {
-		if (!this.isEnabled() && !required) return
+		if (!this.isEnabled()) return
 
 		// Convert metric to event format for PostHog
 		// Most counters don't need individual events - they're aggregated in OpenTelemetry
 		// Only log significant counter events that have dashboard equivalents
-		if (name === "cline.tokens.input.total" || name === "cline.tokens.output.total") {
+		if (name === "dline.tokens.input.total" || name === "dline.tokens.output.total") {
 			// These will be batched and emitted as a single "task.tokens" event
 			// Implementation will be added when we update captureTokenUsage
 		}
@@ -191,12 +168,12 @@ export class PostHogTelemetryProvider implements ITelemetryProvider {
 		value: number | null,
 		attributes?: TelemetryProperties,
 		_description?: string,
-		required = false,
+		_required = false,
 	): void {
-		if ((!this.isEnabled() && !required) || value === null) return
+		if (!this.isEnabled() || value === null) return
 
 		// Convert gauge updates to state change events
-		if (name === "cline.workspace.active_roots") {
+		if (name === "dline.workspace.active_roots") {
 			this.log("workspace.roots_changed", {
 				count: value,
 				...attributes,

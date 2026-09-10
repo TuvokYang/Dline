@@ -1,6 +1,7 @@
 import fs from "node:fs/promises"
 import { recordPerfPhase } from "@/services/telemetry/instrumentation/duration-recorder"
 import { PerfDomain } from "@/services/telemetry/instrumentation/perf-domains"
+import { startSignalSpan } from "@/services/telemetry/service/pipeline-port"
 import { Logger } from "@/shared/services/Logger"
 import type { TaskSnapshot } from "./TaskSnapshot"
 
@@ -104,6 +105,7 @@ export class TaskSnapshotPersistence {
 	 * Immediately write the latest pending snapshot and cancel any scheduled timer.
 	 */
 	async flushNow(): Promise<void> {
+		const traceSpan = startSignalSpan({ name: "task_snapshot.flush" })
 		if (this.flushTimer) {
 			this.clearTimeoutFn(this.flushTimer)
 			this.flushTimer = undefined
@@ -112,6 +114,7 @@ export class TaskSnapshotPersistence {
 		const attempt = this.writeChain.then(async () => {
 			const snapshot = this.pendingSnapshot
 			if (!snapshot) return
+			if (snapshot.taskId) traceSpan.setAttribute("task_id", snapshot.taskId)
 			// Callers await this flush inside runtime transitions, so separate the
 			// wait behind earlier writes from the write itself: only the latter is
 			// this snapshot's own disk cost.
@@ -141,6 +144,13 @@ export class TaskSnapshotPersistence {
 		// The caller still observes this attempt's failure, while the internal tail
 		// remains usable so a later flush can retry the retained snapshot.
 		this.writeChain = attempt.catch(() => undefined)
-		await attempt
+		try {
+			await attempt
+			traceSpan.end("success")
+		} catch (error) {
+			traceSpan.recordException(error)
+			traceSpan.end("failure")
+			throw error
+		}
 	}
 }

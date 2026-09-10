@@ -48,6 +48,23 @@ describe("createRequestApiScope", () => {
 		})
 	})
 
+	it("freezes the handler-selected API format instead of the model format list head", () => {
+		const handler = createHandler("openai", "multi-format-model")
+		handler.getModel = () => ({
+			id: "multi-format-model",
+			info: {
+				id: "multi-format-model",
+				apiFormats: [ApiFormat.OPENAI_CHAT, ApiFormat.OPENAI_RESPONSES],
+			},
+		})
+		handler.getSelectedApiFormat = vi.fn(() => ApiFormat.OPENAI_RESPONSES)
+
+		const scope = createRequestApiScope(handler, "act")
+
+		expect(handler.getSelectedApiFormat).toHaveBeenCalledTimes(1)
+		expect(scope.selectedApiFormat).toBe(ApiFormat.OPENAI_RESPONSES)
+	})
+
 	it("rejects handlers that cannot identify their provider", () => {
 		const handler = createHandler("openai", "openai-model")
 		delete handler.getProviderId

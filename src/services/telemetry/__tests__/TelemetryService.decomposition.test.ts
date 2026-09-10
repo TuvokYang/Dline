@@ -222,7 +222,7 @@ describe("TelemetryService decomposition", () => {
 		service.addProvider(provider)
 		expect(service.getProviders()).toHaveLength(1)
 
-		service.removeProvider(provider.name)
+		await service.removeProvider(provider.name)
 		expect(service.getProviders()).toHaveLength(0)
 		await service.dispose()
 	})
@@ -239,7 +239,7 @@ describe("deferred provider attachment", () => {
 		const provider = new RecordingProvider()
 
 		registry.logEvent("user.telemetry_enabled", () => ({}), false)
-		registry.recordCounter("cline.turns.total", 1, () => ({}))
+		registry.recordCounter("dline.turns.total", 1, () => ({}))
 		registry.logEvent("user.extension_activated", () => ({}), false)
 		registry.identifyUser({ id: "user-1" } as never, () => ({}))
 
@@ -252,7 +252,7 @@ describe("deferred provider attachment", () => {
 		// Order holds across kinds: events and metrics share one queue, so a
 		// consumer can still reconstruct the startup sequence.
 		expect(provider.eventNames()).toEqual(["user.telemetry_enabled", "user.extension_activated"])
-		expect(provider.counters.map((entry) => entry.name)).toEqual(["cline.turns.total"])
+		expect(provider.counters.map((entry) => entry.name)).toEqual(["dline.turns.total"])
 		expect(provider.identified.map((entry) => entry.id)).toEqual(["user-1"])
 		expect(registry.pendingCount).toBe(0)
 	})

@@ -114,7 +114,7 @@ export class PostHogErrorProvider implements IErrorProvider {
 			},
 		})
 
-		Logger.error("[PostHogErrorProvider] Logging exception", error)
+		Logger.internalError("[PostHogErrorProvider] Logging exception", error)
 	}
 
 	public logMessage(
@@ -149,7 +149,9 @@ export class PostHogErrorProvider implements IErrorProvider {
 		// Error reporting has its own consent: agreeing to be measured is not
 		// agreeing to have crashes collected, nor the reverse. An undecided
 		// user has not consented.
-		return isReportingAllowed(StateManager.get().getGlobalSettingsKey("errorReportingSetting")) && this.errorSettings.hostEnabled
+		return (
+			isReportingAllowed(StateManager.get().getGlobalSettingsKey("errorReportingSetting")) && this.errorSettings.hostEnabled
+		)
 	}
 
 	public getSettings(): ErrorSettings {
@@ -163,7 +165,7 @@ export class PostHogErrorProvider implements IErrorProvider {
 	public async dispose(): Promise<void> {
 		// Only shut down the client if it's not shared (we own it)
 		if (!this.isSharedClient) {
-			await this.client.shutdown().catch((error) => Logger.error("Error shutting down PostHog client:", error))
+			await this.client.shutdown().catch((error) => Logger.internalError("Error shutting down PostHog client:", error))
 		}
 	}
 }

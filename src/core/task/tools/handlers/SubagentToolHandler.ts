@@ -9,6 +9,7 @@ import {
 	SubagentStatusItem,
 } from "@shared/ExtensionMessage"
 import { telemetryService } from "@/services/telemetry"
+import { calculateApiUsageStatistics } from "@/shared/api-usage"
 import { ClineDefaultTool } from "@/shared/tools"
 import type { ToolResponse } from "../../index"
 import { showNotificationForApproval } from "../../utils"
@@ -132,8 +133,12 @@ function applyStats(entry: SubagentStatusItem, stats: SubagentRunStats): void {
 	entry.outputTokens = stats.outputTokens || 0
 	entry.cacheWriteTokens = stats.cacheWriteTokens || 0
 	entry.cacheReadTokens = stats.cacheReadTokens || 0
-	const totalInputTokens = entry.inputTokens + entry.cacheWriteTokens + entry.cacheReadTokens
-	entry.cacheHitRate = totalInputTokens > 0 ? Math.round((entry.cacheReadTokens / totalInputTokens) * 10_000) / 100 : 0
+	entry.cacheHitRate = calculateApiUsageStatistics({
+		inputTokens: entry.inputTokens,
+		outputTokens: entry.outputTokens,
+		cacheWriteTokens: entry.cacheWriteTokens,
+		cacheReadTokens: entry.cacheReadTokens,
+	}).cacheHitRatePercent
 	entry.totalCost = stats.totalCost || 0
 	entry.currency = stats.currency || ""
 	entry.contextTokens = stats.contextTokens || 0

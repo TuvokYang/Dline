@@ -30,7 +30,7 @@ import type { RuntimeEventBus } from "../../runtime-event-bus"
 function activate(options: { dataDir: string; telemetrySetting: TelemetrySetting; sessionId?: string }) {
 	return activateRuntimeTelemetry({
 		...options,
-		processorFactory: () => undefined,
+		onEvent: () => {},
 		samplerIntervalMs: 0,
 	})
 }

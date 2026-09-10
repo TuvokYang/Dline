@@ -2,6 +2,7 @@ import {
 	configureSignalRecording,
 	emitSignal,
 	isSignalRecordingEnabled,
+	recordDurationHistogram,
 	resetSignalRecording,
 	type SignalContext,
 } from "../service/pipeline-port"
@@ -90,10 +91,12 @@ class ActivePerfPhase implements PerfPhaseHandle {
 		if (this.stopped) return
 		this.stopped = true
 		const durationMs = Math.round(clock() - this.startedAt)
+		const attributes = { ...this.baseDimensions, ...dimensions, durationMs }
+		recordDurationHistogram(durationMs, metricAttributes(this.name, attributes))
 		emitSignal({
 			name: this.name,
 			level: "performance",
-			attributes: { ...this.baseDimensions, ...dimensions, durationMs },
+			attributes,
 			context: this.context,
 		})
 	}
@@ -131,10 +134,13 @@ export function recordPerfPhase<D extends PerfDomain>(
 	context?: SignalContext,
 ): void {
 	if (!isSignalRecordingEnabled()) return
+	const roundedDurationMs = Math.round(durationMs)
+	const attributes = { ...dimensions, durationMs: roundedDurationMs }
+	recordDurationHistogram(roundedDurationMs, metricAttributes(perfEventName(domain, phase), attributes))
 	emitSignal({
 		name: perfEventName(domain, phase),
 		level: "performance",
-		attributes: { ...dimensions, durationMs: Math.round(durationMs) },
+		attributes,
 		context,
 	})
 }
@@ -145,6 +151,20 @@ export function recordPerfPhase<D extends PerfDomain>(
  * Emitted at `Debug` priority so a burst of markers is dropped before real
  * timing data when the queue is under pressure.
  */
+function metricAttributes(operation: string, dimensions: PerfDimensions): Record<string, string | number | boolean> {
+	const attributes: Record<string, string | number | boolean> = { operation }
+	for (const [key, value] of Object.entries(dimensions)) {
+		if (key === "durationMs" || isIdentityDimension(key)) continue
+		attributes[key] = value
+	}
+	return attributes
+}
+
+function isIdentityDimension(key: string): boolean {
+	const normalized = key.replace(/[A-Z]/g, (character) => `_${character.toLowerCase()}`).toLowerCase()
+	return /(^|_)(id|ulid|user_id|task_id|controller_id|workspace_id|terminal_id|organization_id|member_id)$/.test(normalized)
+}
+
 export function markPerfPhase<D extends PerfDomain>(
 	domain: D,
 	phase: PerfPhase<D>,

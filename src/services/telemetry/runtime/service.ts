@@ -1,3 +1,5 @@
+import type { RuntimeEventRecorderPort } from "../events/runtime"
+import type { SignalLevel } from "../service/pipeline-port"
 import type { RuntimeTelemetryScope } from "./context"
 import { RuntimeEventBus } from "./runtime-event-bus"
 import {
@@ -31,6 +33,8 @@ export interface RuntimeTelemetryServiceOptions {
 	 * the telemetry setting while the extension host is running.
 	 */
 	readonly enabled?: () => boolean
+	/** Standard pipeline recorder used by the production lifecycle. */
+	readonly recorder?: RuntimeEventRecorderPort
 	/** Monotonic clock, injectable so tests do not depend on wall time. */
 	readonly now?: () => number
 }
@@ -38,11 +42,13 @@ export interface RuntimeTelemetryServiceOptions {
 export class RuntimeTelemetryService {
 	private readonly bus: RuntimeEventBus
 	private readonly isEnabled: () => boolean
+	private readonly recorder: RuntimeEventRecorderPort | undefined
 	private readonly now: () => number
 
 	constructor(options: RuntimeTelemetryServiceOptions) {
 		this.bus = options.bus
 		this.isEnabled = options.enabled ?? (() => true)
+		this.recorder = options.recorder
 		this.now = options.now ?? (() => performance.now())
 	}
 
@@ -90,12 +96,21 @@ export class RuntimeTelemetryService {
 		context?: Partial<RuntimeTelemetryContext>,
 	): void {
 		this.record(
-			RuntimeEventPriority.Performance,
+			RuntimeEventPriority.PerformanceSample,
 			name,
 			{ ...attributes, durationMs: Math.round(durationMs) },
 			undefined,
 			context,
 		)
+	}
+
+	/** Record a threshold breach or degraded performance condition. */
+	recordPerformanceAnomaly(
+		name: string,
+		attributes?: Readonly<Record<string, unknown>>,
+		context?: Partial<RuntimeTelemetryContext>,
+	): void {
+		this.record(RuntimeEventPriority.PerformanceAnomaly, name, attributes, undefined, context)
 	}
 
 	/** Record diagnostic detail that is useful only while investigating. */
@@ -118,25 +133,13 @@ export class RuntimeTelemetryService {
 		this.record(RuntimeEventPriority.Error, name, attributes, error, context)
 	}
 
-	/**
-	 * Record a broken internal assumption.
-	 *
-	 * Invariant breaches bypass the enabled gate: they carry no user content by
-	 * construction, and they are the evidence a defect existed at all. Losing
-	 * them because telemetry happens to be off would make the class of bug this
-	 * service exists to find undiagnosable.
-	 */
+	/** Record a broken internal assumption under the same error-channel consent. */
 	recordInvariant(
 		name: string,
 		attributes?: Readonly<Record<string, unknown>>,
 		context?: Partial<RuntimeTelemetryContext>,
 	): void {
-		this.bus.record({
-			name,
-			priority: RuntimeEventPriority.Invariant,
-			attributes,
-			context,
-		})
+		this.record(RuntimeEventPriority.Invariant, name, attributes, undefined, context)
 	}
 
 	/**
@@ -177,7 +180,7 @@ export class RuntimeTelemetryService {
 			[OUTCOME_ATTRIBUTE]: outcome,
 			durationMs: Math.round(this.now() - startedAt),
 		}
-		const priority = outcome === "failure" ? RuntimeEventPriority.Error : RuntimeEventPriority.Performance
+		const priority = outcome === "failure" ? RuntimeEventPriority.Error : RuntimeEventPriority.PerformanceSample
 		this.record(priority, name, spanAttributes, error, context)
 	}
 
@@ -189,6 +192,26 @@ export class RuntimeTelemetryService {
 		context: Partial<RuntimeTelemetryContext> | undefined,
 	): void {
 		if (!this.isEnabled()) return
+		if (this.recorder) {
+			this.recorder.record({ name, level: signalLevel(priority), attributes, error, context })
+			return
+		}
 		this.bus.record({ name, priority, attributes, error, context })
+	}
+}
+
+function signalLevel(priority: RuntimeEventPriority): SignalLevel {
+	switch (priority) {
+		case RuntimeEventPriority.Debug:
+			return "debug"
+		case RuntimeEventPriority.Info:
+			return "info"
+		case RuntimeEventPriority.PerformanceSample:
+			return "performance"
+		case RuntimeEventPriority.PerformanceAnomaly:
+		case RuntimeEventPriority.Error:
+			return "error"
+		case RuntimeEventPriority.Invariant:
+			return "invariant"
 	}
 }

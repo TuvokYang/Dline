@@ -169,6 +169,14 @@ describe("Task request API boundary", () => {
 		)
 	})
 
+	it("reports the request-selected API format in final usage telemetry", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
+
+		expect(method).toContain("apiFormat: requestScope.selectedApiFormat")
+		expect(method).not.toContain("apiFormat: model.info.apiFormats?.[0]")
+	})
+
 	it("does not read the mutable handler after creating the request scope", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")

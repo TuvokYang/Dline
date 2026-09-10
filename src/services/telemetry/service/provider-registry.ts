@@ -1,6 +1,19 @@
 import type { ClineAccountUserInfo } from "@/services/auth/AuthService"
 import { Logger } from "@/shared/services/Logger"
+import {
+	isTelemetryProviderRegistration,
+	type JournalTelemetrySignal,
+	type TelemetryChannel,
+	type TelemetryProviderCapability,
+	type TelemetryProviderInput,
+	type TelemetryProviderRegistration,
+	type TelemetrySeverity,
+	type TelemetrySpanHandle,
+	type TelemetrySpanStartOptions,
+} from "../providers/capabilities"
 import type { ITelemetryProvider, TelemetryProperties, TelemetrySettings } from "../providers/ITelemetryProvider"
+import { adaptLegacyTelemetryProvider } from "../providers/LegacyTelemetryProviderAdapter"
+import { TelemetryChannelPolicy } from "./channel-policy"
 
 /**
  * Owns the set of providers and the fan-out to them.
@@ -39,10 +52,25 @@ export type PropertiesThunk = () => TelemetryProperties
 
 /** One delivery deferred until providers exist. */
 type PendingDelivery =
-	| { kind: "event"; event: string; properties: PropertiesThunk; required: boolean }
-	| { kind: "identify"; userInfo: ClineAccountUserInfo; properties: PropertiesThunk }
+	| {
+			kind: "event"
+			channel: TelemetryChannel
+			severity: TelemetrySeverity
+			event: string
+			properties: PropertiesThunk
+			required: boolean
+	  }
+	| {
+			kind: "identify"
+			channel: "usage"
+			severity: "info"
+			userInfo: ClineAccountUserInfo
+			properties: PropertiesThunk
+	  }
 	| {
 			kind: "counter" | "histogram"
+			channel: TelemetryChannel
+			severity: TelemetrySeverity
 			name: string
 			value: number
 			attributes: PropertiesThunk
@@ -51,6 +79,8 @@ type PendingDelivery =
 	  }
 	| {
 			kind: "gauge"
+			channel: TelemetryChannel
+			severity: TelemetrySeverity
 			name: string
 			value: number | null
 			attributes: PropertiesThunk
@@ -59,7 +89,7 @@ type PendingDelivery =
 	  }
 
 export class TelemetryProviderRegistry {
-	private providers: ITelemetryProvider[]
+	private registrations: TelemetryProviderRegistration[]
 
 	/**
 	 * Whether providers are final.
@@ -72,24 +102,33 @@ export class TelemetryProviderRegistry {
 
 	private readonly pending: PendingDelivery[] = []
 	private pendingDropped = 0
+	private readonly policy: TelemetryChannelPolicy
 
-	constructor(providers: ITelemetryProvider[] = [], options: { readonly ready?: boolean } = {}) {
-		this.providers = [...providers]
+	constructor(
+		providers: TelemetryProviderInput[] = [],
+		options: { readonly ready?: boolean; readonly policy?: TelemetryChannelPolicy } = {},
+	) {
+		this.registrations = providers.map(normalizeRegistration)
 		this.ready = options.ready ?? true
+		this.policy = options.policy ?? TelemetryChannelPolicy.allowAll()
 	}
 
-	add(provider: ITelemetryProvider): void {
+	add(provider: TelemetryProviderInput): void {
+		const registration = normalizeRegistration(provider)
 		if (this.closed) {
 			// Adding to a disposed registry would leak the provider's sockets
 			// and timers, since nothing will dispose it.
-			void provider.dispose().catch(() => {})
+			void registration.base.dispose().catch(() => {})
 			return
 		}
-		this.providers.push(provider)
+
+		const replaced = this.takeByName(registration.base.name)
+		this.registrations.push(registration)
+		void this.closeRegistrations(replaced)
 	}
 
-	remove(name: string): void {
-		this.providers = this.providers.filter((provider) => provider.name !== name)
+	async remove(name: string): Promise<void> {
+		await this.closeRegistrations(this.takeByName(name))
 	}
 
 	/**
@@ -115,17 +154,22 @@ export class TelemetryProviderRegistry {
 		if (dropped > 0) {
 			// A gap in the startup stream must be visible; silently shorter
 			// evidence is worse than evidence that says it is incomplete.
-			Logger.warn(`[TelemetryService] Dropped ${dropped} telemetry signal(s) recorded before providers were ready`)
+			Logger.internalWarn(`[TelemetryService] Dropped ${dropped} telemetry signal(s) recorded before providers were ready`)
 		}
 	}
 
-	/** A copy, so a caller iterating cannot be surprised by a concurrent add. */
+	/** Compatibility projection for callers still using the legacy provider API. */
 	list(): ITelemetryProvider[] {
-		return [...this.providers]
+		return this.registrations.flatMap((registration) => (registration.legacy ? [registration.legacy] : []))
+	}
+
+	/** Full registration view for capability-aware callers and tests. */
+	listRegistrations(): TelemetryProviderRegistration[] {
+		return [...this.registrations]
 	}
 
 	get size(): number {
-		return this.providers.length
+		return this.registrations.length
 	}
 
 	/** Signals held because providers do not exist yet. */
@@ -134,7 +178,7 @@ export class TelemetryProviderRegistry {
 	}
 
 	isEnabled(): boolean {
-		return this.providers.some((provider) => provider.isEnabled())
+		return this.registrations.some((registration) => this.policy.allows({ channel: "usage", severity: "info" }, registration))
 	}
 
 	/**
@@ -146,27 +190,81 @@ export class TelemetryProviderRegistry {
 	 * destination exists.
 	 */
 	getSettings(): TelemetrySettings {
-		return this.providers.length > 0 ? this.providers[0].getSettings() : { hostEnabled: false, level: "off" as const }
+		return this.registrations.length > 0
+			? this.registrations[0].base.getSettings()
+			: { hostEnabled: false, level: "off" as const }
 	}
 
-	logEvent(event: string, properties: PropertiesThunk, required: boolean): void {
-		this.dispatch({ kind: "event", event, properties, required })
+	logEvent(
+		event: string,
+		properties: PropertiesThunk,
+		required: boolean,
+		channel: TelemetryChannel = "usage",
+		severity: TelemetrySeverity = "info",
+	): void {
+		this.dispatch({ kind: "event", channel, severity, event, properties, required })
 	}
 
 	identifyUser(userInfo: ClineAccountUserInfo, properties: PropertiesThunk): void {
-		this.dispatch({ kind: "identify", userInfo, properties })
+		this.dispatch({ kind: "identify", channel: "usage", severity: "info", userInfo, properties })
 	}
 
-	recordCounter(name: string, value: number, attributes: PropertiesThunk, description?: string, required = false): void {
-		this.dispatch({ kind: "counter", name, value, attributes, description, required })
+	recordCounter(
+		name: string,
+		value: number,
+		attributes: PropertiesThunk,
+		description?: string,
+		required = false,
+		channel: TelemetryChannel = "usage",
+		severity: TelemetrySeverity = "info",
+	): void {
+		this.dispatch({ kind: "counter", channel, severity, name, value, attributes, description, required })
 	}
 
-	recordHistogram(name: string, value: number, attributes: PropertiesThunk, description?: string, required = false): void {
-		this.dispatch({ kind: "histogram", name, value, attributes, description, required })
+	recordHistogram(
+		name: string,
+		value: number,
+		attributes: PropertiesThunk,
+		description?: string,
+		required = false,
+		channel: TelemetryChannel = "usage",
+		severity: TelemetrySeverity = "info",
+	): void {
+		this.dispatch({ kind: "histogram", channel, severity, name, value, attributes, description, required })
 	}
 
-	recordGauge(name: string, value: number | null, attributes: PropertiesThunk, description?: string, required = false): void {
-		this.dispatch({ kind: "gauge", name, value, attributes, description, required })
+	recordGauge(
+		name: string,
+		value: number | null,
+		attributes: PropertiesThunk,
+		description?: string,
+		required = false,
+		channel: TelemetryChannel = "usage",
+		severity: TelemetrySeverity = "info",
+	): void {
+		this.dispatch({ kind: "gauge", channel, severity, name, value, attributes, description, required })
+	}
+
+	startSpan(options: TelemetrySpanStartOptions, channel: TelemetryChannel = "runtime"): TelemetrySpanHandle {
+		const handles = orderedRegistrations(this.registrations).flatMap((registration) => {
+			try {
+				if (!this.policy.allows({ channel, severity: "info" }, registration)) return []
+				const capability = registration.capabilities.find((entry) => entry.kind === "trace")
+				if (capability?.kind !== "trace") return []
+				const parent =
+					options.parent instanceof CompositeTelemetrySpan
+						? options.parent.forProvider(registration.base.name)
+						: options.parent
+				return [{ providerName: registration.base.name, handle: capability.startSpan({ ...options, parent }) }]
+			} catch (error) {
+				Logger.internalError(
+					`[TelemetryService] Provider ${registration.base.name} failed to start span ${options.name}:`,
+					error,
+				)
+				return []
+			}
+		})
+		return handles.length === 0 ? INERT_SPAN : new CompositeTelemetrySpan(handles)
 	}
 
 	/**
@@ -179,9 +277,9 @@ export class TelemetryProviderRegistry {
 		this.closed = true
 		this.pending.length = 0
 		this.pendingDropped = 0
-		const providers = this.providers
-		this.providers = []
-		await Promise.allSettled(providers.map((provider) => provider.dispose()))
+		const registrations = this.registrations
+		this.registrations = []
+		await this.closeRegistrations(registrations)
 	}
 
 	/** Deliver now, or hold until providers exist. */
@@ -207,26 +305,39 @@ export class TelemetryProviderRegistry {
 	private deliver(delivery: PendingDelivery): void {
 		// A snapshot, so a provider that registers or removes another provider
 		// while handling this signal cannot change who receives it midway.
-		const providers = [...this.providers]
-		if (providers.length === 0) {
+		const registrations = [...this.registrations]
+		const permitted = registrations.filter((registration) => {
+			try {
+				return this.policy.allows(delivery, registration)
+			} catch (error) {
+				Logger.internalError(`[TelemetryService] Policy failed for ${registration.base.name}:`, error)
+				return false
+			}
+		})
+		if (permitted.length === 0) {
 			return
 		}
 
-		// Resolved once per signal rather than once per provider: every
-		// provider must see identical properties, and the merge is not free.
+		// Resolved only after consent and sink policy pass, so disabled telemetry
+		// does not build metadata or attributes merely to discard them.
 		let properties: TelemetryProperties
 		try {
 			properties = TelemetryProviderRegistry.propertiesOf(delivery)
 		} catch (error) {
-			Logger.error(`[TelemetryService] Failed to build properties for ${describe(delivery)}:`, error)
+			Logger.internalError(`[TelemetryService] Failed to build properties for ${describe(delivery)}:`, error)
 			return
 		}
 
-		for (const provider of providers) {
-			try {
-				TelemetryProviderRegistry.applyTo(provider, delivery, properties)
-			} catch (error) {
-				Logger.error(`[TelemetryService] Provider ${provider.name} failed for ${describe(delivery)}:`, error)
+		for (const registration of orderedRegistrations(permitted)) {
+			for (const capability of registration.capabilities) {
+				try {
+					TelemetryProviderRegistry.applyToCapability(capability, delivery, properties)
+				} catch (error) {
+					Logger.internalError(
+						`[TelemetryService] Provider ${registration.base.name} failed for ${describe(delivery)}:`,
+						error,
+					)
+				}
 			}
 		}
 	}
@@ -260,26 +371,43 @@ export class TelemetryProviderRegistry {
 	 * A switch over the discriminant rather than a stored callback so that
 	 * adding a delivery kind fails to compile until it is routed.
 	 */
-	private static applyTo(provider: ITelemetryProvider, delivery: PendingDelivery, properties: TelemetryProperties): void {
+	private static applyToCapability(
+		capability: TelemetryProviderCapability,
+		delivery: PendingDelivery,
+		properties: TelemetryProperties,
+	): void {
+		if (capability.kind === "journal") {
+			const signal = TelemetryProviderRegistry.toJournalSignal(delivery, properties)
+			if (signal) capability.append(signal)
+			return
+		}
+
 		switch (delivery.kind) {
-			case "event":
-				if (delivery.required) {
-					provider.logRequired(delivery.event, properties)
-				} else {
-					provider.log(delivery.event, properties)
+			case "event": {
+				if (capability.kind !== "event") return
+				const eventProperties = {
+					...properties,
+					telemetry_channel: delivery.channel,
+					telemetry_severity: delivery.severity,
 				}
+				if (delivery.required) capability.logRequired(delivery.event, eventProperties)
+				else capability.log(delivery.event, eventProperties)
 				return
+			}
 			case "identify":
-				provider.identifyUser(delivery.userInfo, properties)
+				if (capability.kind === "event") capability.identifyUser(delivery.userInfo, properties)
 				return
 			case "counter":
-				provider.recordCounter(delivery.name, delivery.value, properties, delivery.description, delivery.required)
+				if (capability.kind === "metric")
+					capability.recordCounter(delivery.name, delivery.value, properties, delivery.description)
 				return
 			case "histogram":
-				provider.recordHistogram(delivery.name, delivery.value, properties, delivery.description, delivery.required)
+				if (capability.kind === "metric")
+					capability.recordHistogram(delivery.name, delivery.value, properties, delivery.description)
 				return
 			case "gauge":
-				provider.recordGauge(delivery.name, delivery.value, properties, delivery.description, delivery.required)
+				if (capability.kind === "metric")
+					capability.recordGauge(delivery.name, delivery.value, properties, delivery.description)
 				return
 			default: {
 				const unhandled: never = delivery
@@ -287,6 +415,100 @@ export class TelemetryProviderRegistry {
 			}
 		}
 	}
+
+	private static toJournalSignal(
+		delivery: PendingDelivery,
+		properties: TelemetryProperties,
+	): JournalTelemetrySignal | undefined {
+		switch (delivery.kind) {
+			case "event":
+				return {
+					kind: "event",
+					channel: delivery.channel,
+					severity: delivery.severity,
+					name: delivery.event,
+					properties,
+					required: delivery.required,
+				}
+			case "identify":
+				// Identity payloads are deliberately never journalled.
+				return undefined
+			case "counter":
+			case "histogram":
+			case "gauge":
+				return {
+					kind: "metric",
+					channel: delivery.channel,
+					severity: delivery.severity,
+					instrument: delivery.kind,
+					name: delivery.name,
+					value: delivery.value,
+					attributes: properties,
+					description: delivery.description,
+				}
+			default: {
+				const unhandled: never = delivery
+				throw new Error(`Unhandled telemetry delivery: ${JSON.stringify(unhandled)}`)
+			}
+		}
+	}
+
+	private takeByName(name: string): TelemetryProviderRegistration[] {
+		const removed = this.registrations.filter((registration) => registration.base.name === name)
+		this.registrations = this.registrations.filter((registration) => registration.base.name !== name)
+		return removed
+	}
+
+	private async closeRegistrations(registrations: readonly TelemetryProviderRegistration[]): Promise<void> {
+		await Promise.allSettled(
+			registrations.map(async (registration) => {
+				try {
+					await registration.base.forceFlush()
+				} finally {
+					await registration.base.dispose()
+				}
+			}),
+		)
+	}
+}
+
+const INERT_SPAN: TelemetrySpanHandle = Object.freeze({
+	active: false,
+	setAttribute(): void {},
+	recordException(): void {},
+	end(): void {},
+})
+
+interface ProviderSpanHandle {
+	readonly providerName: string
+	readonly handle: TelemetrySpanHandle
+}
+
+class CompositeTelemetrySpan implements TelemetrySpanHandle {
+	readonly active = true
+	constructor(private readonly handles: readonly ProviderSpanHandle[]) {}
+	forProvider(providerName: string): TelemetrySpanHandle | undefined {
+		return this.handles.find((entry) => entry.providerName === providerName)?.handle
+	}
+	setAttribute(name: string, value: string | number | boolean): void {
+		for (const { handle } of this.handles) handle.setAttribute(name, value)
+	}
+	recordException(error: unknown): void {
+		for (const { handle } of this.handles) handle.recordException(error)
+	}
+	end(outcome?: "success" | "failure" | "cancelled", endTime?: number): void {
+		for (const { handle } of this.handles) handle.end(outcome, endTime)
+	}
+}
+
+function orderedRegistrations(registrations: readonly TelemetryProviderRegistration[]): TelemetryProviderRegistration[] {
+	return [...registrations].sort((left, right) =>
+		left.sink.kind === right.sink.kind ? 0 : left.sink.kind === "journal" ? -1 : right.sink.kind === "journal" ? 1 : 0,
+	)
+}
+
+function normalizeRegistration(provider: TelemetryProviderInput): TelemetryProviderRegistration {
+	return isTelemetryProviderRegistration(provider) ? provider : adaptLegacyTelemetryProvider(provider)
 }
 
 /** Short identifier used only in failure logs. */

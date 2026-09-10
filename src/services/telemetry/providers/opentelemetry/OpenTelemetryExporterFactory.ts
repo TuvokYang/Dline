@@ -9,6 +9,7 @@ import { ConsoleLogRecordExporter, LogRecordExporter } from "@opentelemetry/sdk-
 import { ConsoleMetricExporter, MetricReader, PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics"
 import { envFlagEnabled } from "@shared/env"
 import { Logger } from "@/shared/services/Logger"
+import { wrapExporterWithDeliveryAccounting } from "../../runtime/transports/delivery-accounting"
 import { wrapLogsExporterWithDiagnostics, wrapMetricsExporterWithDiagnostics } from "./otel-exporter-diagnostics"
 
 /**
@@ -42,6 +43,7 @@ export function createOTLPLogExporter(
 	endpoint: string,
 	insecure: boolean,
 	headers?: Record<string, string>,
+	timeoutMs = 30_000,
 ): LogRecordExporter | null {
 	try {
 		let exporter: any = null
@@ -73,6 +75,7 @@ export function createOTLPLogExporter(
 				return null
 		}
 
+		wrapExporterWithDeliveryAccounting(exporter, (batch: unknown) => (Array.isArray(batch) ? batch.length : 0), timeoutMs)
 		// Wrap with diagnostics if debug is enabled
 		if (isDebugEnabled()) {
 			wrapLogsExporterWithDiagnostics(exporter, protocol, logsUrl.toString())
@@ -139,6 +142,7 @@ export function createOTLPMetricReader(
 				return null
 		}
 
+		wrapExporterWithDeliveryAccounting(exporter, (batch: unknown) => (Array.isArray(batch) ? batch.length : 1), timeoutMs)
 		// Wrap with diagnostics if debug is enabled
 		if (isDebugEnabled()) {
 			wrapMetricsExporterWithDiagnostics(exporter, protocol, metricsUrl.toString())

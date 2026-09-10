@@ -8801,6 +8801,7 @@ export class Task {
 					cacheReadTokens: finalUsage.cacheReadTokens,
 					thoughtsTokens: finalUsage.thoughtsTokens,
 				})
+				const rateMetrics = this.apiRateMetricsService.getSnapshot()
 				telemetryService.captureTokenUsage(
 					this.ulid,
 					finalUsage.inputTokens,
@@ -8810,7 +8811,32 @@ export class Task {
 					{
 						cacheWriteTokens: finalUsage.cacheWriteTokens,
 						cacheReadTokens: finalUsage.cacheReadTokens,
+						thoughtsTokens: finalUsage.thoughtsTokens,
+						apiFormat: requestScope.selectedApiFormat,
 						totalCost: finalUsage.totalCost,
+						cacheUsageReported: finalUsage.cacheUsageReported,
+						requestsPerMinute: rateMetrics.requestsPerMinute,
+						tokensPerMinute: rateMetrics.tokensPerMinute,
+						features: {
+							checkpoints: this.stateManager.getGlobalSettingsKey("enableCheckpointsSetting") === true,
+							hooks: getHooksEnabledSafe(this.stateManager.getGlobalSettingsKey("hooksEnabled")),
+							focus_chain: this.stateManager.getGlobalSettingsKey("focusChainSettings")?.enabled === true,
+							auto_condense: this.stateManager.getGlobalSettingsKey("useAutoCondense") === true,
+							yolo_mode: this.stateManager.getGlobalSettingsKey("yoloModeToggled") === true,
+							auto_approve_all: this.stateManager.getGlobalSettingsKey("autoApproveAllToggled") === true,
+							subagents: this.stateManager.getGlobalSettingsKey("subagentsEnabled") === true,
+							mcp: this.stateManager.getGlobalSettingsKey("mcpEnabled") === true,
+							image_generation: this.stateManager.getGlobalSettingsKey("imageGenerationEnabled") === true,
+							web_tools: this.stateManager.getGlobalSettingsKey("clineWebToolsEnabled") === true,
+							worktrees: this.stateManager.getGlobalSettingsKey("worktreesEnabled") === true,
+							strict_plan: this.stateManager.getGlobalSettingsKey("strictPlanModeEnabled") === true,
+							background_edit: this.stateManager.getGlobalSettingsKey("backgroundEditEnabled") === true,
+							double_check_completion:
+								this.stateManager.getGlobalSettingsKey("doubleCheckCompletionEnabled") === true,
+							lazy_teammate_mode: this.stateManager.getGlobalSettingsKey("lazyTeammateModeEnabled") === true,
+							native_tool_calls: this.shouldUseNativeToolCalls(requestScope.providerInfo),
+							parallel_tool_calling: this.resolveParallelToolCallingEnabled(requestScope.providerInfo),
+						},
 					},
 				)
 			}

@@ -27,11 +27,11 @@ export function wrapMetricsExporterWithDiagnostics(exporter: any, protocol: stri
 			const metricsCount = metrics?.resourceMetrics?.[0]?.scopeMetrics?.[0]?.metrics?.length || 0
 
 			if (result.code === 0) {
-				Logger.log(
+				Logger.debug(
 					`[OTEL METRICS] Export #${exportCount} OK - protocol=${protocol} url=${endpoint} count=${metricsCount} elapsed=${elapsed}ms`,
 				)
 			} else {
-				Logger.error(
+				Logger.internalError(
 					`[OTEL METRICS] Export #${exportCount} FAILED - protocol=${protocol} url=${endpoint} elapsed=${elapsed}ms error="${result.error?.message || "unknown"}"`,
 				)
 			}
@@ -43,7 +43,7 @@ export function wrapMetricsExporterWithDiagnostics(exporter: any, protocol: stri
 			originalExport(metrics, wrappedCallback)
 		} catch (error) {
 			const elapsed = Date.now() - startTime
-			Logger.error(
+			Logger.internalError(
 				`[OTEL METRICS] Export #${exportCount} EXCEPTION - elapsed=${elapsed}ms error="${error instanceof Error ? error.message : String(error)}"`,
 			)
 			throw error
@@ -71,11 +71,11 @@ export function wrapLogsExporterWithDiagnostics(exporter: any, protocol: string,
 			const logsCount = logs?.resourceLogs?.[0]?.scopeLogs?.[0]?.logRecords?.length || 0
 
 			if (result.code === 0) {
-				Logger.log(
+				Logger.debug(
 					`[OTEL LOGS] Export #${exportCount} OK - protocol=${protocol} url=${endpoint} count=${logsCount} elapsed=${elapsed}ms`,
 				)
 			} else {
-				Logger.error(
+				Logger.internalError(
 					`[OTEL LOGS] Export #${exportCount} FAILED - protocol=${protocol} url=${endpoint} elapsed=${elapsed}ms error="${result.error?.message || "unknown"}"`,
 				)
 			}
@@ -87,7 +87,7 @@ export function wrapLogsExporterWithDiagnostics(exporter: any, protocol: string,
 			originalExport(logs, wrappedCallback)
 		} catch (error) {
 			const elapsed = Date.now() - startTime
-			Logger.error(
+			Logger.internalError(
 				`[OTEL LOGS] Export #${exportCount} EXCEPTION - elapsed=${elapsed}ms error="${error instanceof Error ? error.message : String(error)}"`,
 			)
 			throw error

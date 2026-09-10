@@ -14,12 +14,15 @@ export enum RuntimeEventPriority {
 	Debug = 0,
 	/** Ordinary lifecycle and phase timing. */
 	Info = 1,
+	/** Ordinary performance sample. Kept as the compatibility value for existing producers. */
+	PerformanceSample = 2,
+	Performance = PerformanceSample,
 	/** Threshold breaches and degraded behaviour worth investigating. */
-	Performance = 2,
+	PerformanceAnomaly = 3,
 	/** Dependency or transport failures. */
-	Error = 3,
+	Error = 4,
 	/** Broken internal assumptions. Retained longest because they indicate defects. */
-	Invariant = 4,
+	Invariant = 5,
 }
 
 /** Reason an event was not admitted to the queue. */
@@ -59,7 +62,7 @@ export interface RuntimeTelemetryContext {
 export interface NormalizedRuntimeError {
 	/** Constructor name, for example `AxiosError`. */
 	readonly name: string
-	/** Redacted and truncated message. */
+	/** Field-preserving mask; the original prose participates only in the in-memory fingerprint. */
 	readonly message: string
 	/** Library or platform error code, when the error carries one. */
 	readonly code?: string

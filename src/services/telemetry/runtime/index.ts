@@ -1,5 +1,6 @@
+import { runtimeEventRecorder } from "../events/runtime"
 import { RuntimeEventBus, type RuntimeEventBusOptions } from "./runtime-event-bus"
-import { RuntimeEventPriority, type RuntimeTelemetryContext } from "./types"
+import type { RuntimeTelemetryContext } from "./types"
 
 export { IncidentCorrelator, type IncidentCorrelatorOptions } from "./analysis/incident-correlator"
 export { ANALYSIS_ATTRIBUTES, OUTCOME, RootCauseAnalyzer } from "./analysis/root-cause-analyzer"
@@ -41,7 +42,6 @@ export {
 	exportDiagnosticBundle,
 	type RawArtifactConsent,
 } from "./export/diagnostic-exporter"
-export { RuntimeTelemetryLifecycle, type RuntimeTelemetryLifecycleOptions } from "./lifecycle"
 export {
 	RUNTIME_METRICS,
 	RuntimeSampler,
@@ -78,12 +78,6 @@ export {
 	type ScenarioReplayReport,
 } from "./reproduction/scenario-runner"
 export { RuntimeEventBus, type RuntimeEventBusOptions } from "./runtime-event-bus"
-export { RuntimeTelemetryService, type RuntimeTelemetryServiceOptions } from "./service"
-export {
-	OtelLogTransport,
-	type OtelLogTransportOptions,
-	type OtelLogTransportStats,
-} from "./transports/otel-log-transport"
 export { PairingAuthorization, PairingRejection } from "./transports/pairing-authorization"
 export { SessionJournal, type SessionJournalOptions, type SessionJournalStats } from "./transports/session-journal"
 export {
@@ -138,12 +132,7 @@ export function recordRuntimePhase(
 	attributes?: Readonly<Record<string, unknown>>,
 	context?: Partial<RuntimeTelemetryContext>,
 ): void {
-	getRuntimeTelemetryBus().record({
-		name,
-		priority: RuntimeEventPriority.Performance,
-		attributes: { ...attributes, durationMs: Math.round(durationMs) },
-		context,
-	})
+	runtimeEventRecorder.performance(name, { ...attributes, durationMs: Math.round(durationMs) }, context)
 }
 
 /** Record a failure that the extension recovered from or surfaced to the user. */
@@ -153,11 +142,5 @@ export function recordRuntimeFailure(
 	attributes?: Readonly<Record<string, unknown>>,
 	context?: Partial<RuntimeTelemetryContext>,
 ): void {
-	getRuntimeTelemetryBus().record({
-		name,
-		priority: RuntimeEventPriority.Error,
-		attributes,
-		error,
-		context,
-	})
+	runtimeEventRecorder.failure(name, error, attributes, context)
 }

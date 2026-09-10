@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createRuntimeTelemetryBus, setRuntimeTelemetryBus } from "../runtime/index"
+import { forwardRuntimeEvent } from "../runtime/provider-event-bridge"
 import type { RuntimeEventBus } from "../runtime/runtime-event-bus"
 import { installRuntimeSignalPipeline, resetRuntimeSignalPipeline } from "../runtime/signal-pipeline"
 import { RuntimeEventPriority } from "../runtime/types"
+import { installObservabilityPipeline } from "../service/pipeline-port"
 import {
 	configurePerfRecorder,
 	isPerfRecordingEnabled,
@@ -30,6 +32,7 @@ describe("duration recorder", () => {
 	afterEach(() => {
 		setRuntimeTelemetryBus(previousBus)
 		resetRuntimeSignalPipeline()
+		installObservabilityPipeline(undefined)
 		resetPerfRecorder()
 	})
 
@@ -51,6 +54,49 @@ describe("duration recorder", () => {
 				outcome: "completed",
 				durationMs: 250,
 			})
+		})
+
+		it("keeps settings controller callback samples at INFO severity", () => {
+			configurePerfRecorder({ enabled: () => true, now: () => 0 })
+			recordPerfPhase(PerfDomain.Settings, "controller_callback", 12, {
+				outcome: "state_publish",
+			})
+
+			const [event] = bus.peek()
+			const captureRuntimeEvent = vi.fn()
+			forwardRuntimeEvent(event, { captureRuntimeEvent })
+
+			expect(event.priority).toBe(RuntimeEventPriority.Performance)
+			expect(captureRuntimeEvent).toHaveBeenCalledTimes(1)
+			expect(captureRuntimeEvent.mock.calls[0]?.[0]).toBe("settings.controller_callback")
+			expect(captureRuntimeEvent.mock.calls[0]?.[2]).toBe("info")
+		})
+
+		it("also records a low-cardinality duration histogram", () => {
+			const recordHistogram = vi.fn()
+			installObservabilityPipeline({
+				recordHistogram,
+				recordGauge: vi.fn(),
+				startSpan: () => ({
+					active: false,
+					setAttribute() {},
+					recordException() {},
+					end() {},
+				}),
+			})
+			let currentMs = 100
+			configurePerfRecorder({ enabled: () => true, now: () => currentMs })
+
+			const handle = startPerfPhase(PerfDomain.Terminal, "execute_complete", { terminalId: 7 })
+			currentMs = 350
+			handle.stop({ outcome: "completed" })
+
+			expect(recordHistogram).toHaveBeenCalledWith(
+				"dline.runtime.operation.duration",
+				250,
+				{ operation: "terminal.execute_complete", outcome: "completed" },
+				"Runtime operation duration in milliseconds",
+			)
 		})
 
 		it("lets stop-time dimensions override start-time dimensions", () => {
