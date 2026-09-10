@@ -15,6 +15,7 @@ import {
 } from "lucide-react"
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react"
 import { FileServiceClient, UiServiceClient } from "@/services/grpc-client"
+import { TOOL_RESPONSE_SCROLL_CLASS } from "./constants"
 
 interface ImageGenerationRowProps {
 	presentation: ImageGenerationPresentationV1
@@ -188,7 +189,7 @@ export default function ImageGenerationRow({ presentation, isExpanded, onAddToIn
 				</button>
 			</div>
 			{isExpanded && (
-				<div className="space-y-3 p-3">
+				<div className={`space-y-3 p-3 ${TOOL_RESPONSE_SCROLL_CLASS}`} data-testid="image-generation-scroll">
 					<div className="whitespace-pre-wrap break-words text-sm">{presentation.prompt}</div>
 					{presentation.modelId && (
 						<div className="text-xs text-description">

@@ -1,6 +1,7 @@
 import type { LoadCapabilityDetail, LoadCapabilityPayload } from "@shared/load-capabilities"
 import { AlertCircleIcon, CheckCircle2Icon, ChevronDownIcon, ChevronRightIcon, LoaderCircleIcon } from "lucide-react"
 import { useMemo } from "react"
+import { TOOL_RESPONSE_SCROLL_CLASS } from "./constants"
 
 interface LoadCapabilityRowProps {
 	payload: LoadCapabilityPayload
@@ -92,7 +93,9 @@ function StatusIcon({ status }: { status: LoadCapabilityPayload["status"] }) {
  */
 function ExpandedContent({ details, body }: { details: LoadCapabilityDetail[]; body?: string }) {
 	return (
-		<div className="border-t border-editor-group-border px-2.5 py-2 text-sm">
+		<div
+			className={`border-t border-editor-group-border px-2.5 py-2 text-sm ${TOOL_RESPONSE_SCROLL_CLASS}`}
+			data-testid="load-capability-details-scroll">
 			{details.length > 0 ? (
 				<dl className="space-y-1">
 					{details.map((detail) => (

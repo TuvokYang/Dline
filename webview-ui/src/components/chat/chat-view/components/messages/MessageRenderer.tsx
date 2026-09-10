@@ -3,10 +3,16 @@ import type React from "react"
 import { useMemo } from "react"
 import BrowserSessionRow from "@/components/chat/BrowserSessionRow"
 import ChatRow from "@/components/chat/ChatRow"
+import { TOOL_RESPONSE_SCROLL_CLASS } from "@/components/chat/constants"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { cn } from "@/lib/utils"
 import type { MessageHandlers } from "../../types/chatTypes"
-import { findReasoningForApiReq, isTextMessagePendingToolCall, isToolGroup, resolveMessageRowExpanded } from "../../utils/messageUtils"
+import {
+	findReasoningForApiReq,
+	isTextMessagePendingToolCall,
+	isToolGroup,
+	resolveMessageRowExpanded,
+} from "../../utils/messageUtils"
 import { ToolGroupRenderer } from "./ToolGroupRenderer"
 
 interface MessageRendererProps {
@@ -80,7 +86,11 @@ export const MessageRenderer: React.FC<MessageRendererProps> = ({
 	}, [messageOrGroup, groupedMessages, index])
 
 	if (isToolGroup(messageOrGroup)) {
-		return <ToolGroupRenderer allMessages={modifiedMessages} isLastGroup={isLastToolGroup} messages={messageOrGroup} />
+		return (
+			<div className={TOOL_RESPONSE_SCROLL_CLASS} data-testid="tool-group-scroll">
+				<ToolGroupRenderer allMessages={modifiedMessages} isLastGroup={isLastToolGroup} messages={messageOrGroup} />
+			</div>
+		)
 	}
 
 	// Browser session group

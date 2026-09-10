@@ -1,6 +1,7 @@
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
 import React, { useMemo } from "react"
 import CodeAccordian from "../common/CodeAccordian"
+import { TOOL_RESPONSE_SCROLL_CLASS } from "./constants"
 
 interface SearchResultsDisplayProps {
 	content: string
@@ -129,7 +130,10 @@ const SearchResultsDisplay: React.FC<SearchResultsDisplayProps> = ({
 			</div>
 
 			{isExpanded && (
-				<div style={{ padding: "10px", borderTop: "1px solid var(--vscode-editorGroup-border)" }}>
+				<div
+					className={TOOL_RESPONSE_SCROLL_CLASS}
+					data-testid="multi-workspace-search-scroll"
+					style={{ padding: "10px", borderTop: "1px solid var(--vscode-editorGroup-border)" }}>
 					{/* Summary line */}
 					<div
 						style={{

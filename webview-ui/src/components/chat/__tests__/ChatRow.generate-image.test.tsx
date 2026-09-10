@@ -159,7 +159,9 @@ describe("ChatRow image generation rendering", () => {
 				imageGeneration: { ...payload.imageGeneration, previews },
 			}),
 		})
-		const { rerender } = render(<TestableChatRowContent {...baseProps} message={messageWithPreviews(orderedPreviews.slice(0, 1))} />)
+		const { rerender } = render(
+			<TestableChatRowContent {...baseProps} message={messageWithPreviews(orderedPreviews.slice(0, 1))} />,
+		)
 		const surface = screen.getByTestId("image-generation-partial-preview")
 		expect(surface).toHaveAttribute("data-preview-sequence", "0")
 
@@ -172,7 +174,9 @@ describe("ChatRow image generation rendering", () => {
 		expect(surface).toHaveAttribute("data-preview-sequence", "2")
 		expect(screen.getAllByTestId("image-generation-partial-preview")).toHaveLength(1)
 		expect(partialMessage.text).not.toContain("base64")
-		await waitFor(() => expect(getImagePreview).toHaveBeenLastCalledWith(expect.objectContaining({ previewId: orderedPreviews[2].id })))
+		await waitFor(() =>
+			expect(getImagePreview).toHaveBeenLastCalledWith(expect.objectContaining({ previewId: orderedPreviews[2].id })),
+		)
 		expect(await screen.findByRole("img", { name: "Generated image partial 3" })).toHaveAttribute(
 			"src",
 			expect.stringMatching(/^data:image\/png;base64,/),
@@ -181,13 +185,15 @@ describe("ChatRow image generation rendering", () => {
 
 	it("keeps partial and final image surfaces full-width with a 60vh height ceiling", async () => {
 		const portraitPartialPayload = JSON.parse(partialMessage.text)
-		portraitPartialPayload.imageGeneration.previews = [
-			{ ...previewPresentations[0], width: 941, height: 1672, sequence: 0 },
-		]
+		portraitPartialPayload.imageGeneration.previews = [{ ...previewPresentations[0], width: 941, height: 1672, sequence: 0 }]
 		const { unmount } = render(
-			<TestableChatRowContent {...baseProps} message={{ ...partialMessage, text: JSON.stringify(portraitPartialPayload) }} />,
+			<TestableChatRowContent
+				{...baseProps}
+				message={{ ...partialMessage, text: JSON.stringify(portraitPartialPayload) }}
+			/>,
 		)
 		const partialImage = await screen.findByRole("img", { name: "Generated image partial 1" })
+		expect(screen.getByTestId("image-generation-scroll")).toHaveClass("max-h-[60vh]", "overflow-y-auto", "overscroll-contain")
 		expect(partialImage.parentElement).toHaveClass("w-full")
 		expect(partialImage.parentElement).toHaveStyle({ maxHeight: "60vh" })
 		unmount()

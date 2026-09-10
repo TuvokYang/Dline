@@ -8,6 +8,7 @@ import { useSize } from "react-use"
 import styled from "styled-components"
 import { BrowserSettingsMenu } from "@/components/browser/BrowserSettingsMenu"
 import { ChatRowContent, ProgressIndicator } from "@/components/chat/ChatRow"
+import { TOOL_RESPONSE_MAX_HEIGHT } from "@/components/chat/constants"
 import CodeBlock, { CODE_BLOCK_BG_COLOR } from "@/components/common/CodeBlock"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { cn } from "@/lib/utils"
@@ -205,6 +206,9 @@ const BrowserSessionRow = memo((props: BrowserSessionRowProps) => {
 					border: "1px solid var(--vscode-editorGroup-border)",
 					// overflow: "hidden",
 					backgroundColor: CODE_BLOCK_BG_COLOR,
+					maxHeight: TOOL_RESPONSE_MAX_HEIGHT,
+					overflowY: "auto",
+					overscrollBehavior: "contain",
 					// marginBottom: 10,
 					maxWidth,
 					margin: "0 auto 10px auto", // Center the container

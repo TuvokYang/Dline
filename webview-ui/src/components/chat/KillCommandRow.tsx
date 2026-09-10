@@ -1,6 +1,7 @@
 import { ActivityIcon, CircleStopIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useTaskActivityNavigation } from "./activity/TaskActivityNavigationContext"
+import { TOOL_RESPONSE_SCROLL_CLASS } from "./constants"
 
 interface KillCommandRowProps {
 	command: string
@@ -16,7 +17,9 @@ export function KillCommandRow({ command, result, activityId }: KillCommandRowPr
 				<CircleStopIcon className="size-2" />
 				<span className="font-bold">Dline requested command termination:</span>
 			</div>
-			<div className="bg-code overflow-hidden border border-editor-group-border rounded-[3px] py-2 px-2.5">
+			<div
+				className={`bg-code border border-editor-group-border rounded-[3px] py-2 px-2.5 ${TOOL_RESPONSE_SCROLL_CLASS}`}
+				data-testid="kill-command-scroll">
 				<code className="ph-no-capture break-all">{command}</code>
 				{result ? <div className="mt-1 text-description break-words">{result}</div> : null}
 				{activityId ? (

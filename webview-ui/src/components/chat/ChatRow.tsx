@@ -54,6 +54,7 @@ import CodeExecutionRow from "./CodeExecutionRow"
 import { CommandOutputContent, CommandOutputRow } from "./CommandOutputRow"
 import { CompletionOutputRow } from "./CompletionOutputRow"
 import { resolveApiErrorMessage } from "./chat-view/utils/messageUtils"
+import { TOOL_RESPONSE_SCROLL_CLASS } from "./constants"
 import { DiffEditRow } from "./DiffEditRow"
 import { EditResultRow } from "./EditResultRow"
 import ErrorRow from "./ErrorRow"
@@ -1033,7 +1034,9 @@ export const ChatRowContent = memo(
 						{title}
 					</div>
 
-					<div className="bg-code rounded-xs py-2 px-2.5 mt-2">
+					<div
+						className={cn("bg-code rounded-xs py-2 px-2.5 mt-2", TOOL_RESPONSE_SCROLL_CLASS)}
+						data-testid="mcp-request-card">
 						{useMcpServer.type === "access_mcp_resource" && (
 							<McpResourceRow
 								item={{
@@ -1116,7 +1119,12 @@ export const ChatRowContent = memo(
 						return <McpResponseDisplay responseText={message.text || ""} />
 					case "mcp_notification":
 						return (
-							<div className="flex items-start gap-2 py-2.5 px-3 bg-quote rounded-sm text-base text-foreground opacity-90 mb-2">
+							<div
+								className={cn(
+									"flex items-start gap-2 py-2.5 px-3 bg-quote rounded-sm text-base text-foreground opacity-90 mb-2",
+									TOOL_RESPONSE_SCROLL_CLASS,
+								)}
+								data-testid="mcp-notification-card">
 								<BellIcon className="mt-0.5 size-2 text-notification-foreground shrink-0" />
 								<div className="break-words flex-1">
 									<span className="font-medium">MCP Notification: </span>
@@ -1249,7 +1257,12 @@ export const ChatRowContent = memo(
 						const isGenerating = explanationInfo.status === "generating" && !wasCancelled
 						const isError = explanationInfo.status === "error"
 						return (
-							<div className="bg-code flex flex-col border border-editor-group-border rounded-sm py-2.5 px-3">
+							<div
+								className={cn(
+									"bg-code flex flex-col border border-editor-group-border rounded-sm py-2.5 px-3",
+									TOOL_RESPONSE_SCROLL_CLASS,
+								)}
+								data-testid="generate-explanation-scroll">
 								<div className="flex items-center">
 									{isGenerating ? (
 										<ProgressIndicator />

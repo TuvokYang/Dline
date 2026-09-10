@@ -6,7 +6,8 @@ import { cn } from "@/lib/utils"
 import { TaskServiceClient } from "@/services/grpc-client"
 import { CopyButton } from "../common/CopyButton"
 import SuccessButton from "../common/SuccessButton"
-import { QuoteButtonState } from "./ChatRow"
+import type { QuoteButtonState } from "./ChatRow"
+import { TOOL_RESPONSE_SCROLL_CLASS } from "./constants"
 import { MarkdownRow } from "./MarkdownRow"
 import QuoteButton from "./QuoteButton"
 
@@ -49,7 +50,12 @@ export const CompletionOutputRow = memo(
 					</div>
 					{/* Content */}
 					<div className="w-full relative border-t-1 border-description/20 rounded-b-sm">
-						<div className="completion-output-content p-2 pt-3 w-full [&_hr]:opacity-20 [&_p:last-child]:mb-0 rounded-sm">
+						<div
+							className={cn(
+								"completion-output-content p-2 pt-3 w-full [&_hr]:opacity-20 [&_p:last-child]:mb-0 rounded-sm",
+								TOOL_RESPONSE_SCROLL_CLASS,
+							)}
+							data-testid="completion-output-scroll">
 							<MarkdownRow markdown={text} />
 							{quoteButtonState.visible && (
 								<QuoteButton left={quoteButtonState.left} onClick={handleQuoteClick} top={quoteButtonState.top} />

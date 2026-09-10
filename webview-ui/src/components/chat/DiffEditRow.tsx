@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import CodeAccordian from "@/components/common/CodeAccordian"
 import { cn } from "@/lib/utils"
 import { FileServiceClient } from "@/services/grpc-client"
+import { TOOL_RESPONSE_SCROLL_CLASS } from "./constants"
 
 interface Patch {
 	action: string
@@ -45,7 +46,7 @@ export const DiffEditRow = memo<DiffEditRowProps>(({ patch, path, isLoading, sta
 	if (!path) return null
 
 	return (
-		<div className="space-y-4 rounded-xs">
+		<div className={`space-y-4 rounded-xs pr-1 ${TOOL_RESPONSE_SCROLL_CLASS}`} data-testid="diff-edit-scroll">
 			{parsedFiles.map((file, index) => (
 				<FileBlock
 					blockError={blockErrors?.[index]}

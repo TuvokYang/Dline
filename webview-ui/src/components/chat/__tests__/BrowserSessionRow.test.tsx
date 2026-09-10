@@ -98,11 +98,13 @@ describe("BrowserSessionRow", () => {
 		render(<BrowserSessionRow {...baseProps} messages={messages} />)
 
 		const previous = screen.getByRole("button", { name: "Previous browser step" })
+		const frame = screen.getByTestId("browser-session-frame")
 		const url = screen.getByText("https://two.example")
 		const browserAction = screen.getByText("Click (20, 30)", { exact: false })
 		const reasoning = screen.getByTestId("conversation-message-3")
 		const response = screen.getByTestId("conversation-message-4")
 
+		expect(frame).toHaveStyle({ maxHeight: "60vh", overflowY: "auto", overscrollBehavior: "contain" })
 		expect(previous.compareDocumentPosition(url) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
 		expect(browserAction.compareDocumentPosition(reasoning) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
 		expect(reasoning.compareDocumentPosition(response) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)

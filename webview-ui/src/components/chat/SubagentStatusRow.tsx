@@ -31,6 +31,7 @@ import { SubagentWorkSection } from "./activity/SubagentWorkSection"
 import { buildSubagentActivityPresentation, normalizeSubagentDisplayText } from "./activity/subagent-activity-model"
 import { useActivityControlGuard } from "./activity/useActivityControlGuard"
 import { cancelTaskActivities, finishTaskActivities, retryTaskActivities, useTaskActivities } from "./activity/useTaskActivities"
+import { TOOL_RESPONSE_SCROLL_CLASS } from "./constants"
 
 interface SubagentStatusRowProps {
 	message: ClineMessage
@@ -382,7 +383,7 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 				)}
 			</div>
 			{!collapsed && (
-				<div className="space-y-2 pr-0.5">
+				<div className={`space-y-2 pr-0.5 ${TOOL_RESPONSE_SCROLL_CLASS}`} data-testid="subagent-list-scroll">
 					{data.items.map((entry, index) => {
 						const displayStatus: DisplayStatus = entry.status
 						const itemKey = entry.jobId ?? String(entry.index)

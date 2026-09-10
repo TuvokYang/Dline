@@ -4,6 +4,7 @@ import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
 import React, { useCallback, useEffect, useState } from "react"
 import styled from "styled-components"
 import ChatErrorBoundary from "@/components/chat/ChatErrorBoundary"
+import { TOOL_RESPONSE_MAX_HEIGHT } from "@/components/chat/constants"
 import { CODE_BLOCK_BG_COLOR } from "@/components/common/CodeBlock"
 import MarkdownBlock from "@/components/common/MarkdownBlock"
 import { DropdownContainer } from "@/components/settings/ApiOptions"
@@ -19,6 +20,7 @@ export const MAX_URLS = 50
 
 const ResponseHeader = styled.div`
 	display: flex;
+	flex-shrink: 0;
 	justify-content: space-between;
 	align-items: center;
 	padding: 5px 5px 5px 8px;
@@ -46,6 +48,9 @@ const ResponseHeader = styled.div`
 
 const ResponseContainer = styled.div`
 	position: relative;
+	display: flex;
+	flex-direction: column;
+	max-height: ${TOOL_RESPONSE_MAX_HEIGHT};
 	font-family: var(--vscode-editor-font-family, monospace);
 	font-size: var(--vscode-editor-font-size, 12px);
 	background-color: ${CODE_BLOCK_BG_COLOR};
@@ -56,8 +61,10 @@ const ResponseContainer = styled.div`
 	z-index: 0;
 
 	.response-content {
+		min-height: 0;
 		overflow-x: auto;
-		overflow-y: hidden;
+		overflow-y: auto;
+		overscroll-behavior: contain;
 		max-width: 100%;
 		padding: 10px;
 	}
@@ -216,7 +223,7 @@ const McpResponseDisplay: React.FC<McpResponseDisplayProps> = ({ responseText })
 
 	try {
 		return (
-			<ResponseContainer>
+			<ResponseContainer data-testid="mcp-response-card">
 				<ResponseHeader
 					onClick={toggleExpand}
 					style={{
@@ -242,14 +249,18 @@ const McpResponseDisplay: React.FC<McpResponseDisplayProps> = ({ responseText })
 					</DropdownContainer>
 				</ResponseHeader>
 
-				{isExpanded && <div className="response-content">{renderContent()}</div>}
+				{isExpanded && (
+					<div className="response-content" data-testid="mcp-response-content">
+						{renderContent()}
+					</div>
+				)}
 			</ResponseContainer>
 		)
 	} catch (_error) {
 		console.log("Error rendering MCP response - falling back to plain text") // Restored comment
 		// Fallback for critical rendering errors
 		return (
-			<ResponseContainer>
+			<ResponseContainer data-testid="mcp-response-card">
 				<ResponseHeader onClick={toggleExpand}>
 					<div className="header-title">
 						{isExpanded ? (
@@ -261,7 +272,7 @@ const McpResponseDisplay: React.FC<McpResponseDisplayProps> = ({ responseText })
 					</div>
 				</ResponseHeader>
 				{isExpanded && (
-					<div className="response-content">
+					<div className="response-content" data-testid="mcp-response-content">
 						<div style={{ color: "var(--vscode-errorForeground)" }}>Error parsing response:</div>
 						<UrlText>{responseText}</UrlText>
 					</div>

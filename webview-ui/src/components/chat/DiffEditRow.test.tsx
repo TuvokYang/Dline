@@ -102,6 +102,7 @@ describe("DiffEditRow", () => {
 
 		render(<DiffEditRow fileAction="Add" patch={patch} path="first.txt" />)
 
+		expect(screen.getByTestId("diff-edit-scroll")).toHaveClass("max-h-[60vh]", "overflow-y-auto", "overscroll-contain")
 		expect(screen.getByText("first.txt")).toBeInTheDocument()
 		expect(screen.getByText("second.txt")).toBeInTheDocument()
 		fireEvent.click(screen.getByRole("button", { name: /first\.txt/ }))
