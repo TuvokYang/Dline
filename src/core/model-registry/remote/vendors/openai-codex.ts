@@ -11,9 +11,14 @@ import { telemetryService } from "@/services/telemetry"
 import type { ProviderModelReconciliationMode } from "../../provider-model-reconciliation"
 import { isRecord, ModelListingSource, readString } from "../model-listing-source"
 import type { ProviderRemoteContext } from "../model-source"
+import {
+	OPENAI_CODEX_MODEL_LIST_MINIMUM_VERSION,
+	type OpenAiCodexClientVersionSource,
+	openAiCodexClientVersionResolver,
+} from "./openai-codex-client-version"
 
-/** Minimum Codex client version required by the bundled GPT-6-Astra catalog entry. */
-export const OPENAI_CODEX_MODEL_LIST_CLIENT_VERSION = "0.153.0"
+/** Stable fallback retained for callers that need the minimum supported listing version. */
+export const OPENAI_CODEX_MODEL_LIST_CLIENT_VERSION = OPENAI_CODEX_MODEL_LIST_MINIMUM_VERSION
 
 /** Lists the models visible to one ChatGPT Codex OAuth account. */
 export class OpenAiCodexModelSource extends ModelListingSource {
@@ -24,6 +29,10 @@ export class OpenAiCodexModelSource extends ModelListingSource {
 	override readonly requiresApiKey = false
 	override readonly preferredDefaultModelId = openAiCodexDefaultModelId
 	protected override readonly defaultBaseUrl = OPENAI_CODEX_PRODUCTION_RUNTIME_CONFIG.apiBaseUrl
+
+	constructor(private readonly clientVersionSource: OpenAiCodexClientVersionSource = openAiCodexClientVersionResolver) {
+		super()
+	}
 
 	override async fetchModels(context: ProviderRemoteContext): Promise<Record<string, ModelInfo>> {
 		const profileId = context.profileId?.trim()
@@ -43,19 +52,25 @@ export class OpenAiCodexModelSource extends ModelListingSource {
 		)
 
 		const baseUrl = resolveOpenAiCodexRuntimeConfig().apiBaseUrl
+		const clientVersion = await this.clientVersionSource.resolve(context.signal)
+		Logger.debug(`[OpenAiCodexModelSource] Client version resolved version=${clientVersion}`)
 		for (let attempt = 0; attempt < 2; attempt++) {
 			try {
-				Logger.debug(
-					`[OpenAiCodexModelSource] Listing request started url=${this.buildListingUrl({ ...context, baseUrl })} attempt=${attempt + 1}`,
-				)
-				telemetryService.captureButtonClick("settings_openai_codex_models_query_sent")
-				const models = await super.fetchModels({
+				const requestContext: ProviderRemoteContext = {
 					...context,
 					profileId,
 					baseUrl,
 					apiKey: credential.accessToken,
-					vendorCredentials: credential.accountId ? { accountId: credential.accountId } : undefined,
-				})
+					vendorCredentials: {
+						...(credential.accountId ? { accountId: credential.accountId } : {}),
+						clientVersion,
+					},
+				}
+				Logger.debug(
+					`[OpenAiCodexModelSource] Listing request started url=${this.buildListingUrl(requestContext)} attempt=${attempt + 1}`,
+				)
+				telemetryService.captureButtonClick("settings_openai_codex_models_query_sent")
+				const models = await super.fetchModels(requestContext)
 				const modelCount = Object.keys(models).length
 				Logger.debug(`[OpenAiCodexModelSource] Listing request completed models=${modelCount}`)
 				telemetryService.captureButtonClick(
@@ -85,7 +100,7 @@ export class OpenAiCodexModelSource extends ModelListingSource {
 		const pathName = url.pathname.replace(/\/+$/, "")
 		url.pathname = /\/models$/i.test(pathName) ? pathName : `${pathName}/models`
 		url.search = ""
-		url.searchParams.set("client_version", OPENAI_CODEX_MODEL_LIST_CLIENT_VERSION)
+		url.searchParams.set("client_version", context.vendorCredentials?.clientVersion ?? OPENAI_CODEX_MODEL_LIST_CLIENT_VERSION)
 		url.hash = ""
 		return url.toString()
 	}
@@ -93,7 +108,7 @@ export class OpenAiCodexModelSource extends ModelListingSource {
 	protected override buildHeaders(context: ProviderRemoteContext): Record<string, string> {
 		const headers: Record<string, string> = {
 			...buildExternalBasicHeaders(),
-			version: OPENAI_CODEX_MODEL_LIST_CLIENT_VERSION,
+			version: context.vendorCredentials?.clientVersion ?? OPENAI_CODEX_MODEL_LIST_CLIENT_VERSION,
 		}
 		if (context.apiKey) headers.Authorization = `Bearer ${context.apiKey}`
 		const accountId = context.vendorCredentials?.accountId

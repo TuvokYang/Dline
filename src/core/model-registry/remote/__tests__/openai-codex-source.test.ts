@@ -3,10 +3,15 @@ import { openAiCodexOAuthManager } from "@/integrations/openai-codex/oauth"
 import { ExtensionRegistryInfo } from "@/registry"
 import { mockFetchForTesting } from "@/shared/net"
 import { discoverProviderModels } from "../model-refresh"
-import { OPENAI_CODEX_MODEL_LIST_CLIENT_VERSION, OpenAiCodexModelSource } from "../vendors/openai-codex"
+import { OpenAiCodexModelSource } from "../vendors/openai-codex"
+import { type OpenAiCodexClientVersionSource, openAiCodexClientVersionResolver } from "../vendors/openai-codex-client-version"
 
 function jsonResponse(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+}
+
+function fixedClientVersionSource(version: string): OpenAiCodexClientVersionSource {
+	return { resolve: vi.fn().mockResolvedValue(version) }
 }
 
 describe("OpenAiCodexModelSource", () => {
@@ -21,11 +26,13 @@ describe("OpenAiCodexModelSource", () => {
 			accountId: "account-a",
 		})
 		const requests: Array<{ url: string; headers: Headers }> = []
-		const source = new OpenAiCodexModelSource()
+		const clientVersion = "0.200.0"
+		const source = new OpenAiCodexModelSource(fixedClientVersionSource(clientVersion))
 
 		const models = await mockFetchForTesting(
 			async (input: RequestInfo | URL, init?: RequestInit) => {
-				requests.push({ url: String(input), headers: new Headers(init?.headers) })
+				const url = new URL(String(input))
+				requests.push({ url: url.toString(), headers: new Headers(init?.headers) })
 				return jsonResponse({
 					models: [
 						{ slug: "gpt-reserve", supported_in_api: true, visibility: "hide" },
@@ -33,6 +40,9 @@ describe("OpenAiCodexModelSource", () => {
 						{ slug: "gpt-5.6-terra", supported_in_api: true, visibility: "list" },
 						{ slug: "gpt-5.6-luna", supported_in_api: true, visibility: "list" },
 						{ slug: "gpt-5.5", supported_in_api: true, visibility: "list" },
+						...(url.searchParams.get("client_version") === clientVersion
+							? [{ slug: "gpt-6-new", supported_in_api: true, visibility: "list" }]
+							: []),
 						{ slug: "codex-auto-review", supported_in_api: true, visibility: "hide" },
 					],
 				})
@@ -40,7 +50,7 @@ describe("OpenAiCodexModelSource", () => {
 			async () => source.fetchModels({ profileId: "profile-a" }),
 		)
 
-		expect(Object.keys(models)).toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"])
+		expect(Object.keys(models)).toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-6-new"])
 		expect(models["gpt-5.6-sol"]).toMatchObject({
 			id: "gpt-5.6-sol",
 			capabilities: { supportsPromptCache: true, supportsReasoning: true },
@@ -51,13 +61,13 @@ describe("OpenAiCodexModelSource", () => {
 		expect(requests).toHaveLength(1)
 		const url = new URL(requests[0].url)
 		expect(url.pathname).toBe("/backend-api/codex/models")
-		expect(url.searchParams.get("client_version")).toBe(OPENAI_CODEX_MODEL_LIST_CLIENT_VERSION)
+		expect(url.searchParams.get("client_version")).toBe(clientVersion)
 		expect(url.searchParams.has("include_hidden")).toBe(false)
 		expect(requests[0].headers.get("Authorization")).toBe("Bearer access-a")
 		expect(requests[0].headers.get("ChatGPT-Account-Id")).toBe("account-a")
 		expect(requests[0].headers.get("Accept")).toBeNull()
 		expect(requests[0].headers.get("originator")).toBeNull()
-		expect(requests[0].headers.get("version")).toBe(OPENAI_CODEX_MODEL_LIST_CLIENT_VERSION)
+		expect(requests[0].headers.get("version")).toBe(clientVersion)
 		expect(requests[0].headers.get("User-Agent")).toBe(`Dline/${ExtensionRegistryInfo.version}`)
 	})
 
@@ -74,7 +84,7 @@ describe("OpenAiCodexModelSource", () => {
 		})
 		const authorizations: string[] = []
 		const accounts: string[] = []
-		const source = new OpenAiCodexModelSource()
+		const source = new OpenAiCodexModelSource(fixedClientVersionSource("0.201.0"))
 
 		const models = await mockFetchForTesting(
 			async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -101,6 +111,7 @@ describe("OpenAiCodexModelSource", () => {
 			accountId: `account-${profileId}`,
 		}))
 		const requests: string[] = []
+		vi.spyOn(openAiCodexClientVersionResolver, "resolve").mockResolvedValue("0.202.0")
 
 		const results = await mockFetchForTesting(
 			async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -122,8 +133,9 @@ describe("OpenAiCodexModelSource", () => {
 
 	it("does not send a listing request without a Profile identity", async () => {
 		const getCredential = vi.spyOn(openAiCodexOAuthManager, "getCredentialContext")
+		const versionSource = fixedClientVersionSource("0.203.0")
 		let calls = 0
-		const source = new OpenAiCodexModelSource()
+		const source = new OpenAiCodexModelSource(versionSource)
 
 		const models = await mockFetchForTesting(
 			async () => {
@@ -136,5 +148,6 @@ describe("OpenAiCodexModelSource", () => {
 		expect(models).toEqual({})
 		expect(calls).toBe(0)
 		expect(getCredential).not.toHaveBeenCalled()
+		expect(versionSource.resolve).not.toHaveBeenCalled()
 	})
 })
