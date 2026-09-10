@@ -1,4 +1,5 @@
 import {
+	ConsumeOpenAiCodexRateLimitResetCreditRequest,
 	OpenAiCodexProfileRequest,
 	type OpenAiCodexRateLimitResetResult,
 	type OpenAiCodexUsageResponse,
@@ -16,7 +17,7 @@ export interface OpenAiCodexUsageState {
 	readonly error?: string
 	readonly resetError?: string
 	readonly refresh: () => Promise<OpenAiCodexUsageResponse | undefined>
-	readonly consumeResetCredit: () => Promise<OpenAiCodexRateLimitResetResult | undefined>
+	readonly consumeResetCredit: (creditId: string) => Promise<OpenAiCodexRateLimitResetResult | undefined>
 }
 
 export function useOpenAiCodexUsage(profileId: string, enabled: boolean): OpenAiCodexUsageState {
@@ -82,29 +83,37 @@ export function useOpenAiCodexUsage(profileId: string, enabled: boolean): OpenAi
 		void refresh()
 		const interval = window.setInterval(() => void refresh(), USAGE_POLL_INTERVAL_MS)
 		return () => window.clearInterval(interval)
-	}, [enabled, profileId, refresh])
+	}, [enabled, refresh])
 
-	const consumeResetCredit = useCallback(async (): Promise<OpenAiCodexRateLimitResetResult | undefined> => {
-		if (!enabled || resetting) return undefined
-		const requestProfileId = profileId
-		setResetError(undefined)
-		setResetting(true)
-		try {
-			const result = await AccountServiceClient.consumeOpenAiCodexRateLimitResetCredit(
-				OpenAiCodexProfileRequest.create({ profileId: requestProfileId }),
-			)
-			if (!mounted.current || profileRef.current !== result.profileId) return undefined
-			await refresh()
-			return result
-		} catch {
-			if (mounted.current && profileRef.current === requestProfileId) {
-				setResetError("The ChatGPT rate-limit reset could not be completed.")
+	const consumeResetCredit = useCallback(
+		async (creditId: string): Promise<OpenAiCodexRateLimitResetResult | undefined> => {
+			if (!enabled || resetting) return undefined
+			const normalizedCreditId = creditId.trim()
+			if (normalizedCreditId.length === 0) return undefined
+			const requestProfileId = profileId
+			setResetError(undefined)
+			setResetting(true)
+			try {
+				const result = await AccountServiceClient.consumeOpenAiCodexRateLimitResetCredit(
+					ConsumeOpenAiCodexRateLimitResetCreditRequest.create({
+						profileId: requestProfileId,
+						creditId: normalizedCreditId,
+					}),
+				)
+				if (!mounted.current || profileRef.current !== result.profileId) return undefined
+				await refresh()
+				return result
+			} catch {
+				if (mounted.current && profileRef.current === requestProfileId) {
+					setResetError("The ChatGPT rate-limit reset could not be completed.")
+				}
+				return undefined
+			} finally {
+				if (mounted.current && profileRef.current === requestProfileId) setResetting(false)
 			}
-			return undefined
-		} finally {
-			if (mounted.current && profileRef.current === requestProfileId) setResetting(false)
-		}
-	}, [enabled, profileId, refresh, resetting])
+		},
+		[enabled, profileId, refresh, resetting],
+	)
 
 	return { usage, loading, refreshing, resetting, error, resetError, refresh, consumeResetCredit }
 }

@@ -61,8 +61,8 @@ service AccountService {
   // Returns Profile-scoped ChatGPT Codex quota and reset-credit availability.
   rpc getOpenAiCodexUsage(OpenAiCodexProfileRequest) returns (OpenAiCodexUsageResponse);
 
-  // Consumes one available rate-limit reset credit after explicit user confirmation.
-  rpc consumeOpenAiCodexRateLimitResetCredit(OpenAiCodexProfileRequest) returns (OpenAiCodexRateLimitResetResult);
+  // Consumes one selected rate-limit reset credit after explicit user confirmation.
+  rpc consumeOpenAiCodexRateLimitResetCredit(ConsumeOpenAiCodexRateLimitResetCreditRequest) returns (OpenAiCodexRateLimitResetResult);
 
   // Completes an existing flow from the full localhost callback URI.
   rpc completeOpenAiCodexCallbackUri(OpenAiCodexCallbackUriRequest) returns (OpenAiCodexAuthStatusResponse);
@@ -151,6 +151,7 @@ message OpenAiCodexAccount {
   optional string display_name = 2;
   optional string email = 3;
   optional string account_type = 4;
+  optional int64 expires_at_ms = 5;
 }
 
 message OpenAiCodexAuthStatusResponse {
@@ -171,6 +172,12 @@ message OpenAiCodexUsageWindow {
   optional int64 reset_at_ms = 6;
 }
 
+message OpenAiCodexRateLimitResetCredit {
+  string id = 1;
+  optional int64 granted_at_ms = 2;
+  optional int64 expires_at_ms = 3;
+}
+
 message OpenAiCodexUsageResponse {
   string profile_id = 1;
   optional string plan_type = 2;
@@ -180,6 +187,12 @@ message OpenAiCodexUsageResponse {
   optional bool allowed = 6;
   optional bool limit_reached = 7;
   bool is_available = 8;
+  repeated OpenAiCodexRateLimitResetCredit reset_credits = 9;
+}
+
+message ConsumeOpenAiCodexRateLimitResetCreditRequest {
+  string profile_id = 1;
+  string credit_id = 2;
 }
 
 enum OpenAiCodexRateLimitResetOutcome {

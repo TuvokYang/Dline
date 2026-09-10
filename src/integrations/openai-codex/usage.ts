@@ -18,6 +18,17 @@ export interface OpenAiCodexUsageWindow {
 	readonly resetAtMs?: number
 }
 
+export interface OpenAiCodexResetCredit {
+	readonly id: string
+	readonly grantedAtMs?: number
+	readonly expiresAtMs?: number
+}
+
+export interface OpenAiCodexResetCreditList {
+	readonly credits: readonly OpenAiCodexResetCredit[]
+	readonly totalCount: number
+}
+
 export interface OpenAiCodexUsageSnapshot {
 	readonly planType?: string
 	readonly allowed?: boolean
@@ -25,6 +36,7 @@ export interface OpenAiCodexUsageSnapshot {
 	readonly windows: readonly OpenAiCodexUsageWindow[]
 	readonly creditsBalance?: number
 	readonly resetCreditsAvailableCount: number
+	readonly resetCredits: readonly OpenAiCodexResetCredit[]
 }
 
 export interface OpenAiCodexResetCreditResult {
@@ -74,6 +86,12 @@ function nonNegativeInteger(value: unknown): number {
 	return parsed === undefined ? 0 : Math.max(0, Math.trunc(parsed))
 }
 
+function optionalTimestampMs(value: unknown): number | undefined {
+	if (typeof value !== "string" || value.length === 0) return undefined
+	const parsed = Date.parse(value)
+	return Number.isFinite(parsed) ? parsed : undefined
+}
+
 function windowPresentation(seconds: number): Pick<OpenAiCodexUsageWindow, "type" | "label"> {
 	if (seconds >= 27 * 24 * 60 * 60) return { type: "monthly", label: "Monthly" }
 	if (seconds >= 6 * 24 * 60 * 60) return { type: "weekly", label: "7 day" }
@@ -102,6 +120,27 @@ function parseUsageWindow(value: unknown): OpenAiCodexUsageWindow | undefined {
 	}
 }
 
+export function parseOpenAiCodexResetCredits(value: unknown): OpenAiCodexResetCreditList {
+	if (!isRecord(value)) throw new Error("OpenAI Codex reset-credit list response must be an object.")
+	const credits = Array.isArray(value.credits)
+		? value.credits.flatMap((candidate) => {
+				if (!isRecord(candidate)) return []
+				const id = optionalString(candidate.id)
+				if (!id) return []
+				const grantedAtMs = optionalTimestampMs(candidate.granted_at)
+				const expiresAtMs = optionalTimestampMs(candidate.expires_at)
+				return [
+					{
+						id,
+						...(grantedAtMs !== undefined ? { grantedAtMs } : {}),
+						...(expiresAtMs !== undefined ? { expiresAtMs } : {}),
+					},
+				]
+			})
+		: []
+	return { credits, totalCount: Math.max(nonNegativeInteger(value.total_count), credits.length) }
+}
+
 export function parseOpenAiCodexUsage(value: unknown): OpenAiCodexUsageSnapshot {
 	if (!isRecord(value)) throw new Error("OpenAI Codex usage response must be an object.")
 	const rateLimit = isRecord(value.rate_limit) ? value.rate_limit : undefined
@@ -118,6 +157,7 @@ export function parseOpenAiCodexUsage(value: unknown): OpenAiCodexUsageSnapshot 
 		windows,
 		...(creditsBalance !== undefined ? { creditsBalance } : {}),
 		resetCreditsAvailableCount: nonNegativeInteger(resetCredits?.available_count),
+		resetCredits: [],
 	}
 }
 
@@ -168,15 +208,31 @@ export class OpenAiCodexUsageClient {
 		profileId: string,
 		options: OpenAiCodexUsageRequestOptions = {},
 	): Promise<OpenAiCodexUsageSnapshot | undefined> {
-		const payload = await this.requestJson(profileId, this.runtimeConfig.usageUrl, { method: "GET" }, options.signal)
-		return payload === undefined ? undefined : parseOpenAiCodexUsage(payload)
+		const usagePayload = await this.requestJson(profileId, this.runtimeConfig.usageUrl, { method: "GET" }, options.signal)
+		if (usagePayload === undefined) return undefined
+		const usage = parseOpenAiCodexUsage(usagePayload)
+		const resetCreditsPayload = await this.requestJson(
+			profileId,
+			this.runtimeConfig.resetCreditsUrl,
+			{ method: "GET" },
+			options.signal,
+		)
+		if (resetCreditsPayload === undefined) return usage
+		const resetCredits = parseOpenAiCodexResetCredits(resetCreditsPayload)
+		return {
+			...usage,
+			resetCredits: resetCredits.credits,
+			resetCreditsAvailableCount: Math.max(usage.resetCreditsAvailableCount, resetCredits.totalCount),
+		}
 	}
 
 	async consumeRateLimitResetCredit(
 		profileId: string,
+		creditId: string,
 		redeemRequestId: string,
 		options: OpenAiCodexUsageRequestOptions = {},
 	): Promise<OpenAiCodexResetCreditResult | undefined> {
+		if (creditId.length === 0) throw new Error("A reset-credit ID is required.")
 		if (redeemRequestId.length === 0) throw new Error("A reset-credit redeem request ID is required.")
 		const payload = await this.requestJson(
 			profileId,
@@ -184,7 +240,7 @@ export class OpenAiCodexUsageClient {
 			{
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ redeem_request_id: redeemRequestId }),
+				body: JSON.stringify({ credit_id: creditId, redeem_request_id: redeemRequestId }),
 			},
 			options.signal,
 		)

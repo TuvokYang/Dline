@@ -50,8 +50,10 @@ class CodexOAuthE2EServer {
 	readonly codexRequests: CodexRequest[] = []
 	readonly modelRequests: ModelRequest[] = []
 	readonly usageRequests: CodexRequest[] = []
+	readonly resetCreditListRequests: CodexRequest[] = []
 	readonly resetCreditRequests: ResetCreditRequest[] = []
 	private usageResponse: unknown = { rate_limit: {}, credits: { balance: 0 } }
+	private resetCreditsResponse: unknown = { credits: [], total_count: 0 }
 	tokenRequestCount = 0
 	baseUrl = ""
 
@@ -80,6 +82,10 @@ class CodexOAuthE2EServer {
 
 	setUsageResponse(response: unknown): void {
 		this.usageResponse = response
+	}
+
+	setResetCreditsResponse(response: unknown): void {
+		this.resetCreditsResponse = response
 	}
 
 	latestCallback(): string | undefined {
@@ -118,6 +124,17 @@ class CodexOAuthE2EServer {
 							: undefined,
 				})
 				this.json(response, 200, this.usageResponse)
+				return
+			}
+			if (request.method === "GET" && url.pathname === "/rate-limit-reset-credits") {
+				this.resetCreditListRequests.push({
+					authorization: typeof request.headers.authorization === "string" ? request.headers.authorization : undefined,
+					accountId:
+						typeof request.headers["chatgpt-account-id"] === "string"
+							? request.headers["chatgpt-account-id"]
+							: undefined,
+				})
+				this.json(response, 200, this.resetCreditsResponse)
 				return
 			}
 			if (request.method === "POST" && url.pathname === "/rate-limit-reset-credits/consume") {
@@ -468,6 +485,8 @@ e2e(
 		const profile = codexProfile("codex-profile-usage", "Codex Usage")
 		const accessToken = randomUUID()
 		const accountId = "account-usage"
+		const credentialExpiresAtMs = Date.now() + 3_600_000
+		const resetCreditExpiresAt = "2026-10-10T12:00:00Z"
 		server.setUsageResponse({
 			plan_type: "pro",
 			rate_limit: {
@@ -479,6 +498,10 @@ e2e(
 			credits: { balance: "0.00" },
 			rate_limit_reset_credits: { available_count: 1 },
 		})
+		server.setResetCreditsResponse({
+			credits: [{ id: "credit-e2e", granted_at: "2026-09-10T00:00:00Z", expires_at: resetCreditExpiresAt }],
+			total_count: 1,
+		})
 		await addCodexProfiles(dlineDir, [profile])
 		const authPath = path.join(dlineDir, "data", "secrets", getOpenAiCodexProfileAuthFileName(profile.id))
 		await writeFile(
@@ -486,7 +509,7 @@ e2e(
 			`${JSON.stringify({
 				type: "openai-codex",
 				access_token: accessToken,
-				expires: Date.now() + 3_600_000,
+				expires: credentialExpiresAtMs,
 				accountId,
 				displayName: "Codex E2E User",
 				email: "codex-e2e@example.test",
@@ -506,17 +529,27 @@ e2e(
 			await expect(account.getByText("Codex E2E User", { exact: true })).toBeVisible({ timeout: 30_000 })
 			await expect(account.getByText("codex-e2e@example.test", { exact: true })).toBeVisible()
 			await expect(account.getByText("Pro", { exact: true })).toBeVisible()
+			await expect(account.getByText(/^Sign-in expires /)).toBeVisible()
+			const accountCard = account.locator("..")
+			await expect(accountCard.getByRole("button", { name: "Sign in again" })).toBeVisible()
+			await expect(accountCard.getByRole("button", { name: "Sign out" })).toBeVisible()
 			await expect.poll(() => server.usageRequests.length).toBeGreaterThan(0)
+			await expect.poll(() => server.resetCreditListRequests.length).toBeGreaterThan(0)
 			expect(server.usageRequests.at(-1)).toEqual({ authorization: `Bearer ${accessToken}`, accountId })
+			expect(server.resetCreditListRequests.at(-1)).toEqual({ authorization: `Bearer ${accessToken}`, accountId })
 
-			const summary = card.getByRole("button", { name: "5 hour 20%" })
+			const summary = card.getByRole("button", { name: "Usage 5 hour 20%" })
 			await expect(summary).toBeVisible({ timeout: 30_000 })
+			expect(await summary.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe("0px")
 			await summary.click()
 			await expect(card.getByText("20% remaining", { exact: true })).toBeVisible()
 			await expect(card.getByText("70% remaining", { exact: true })).toBeVisible()
+			await expect(card.getByRole("progressbar", { name: "5 hour usage" })).toHaveAttribute("data-usage-tone", "warning")
+			await expect(card.getByRole("progressbar", { name: "7 day usage" })).toHaveAttribute("data-usage-tone", "success")
 			await expect(card.getByText("Reset cards: 1", { exact: true })).toBeVisible()
+			await expect(card.getByText(/^Expires /)).toBeVisible()
 
-			await card.getByRole("button", { name: "Reset limits" }).click()
+			await card.getByRole("button", { name: "Use reset card 1" }).click()
 			const dialog = ready.sidebar.getByRole("dialog", { name: "Use a rate-limit reset card?" })
 			await expect(dialog).toBeVisible()
 			expect(server.resetCreditRequests).toHaveLength(0)
@@ -524,14 +557,29 @@ e2e(
 			await expect(dialog).not.toBeVisible()
 			expect(server.resetCreditRequests).toHaveLength(0)
 
-			await card.getByRole("button", { name: "Reset limits" }).click()
+			await card.getByRole("button", { name: "Use reset card 1" }).click()
 			await dialog.getByRole("button", { name: "Use reset card" }).click()
 			await expect.poll(() => server.resetCreditRequests.length).toBe(1)
 			const resetRequest = server.resetCreditRequests[0]
 			expect(resetRequest).toMatchObject({ authorization: `Bearer ${accessToken}`, accountId })
-			expect(Object.keys(resetRequest.body)).toEqual(["redeem_request_id"])
+			expect(Object.keys(resetRequest.body)).toEqual(["credit_id", "redeem_request_id"])
+			expect(resetRequest.body.credit_id).toBe("credit-e2e")
 			expect(resetRequest.body.redeem_request_id).toEqual(expect.any(String))
 			await expect(card.getByText("Reset completed for primary and secondary.", { exact: true })).toBeVisible()
+
+			await ready.sidebar.getByRole("button", { name: "Done", exact: true }).click()
+			await selectProfile(ready.sidebar, profile.name)
+			const inputUsage = ready.sidebar.getByRole("button", { name: "OpenAI Codex usage" })
+			await expect(inputUsage).toBeVisible({ timeout: 30_000 })
+			await inputUsage.hover()
+			const usageTooltip = ready.sidebar.locator('[data-slot="tooltip-content"]:visible')
+			await expect(usageTooltip).toContainText("5 hour: 80% used")
+			await expect(usageTooltip).toContainText("Reset cards: 1")
+			await expect(usageTooltip).toContainText("Next card expires")
+			await inputUsage.click()
+			const usagePanel = ready.sidebar.getByLabel("OpenAI Codex usage details")
+			await expect(usagePanel).toBeVisible()
+			await expect(usagePanel.getByRole("button", { name: "Use reset card 1" })).toBeVisible()
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
 			await app?.close().catch(() => undefined)

@@ -5,7 +5,7 @@ import {
 	OpenAiCodexFlowStatus,
 } from "@shared/proto/dline/account"
 import { ApiProfile } from "@shared/proto/dline/profile"
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { OpenAiCodexProvider } from "./OpenAiCodexProvider"
 
@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
 	importOAuthJson: vi.fn(),
 	cancel: vi.fn(),
 	signOut: vi.fn(),
+	getUsage: vi.fn(),
+	consumeResetCredit: vi.fn(),
 	copyToClipboard: vi.fn(),
 	openInBrowser: vi.fn(),
 }))
@@ -28,6 +30,8 @@ vi.mock("@/services/grpc-client", () => ({
 		importOpenAiCodexCredentialJson: mocks.importOAuthJson,
 		cancelOpenAiCodexSignIn: mocks.cancel,
 		signOutOpenAiCodexProfile: mocks.signOut,
+		getOpenAiCodexUsage: mocks.getUsage,
+		consumeOpenAiCodexRateLimitResetCredit: mocks.consumeResetCredit,
 	},
 	FileServiceClient: { copyToClipboard: mocks.copyToClipboard },
 	WebServiceClient: { openInBrowser: mocks.openInBrowser },
@@ -85,6 +89,26 @@ describe("OpenAiCodexProvider OAUTH control", () => {
 		})
 		mocks.cancel.mockResolvedValue({})
 		mocks.signOut.mockResolvedValue({})
+		mocks.getUsage.mockResolvedValue({
+			profileId: profile.id,
+			planType: "pro",
+			windows: [
+				{
+					type: "weekly",
+					label: "7 day",
+					usedPercent: 83,
+					remainingPercent: 17,
+					limitWindowSeconds: 604_800,
+					resetAtMs: 1_900_500_000_000,
+				},
+			],
+			resetCreditsAvailableCount: 1,
+			resetCredits: [{ id: "credit-a", expiresAtMs: 1_900_750_000_000 }],
+			allowed: true,
+			limitReached: false,
+			isAvailable: true,
+		})
+		mocks.consumeResetCredit.mockResolvedValue({ profileId: profile.id, outcome: 1, windowsReset: ["primary"] })
 		mocks.copyToClipboard.mockResolvedValue({})
 		mocks.openInBrowser.mockResolvedValue({})
 	})
@@ -106,6 +130,7 @@ describe("OpenAiCodexProvider OAUTH control", () => {
 				displayName: "Ada Lovelace",
 				email: "ada@example.test",
 				accountType: "pro",
+				expiresAtMs: 1_900_000_000_000,
 			},
 		})
 
@@ -114,7 +139,18 @@ describe("OpenAiCodexProvider OAUTH control", () => {
 		expect(await screen.findByText("Ada Lovelace")).toBeInTheDocument()
 		expect(screen.getByText("ada@example.test")).toBeInTheDocument()
 		expect(screen.getByText("Pro")).toBeInTheDocument()
-		expect(screen.getByLabelText("Signed-in ChatGPT account")).toBeInTheDocument()
+		const accountDetails = screen.getByLabelText("Signed-in ChatGPT account")
+		expect(accountDetails).toBeInTheDocument()
+		expect(within(accountDetails).getByText(/^Sign-in expires /)).toBeInTheDocument()
+		expect(within(accountDetails).getByText("Usage")).toBeInTheDocument()
+		const accountCard = accountDetails.parentElement
+		const signInAgain = screen.getByRole("button", { name: "Sign in again" })
+		const signOut = screen.getByRole("button", { name: "Sign out" })
+		expect(accountCard).toContainElement(signInAgain)
+		expect(accountCard).toContainElement(signOut)
+		expect(signInAgain).toHaveClass("bg-button-background")
+		expect(signOut).toHaveClass("text-error")
+		await waitFor(() => expect(mocks.getUsage).toHaveBeenCalledWith({ profileId: "profile-a" }))
 	})
 
 	it("opens the OAUTH dialog immediately and then shows the transient authorization URI", async () => {

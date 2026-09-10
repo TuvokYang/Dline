@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest"
 import { ExtensionRegistryInfo } from "@/registry"
-import { OpenAiCodexUsageClient, parseOpenAiCodexResetCreditResult, parseOpenAiCodexUsage, toAccountUsage } from "./usage"
+import {
+	OpenAiCodexUsageClient,
+	parseOpenAiCodexResetCreditResult,
+	parseOpenAiCodexResetCredits,
+	parseOpenAiCodexUsage,
+	toAccountUsage,
+} from "./usage"
 
 const runtimeConfig = {
 	apiBaseUrl: "https://chatgpt.example.test/backend-api/codex",
@@ -55,8 +61,30 @@ describe("OpenAiCodex usage protocol", () => {
 			],
 			creditsBalance: 7.5,
 			resetCreditsAvailableCount: 2,
+			resetCredits: [],
 		})
 		expect(toAccountUsage(usage)?.quotas?.map((quota) => quota.label)).toEqual(["5 hour", "7 day"])
+		expect(
+			parseOpenAiCodexResetCredits({
+				credits: [
+					{
+						id: "credit-a",
+						granted_at: "2026-09-01T00:00:00Z",
+						expires_at: "2026-10-01T00:00:00Z",
+					},
+				],
+				total_count: 1,
+			}),
+		).toEqual({
+			credits: [
+				{
+					id: "credit-a",
+					grantedAtMs: Date.parse("2026-09-01T00:00:00Z"),
+					expiresAtMs: Date.parse("2026-10-01T00:00:00Z"),
+				},
+			],
+			totalCount: 1,
+		})
 	})
 
 	it("sends the Dline identity and refreshes the complete credential snapshot after one 401", async () => {
@@ -64,6 +92,7 @@ describe("OpenAiCodex usage protocol", () => {
 			.fn()
 			.mockResolvedValueOnce(jsonResponse({ error: "expired" }, 401))
 			.mockResolvedValueOnce(jsonResponse({ rate_limit: { primary_window: { used_percent: 5 } } }))
+			.mockResolvedValueOnce(jsonResponse({ credits: [], total_count: 0 }))
 		const credentialProvider = {
 			getCredentialContext: vi.fn().mockResolvedValue({ accessToken: "old-token", accountId: "old-account", expires: 1 }),
 			forceRefreshCredentialContext: vi
@@ -77,7 +106,7 @@ describe("OpenAiCodex usage protocol", () => {
 		})
 
 		await expect(client.getUsage("profile-a")).resolves.toMatchObject({ resetCreditsAvailableCount: 0 })
-		expect(request).toHaveBeenCalledTimes(2)
+		expect(request).toHaveBeenCalledTimes(3)
 		const firstHeaders = new Headers(request.mock.calls[0][1].headers)
 		const secondHeaders = new Headers(request.mock.calls[1][1].headers)
 		expect(firstHeaders.get("Authorization")).toBe("Bearer old-token")
@@ -98,7 +127,7 @@ describe("OpenAiCodex usage protocol", () => {
 			runtimeConfig,
 		})
 
-		await expect(client.consumeRateLimitResetCredit("profile-a", "redeem-id")).resolves.toEqual({
+		await expect(client.consumeRateLimitResetCredit("profile-a", "credit-a", "redeem-id")).resolves.toEqual({
 			outcome: "reset",
 			windowsReset: ["primary", "secondary"],
 		})
@@ -106,7 +135,7 @@ describe("OpenAiCodex usage protocol", () => {
 			runtimeConfig.consumeResetCreditUrl,
 			expect.objectContaining({
 				method: "POST",
-				body: JSON.stringify({ redeem_request_id: "redeem-id" }),
+				body: JSON.stringify({ credit_id: "credit-a", redeem_request_id: "redeem-id" }),
 			}),
 		)
 		expect(parseOpenAiCodexResetCreditResult({ result: "no_credit" })).toEqual({ outcome: "no_credit", windowsReset: [] })

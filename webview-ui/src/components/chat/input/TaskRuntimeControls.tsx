@@ -9,6 +9,7 @@ import type { OpenAiServiceTier } from "@shared/storage/types"
 import { profileServiceTierEnabled, resolveProfileServiceTier } from "@shared/task-provider-overrides"
 import { resolveProfileReasoningConfig, resolveTaskThinkingConfig } from "@shared/task-reasoning"
 import { useEffect, useMemo, useState } from "react"
+import { TaskOpenAiCodexUsageControl } from "./TaskOpenAiCodexUsageControl"
 import { TaskServiceTierControl } from "./TaskServiceTierControl"
 
 /** Task-local reasoning and OpenAI service-tier controls for the chat input toolbar. */
@@ -42,6 +43,7 @@ export function TaskRuntimeControls() {
 	const supportsEffort = effortLevels.length > 0
 	const supportsBudget = Number.isSafeInteger(maxBudget) && (maxBudget ?? -1) >= 0
 	const supportsServiceTier = profileServiceTierEnabled(profile)
+	const supportsCodexUsage = profile?.provider === "openai-codex"
 
 	const reasoningOverride =
 		mode === "plan" ? apiConfiguration?.planModeReasoningOverride : apiConfiguration?.actModeReasoningOverride
@@ -125,11 +127,12 @@ export function TaskRuntimeControls() {
 		)
 	}
 
-	if (!taskId || (!supportsEffort && !supportsBudget && !supportsServiceTier)) return null
+	const hasTaskControls = Boolean(taskId && (supportsEffort || supportsBudget || supportsServiceTier))
+	if (!hasTaskControls && !supportsCodexUsage) return null
 
 	return (
 		<>
-			{(supportsEffort || supportsBudget) && (
+			{taskId && (supportsEffort || supportsBudget) && (
 				<div
 					className="flex h-[18.5px] min-w-0 max-w-full flex-[0_1_auto] items-center justify-center overflow-hidden"
 					data-chat-input-slot="thinking">
@@ -175,8 +178,11 @@ export function TaskRuntimeControls() {
 					)}
 				</div>
 			)}
-			{supportsServiceTier && <TaskServiceTierControl onSelect={updateServiceTier} value={configuredServiceTier} />}
-			{error && (
+			{taskId && supportsServiceTier ? (
+				<TaskServiceTierControl onSelect={updateServiceTier} value={configuredServiceTier} />
+			) : null}
+			{supportsCodexUsage && profile ? <TaskOpenAiCodexUsageControl profileId={profile.id} /> : null}
+			{taskId && error && (
 				<span className="text-[10px] text-error" role="status" title={error}>
 					{error}
 				</span>

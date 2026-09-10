@@ -30,6 +30,7 @@ export interface OpenAiCodexAccountIdentity {
 	displayName?: string
 	email?: string
 	accountType?: string
+	expiresAtMs?: number
 }
 
 export interface OpenAiCodexRefreshStrategy {
@@ -73,7 +74,7 @@ function toContext(credential: OpenAiOAuthCredentials): OpenAiCodexCredentialCon
 }
 
 function toIdentity(credential: OpenAiOAuthCredentials): OpenAiCodexAccountIdentity {
-	return resolveOpenAiCodexStoredAccountIdentity(credential)
+	return { ...resolveOpenAiCodexStoredAccountIdentity(credential), expiresAtMs: credential.expires }
 }
 
 export class OpenAiCodexProfileSessionRegistry {

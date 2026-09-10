@@ -1,13 +1,11 @@
 import { OpenAiCodexProviderConfig } from "@shared/proto/dline/provider/openai_codex"
 import { buildEffectiveModelInfo } from "@shared/providers/effective-model-info"
 import { OPENAI_REASONING_EFFORT_OPTIONS } from "@shared/storage/types"
-import { useState } from "react"
 import { ModelAutocomplete } from "../common/ModelAutocomplete"
 import { ModelInfoView } from "../common/ModelInfoView"
 import OpenAIServiceTierSelector from "../OpenAIServiceTierSelector"
 import ThinkingControl from "../ThinkingControl"
 import { OpenAiCodexOAuthControl } from "./OpenAiCodexOAuthControl"
-import { OpenAiCodexUsage } from "./OpenAiCodexUsage"
 import type { ApiProfile } from "./ProviderProfile"
 import { useProviderModelOptions } from "./useProviderModelOptions"
 
@@ -30,7 +28,6 @@ function getCodexConfig(profile: ApiProfile): OpenAiCodexProviderConfig {
 
 export const OpenAiCodexProvider = ({ showModelOptions, isPopup, profile, onUpdate }: OpenAiCodexProviderProps) => {
 	const pc = getCodexConfig(profile)
-	const [authenticated, setAuthenticated] = useState(false)
 	const {
 		models,
 		defaultModelId,
@@ -53,7 +50,7 @@ export const OpenAiCodexProvider = ({ showModelOptions, isPopup, profile, onUpda
 	})
 	return (
 		<div className="flex flex-col gap-4">
-			<OpenAiCodexOAuthControl onAuthenticatedChange={setAuthenticated} profileId={profile.id} />
+			<OpenAiCodexOAuthControl profileId={profile.id} />
 			{showModelOptions && (
 				<>
 					<ModelAutocomplete
@@ -80,17 +77,14 @@ export const OpenAiCodexProvider = ({ showModelOptions, isPopup, profile, onUpda
 						reasoningConfig={pc.reasoning}
 						showModeSelector={true}
 					/>
-					<div className="grid min-w-0 grid-cols-1 items-start gap-3 xs:grid-cols-2">
-						<OpenAIServiceTierSelector
-							onServiceTierChange={(serviceTier) => onUpdate({ openaiCodex: { ...pc, serviceTier } })}
-							onServiceTierEnabledChange={(serviceTierEnabled) =>
-								onUpdate({ openaiCodex: { ...pc, serviceTierEnabled } })
-							}
-							serviceTier={pc.serviceTier}
-							serviceTierEnabled={pc.serviceTierEnabled !== false}
-						/>
-						<OpenAiCodexUsage enabled={authenticated} profileId={profile.id} />
-					</div>
+					<OpenAIServiceTierSelector
+						onServiceTierChange={(serviceTier) => onUpdate({ openaiCodex: { ...pc, serviceTier } })}
+						onServiceTierEnabledChange={(serviceTierEnabled) =>
+							onUpdate({ openaiCodex: { ...pc, serviceTierEnabled } })
+						}
+						serviceTier={pc.serviceTier}
+						serviceTierEnabled={pc.serviceTierEnabled !== false}
+					/>
 					<ModelInfoView isPopup={isPopup} modelInfo={modelInfo} selectedModelId={modelId} />
 				</>
 			)}

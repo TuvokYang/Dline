@@ -57,12 +57,18 @@ export function toOpenAiCodexAuthStatus(status: OpenAiCodexProfileAuthStatus): O
 }
 
 export function toOpenAiCodexAccount(context: OpenAiCodexAccountIdentity | null): OpenAiCodexAccount | undefined {
-	if (!context || (!context.accountId && !context.displayName && !context.email && !context.accountType)) return undefined
+	if (
+		!context ||
+		(!context.accountId && !context.displayName && !context.email && !context.accountType && !context.expiresAtMs)
+	) {
+		return undefined
+	}
 	return OpenAiCodexAccount.create({
 		accountId: context.accountId ?? "",
 		displayName: context.displayName,
 		email: context.email,
 		accountType: context.accountType,
+		expiresAtMs: context.expiresAtMs,
 	})
 }
 
@@ -84,6 +90,12 @@ export function toOpenAiCodexUsageResponse(
 			})) ?? [],
 		creditsBalance: usage?.creditsBalance,
 		resetCreditsAvailableCount: usage?.resetCreditsAvailableCount ?? 0,
+		resetCredits:
+			usage?.resetCredits.map((credit) => ({
+				id: credit.id,
+				grantedAtMs: credit.grantedAtMs,
+				expiresAtMs: credit.expiresAtMs,
+			})) ?? [],
 		allowed: usage?.allowed,
 		limitReached: usage?.limitReached,
 		isAvailable: usage !== undefined,

@@ -167,6 +167,7 @@ describe("OpenAI Codex Profile OAuth handlers", () => {
 			displayName: "Ada Lovelace",
 			email: "ada@example.test",
 			accountType: "pro",
+			expiresAtMs: 1_900_000_000_000,
 		})
 
 		await expect(getOpenAiCodexAuthStatus(controller, profileRequest())).resolves.toMatchObject({
@@ -177,6 +178,7 @@ describe("OpenAI Codex Profile OAuth handlers", () => {
 				displayName: "Ada Lovelace",
 				email: "ada@example.test",
 				accountType: "pro",
+				expiresAtMs: 1_900_000_000_000,
 			},
 		})
 	})
@@ -198,6 +200,7 @@ describe("OpenAI Codex Profile OAuth handlers", () => {
 			],
 			creditsBalance: 5,
 			resetCreditsAvailableCount: 1,
+			resetCredits: [{ id: "credit-a", grantedAtMs: 1_800_000_000_000, expiresAtMs: 1_900_000_000_000 }],
 		})
 
 		await expect(getOpenAiCodexUsage(controller, profileRequest())).resolves.toMatchObject({
@@ -205,18 +208,21 @@ describe("OpenAI Codex Profile OAuth handlers", () => {
 			planType: "pro",
 			isAvailable: true,
 			resetCreditsAvailableCount: 1,
+			resetCredits: [{ id: "credit-a", expiresAtMs: 1_900_000_000_000 }],
 			windows: [{ type: "5hour", remainingPercent: 75 }],
 		})
 		expect(mocks.getUsage).toHaveBeenCalledWith("profile-a")
 	})
 
-	it("consumes a reset credit only for the explicit Profile and maps the official outcome", async () => {
-		await expect(consumeOpenAiCodexRateLimitResetCredit(controller, profileRequest())).resolves.toEqual({
+	it("consumes the selected reset credit only for the explicit Profile and maps the official outcome", async () => {
+		await expect(
+			consumeOpenAiCodexRateLimitResetCredit(controller, { profileId: "profile-a", creditId: "credit-a" }),
+		).resolves.toEqual({
 			profileId: "profile-a",
 			outcome: OpenAiCodexRateLimitResetOutcome.OPEN_AI_CODEX_RATE_LIMIT_RESET_OUTCOME_RESET,
 			windowsReset: ["primary"],
 		})
-		expect(mocks.consumeResetCredit).toHaveBeenCalledWith("profile-a", expect.any(String))
+		expect(mocks.consumeResetCredit).toHaveBeenCalledWith("profile-a", "credit-a", expect.any(String))
 	})
 
 	it("uses the same Profile and flow owner for callback completion and cancellation", async () => {
