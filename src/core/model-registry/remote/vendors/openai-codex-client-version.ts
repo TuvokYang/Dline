@@ -1,5 +1,6 @@
 import { Logger } from "@shared/services/Logger"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
+import { emitSignal } from "@/services/telemetry/service/pipeline-port"
 import { fetch } from "@/shared/net"
 
 /** Official npm dist-tag endpoint used by sub2api to discover the current Codex CLI version. */
@@ -27,6 +28,21 @@ export interface OpenAiCodexClientVersionSource {
 	resolve(signal?: AbortSignal): Promise<string>
 }
 
+export type OpenAiCodexClientVersionResolutionSource = "registry" | "previous" | "minimum"
+export type OpenAiCodexClientVersionFailureReason = "timeout" | "http_error" | "invalid_payload" | "network_error" | "unknown"
+
+export interface OpenAiCodexClientVersionResolutionEvent {
+	readonly outcome: "resolved" | "fallback"
+	readonly source: OpenAiCodexClientVersionResolutionSource
+	readonly selectedVersion: string
+	readonly registryVersion?: string
+	readonly floorApplied: boolean
+	readonly preservedPrevious: boolean
+	readonly durationMs: number
+	readonly failureReason?: OpenAiCodexClientVersionFailureReason
+	readonly httpStatus?: number
+}
+
 export interface OpenAiCodexClientVersionResolverOptions {
 	readonly fetchImpl?: typeof globalThis.fetch
 	readonly now?: () => number
@@ -35,6 +51,7 @@ export interface OpenAiCodexClientVersionResolverOptions {
 	readonly successTtlMs?: number
 	readonly failureTtlMs?: number
 	readonly timeoutMs?: number
+	readonly onResolution?: (event: OpenAiCodexClientVersionResolutionEvent) => void
 }
 
 const SEMVER_PATTERN =
@@ -102,6 +119,50 @@ function readRegistryVersion(payload: unknown): string | undefined {
 	return typeof version === "string" && parseVersion(version) ? version.trim() : undefined
 }
 
+function selectedVersionSource(
+	minimumVersion: string,
+	previousVersion: string | undefined,
+	registryVersion: string | undefined,
+	selectedVersion: string,
+): OpenAiCodexClientVersionResolutionSource {
+	if (registryVersion === selectedVersion) return "registry"
+	if (previousVersion === selectedVersion) return "previous"
+	return selectedVersion === minimumVersion ? "minimum" : "previous"
+}
+
+function classifyFailure(error: unknown): {
+	reason: OpenAiCodexClientVersionFailureReason
+	httpStatus?: number
+} {
+	if (error instanceof DOMException && (error.name === "TimeoutError" || error.name === "AbortError")) {
+		return { reason: "timeout" }
+	}
+	const message = error instanceof Error ? error.message : ""
+	const statusMatch = /^status_(\d{3})$/.exec(message)
+	if (statusMatch) return { reason: "http_error", httpStatus: Number(statusMatch[1]) }
+	if (message === "invalid_version_payload") return { reason: "invalid_payload" }
+	if (error instanceof TypeError) return { reason: "network_error" }
+	return { reason: "unknown" }
+}
+
+function emitResolutionTelemetry(event: OpenAiCodexClientVersionResolutionEvent): void {
+	emitSignal({
+		name: "openai_codex.client_version_resolution",
+		level: "debug",
+		attributes: {
+			outcome: event.outcome,
+			source: event.source,
+			selectedVersion: event.selectedVersion,
+			floorApplied: event.floorApplied,
+			preservedPrevious: event.preservedPrevious,
+			durationMs: event.durationMs,
+			...(event.registryVersion ? { registryVersion: event.registryVersion } : {}),
+			...(event.failureReason ? { failureReason: event.failureReason } : {}),
+			...(event.httpStatus === undefined ? {} : { httpStatus: event.httpStatus }),
+		},
+	})
+}
+
 function aborted(signal: AbortSignal): Error {
 	return signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError")
 }
@@ -125,6 +186,7 @@ export class OpenAiCodexClientVersionResolver implements OpenAiCodexClientVersio
 	private readonly successTtlMs: number
 	private readonly failureTtlMs: number
 	private readonly timeoutMs: number
+	private readonly onResolution: (event: OpenAiCodexClientVersionResolutionEvent) => void
 	private cache: VersionCacheEntry | undefined
 	private inFlight: Promise<string> | undefined
 
@@ -136,6 +198,7 @@ export class OpenAiCodexClientVersionResolver implements OpenAiCodexClientVersio
 		this.successTtlMs = Math.max(1, options.successTtlMs ?? OPENAI_CODEX_CLIENT_VERSION_SUCCESS_TTL_MS)
 		this.failureTtlMs = Math.max(1, options.failureTtlMs ?? OPENAI_CODEX_CLIENT_VERSION_FAILURE_TTL_MS)
 		this.timeoutMs = Math.max(1, options.timeoutMs ?? OPENAI_CODEX_CLIENT_VERSION_REQUEST_TIMEOUT_MS)
+		this.onResolution = options.onResolution ?? emitResolutionTelemetry
 	}
 
 	resolve(signal?: AbortSignal): Promise<string> {
@@ -153,8 +216,12 @@ export class OpenAiCodexClientVersionResolver implements OpenAiCodexClientVersio
 	}
 
 	private async refresh(): Promise<string> {
+		const startedAt = performance.now()
 		const previousVersion = this.cache?.version
 		const fallback = highestVersion(this.minimumVersion, previousVersion)
+		Logger.debug(
+			`[OpenAiCodexClientVersionResolver] Fetching registry version minimumVersion=${this.minimumVersion} previousVersion=${previousVersion ?? "none"}`,
+		)
 		try {
 			const response = await this.fetchImpl(this.registryUrl, {
 				headers: buildExternalBasicHeaders(),
@@ -165,15 +232,44 @@ export class OpenAiCodexClientVersionResolver implements OpenAiCodexClientVersio
 			if (!registryVersion) throw new Error("invalid_version_payload")
 			const version = highestVersion(this.minimumVersion, previousVersion, registryVersion)
 			this.cache = { version, expiresAt: this.now() + this.successTtlMs }
+			this.recordResolution({
+				outcome: "resolved",
+				source: selectedVersionSource(this.minimumVersion, previousVersion, registryVersion, version),
+				selectedVersion: version,
+				registryVersion,
+				floorApplied: version !== registryVersion,
+				preservedPrevious: previousVersion === version && previousVersion !== registryVersion,
+				durationMs: Math.round(performance.now() - startedAt),
+			})
 			Logger.debug(
 				`[OpenAiCodexClientVersionResolver] Registry resolved registryVersion=${registryVersion} selectedVersion=${version} floorApplied=${version !== registryVersion}`,
 			)
 			return version
 		} catch (error) {
 			this.cache = { version: fallback, expiresAt: this.now() + this.failureTtlMs }
-			const reason = error instanceof Error ? error.message : "unknown_error"
-			Logger.debug(`[OpenAiCodexClientVersionResolver] Registry unavailable; using version=${fallback} reason=${reason}`)
+			const failure = classifyFailure(error)
+			this.recordResolution({
+				outcome: "fallback",
+				source: selectedVersionSource(this.minimumVersion, previousVersion, undefined, fallback),
+				selectedVersion: fallback,
+				floorApplied: fallback === this.minimumVersion,
+				preservedPrevious: previousVersion === fallback,
+				durationMs: Math.round(performance.now() - startedAt),
+				failureReason: failure.reason,
+				...(failure.httpStatus === undefined ? {} : { httpStatus: failure.httpStatus }),
+			})
+			Logger.debug(
+				`[OpenAiCodexClientVersionResolver] Registry unavailable; using version=${fallback} reason=${failure.reason}${failure.httpStatus === undefined ? "" : ` status=${failure.httpStatus}`}`,
+			)
 			return fallback
+		}
+	}
+
+	private recordResolution(event: OpenAiCodexClientVersionResolutionEvent): void {
+		try {
+			this.onResolution(event)
+		} catch {
+			Logger.debug("[OpenAiCodexClientVersionResolver] Telemetry recording failed")
 		}
 	}
 }

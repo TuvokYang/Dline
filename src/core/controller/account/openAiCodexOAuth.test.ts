@@ -33,6 +33,8 @@ const mocks = vi.hoisted(() => ({
 	clearCredentials: vi.fn(),
 	getUsage: vi.fn(),
 	consumeResetCredit: vi.fn(),
+	loadProviderUsageSnapshot: vi.fn(),
+	consumeProviderUsageResetCredit: vi.fn(),
 	showMessage: vi.fn(),
 	loggerError: vi.fn(),
 }))
@@ -60,7 +62,11 @@ vi.mock("@/integrations/openai-codex/usage", () => ({
 vi.mock("@/hosts/host-provider", () => ({ HostProvider: { window: { showMessage: mocks.showMessage } } }))
 vi.mock("@/shared/services/Logger", () => ({ Logger: { error: mocks.loggerError } }))
 
-const controller = { postStateToWebview: vi.fn() } as never
+const controller = {
+	postStateToWebview: vi.fn(),
+	loadProviderUsageSnapshot: mocks.loadProviderUsageSnapshot,
+	consumeProviderUsageResetCredit: mocks.consumeProviderUsageResetCredit,
+} as never
 const profileA = ApiProfile.create({ id: "profile-a", name: "Codex A", provider: "openai-codex", enabled: true })
 const profileB = ApiProfile.create({ id: "profile-b", name: "OpenAI B", provider: "openai", enabled: true })
 const credentials = {
@@ -96,6 +102,21 @@ describe("OpenAI Codex Profile OAuth handlers", () => {
 		mocks.clearCredentials.mockResolvedValue(undefined)
 		mocks.getUsage.mockResolvedValue(undefined)
 		mocks.consumeResetCredit.mockResolvedValue({ outcome: "reset", windowsReset: ["primary"] })
+		mocks.loadProviderUsageSnapshot.mockResolvedValue({
+			profileId: "profile-a",
+			providerId: "openai-codex",
+			currency: "",
+			isAvailable: false,
+		})
+		mocks.consumeProviderUsageResetCredit.mockResolvedValue({
+			result: { outcome: "reset", quotaTypesReset: ["primary"] },
+			usage: {
+				profileId: "profile-a",
+				providerId: "openai-codex",
+				currency: "",
+				isAvailable: true,
+			},
+		})
 	})
 
 	it("starts an OAUTH flow for the explicit Profile and returns its transient presentation", async () => {
@@ -184,23 +205,33 @@ describe("OpenAI Codex Profile OAuth handlers", () => {
 	})
 
 	it("returns Profile-scoped usage with plan, quota windows, and reset-card availability", async () => {
-		mocks.getUsage.mockResolvedValue({
+		mocks.loadProviderUsageSnapshot.mockResolvedValue({
+			profileId: "profile-a",
+			providerId: "openai-codex",
+			currency: "USD",
+			remainingBalance: 5,
 			planType: "pro",
 			allowed: true,
 			limitReached: false,
-			windows: [
+			quotas: [
 				{
 					type: "5hour",
 					label: "5 hour",
-					usedPercent: 25,
-					remainingPercent: 75,
-					limitWindowSeconds: 18_000,
-					resetAtMs: 1_800_000_000_000,
+					used: 25,
+					limit: 100,
+					windowSeconds: 18_000,
+					resetAt: new Date(1_800_000_000_000).toISOString(),
 				},
 			],
-			creditsBalance: 5,
 			resetCreditsAvailableCount: 1,
-			resetCredits: [{ id: "credit-a", grantedAtMs: 1_800_000_000_000, expiresAtMs: 1_900_000_000_000 }],
+			resetCredits: [
+				{
+					id: "credit-a",
+					grantedAt: new Date(1_800_000_000_000).toISOString(),
+					expiresAt: new Date(1_900_000_000_000).toISOString(),
+				},
+			],
+			isAvailable: true,
 		})
 
 		await expect(getOpenAiCodexUsage(controller, profileRequest())).resolves.toMatchObject({
@@ -211,10 +242,19 @@ describe("OpenAI Codex Profile OAuth handlers", () => {
 			resetCredits: [{ id: "credit-a", expiresAtMs: 1_900_000_000_000 }],
 			windows: [{ type: "5hour", remainingPercent: 75 }],
 		})
-		expect(mocks.getUsage).toHaveBeenCalledWith("profile-a")
+		expect(mocks.loadProviderUsageSnapshot).toHaveBeenCalledWith("profile-a")
 	})
 
 	it("consumes the selected reset credit only for the explicit Profile and maps the official outcome", async () => {
+		mocks.consumeProviderUsageResetCredit.mockResolvedValue({
+			result: { outcome: "reset", quotaTypesReset: ["primary"] },
+			usage: {
+				profileId: "profile-a",
+				providerId: "openai-codex",
+				currency: "",
+				isAvailable: true,
+			},
+		})
 		await expect(
 			consumeOpenAiCodexRateLimitResetCredit(controller, { profileId: "profile-a", creditId: "credit-a" }),
 		).resolves.toEqual({
@@ -222,7 +262,7 @@ describe("OpenAI Codex Profile OAuth handlers", () => {
 			outcome: OpenAiCodexRateLimitResetOutcome.OPEN_AI_CODEX_RATE_LIMIT_RESET_OUTCOME_RESET,
 			windowsReset: ["primary"],
 		})
-		expect(mocks.consumeResetCredit).toHaveBeenCalledWith("profile-a", "credit-a", expect.any(String))
+		expect(mocks.consumeProviderUsageResetCredit).toHaveBeenCalledWith("profile-a", "credit-a")
 	})
 
 	it("uses the same Profile and flow owner for callback completion and cancellation", async () => {

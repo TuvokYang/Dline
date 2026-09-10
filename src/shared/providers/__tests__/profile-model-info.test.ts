@@ -1,9 +1,12 @@
 import { anthropicModels } from "@core/api/providers/models/anthropic"
 import { deepSeekModels } from "@core/api/providers/models/deepseek"
+import { openAiCodexModels } from "@core/api/providers/models/openai-codex"
+import { ApiFormat } from "@shared/proto/dline/models/metadata"
 import { ApiProfile } from "@shared/proto/dline/profile"
 import { AnthropicProviderConfig } from "@shared/proto/dline/provider/anthropic"
 import { BaseProviderConfig } from "@shared/proto/dline/provider/common"
 import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
+import { OpenAiCodexProviderConfig } from "@shared/proto/dline/provider/openai_codex"
 import { expect } from "chai"
 import { describe, it } from "vitest"
 import { resolveProfileModelInfo } from "../profile-model-info"
@@ -106,6 +109,27 @@ describe("resolveProfileModelInfo", () => {
 		expect(result.capabilities?.contextWindow).to.equal(272_000)
 		expect(result.capabilities?.maxTokens).to.equal(128_000)
 		expect(result.capabilities?.supportsReasoning).to.equal(true)
+	})
+
+	it("applies Codex capability overrides and prioritizes the selected Responses transport", () => {
+		const profile = ApiProfile.create({
+			provider: "openai-codex",
+			modelId: "gpt-6-astra",
+			openaiCodex: OpenAiCodexProviderConfig.create({
+				apiFormat: ApiFormat.OPENAI_RESPONSES,
+				websocketEnabled: true,
+				capabilities: { contextWindow: 400_000, maxTokens: 64_000 },
+			}),
+		})
+
+		const result = resolveProfileModelInfo(profile, {
+			models: openAiCodexModels,
+			defaultModelId: "gpt-6-astra",
+		})
+
+		expect(result.capabilities?.contextWindow).to.equal(400_000)
+		expect(result.capabilities?.maxTokens).to.equal(64_000)
+		expect(result.apiFormats).to.deep.equal([ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE, ApiFormat.OPENAI_RESPONSES])
 	})
 
 	it("uses the native 1M context for Anthropic profiles without an explicit flag", () => {

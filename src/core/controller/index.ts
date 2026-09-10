@@ -1,7 +1,14 @@
 import { createHash, randomUUID } from "node:crypto"
 import type { Anthropic } from "@anthropic-ai/sdk"
 import { accountUsageCoordinator } from "@core/account-usage/AccountUsageCoordinator"
-import { type AccountUsage, type ApiHandler, buildApiHandler } from "@core/api"
+import { decorateProviderAccountUsage } from "@core/account-usage/provider-usage"
+import {
+	type AccountUsage,
+	type AccountUsageResetResult,
+	type ApiHandler,
+	buildApiHandler,
+	buildApiHandlerFromProfile,
+} from "@core/api"
 import { getProfileModelInfo } from "@core/api/model-info"
 import { createGlobalConfigurationSnapshot, type GlobalConfigurationSnapshot } from "@core/configuration/GlobalConfiguration"
 import { GlobalConfigurationManager, type GlobalConfigurationResult } from "@core/configuration/GlobalConfigurationManager"
@@ -114,6 +121,14 @@ import { projectTaskHistory } from "./state/taskHistoryProjection"
 import { prepareHistoryTaskForDisplay, projectHistoryPreparingView } from "./task/history-task-readiness"
 import { startTaskLifecycle } from "./task/task-start-lifecycle"
 import { sendChatButtonClickedEvent } from "./ui/subscribeToChatButtonClicked"
+
+const ACCOUNT_USAGE_BINDING_SETTINGS = new Set([
+	"mode",
+	"planModeProfileId",
+	"planModeProfile",
+	"actModeProfileId",
+	"actModeProfile",
+])
 
 type InitTaskOptions = {
 	onHistoryTaskPreparingToDisplay?: () => Promise<void>
@@ -386,6 +401,85 @@ export class Controller {
 		return this._accountUsage
 	}
 
+	private isActiveProviderUsageProfile(profileId: string): boolean {
+		const taskId = this.task?.taskId
+		const apiConfig = this.stateManager.getApiConfigurationForTask(taskId)
+		const mode = this.stateManager.getSettingsKeyForTask("mode", taskId) || "act"
+		const profileReference =
+			mode === "plan"
+				? (apiConfig.planModeProfileId ?? apiConfig.planModeProfile)
+				: (apiConfig.actModeProfileId ?? apiConfig.actModeProfile)
+		const resolution = resolveProfileReference(readApiProfiles(), profileReference)
+		return resolution.status === "resolved" && resolution.profile.id === profileId
+	}
+
+	/** Publish a shared snapshot only when its Profile is still active for the current mode. */
+	async publishAccountUsageSnapshot(profileId: string, usage: AccountUsage): Promise<void> {
+		if (!this.isActiveProviderUsageProfile(profileId)) return
+		if (JSON.stringify(this._accountUsage) === JSON.stringify(usage)) return
+		this._accountUsage = usage
+		await sendAccountUsageUpdate(this, usage)
+	}
+
+	private buildProviderUsageHandler(profileId: string) {
+		const normalizedProfileId = profileId.trim()
+		if (normalizedProfileId.length === 0) throw new Error("A Provider Profile ID is required.")
+		const profile = readApiProfiles().find((candidate) => candidate.id === normalizedProfileId && candidate.enabled !== false)
+		if (!profile) throw new Error("The requested Provider Profile does not exist.")
+		const taskId = this.task?.taskId
+		const apiConfiguration = this.stateManager.getApiConfigurationForTask(taskId)
+		const mode = this.stateManager.getSettingsKeyForTask("mode", taskId) || "act"
+		return { profile, handler: buildApiHandlerFromProfile(apiConfiguration, mode, profile) }
+	}
+
+	/** Load one Profile's shared usage capability without introducing a second provider-specific service. */
+	async loadProviderUsageSnapshot(profileId: string): Promise<AccountUsage> {
+		const target = this.buildProviderUsageHandler(profileId)
+		try {
+			const usage = decorateProviderAccountUsage(
+				target.profile,
+				target.handler.getAccountUsage ? await target.handler.getAccountUsage() : undefined,
+			) ?? {
+				profileId: target.profile.id,
+				providerId: target.profile.provider,
+				currency: "",
+				isAvailable: false,
+			}
+			await this.publishAccountUsageSnapshot(target.profile.id, usage)
+			return usage
+		} finally {
+			target.handler.abort?.()
+		}
+	}
+
+	/** Execute and refresh one reset-credit action through the selected Provider handler. */
+	async consumeProviderUsageResetCredit(
+		profileId: string,
+		creditId: string,
+	): Promise<{ result: AccountUsageResetResult; usage: AccountUsage }> {
+		const target = this.buildProviderUsageHandler(profileId)
+		try {
+			if (!target.handler.consumeAccountUsageResetCredit) {
+				throw new Error("The selected Provider does not support account usage reset credits.")
+			}
+			const result = await target.handler.consumeAccountUsageResetCredit(creditId)
+			accountUsageCoordinator.deleteByPrefix(`${target.profile.id}:`)
+			const usage = decorateProviderAccountUsage(
+				target.profile,
+				target.handler.getAccountUsage ? await target.handler.getAccountUsage() : undefined,
+			) ?? {
+				profileId: target.profile.id,
+				providerId: target.profile.provider,
+				currency: "",
+				isAvailable: false,
+			}
+			await this.publishAccountUsageSnapshot(target.profile.id, usage)
+			return { result, usage }
+		} finally {
+			target.handler.abort?.()
+		}
+	}
+
 	// Public getter for workspace manager with lazy initialization - To get workspaces when task isn't initialized (Used by file mentions)
 	async ensureWorkspaceManager(): Promise<WorkspaceRootManager | undefined> {
 		if (this.workspaceManager) {
@@ -455,6 +549,9 @@ export class Controller {
 				const startedAt = performance.now()
 				const changedKeys = event.source === "settings" ? event.commit.changedKeys : []
 				await this.configureGlobalComponents()
+				if (changedKeys.some((key) => ACCOUNT_USAGE_BINDING_SETTINGS.has(key))) {
+					this.restartAccountUsagePolling()
+				}
 				const configureMs = Math.round(performance.now() - startedAt)
 				if (event.source === "settings" && this.task && settingsAffectPromptFreshness(event.commit.changedKeys)) {
 					const freshnessStartedAt = performance.now()
@@ -2184,7 +2281,8 @@ export class Controller {
 				await clearStaleUsage()
 				return
 			}
-			const getAccountUsage = handler.getAccountUsage.bind(handler)
+			const loadAccountUsage = handler.getAccountUsage.bind(handler)
+			const getAccountUsage = async () => decorateProviderAccountUsage(profile, await loadAccountUsage())
 			this.accountUsageHandler = handler
 			let usage: AccountUsage | undefined
 			try {

@@ -211,17 +211,33 @@ export interface ExtensionState {
  * Kept in sync with proto AccountUsage message.
  */
 export interface AccountUsageData {
+	/** Profile and provider that own this snapshot. Populated by the usage service boundary. */
+	profileId?: string
+	providerId?: string
 	currency: string
 	remainingBalance?: number
 	toppedUpBalance?: number
 	grantedBalance?: number
+	planType?: string
+	allowed?: boolean
+	limitReached?: boolean
 	/** Usage quota windows for quota-mode providers (e.g., Codex, Copilot) */
 	quotas?: AccountUsageQuotaData[]
+	/** Optional provider-owned reset credits exposed through the shared usage capability. */
+	resetCredits?: AccountUsageResetCreditData[]
+	resetCreditsAvailableCount?: number
 	isAvailable?: boolean
 	dailyInputTokens?: number
 	dailyOutputTokens?: number
 	dailyCacheHitTokens?: number
 	dailyCacheMissTokens?: number
+}
+
+/** Single provider-owned reset credit that can be consumed through the shared usage action. */
+export interface AccountUsageResetCreditData {
+	id: string
+	grantedAt?: string
+	expiresAt?: string
 }
 
 /** Single usage quota window */
@@ -230,6 +246,7 @@ export interface AccountUsageQuotaData {
 	label: string
 	used: number
 	limit: number
+	windowSeconds?: number
 	resetAt?: string
 	resetLabel?: string
 }

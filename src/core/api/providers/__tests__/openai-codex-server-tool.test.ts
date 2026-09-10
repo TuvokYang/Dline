@@ -1,6 +1,9 @@
+import { openAiCodexModels } from "@core/api/providers/models/openai-codex"
 import { mockFetchForTesting } from "@shared/net"
-import { ServerTool } from "@shared/proto/dline/models/metadata"
+import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import { ApiProfile } from "@shared/proto/dline/profile"
+import { OpenAiCodexProviderConfig } from "@shared/proto/dline/provider/openai_codex"
+import { resolveProfileModelInfo } from "@shared/providers/profile-model-info"
 import { expect } from "chai"
 import type { ChatCompletionTool } from "openai/resources/chat/completions"
 import { afterEach, describe, it, vi } from "vitest"
@@ -32,6 +35,10 @@ async function collect(stream: AsyncIterable<unknown>): Promise<unknown[]> {
 	const chunks: unknown[] = []
 	for await (const chunk of stream) chunks.push(chunk)
 	return chunks
+}
+
+async function* eventStream(events: readonly unknown[]): AsyncGenerator<unknown> {
+	for (const event of events) yield event
 }
 
 function deferred<T>() {
@@ -134,6 +141,33 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 		expect(JSON.stringify(first)).not.to.contain("prompt_cache_breakpoint")
 	})
 
+	it("uses Profile model limits and the selected Responses transport at runtime", () => {
+		const configuredProfile = ApiProfile.create({
+			id: "profile-websocket",
+			provider: "openai-codex",
+			modelId: "gpt-6-astra",
+			openaiCodex: OpenAiCodexProviderConfig.create({
+				apiFormat: ApiFormat.OPENAI_RESPONSES,
+				websocketEnabled: true,
+				capabilities: { contextWindow: 400_000, maxTokens: 64_000 },
+			}),
+		})
+		const profile = ApiProfile.create({
+			...configuredProfile,
+			modelInfo: resolveProfileModelInfo(configuredProfile, {
+				models: openAiCodexModels,
+				defaultModelId: "gpt-6-astra",
+			}),
+		})
+		const handler = new OpenAiCodexHandler({ profile, mode: "act" })
+		const model = handler.getModel()
+
+		expect(model.info.capabilities?.contextWindow).to.equal(400_000)
+		expect(model.info.capabilities?.maxTokens).to.equal(64_000)
+		expect(model.info.apiFormats?.[0]).to.equal(ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE)
+		expect((handler as any).shouldUseWebsocketMode(model.info.apiFormats?.[0])).to.equal(true)
+	})
+
 	it("keeps a remotely discovered Codex model id instead of falling back to the bundled default", () => {
 		const handler = new OpenAiCodexHandler({
 			profile: ApiProfile.create({ id: "profile-remote", provider: "openai-codex", modelId: "gpt-codex-remote" }),
@@ -192,7 +226,6 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 
 	it("normalizes hosted lifecycle events from Codex Responses", async () => {
 		const handler = createHandler()
-		const processEvent = (handler as any).processEvent.bind(handler)
 		const events = [
 			{
 				type: "response.output_item.added",
@@ -212,10 +245,7 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 				},
 			},
 		]
-		const chunks: unknown[] = []
-		for (const event of events) {
-			chunks.push(...((await collect(processEvent(event, handler.getModel()))) as unknown[]))
-		}
+		const chunks = await collect((handler as any).handleResponseEvents(eventStream(events), handler.getModel()))
 
 		expect(chunks.filter((chunk: any) => chunk.type === "server_tool")).to.deep.include.members([
 			{
@@ -252,6 +282,135 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 				},
 			},
 		])
+	})
+
+	it("uses shared Responses stitching without duplicating snapshots and preserves replay metadata", async () => {
+		const handler = createHandler()
+		const completeArguments = JSON.stringify({ path: "README.md" })
+		const splitAt = Math.floor(completeArguments.length / 2)
+		const events = [
+			{
+				type: "response.output_item.added",
+				output_index: 0,
+				sequence_number: 1,
+				item: { type: "reasoning", id: "rs_1", summary: [], encrypted_content: "partial-reasoning" },
+			},
+			{ type: "response.reasoning.delta", delta: "thinking", output_index: 0, sequence_number: 2 },
+			{
+				type: "response.output_item.done",
+				output_index: 0,
+				sequence_number: 3,
+				item: { type: "reasoning", id: "rs_1", text: "thinking", encrypted_content: "final-reasoning" },
+			},
+			{
+				type: "response.output_item.added",
+				output_index: 1,
+				sequence_number: 4,
+				item: { type: "message", id: "msg_1", role: "assistant", content: [] },
+			},
+			{ type: "response.text.delta", delta: "hello", output_index: 1, sequence_number: 5 },
+			{
+				type: "response.output_item.done",
+				output_index: 1,
+				sequence_number: 6,
+				item: {
+					type: "message",
+					id: "msg_1",
+					role: "assistant",
+					content: [{ type: "output_text", text: "hello" }],
+				},
+			},
+			{
+				type: "response.output_item.added",
+				output_index: 2,
+				sequence_number: 7,
+				item: { type: "tool_call", id: "fc_1", tool_call_id: "call_1", name: "read_file", arguments: "" },
+			},
+			{
+				type: "response.tool_call_arguments.delta",
+				item_id: "fc_1",
+				tool_call_id: "call_1",
+				function_name: "read_file",
+				delta: completeArguments.slice(0, splitAt),
+				output_index: 2,
+				sequence_number: 8,
+			},
+			{
+				type: "response.tool_call_arguments.delta",
+				item_id: "fc_1",
+				tool_call_id: "call_1",
+				function_name: "read_file",
+				delta: completeArguments.slice(splitAt),
+				output_index: 2,
+				sequence_number: 9,
+			},
+			{
+				type: "response.tool_call_arguments.done",
+				item_id: "fc_1",
+				tool_call_id: "call_1",
+				function_name: "read_file",
+				arguments: completeArguments,
+				output_index: 2,
+				sequence_number: 10,
+			},
+			{
+				type: "response.output_item.done",
+				output_index: 2,
+				sequence_number: 11,
+				item: {
+					type: "tool_call",
+					id: "fc_1",
+					tool_call_id: "call_1",
+					name: "read_file",
+					arguments: completeArguments,
+				},
+			},
+			{
+				type: "response.done",
+				response: {
+					id: "resp_1",
+					usage: {
+						input_tokens: 100,
+						input_tokens_details: { cached_tokens: 80 },
+						output_tokens: 10,
+						output_tokens_details: { reasoning_tokens: 5 },
+						total_tokens: 110,
+					},
+				},
+			},
+		]
+
+		const chunks = (await collect((handler as any).handleResponseEvents(eventStream(events), handler.getModel()))) as any[]
+
+		expect(chunks.filter((chunk) => chunk.type === "text").map((chunk) => chunk.text)).to.deep.equal(["hello"])
+		expect(
+			chunks
+				.filter((chunk) => chunk.type === "tool_calls" && chunk.tool_call.function.arguments !== undefined)
+				.map((chunk) => chunk.tool_call.function.arguments),
+		).to.deep.equal([completeArguments.slice(0, splitAt), completeArguments.slice(splitAt)])
+		expect(chunks.filter((chunk) => chunk.type === "tool_calls" && chunk.phase === "completed")).to.have.length(1)
+		expect(chunks).to.deep.include({
+			type: "reasoning",
+			provider_metadata: { response_id: "rs_1" },
+			reasoning: "thinking",
+		})
+		expect(chunks).to.deep.include({
+			type: "reasoning",
+			provider_metadata: { response_id: "rs_1" },
+			reasoning: "",
+			redacted_data: "final-reasoning",
+			redacted_phase: "final",
+		})
+		expect(chunks).to.deep.include({
+			type: "usage",
+			inputTokens: 20,
+			outputTokens: 10,
+			cacheWriteTokens: 0,
+			cacheReadTokens: 80,
+			thoughtsTokenCount: 5,
+			totalCost: 0,
+			provider_metadata: { response_id: "resp_1" },
+		})
 	})
 
 	it("surfaces Codex max_output_tokens as typed termination without HTTP fallback", async () => {
@@ -292,11 +451,13 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 	it("maps a failed output item to one failed hosted lifecycle event", async () => {
 		const handler = createHandler()
 		const chunks = await collect(
-			(handler as any).processEvent(
-				{
-					type: "response.output_item.done",
-					item: { type: "web_search_call", id: "ws_failed", status: "failed", action: { code: "search_failed" } },
-				},
+			(handler as any).handleResponseEvents(
+				eventStream([
+					{
+						type: "response.output_item.done",
+						item: { type: "web_search_call", id: "ws_failed", status: "failed", action: { code: "search_failed" } },
+					},
+				]),
 				handler.getModel(),
 			),
 		)
@@ -373,8 +534,12 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 		const handler = createHandler()
 		const first = { accessToken: "access-a", expires: 1_900_000_000_000, accountId: "account-a" }
 		const refreshed = { accessToken: "access-b", expires: 1_900_000_100_000, accountId: "account-b" }
-		vi.spyOn(openAiCodexOAuthManager, "getCredentialContext").mockResolvedValue(first)
-		vi.spyOn(openAiCodexOAuthManager, "forceRefreshCredentialContext").mockResolvedValue(refreshed)
+		let current = first
+		vi.spyOn(openAiCodexOAuthManager, "getCredentialContext").mockImplementation(async () => current)
+		vi.spyOn(openAiCodexOAuthManager, "forceRefreshCredentialContext").mockImplementation(async () => {
+			current = refreshed
+			return refreshed
+		})
 		const headers: Array<{ authorization: string | null; accountId: string | null }> = []
 		const transport = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
 			const requestHeaders = new Headers(init?.headers)
@@ -382,21 +547,81 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 				authorization: requestHeaders.get("Authorization"),
 				accountId: requestHeaders.get("ChatGPT-Account-Id"),
 			})
-			return headers.length === 1
-				? new Response(undefined, { status: 401 })
-				: new Response(JSON.stringify({ credits: { balance: "9" } }), {
-						status: 200,
-						headers: { "Content-Type": "application/json" },
-					})
+			if (headers.length === 1) return new Response(undefined, { status: 401 })
+			const payload =
+				headers.length === 2
+					? {
+							plan_type: "pro",
+							rate_limit: {
+								allowed: true,
+								limit_reached: false,
+								primary_window: {
+									used_percent: 25,
+									limit_window_seconds: 18_000,
+									reset_at: 1_900_000_000,
+								},
+							},
+							credits: { balance: "9" },
+							rate_limit_reset_credits: { available_count: 1 },
+						}
+					: {
+							total_count: 1,
+							credits: [{ id: "credit-a", expires_at: "2030-03-25T00:00:00.000Z" }],
+						}
+			return new Response(JSON.stringify(payload), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			})
 		})
 
 		const usage = await mockFetchForTesting(transport, () => handler.getAccountUsage())
 
-		expect(usage?.remainingBalance).to.equal(9)
+		expect(usage).to.deep.include({
+			remainingBalance: 9,
+			planType: "pro",
+			allowed: true,
+			limitReached: false,
+			resetCreditsAvailableCount: 1,
+		})
+		expect(usage?.quotas).to.deep.equal([
+			{
+				type: "5hour",
+				label: "5 hour",
+				used: 25,
+				limit: 100,
+				windowSeconds: 18_000,
+				resetAt: new Date(1_900_000_000_000).toISOString(),
+			},
+		])
+		expect(usage?.resetCredits).to.deep.equal([{ id: "credit-a", expiresAt: "2030-03-25T00:00:00.000Z" }])
 		expect(headers).to.deep.equal([
 			{ authorization: "Bearer access-a", accountId: "account-a" },
 			{ authorization: "Bearer access-b", accountId: "account-b" },
+			{ authorization: "Bearer access-b", accountId: "account-b" },
 		])
+	})
+
+	it("consumes a reset credit through the provider-neutral handler capability", async () => {
+		const handler = createHandler()
+		vi.spyOn(openAiCodexOAuthManager, "getCredentialContext").mockResolvedValue({
+			accessToken: "access-a",
+			expires: 1_900_000_000_000,
+			accountId: "account-a",
+		})
+		let requestBody: Record<string, unknown> | undefined
+		const transport = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
+			requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+			return new Response(JSON.stringify({ result: "reset", windows_reset: ["primary"] }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			})
+		})
+
+		const result = await mockFetchForTesting(transport, () => handler.consumeAccountUsageResetCredit("credit-a"))
+
+		expect(result).to.deep.equal({ outcome: "reset", quotaTypesReset: ["primary"] })
+		expect(requestBody).to.deep.include({ credit_id: "credit-a" })
+		expect(requestBody?.redeem_request_id).to.be.a("string").and.not.equal("")
 	})
 
 	it("aborts only when the active handler receives a mutation for its own Profile", async () => {

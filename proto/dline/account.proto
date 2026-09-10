@@ -3,6 +3,7 @@ syntax = "proto3";
 package dline;
 
 import "dline/common.proto";
+import "dline/state.proto";
 
 option go_package = "github.com/dline/grpc-go/dline";
 option java_multiple_files = true;
@@ -46,6 +47,12 @@ service AccountService {
 
   // Returns a link the webview can use to redirect back to the user's IDE.
   rpc getRedirectUrl(EmptyRequest) returns (String);
+
+  // Returns the shared usage capability for one explicit Profile.
+  rpc getProviderUsage(ProviderUsageRequest) returns (AccountUsage);
+
+  // Consumes one provider-owned reset credit through the shared usage capability.
+  rpc consumeAccountUsageResetCredit(AccountUsageResetCreditRequest) returns (AccountUsageResetResult);
 
   // Deprecated compatibility RPC. It no longer infers an active Profile.
   rpc openAiCodexSignIn(EmptyRequest) returns (Empty) {
@@ -161,6 +168,22 @@ message OpenAiCodexAuthStatusResponse {
   OpenAiCodexAuthFlow active_flow = 4;
   OpenAiCodexFlowOutcome last_flow_outcome = 5;
   OpenAiCodexAccount account = 6;
+}
+
+message ProviderUsageRequest {
+  string profile_id = 1;
+}
+
+message AccountUsageResetCreditRequest {
+  string profile_id = 1;
+  string credit_id = 2;
+}
+
+message AccountUsageResetResult {
+  string profile_id = 1;
+  string outcome = 2;
+  repeated string quota_types_reset = 3;
+  AccountUsage usage = 4;
 }
 
 message OpenAiCodexUsageWindow {

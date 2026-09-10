@@ -3,7 +3,12 @@ import os from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { FileLock } from "../backend/jsonl/FileLock"
-import { getOpenAiCodexProfileAuthFileName, getOpenAiCodexProfileAuthPath } from "./OpenAiCodexProfileAuthPath"
+import {
+	getLegacyHashedOpenAiCodexProfileAuthFileName,
+	getLegacyHashedOpenAiCodexProfileAuthPath,
+	getOpenAiCodexProfileAuthFileName,
+	getOpenAiCodexProfileAuthPath,
+} from "./OpenAiCodexProfileAuthPath"
 import {
 	OpenAiCodexProfileAuthRepository,
 	type OpenAiOAuthCredentials,
@@ -35,12 +40,15 @@ describe("OpenAiCodexProfileAuthRepository", () => {
 		await fs.rm(root, { recursive: true, force: true })
 	})
 
-	it("derives a deterministic traversal-safe file name from the exact profile ID", () => {
+	it("uses the escaped Profile ID as a deterministic traversal-safe file suffix", () => {
 		const fileName = getOpenAiCodexProfileAuthFileName("../../profile-a")
 		const filePath = getOpenAiCodexProfileAuthPath(secretsDir, "../../profile-a")
 
-		expect(fileName).toMatch(/^openai_codex_[a-f0-9]{32}\.json$/)
-		expect(fileName).toBe("openai_codex_1ba7dff874a224231bbcf39de2baacad.json")
+		expect(fileName).toBe("openai_codex_oauth_..%2F..%2Fprofile-a.json")
+		expect(getOpenAiCodexProfileAuthFileName("profile-a")).toBe("openai_codex_oauth_profile-a.json")
+		expect(getLegacyHashedOpenAiCodexProfileAuthFileName("../../profile-a")).toBe(
+			"openai_codex_1ba7dff874a224231bbcf39de2baacad.json",
+		)
 		expect(path.dirname(filePath)).toBe(path.resolve(secretsDir))
 	})
 
@@ -62,6 +70,21 @@ describe("OpenAiCodexProfileAuthRepository", () => {
 		expect((await fs.readdir(secretsDir)).filter((name) => name.endsWith(".tmp"))).toEqual([])
 		await expect(fs.access(path.join(root, "data", "secrets.json"))).rejects.toMatchObject({ code: "ENOENT" })
 		await expect(fs.access(path.join(secretsDir, "api_keys.json"))).rejects.toMatchObject({ code: "ENOENT" })
+	})
+
+	it("migrates one legacy hashed file to the Profile-ID path without losing private fields", async () => {
+		const legacyPath = getLegacyHashedOpenAiCodexProfileAuthPath(secretsDir, "profile-a")
+		await fs.mkdir(secretsDir, { recursive: true })
+		await fs.writeFile(legacyPath, JSON.stringify({ ...credentials, provider_private_claim: "private-value" }), {
+			mode: 0o600,
+		})
+
+		await expect(repository.read("profile-a")).resolves.toEqual({ status: "valid", credential: credentials })
+		expect(JSON.parse(await fs.readFile(repository.filePath("profile-a"), "utf8"))).toMatchObject({
+			access_token: "access-a",
+			provider_private_claim: "private-value",
+		})
+		await expect(fs.access(legacyPath)).rejects.toMatchObject({ code: "ENOENT" })
 	})
 
 	it.skipIf(process.platform === "win32")("writes owner-only file permissions", async () => {
@@ -160,12 +183,17 @@ describe("OpenAiCodexProfileAuthRepository", () => {
 		}
 	})
 
-	it("deletes only the requested profile credential", async () => {
+	it("deletes both current and legacy files only for the requested profile", async () => {
 		await repository.save("profile-a", credentials)
 		await repository.save("profile-b", { ...credentials, access_token: "access-b" })
+		const legacyPathA = getLegacyHashedOpenAiCodexProfileAuthPath(secretsDir, "profile-a")
+		await fs.writeFile(legacyPathA, JSON.stringify({ ...credentials, access_token: "stale-access" }), "utf8")
+
 		await repository.delete("profile-a")
 
 		await expect(repository.read("profile-a")).resolves.toEqual({ status: "missing" })
+		await expect(fs.access(repository.filePath("profile-a"))).rejects.toMatchObject({ code: "ENOENT" })
+		await expect(fs.access(legacyPathA)).rejects.toMatchObject({ code: "ENOENT" })
 		await expect(repository.read("profile-b")).resolves.toMatchObject({ status: "valid" })
 	})
 })

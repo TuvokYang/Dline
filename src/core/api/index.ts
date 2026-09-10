@@ -82,6 +82,12 @@ export interface ApiHandlerContext {
 export type UsageQuota = AccountUsageQuotaData
 export type AccountUsage = AccountUsageData
 
+/** Provider-neutral result of consuming one account usage reset credit. */
+export interface AccountUsageResetResult {
+	readonly outcome: string
+	readonly quotaTypesReset: readonly string[]
+}
+
 /** Request-scoped generation controls resolved above provider adapters. */
 export interface ApiGenerationOptions {
 	readonly purpose: "compaction"
@@ -130,6 +136,8 @@ export interface ApiHandler {
 	getApiStreamUsage?(): Promise<ApiStreamUsageChunk | undefined>
 	/** Query account-level usage/balance from the provider. Returns undefined if not supported. */
 	getAccountUsage?(): Promise<AccountUsage | undefined>
+	/** Consume one opaque reset-credit ID exposed by getAccountUsage(). */
+	consumeAccountUsageResetCredit?(creditId: string): Promise<AccountUsageResetResult>
 	abort?(): void
 	/** Parse a provider-specific error into a ClineError. Falls back to generic ClineError.transform if not implemented. */
 	parseError?(error: any, modelId?: string): ClineError

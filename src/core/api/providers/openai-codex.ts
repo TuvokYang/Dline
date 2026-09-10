@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { ModelInfo, OpenAiCodexModelId, openAiCodexDefaultModelId, openAiCodexModels } from "@shared/api"
 import { providerFetch } from "@shared/net"
 import { observeProviderStream } from "@shared/provider-attempt-observer"
@@ -11,23 +12,18 @@ import { resolveOpenAiCodexRuntimeConfig } from "@/integrations/openai-codex/run
 import { openAiCodexUsageClient, toAccountUsage } from "@/integrations/openai-codex/usage"
 import { ExtensionRegistryInfo } from "@/registry"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
-import { featureFlagsService } from "@/services/feature-flags"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { ApiFormat, ServerTool } from "@/shared/proto/dline/models/metadata"
-import { ExperimentalFeatureFlag } from "@/shared/services/feature-flags/feature-flags"
 import { Logger } from "@/shared/services/Logger"
-import { AccountUsage, ApiHandler, ApiHandlerContext, type ApiRequestOptions } from "../"
+import { redactDiagnosticString } from "@/shared/services/logging/safe-diagnostic-value"
+import { AccountUsage, type AccountUsageResetResult, ApiHandler, ApiHandlerContext, type ApiRequestOptions } from "../"
 import { isOutputLimitExceededError, OutputLimitExceededError } from "../stream/OutputLimitExceededError"
 import { projectOpenAIResponsesPromptCache } from "../transform/openai-prompt-cache"
 import { convertToOpenAIResponsesInput } from "../transform/openai-response-format"
-import {
-	createResponsesRegistry,
-	createResponsesToolChunk,
-	ResponsesIdentityRegistry,
-} from "../transform/responses-identity-registry"
-import { ApiStream, ApiStreamUsageChunk } from "../transform/stream"
-import { mapResponsesWebSearchEvent } from "../utils/responses_api_support"
+import { ApiStream } from "../transform/stream"
+import { handleResponsesApiStreamResponse } from "../utils/responses_api_support"
 import { openAiCodexModelInfoSaneDefaults } from "./models/openai-codex"
+import { canonicalizeOpenAiCodexResponseEvents } from "./openai-codex-response-events"
 
 const SAFE_CODEX_ERROR_CODES = new Set([
 	"authentication_error",
@@ -61,12 +57,11 @@ export class OpenAiCodexHandler implements ApiHandler {
 	// Abort controller for cancelling ongoing requests
 	private abortController?: AbortController
 	private accountUsageController?: AbortController
+	private accountUsageActionController?: AbortController
 	private readonly profileId: string
 	private runtimeMutationDispose?: () => void
 	private activeRuntimeOperations = 0
 	private readonly runtimeConfig = resolveOpenAiCodexRuntimeConfig()
-	// Track request-local Responses item and function identities.
-	private responsesRegistry: ResponsesIdentityRegistry = createResponsesRegistry("openai-codex")
 
 	constructor(private ctx: ApiHandlerContext) {
 		if (!ctx.profile.id?.trim()) throw new Error("OpenAI Codex requires a non-empty Profile ID.")
@@ -158,14 +153,56 @@ export class OpenAiCodexHandler implements ApiHandler {
 		return typeof code === "string" && SAFE_CODEX_ERROR_CODES.has(code) ? code : undefined
 	}
 
-	private toSafeProviderError(error: unknown): Error & { status?: number; code?: string } {
-		const status = this.safeErrorStatus(error)
-		const code = this.safeErrorCode(error)
-		const suffix = status !== undefined ? ` with status ${status}` : code ? ` (${code})` : ""
-		return Object.assign(new Error(`OpenAI Codex request failed${suffix}.`), {
-			...(status !== undefined ? { status } : {}),
-			...(code ? { code } : {}),
-		})
+	private redactProviderErrorText(value: string): string {
+		return redactDiagnosticString(value).replace(
+			/(\b(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|client[_-]?secret|password|account[_-]?payload|chatgpt[_-]?account[_-]?id)\b(?:["']?\s*[:=]\s*["']?))([^"'&,\s}\]]+)/gi,
+			"$1[REDACTED]",
+		)
+	}
+
+	private redactProviderErrorValue(value: unknown, depth = 0): unknown {
+		if (typeof value === "string") return this.redactProviderErrorText(value)
+		if (value === null || typeof value !== "object" || depth >= 6) return value
+		if (Array.isArray(value)) return value.map((entry) => this.redactProviderErrorValue(entry, depth + 1))
+		const redacted: Record<string, unknown> = {}
+		for (const [key, entry] of Object.entries(value)) {
+			const normalizedKey = key.toLowerCase().replaceAll("-", "").replaceAll("_", "")
+			redacted[key] = /^(?:accesstoken|refreshtoken|idtoken|apikey|clientsecret|password|authorization|cookie)$/.test(
+				normalizedKey,
+			)
+				? "[REDACTED]"
+				: this.redactProviderErrorValue(entry, depth + 1)
+		}
+		return redacted
+	}
+
+	private getProviderErrorMessage(error: unknown): string {
+		let message: string
+		if (error instanceof Error && error.message) message = error.message
+		else if (typeof error === "string" && error) message = error
+		else if (typeof error === "object" && error !== null && "message" in error) {
+			const candidate = (error as { message?: unknown }).message
+			message = typeof candidate === "string" && candidate ? candidate : JSON.stringify(error)
+		} else {
+			try {
+				message = JSON.stringify(error) || String(error)
+			} catch {
+				message = String(error)
+			}
+		}
+		return this.redactProviderErrorText(message)
+	}
+
+	private toProviderError(error: unknown): Error & { status?: number; code?: string; responseBody?: string } {
+		const providerError = new Error(this.getProviderErrorMessage(error)) as Error & {
+			status?: number
+			code?: string
+			responseBody?: string
+		}
+		const redacted = this.redactProviderErrorValue(error)
+		if (typeof redacted === "object" && redacted !== null) Object.assign(providerError, redacted)
+		providerError.message = this.getProviderErrorMessage(error)
+		return providerError
 	}
 
 	private isAuthenticationFailure(error: unknown): boolean {
@@ -203,47 +240,23 @@ export class OpenAiCodexHandler implements ApiHandler {
 		}
 	}
 
-	private normalizeUsage(usage: any, _model: { id: string; info: ModelInfo }): ApiStreamUsageChunk | undefined {
-		if (!usage) {
-			return undefined
+	async consumeAccountUsageResetCredit(creditId: string): Promise<AccountUsageResetResult> {
+		const releaseRuntime = this.beginRuntimeOperation()
+		this.accountUsageActionController?.abort()
+		const controller = new AbortController()
+		this.accountUsageActionController = controller
+		try {
+			const result = await openAiCodexUsageClient.consumeRateLimitResetCredit(this.profileId, creditId, randomUUID(), {
+				signal: controller.signal,
+			})
+			if (!result) throw new Error("OpenAI Codex authentication is unavailable.")
+			return { outcome: result.outcome, quotaTypesReset: result.windowsReset }
+		} finally {
+			if (this.accountUsageActionController === controller) {
+				this.accountUsageActionController = undefined
+			}
+			releaseRuntime()
 		}
-
-		const inputDetails = usage.input_tokens_details ?? usage.prompt_tokens_details
-
-		const hasCachedTokens = typeof inputDetails?.cached_tokens === "number"
-		const hasCacheMissTokens = typeof inputDetails?.cache_miss_tokens === "number"
-		const cachedFromDetails = hasCachedTokens ? inputDetails.cached_tokens : 0
-		const missFromDetails = hasCacheMissTokens ? inputDetails.cache_miss_tokens : 0
-
-		let totalInputTokens = usage.input_tokens ?? usage.prompt_tokens ?? 0
-		if (totalInputTokens === 0 && inputDetails && (cachedFromDetails > 0 || missFromDetails > 0)) {
-			totalInputTokens = cachedFromDetails + missFromDetails
-		}
-
-		const totalOutputTokens = usage.output_tokens ?? usage.completion_tokens ?? 0
-		const cacheWriteTokens = usage.cache_creation_input_tokens ?? usage.cache_write_tokens ?? 0
-		const cacheReadTokens =
-			usage.cache_read_input_tokens ?? usage.cache_read_tokens ?? usage.cached_tokens ?? cachedFromDetails ?? 0
-
-		const reasoningTokens =
-			typeof usage.output_tokens_details?.reasoning_tokens === "number"
-				? usage.output_tokens_details.reasoning_tokens
-				: undefined
-
-		// Yield inputTokens in Anthropic semantic (excluding cache) so
-		// ContextManager and updateApiReqMsg can accurately estimate
-		// context pressure. Cost is zero for subscription-based billing.
-		const nonCachedInputTokens = Math.max(0, totalInputTokens - cacheReadTokens - cacheWriteTokens)
-		const out: ApiStreamUsageChunk = {
-			type: "usage",
-			inputTokens: nonCachedInputTokens,
-			outputTokens: totalOutputTokens,
-			cacheWriteTokens,
-			cacheReadTokens,
-			...(typeof reasoningTokens === "number" ? { reasoningTokens } : {}),
-			totalCost: 0, // Subscription-based pricing
-		}
-		return out
 	}
 
 	async *createMessage(
@@ -256,9 +269,6 @@ export class OpenAiCodexHandler implements ApiHandler {
 		try {
 			const model = this.getModel()
 
-			// Reset request-local Responses identity state.
-			this.responsesRegistry = createResponsesRegistry("openai-codex")
-
 			// Resolve token and account identity from one Profile-owned snapshot.
 			let credential = await openAiCodexOAuthManager.getCredentialContext(this.profileId)
 			if (!credential) {
@@ -266,7 +276,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 					"Not authenticated with OpenAI Codex. Please sign in using the OpenAI Codex OAuth flow in settings.",
 				)
 			}
-			const useWebsocketMode = this.useWebsocketMode(model.info.apiFormats?.[0])
+			const useWebsocketMode = this.shouldUseWebsocketMode(this.getSelectedApiFormat())
 			const { input, previousResponseId } = convertToOpenAIResponsesInput(messages, {
 				usePreviousResponseId: useWebsocketMode,
 			})
@@ -295,7 +305,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 						})
 					}
 					if (isOutputLimitExceededError(error)) throw error
-					throw this.toSafeProviderError(error)
+					throw this.toProviderError(error)
 				}
 			}
 		} finally {
@@ -303,11 +313,8 @@ export class OpenAiCodexHandler implements ApiHandler {
 		}
 	}
 
-	private useWebsocketMode(apiFormat?: ApiFormat): boolean {
-		if (featureFlagsService.getBooleanFlagEnabled(ExperimentalFeatureFlag.OPENAI_RESPONSES_WEBSOCKET_MODE)) {
-			return apiFormat === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE
-		}
-		return false
+	private shouldUseWebsocketMode(apiFormat?: ApiFormat): boolean {
+		return apiFormat === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE
 	}
 
 	private buildRequestBody(
@@ -392,7 +399,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 					if (isOutputLimitExceededError(error) || this.isAuthenticationFailure(error)) {
 						throw error
 					}
-					const diagnostic = this.toSafeProviderError(error)
+					const diagnostic = this.toProviderError(error)
 					Logger.error(
 						`OpenAI Codex websocket mode failed; falling back to HTTP Responses API (status=${diagnostic.status ?? "unknown"}, code=${diagnostic.code ?? "unknown"}).`,
 					)
@@ -420,15 +427,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 					throw new Error("OpenAI SDK did not return an AsyncIterable")
 				}
 
-				for await (const event of stream) {
-					if (this.abortController.signal.aborted) {
-						break
-					}
-
-					for await (const outChunk of this.processEvent(event, model)) {
-						yield outChunk
-					}
-				}
+				yield* this.handleResponseEvents(stream, model)
 			} catch (error) {
 				if (isOutputLimitExceededError(error) || this.isAuthenticationFailure(error)) {
 					throw error
@@ -449,28 +448,28 @@ export class OpenAiCodexHandler implements ApiHandler {
 		model: { id: string; info: ModelInfo },
 	): ApiStream {
 		try {
-			for await (const event of this.createResponseEventsViaWebsocket(primaryParams, credential, codexHeaders)) {
-				if (this.abortController?.signal.aborted) {
-					return
-				}
-				yield* this.processEvent(event, model)
-			}
+			yield* this.handleResponseEvents(
+				this.createResponseEventsViaWebsocket(primaryParams, credential, codexHeaders),
+				model,
+			)
 		} catch (error) {
 			if (this.shouldRetryWebsocketWithFullContext(error, !!primaryParams.previous_response_id)) {
 				Logger.log(
 					"Retrying Codex websocket response with full context after previous_response_not_found or socket reset",
 				)
 				this.closeResponsesWebsocket()
-				for await (const event of this.createResponseEventsViaWebsocket(fallbackParams, credential, codexHeaders)) {
-					if (this.abortController?.signal.aborted) {
-						return
-					}
-					yield* this.processEvent(event, model)
-				}
+				yield* this.handleResponseEvents(
+					this.createResponseEventsViaWebsocket(fallbackParams, credential, codexHeaders),
+					model,
+				)
 				return
 			}
 			throw error
 		}
+	}
+
+	private async *handleResponseEvents(events: AsyncIterable<unknown>, model: { id: string; info: ModelInfo }): ApiStream {
+		yield* handleResponsesApiStreamResponse(canonicalizeOpenAiCodexResponseEvents(events), model.info, async () => 0)
 	}
 
 	private shouldRetryWebsocketWithFullContext(error: unknown, hadPreviousResponseId: boolean): boolean {
@@ -590,8 +589,8 @@ export class OpenAiCodexHandler implements ApiHandler {
 
 				const parsed = JSON.parse(raw)
 				if (parsed?.type === "error" && parsed?.error) {
-					const error: Error & { code?: string } = new Error("Codex Responses websocket error")
-					error.code = this.safeErrorCode(parsed.error)
+					const error = this.toProviderError(parsed.error)
+					error.responseBody = this.redactProviderErrorText(raw)
 					failure = error
 					completed = true
 					wake()
@@ -600,10 +599,8 @@ export class OpenAiCodexHandler implements ApiHandler {
 
 				if (parsed?.type === "response.failed") {
 					const responseError = parsed.response?.error
-					// Preserve the upstream code: downstream retry classification needs it to
-					// tell a transient gateway failure apart from an account-level rejection.
-					const failedError: Error & { code?: string } = new Error("Codex Responses websocket request failed")
-					failedError.code = this.safeErrorCode(responseError)
+					const failedError = this.toProviderError(responseError ?? parsed.response ?? parsed)
+					failedError.responseBody = this.redactProviderErrorText(raw)
 					failure = failedError
 					completed = true
 					wake()
@@ -715,17 +712,23 @@ export class OpenAiCodexHandler implements ApiHandler {
 			})
 
 			if (!response.ok) {
-				let code: string | undefined
+				const responseBody = await response.text()
+				let payload: unknown
 				try {
-					const payload = (await response.json()) as { error?: { code?: unknown }; code?: unknown }
-					code = this.safeErrorCode(payload.error ?? payload)
+					payload = responseBody ? JSON.parse(responseBody) : undefined
 				} catch {
-					// The response body is intentionally discarded because it may contain account data.
+					payload = undefined
 				}
-				throw Object.assign(new Error("Codex API request rejected"), {
-					status: response.status,
-					...(code ? { code } : {}),
-				})
+				const errorPayload =
+					typeof payload === "object" && payload !== null && "error" in payload
+						? (payload as { error?: unknown }).error
+						: payload
+				const providerError = this.toProviderError(
+					errorPayload ?? responseBody ?? `Codex API request rejected with status ${response.status}`,
+				)
+				providerError.status = response.status
+				providerError.responseBody = this.redactProviderErrorText(responseBody)
+				throw providerError
 			}
 
 			if (!response.body) {
@@ -737,11 +740,15 @@ export class OpenAiCodexHandler implements ApiHandler {
 			if (isOutputLimitExceededError(error)) {
 				throw error
 			}
-			throw this.toSafeProviderError(error)
+			throw this.toProviderError(error)
 		}
 	}
 
 	private async *handleStreamResponse(body: ReadableStream<Uint8Array>, model: { id: string; info: ModelInfo }): ApiStream {
+		yield* this.handleResponseEvents(this.readStreamEvents(body), model)
+	}
+
+	private async *readStreamEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<unknown> {
 		const reader = body.getReader()
 		const decoder = new TextDecoder()
 		let buffer = ""
@@ -773,11 +780,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 						}
 
 						try {
-							const parsed = JSON.parse(data)
-
-							for await (const outChunk of this.processEvent(parsed, model)) {
-								yield outChunk
-							}
+							yield JSON.parse(data)
 						} catch (e) {
 							if (!(e instanceof SyntaxError)) {
 								throw e
@@ -798,146 +801,17 @@ export class OpenAiCodexHandler implements ApiHandler {
 		}
 	}
 
-	private async *processEvent(event: any, model: { id: string; info: ModelInfo }): ApiStream {
-		const webSearchChunk = mapResponsesWebSearchEvent(event)
-		if (webSearchChunk) {
-			yield webSearchChunk
-		}
-
-		if (
-			event?.type === "response.incomplete" &&
-			event?.response?.status === "incomplete" &&
-			event?.response?.incomplete_details?.reason === "max_output_tokens"
-		) {
-			throw new OutputLimitExceededError("openai_responses", "max_output_tokens")
-		}
-
-		// Handle text deltas
-		if (event?.type === "response.text.delta" || event?.type === "response.output_text.delta") {
-			if (event?.delta) {
-				yield { type: "text", text: event.delta }
-			}
-			return
-		}
-
-		// Handle reasoning deltas
-		if (
-			event?.type === "response.reasoning.delta" ||
-			event?.type === "response.reasoning_text.delta" ||
-			event?.type === "response.reasoning_summary.delta" ||
-			event?.type === "response.reasoning_summary_text.delta"
-		) {
-			if (event?.delta) {
-				yield { type: "reasoning", reasoning: event.delta }
-			}
-			return
-		}
-
-		// Handle refusal deltas
-		if (event?.type === "response.refusal.delta") {
-			if (event?.delta) {
-				yield { type: "text", text: `[Refusal] ${event.delta}` }
-			}
-			return
-		}
-
-		// Handle tool/function call deltas
-		if (event?.type === "response.tool_call_arguments.delta" || event?.type === "response.function_call_arguments.delta") {
-			const itemId = event.item_id
-			if (typeof itemId !== "string" || itemId.length === 0) {
-				throw new Error("OpenAI Codex Responses argument delta is missing item_id")
-			}
-			let identity = this.responsesRegistry.resolveItem(itemId)
-			if (!identity) {
-				const functionId = event.call_id || event.tool_call_id
-				const name = event.name || event.function_name
-				if (typeof functionId === "string" && functionId.length > 0 && typeof name === "string" && name.length > 0) {
-					identity = this.responsesRegistry.registerItem({ itemId, functionId, name })
-				} else {
-					identity = this.responsesRegistry.requireItem(itemId)
-				}
-			}
-			const args = event.delta || event.arguments
-			yield createResponsesToolChunk(identity, typeof args === "string" ? args : "")
-			return
-		}
-
-		// Handle output item events
-		if (event?.type === "response.output_item.added" || event?.type === "response.output_item.done") {
-			const item = event?.item
-			if (item) {
-				// Capture provider-native item and function identities for subsequent argument deltas.
-				if (item.type === "function_call" || item.type === "tool_call") {
-					const itemId = item.id
-					const functionId = item.call_id || item.tool_call_id
-					const name = item.name || item.function?.name || item.function_name
-					if (
-						typeof itemId === "string" &&
-						itemId.length > 0 &&
-						typeof functionId === "string" &&
-						functionId.length > 0 &&
-						typeof name === "string" &&
-						name.length > 0
-					) {
-						this.responsesRegistry.registerItem({ itemId, functionId, name })
-					}
-				}
-
-				if (item.type === "text" && item.text) {
-					yield { type: "text", text: item.text }
-				} else if (item.type === "reasoning" && item.text) {
-					yield { type: "reasoning", reasoning: item.text }
-				} else if (item.type === "message" && Array.isArray(item.content)) {
-					for (const content of item.content) {
-						if ((content?.type === "text" || content?.type === "output_text") && content?.text) {
-							yield { type: "text", text: content.text }
-						}
-					}
-				} else if (
-					(item.type === "function_call" || item.type === "tool_call") &&
-					event.type === "response.output_item.done"
-				) {
-					const itemId = item.id
-					if (typeof itemId === "string" && itemId.length > 0) {
-						const identity = this.responsesRegistry.requireItem(itemId)
-						const args = item.arguments || item.function?.arguments || item.function_arguments
-						yield createResponsesToolChunk(identity, typeof args === "string" ? args : "{}")
-					}
-				}
-			}
-			return
-		}
-
-		// Handle completion events
-		if (event?.type === "response.done" || event?.type === "response.completed") {
-			const usage = event?.response?.usage || event?.usage || undefined
-			const usageData = this.normalizeUsage(usage, model)
-			if (usageData) {
-				yield usageData
-			}
-			return
-		}
-
-		// Fallbacks for legacy formats
-		if (event?.choices?.[0]?.delta?.content) {
-			yield { type: "text", text: event.choices[0].delta.content }
-			return
-		}
-
-		if (event?.usage) {
-			const usageData = this.normalizeUsage(event.usage, model)
-			if (usageData) {
-				yield usageData
-			}
-		}
-	}
-
 	abort(): void {
 		this.closeResponsesWebsocket()
 		this.abortController?.abort()
 		this.accountUsageController?.abort()
+		this.accountUsageActionController?.abort()
 		this.runtimeMutationDispose?.()
 		this.runtimeMutationDispose = undefined
+	}
+
+	getSelectedApiFormat(): ApiFormat {
+		return this.getModel().info.apiFormats?.[0] ?? ApiFormat.OPENAI_RESPONSES
 	}
 
 	getModel(): { id: OpenAiCodexModelId; info: ModelInfo } {

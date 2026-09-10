@@ -3,7 +3,7 @@ import os from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { OpenAiCodexProfileAuthGarbageCollector } from "./OpenAiCodexProfileAuthGarbageCollector"
-import { getLegacyOpenAiCodexAuthPath } from "./OpenAiCodexProfileAuthPath"
+import { getLegacyHashedOpenAiCodexProfileAuthPath, getLegacyOpenAiCodexAuthPath } from "./OpenAiCodexProfileAuthPath"
 import { OpenAiCodexProfileAuthRepository, type OpenAiOAuthCredentials } from "./OpenAiCodexProfileAuthRepository"
 
 const credentials: OpenAiOAuthCredentials = {
@@ -44,6 +44,23 @@ describe("OpenAiCodexProfileAuthGarbageCollector", () => {
 		await expect(repository.read("deleted-profile")).resolves.toEqual({ status: "missing" })
 		await expect(repository.read("switched-profile")).resolves.toEqual({ status: "missing" })
 		await expect(repository.read("duplicated-profile")).resolves.toEqual({ status: "missing" })
+	})
+
+	it("normalizes retained credentials to one Profile-ID file and deletes orphaned hashed files", async () => {
+		const duplicateLegacyPath = getLegacyHashedOpenAiCodexProfileAuthPath(secretsDir, "retained-profile")
+		const orphanedLegacyPath = getLegacyHashedOpenAiCodexProfileAuthPath(secretsDir, "orphaned-profile")
+		await fs.writeFile(duplicateLegacyPath, JSON.stringify({ ...credentials, access_token: "stale-retained" }), "utf8")
+		await fs.writeFile(orphanedLegacyPath, JSON.stringify({ ...credentials, access_token: "orphaned" }), "utf8")
+
+		const result = await collector.collect([{ id: "retained-profile", provider: "openai-codex" }])
+
+		await expect(repository.read("retained-profile")).resolves.toMatchObject({
+			status: "valid",
+			credential: { access_token: "access" },
+		})
+		await expect(fs.access(duplicateLegacyPath)).rejects.toMatchObject({ code: "ENOENT" })
+		await expect(fs.access(orphanedLegacyPath)).rejects.toMatchObject({ code: "ENOENT" })
+		expect(result.deletedFileNames).toContain(path.basename(orphanedLegacyPath))
 	})
 
 	it("does not delete the legacy shared source or unrelated secret files", async () => {

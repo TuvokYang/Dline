@@ -3,7 +3,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { FileLock } from "../backend/jsonl/FileLock"
 import { getDlineDataDir } from "../disk"
-import { getOpenAiCodexProfileAuthPath } from "./OpenAiCodexProfileAuthPath"
+import { getLegacyHashedOpenAiCodexProfileAuthPath, getOpenAiCodexProfileAuthPath } from "./OpenAiCodexProfileAuthPath"
 
 const MINIMUM_VALID_EXPIRY_MS = 1_000_000_000_000
 const RENAME_RETRY_DELAYS_MS = [10, 25, 50] as const
@@ -140,6 +140,12 @@ async function atomicWriteCredential(filePath: string, value: Record<string, unk
 	}
 }
 
+async function unlinkIfExists(filePath: string): Promise<void> {
+	await fs.unlink(filePath).catch((error: NodeJS.ErrnoException) => {
+		if (error.code !== "ENOENT") throw error
+	})
+}
+
 export class OpenAiCodexProfileAuthRepository {
 	readonly secretsDir: string
 	private readonly lock = new FileLock()
@@ -152,26 +158,37 @@ export class OpenAiCodexProfileAuthRepository {
 		return getOpenAiCodexProfileAuthPath(this.secretsDir, profileId)
 	}
 
+	legacyHashedFilePath(profileId: string): string {
+		return getLegacyHashedOpenAiCodexProfileAuthPath(this.secretsDir, profileId)
+	}
+
 	async read(profileId: string): Promise<OpenAiCodexProfileAuthReadResult> {
-		return this.readPath(this.filePath(profileId))
+		const filePath = this.filePath(profileId)
+		const legacyFilePath = this.legacyHashedFilePath(profileId)
+		const [current, legacy] = await Promise.all([this.readPath(filePath), this.readPath(legacyFilePath)])
+		if (current.status !== "missing" && legacy.status === "missing") return current
+		if (current.status === "malformed") return current
+		if (current.status === "missing" && legacy.status !== "valid") return legacy
+		return this.withProfileFiles(profileId, (lockedFilePath, lockedLegacyFilePath) =>
+			this.readAndMigrateLocked(lockedFilePath, lockedLegacyFilePath),
+		)
 	}
 
 	async save(profileId: string, credential: OpenAiOAuthCredentials): Promise<void> {
 		const validated = parseOpenAiOAuthCredentials(credential)
-		const filePath = this.filePath(profileId)
-		await fs.mkdir(this.secretsDir, { recursive: true })
-		await this.lock.withLock(filePath, async () => {
-			const existing = await this.readRawObject(filePath)
+		await this.withProfileFiles(profileId, async (filePath, legacyFilePath) => {
+			const current = await this.readRawObject(filePath)
+			const existing = current ?? (await this.readRawObject(legacyFilePath))
 			await atomicWriteCredential(filePath, { ...preserveUnknownFields(existing), ...serializeCredential(validated) })
+			await unlinkIfExists(legacyFilePath)
 		})
 	}
 
 	async importCredential(profileId: string, value: unknown): Promise<OpenAiOAuthCredentials> {
 		const credential = parseOpenAiOAuthCredentials(value)
-		const filePath = this.filePath(profileId)
-		await fs.mkdir(this.secretsDir, { recursive: true })
-		await this.lock.withLock(filePath, async () => {
+		await this.withProfileFiles(profileId, async (filePath, legacyFilePath) => {
 			await atomicWriteCredential(filePath, { ...preserveUnknownFields(value), ...serializeCredential(credential) })
+			await unlinkIfExists(legacyFilePath)
 		})
 		return credential
 	}
@@ -188,12 +205,9 @@ export class OpenAiCodexProfileAuthRepository {
 	}
 
 	async delete(profileId: string): Promise<void> {
-		const filePath = this.filePath(profileId)
-		await fs.mkdir(this.secretsDir, { recursive: true })
-		await this.lock.withLock(filePath, async () => {
-			await fs.unlink(filePath).catch((error: NodeJS.ErrnoException) => {
-				if (error.code !== "ENOENT") throw error
-			})
+		await this.withProfileFiles(profileId, async (filePath, legacyFilePath) => {
+			await unlinkIfExists(filePath)
+			await unlinkIfExists(legacyFilePath)
 		})
 	}
 
@@ -204,14 +218,13 @@ export class OpenAiCodexProfileAuthRepository {
 	): Promise<OpenAiCodexProfileAuthReplaceResult> {
 		const expected = parseOpenAiOAuthCredentials(expectedCredential)
 		const next = parseOpenAiOAuthCredentials(nextCredential)
-		const filePath = this.filePath(profileId)
-		await fs.mkdir(this.secretsDir, { recursive: true })
-		return this.lock.withLock(filePath, async () => {
-			const current = await this.readPath(filePath)
+		return this.withProfileFiles(profileId, async (filePath, legacyFilePath) => {
+			const current = await this.readAndMigrateLocked(filePath, legacyFilePath)
 			if (current.status !== "valid") return current.status
 			if (!credentialsEqual(current.credential, expected)) return "changed"
 			const existing = await this.readRawObject(filePath)
 			await atomicWriteCredential(filePath, { ...preserveUnknownFields(existing), ...serializeCredential(next) })
+			await unlinkIfExists(legacyFilePath)
 			return "saved"
 		})
 	}
@@ -221,13 +234,12 @@ export class OpenAiCodexProfileAuthRepository {
 		expectedCredential: OpenAiOAuthCredentials,
 	): Promise<OpenAiCodexProfileAuthDeleteIfMatchesResult> {
 		const expected = parseOpenAiOAuthCredentials(expectedCredential)
-		const filePath = this.filePath(profileId)
-		await fs.mkdir(this.secretsDir, { recursive: true })
-		return this.lock.withLock(filePath, async () => {
-			const current = await this.readPath(filePath)
+		return this.withProfileFiles(profileId, async (filePath, legacyFilePath) => {
+			const current = await this.readAndMigrateLocked(filePath, legacyFilePath)
 			if (current.status !== "valid") return current.status
 			if (!credentialsEqual(current.credential, expected)) return "changed"
-			await fs.unlink(filePath)
+			await unlinkIfExists(filePath)
+			await unlinkIfExists(legacyFilePath)
 			return "deleted"
 		})
 	}
@@ -237,15 +249,43 @@ export class OpenAiCodexProfileAuthRepository {
 		credential: OpenAiOAuthCredentials,
 		unknownFields: Record<string, unknown>,
 	): Promise<OpenAiCodexProfileAuthSaveIfMissingResult> {
-		const filePath = this.filePath(profileId)
-		await fs.mkdir(this.secretsDir, { recursive: true })
-		return this.lock.withLock(filePath, async () => {
-			const current = await this.readPath(filePath)
+		return this.withProfileFiles(profileId, async (filePath, legacyFilePath) => {
+			const current = await this.readAndMigrateLocked(filePath, legacyFilePath)
 			if (current.status === "valid") return "existing"
 			if (current.status === "malformed") return "malformed"
 			await atomicWriteCredential(filePath, { ...unknownFields, ...serializeCredential(credential) })
+			await unlinkIfExists(legacyFilePath)
 			return "saved"
 		})
+	}
+
+	private async withProfileFiles<T>(
+		profileId: string,
+		operation: (filePath: string, legacyFilePath: string) => Promise<T>,
+	): Promise<T> {
+		const filePath = this.filePath(profileId)
+		const legacyFilePath = this.legacyHashedFilePath(profileId)
+		const [firstLockPath, secondLockPath] = [filePath, legacyFilePath].sort()
+		await fs.mkdir(this.secretsDir, { recursive: true })
+		return this.lock.withLock(firstLockPath, () =>
+			this.lock.withLock(secondLockPath, () => operation(filePath, legacyFilePath)),
+		)
+	}
+
+	private async readAndMigrateLocked(filePath: string, legacyFilePath: string): Promise<OpenAiCodexProfileAuthReadResult> {
+		const current = await this.readPath(filePath)
+		if (current.status === "valid") {
+			await unlinkIfExists(legacyFilePath)
+			return current
+		}
+		if (current.status === "malformed") return current
+
+		const legacy = await this.readPath(legacyFilePath)
+		if (legacy.status !== "valid") return legacy
+		const raw = await this.readRawObject(legacyFilePath)
+		await atomicWriteCredential(filePath, { ...preserveUnknownFields(raw), ...serializeCredential(legacy.credential) })
+		await unlinkIfExists(legacyFilePath)
+		return legacy
 	}
 
 	private async readPath(filePath: string): Promise<OpenAiCodexProfileAuthReadResult> {

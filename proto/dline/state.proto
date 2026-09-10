@@ -255,10 +255,18 @@ message Settings {
 message UsageQuota {
   string type = 1;           // "daily" | "5hour" | "weekly" | "monthly" | "custom"
   string label = 2;          // Human-readable label
-  int64 used = 3;            // Tokens consumed
-  int64 limit = 4;           // Token limit
+  int64 used = 3;            // Tokens or percentage consumed
+  int64 limit = 4;           // Token or percentage limit
   optional string reset_at = 5;       // ISO timestamp
   optional string reset_label = 6;    // Human-readable reset description
+  optional int64 window_seconds = 7;  // Duration of the quota window
+}
+
+// Provider-owned reset credit exposed through the shared usage capability.
+message AccountUsageResetCredit {
+  string id = 1;
+  optional string granted_at = 2;     // ISO timestamp
+  optional string expires_at = 3;     // ISO timestamp
 }
 
 // Account-level usage or balance information
@@ -273,6 +281,13 @@ message AccountUsage {
   optional int64 daily_output_tokens = 8;
   optional int64 daily_cache_hit_tokens = 9;
   optional int64 daily_cache_miss_tokens = 10;
+  optional string profile_id = 11;
+  optional string provider_id = 12;
+  optional string plan_type = 13;
+  optional bool allowed = 14;
+  optional bool limit_reached = 15;
+  repeated AccountUsageResetCredit reset_credits = 16;
+  optional uint32 reset_credits_available_count = 17;
 }
 
 message State {

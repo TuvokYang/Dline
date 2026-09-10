@@ -1,7 +1,12 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 import { FileLock } from "../backend/jsonl/FileLock"
-import { getOpenAiCodexProfileAuthFileName, isOpenAiCodexProfileAuthFileName } from "./OpenAiCodexProfileAuthPath"
+import {
+	getLegacyHashedOpenAiCodexProfileAuthFileName,
+	getOpenAiCodexProfileAuthFileName,
+	isOpenAiCodexProfileAuthFileName,
+} from "./OpenAiCodexProfileAuthPath"
+import { OpenAiCodexProfileAuthRepository } from "./OpenAiCodexProfileAuthRepository"
 
 export interface OAuthProfileCatalogEntry {
 	id: string
@@ -20,15 +25,21 @@ export interface OpenAiCodexProfileAuthGarbageCollectionResult {
 
 export class OpenAiCodexProfileAuthGarbageCollector {
 	private readonly lock = new FileLock()
+	private readonly repository: OpenAiCodexProfileAuthRepository
 
-	constructor(private readonly options: OpenAiCodexProfileAuthGarbageCollectorOptions) {}
+	constructor(private readonly options: OpenAiCodexProfileAuthGarbageCollectorOptions) {
+		this.repository = new OpenAiCodexProfileAuthRepository({ secretsDir: options.secretsDir })
+	}
 
 	async collect(profiles: readonly OAuthProfileCatalogEntry[]): Promise<OpenAiCodexProfileAuthGarbageCollectionResult> {
-		const retainedFileNames = new Set(
-			profiles
-				.filter((profile) => profile.provider === "openai-codex" && profile.id.length > 0)
-				.map((profile) => getOpenAiCodexProfileAuthFileName(profile.id)),
-		)
+		const codexProfiles = profiles.filter((profile) => profile.provider === "openai-codex" && profile.id.length > 0)
+		const retainedFileNames = new Set(codexProfiles.map((profile) => getOpenAiCodexProfileAuthFileName(profile.id)))
+		for (const profile of codexProfiles) {
+			const result = await this.repository.read(profile.id)
+			if (result.status === "malformed") {
+				retainedFileNames.add(getLegacyHashedOpenAiCodexProfileAuthFileName(profile.id))
+			}
+		}
 		let fileNames: string[]
 		try {
 			fileNames = await fs.readdir(this.options.secretsDir)

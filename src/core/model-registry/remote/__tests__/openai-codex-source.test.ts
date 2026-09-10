@@ -1,3 +1,4 @@
+import { ApiFormat } from "@shared/proto/dline/models/metadata"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { openAiCodexOAuthManager } from "@/integrations/openai-codex/oauth"
 import { ExtensionRegistryInfo } from "@/registry"
@@ -53,7 +54,8 @@ describe("OpenAiCodexModelSource", () => {
 		expect(Object.keys(models)).toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-6-new"])
 		expect(models["gpt-5.6-sol"]).toMatchObject({
 			id: "gpt-5.6-sol",
-			capabilities: { supportsPromptCache: true, supportsReasoning: true },
+			apiFormats: [ApiFormat.OPENAI_RESPONSES, ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE],
+			capabilities: { contextWindow: 372_000, supportsPromptCache: true, supportsReasoning: true },
 		})
 		expect(models).not.toHaveProperty("gpt-reserve")
 		expect(models).not.toHaveProperty("codex-auto-review")

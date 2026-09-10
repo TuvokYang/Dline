@@ -180,13 +180,24 @@ export function toAccountUsage(snapshot: OpenAiCodexUsageSnapshot | undefined): 
 		label: window.label,
 		used: window.usedPercent,
 		limit: 100,
+		windowSeconds: window.limitWindowSeconds,
 		...(window.resetAtMs !== undefined ? { resetAt: new Date(window.resetAtMs).toISOString() } : {}),
 	}))
-	if (quotas.length === 0 && snapshot.creditsBalance === undefined) return undefined
+	if (quotas.length === 0 && snapshot.creditsBalance === undefined && snapshot.resetCreditsAvailableCount === 0)
+		return undefined
 	return {
 		currency: snapshot.creditsBalance === undefined ? "" : "USD",
 		...(snapshot.creditsBalance !== undefined ? { remainingBalance: snapshot.creditsBalance } : {}),
+		planType: snapshot.planType,
+		allowed: snapshot.allowed,
+		limitReached: snapshot.limitReached,
 		quotas,
+		resetCreditsAvailableCount: snapshot.resetCreditsAvailableCount,
+		resetCredits: snapshot.resetCredits.map((credit) => ({
+			id: credit.id,
+			...(credit.grantedAtMs !== undefined ? { grantedAt: new Date(credit.grantedAtMs).toISOString() } : {}),
+			...(credit.expiresAtMs !== undefined ? { expiresAt: new Date(credit.expiresAtMs).toISOString() } : {}),
+		})),
 		isAvailable: true,
 	}
 }

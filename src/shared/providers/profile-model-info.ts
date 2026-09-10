@@ -1,6 +1,7 @@
 import type { ModelInfo } from "@shared/proto/dline/models"
-import type { ModelCapabilities, ModelPricing, ServerTool } from "@shared/proto/dline/models/metadata"
+import { ApiFormat, type ModelCapabilities, type ModelPricing, type ServerTool } from "@shared/proto/dline/models/metadata"
 import type { ApiProfile } from "@shared/proto/dline/profile"
+import { prioritizeApiFormat, resolveApiFormat } from "./api-format"
 import { buildEffectiveModelInfo, type ProviderModelOverrides } from "./effective-model-info"
 import type { ProviderModelsConfig } from "./types"
 
@@ -97,6 +98,25 @@ export function resolveProfileOverrides(profile: ApiProfile): ProviderModelOverr
 	return providerKey ? readOverrides(profile[providerKey]) : {}
 }
 
+/** Read the API protocol and optional Responses transport selected by a provider Profile. */
+function resolveProfileApiFormat(profile: ApiProfile): ApiFormat | undefined {
+	const providerKey = PROFILE_PROVIDER_KEYS[profile.provider]
+	if (!providerKey) return undefined
+
+	const config = profile[providerKey]
+	if (!isObject(config)) return undefined
+
+	const configured = typeof config.apiFormat === "number" ? (config.apiFormat as ApiFormat) : undefined
+	const baseFormat = configured === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE ? ApiFormat.OPENAI_RESPONSES : configured
+	if (config.websocketEnabled === true && (baseFormat === undefined || baseFormat === ApiFormat.OPENAI_RESPONSES)) {
+		return ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE
+	}
+	if (config.websocketEnabled === undefined && configured === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE) {
+		return ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE
+	}
+	return baseFormat
+}
+
 /**
  * Read the hosted server tools this profile switched off.
  *
@@ -150,7 +170,7 @@ export function resolveProfileModelInfo(
 
 	const baseModel = registryModel ?? profile.modelInfo ?? (profile.modelId ? undefined : defaultModel)
 
-	return buildEffectiveModelInfo(modelId || baseModel?.id, baseModel, {
+	const modelInfo = buildEffectiveModelInfo(modelId || baseModel?.id, baseModel, {
 		...resolveProfileOverrides(profile),
 		preferContextWindowTier: profile.provider === "anthropic",
 		contextWindowTiersEnabled:
@@ -158,4 +178,9 @@ export function resolveProfileModelInfo(
 				? Boolean(registryModel.capabilities?.contextWindowTiers?.length)
 				: undefined,
 	})
+	const configuredApiFormat = resolveProfileApiFormat(profile)
+	if (configuredApiFormat === undefined) return modelInfo
+
+	const activeApiFormat = resolveApiFormat(configuredApiFormat, modelInfo, modelInfo.apiFormats?.[0] ?? configuredApiFormat)
+	return prioritizeApiFormat(modelInfo, activeApiFormat)
 }

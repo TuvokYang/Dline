@@ -17,4 +17,8 @@ message OpenAiCodexProviderConfig {
   // Hosted server tools the user turned off for this profile. See
   // BaseProviderConfig.disabled_server_tools for the subtraction semantics.
   repeated dline.models.ServerTool disabled_server_tools = 7;
+  // Base request protocol selected for this Profile. WebSocket is configured separately.
+  optional dline.models.ApiFormat api_format = 8;
+  // Use the persistent Responses WebSocket transport instead of HTTP streaming.
+  optional bool websocket_enabled = 9;
 }
