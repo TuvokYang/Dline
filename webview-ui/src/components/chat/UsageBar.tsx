@@ -1,4 +1,17 @@
+import { AccountUsageResetCreditRequest, type AccountUsageResetResult, ProviderUsageRequest } from "@shared/proto/dline/account"
+import { LoaderIcon, RefreshCwIcon } from "lucide-react"
+import { useState } from "react"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useExtensionState } from "@/context/ExtensionStateContext"
+import { AccountServiceClient } from "@/services/grpc-client"
+import {
+	formatProviderUsageCurrency,
+	ProviderUsageDetails,
+	selectEffectiveUsageQuota,
+	usageRemainingPercent,
+	usageUsedPercent,
+} from "../settings/providers/ProviderUsageDetails"
 
 const fmt = (n: number): string => {
 	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
@@ -6,91 +19,129 @@ const fmt = (n: number): string => {
 	return String(n)
 }
 
-const formatCurrency = (currency: string | undefined, amount: number): string => {
-	const code = (currency || "USD").toUpperCase()
-	if (code === "CNY") {
-		return `￥${amount.toFixed(2)}`
-	}
-
-	try {
-		return new Intl.NumberFormat(undefined, {
-			style: "currency",
-			currency: code,
-			currencyDisplay: "narrowSymbol",
-			minimumFractionDigits: 2,
-			maximumFractionDigits: 2,
-		}).format(amount)
-	} catch {
-		return `${code} ${amount.toFixed(2)}`
-	}
-}
-
-const formatQuotaRemaining = (label: string, used: number, limit: number): string => {
-	const remaining = Math.max(0, limit - used)
-	const percent = limit > 0 ? (remaining / limit) * 100 : 0
-	return `${label} ${Math.max(0, Math.min(100, percent)).toFixed(0)}%`
-}
-
-const formatReset = (resetAt: string | undefined): string | undefined => {
-	if (!resetAt) return undefined
-	const date = new Date(resetAt)
+const formatTime = (value: string | undefined): string | undefined => {
+	if (!value) return undefined
+	const date = new Date(value)
 	return Number.isNaN(date.getTime()) ? undefined : date.toLocaleString()
 }
 
-/**
- * Compact usage badge placed between provider name and Plan/Act toggle.
- * Hover to show detailed tooltip with balance, today in/out, cache hit rate.
- */
+/** Existing account usage surface, enhanced by provider-owned capability data. */
 export const UsageBar = () => {
 	const { accountUsage } = useExtensionState()
-
-	const baseClass =
-		"inline-flex shrink-0 items-center gap-1 text-xs text-description select-none whitespace-nowrap cursor-default group relative"
+	const [open, setOpen] = useState(false)
+	const [refreshing, setRefreshing] = useState(false)
+	const [resetting, setResetting] = useState(false)
+	const [resetError, setResetError] = useState<string>()
 
 	if (!accountUsage) return null
-
 	const quotas = accountUsage.quotas?.filter((quota) => quota.limit > 0) ?? []
-	if (quotas.length > 0) {
-		const primaryQuota =
-			quotas.find((quota) => quota.type === "5hour") ?? quotas.find((quota) => quota.type === "weekly") ?? quotas[0]
-		return (
-			<span className={baseClass}>
-				<span className="font-medium text-foreground">
-					{formatQuotaRemaining(primaryQuota.label, primaryQuota.used, primaryQuota.limit)}
-				</span>
-				<span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:inline-flex flex-col gap-0.5 bg-dropdown-background border border-editor-group-border rounded-[3px] px-2 py-1 shadow-lg z-50 text-[10px] whitespace-nowrap">
-					{quotas.map((quota) => {
-						const reset = formatReset(quota.resetAt)
-						return (
-							<span key={`${quota.type}:${quota.label}`}>
-								{formatQuotaRemaining(quota.label, quota.used, quota.limit)}
-								{reset ? ` · resets ${reset}` : ""}
-							</span>
-						)
-					})}
-					<span>Usage for the active profile</span>
-				</span>
-			</span>
-		)
+	const effectiveQuota = selectEffectiveUsageQuota(quotas)
+	const supportsResetCredits = accountUsage.resetCredits !== undefined || accountUsage.resetCreditsAvailableCount !== undefined
+	const nextResetCreditExpiry = accountUsage.resetCredits
+		?.map((credit) => credit.expiresAt)
+		.filter((value): value is string => value !== undefined && Number.isFinite(Date.parse(value)))
+		.sort((left, right) => Date.parse(left) - Date.parse(right))[0]
+	const summary = effectiveQuota
+		? `${effectiveQuota.type === "5hour" ? "5h:" : effectiveQuota.type === "weekly" ? "7d:" : `${effectiveQuota.label}:`} ${usageRemainingPercent(effectiveQuota).toFixed(0)}%`
+		: !accountUsage.planType && accountUsage.remainingBalance !== undefined
+			? formatProviderUsageCurrency(accountUsage.currency, accountUsage.remainingBalance)
+			: undefined
+	if (!summary) return null
+
+	const tooltip = (
+		<div className="flex max-w-72 flex-col gap-1">
+			{quotas.map((quota) => {
+				const resetAt = formatTime(quota.resetAt)
+				return (
+					<span key={`${quota.type}:${quota.label}`}>
+						{quota.label}: {usageUsedPercent(quota).toFixed(0)}% used
+						{resetAt ? ` · resets ${resetAt}` : ""}
+					</span>
+				)
+			})}
+			{supportsResetCredits ? <span>Reset cards: {accountUsage.resetCreditsAvailableCount ?? 0}</span> : null}
+			{nextResetCreditExpiry ? <span>Next card expires {formatTime(nextResetCreditExpiry)}</span> : null}
+			{!accountUsage.planType && accountUsage.remainingBalance !== undefined ? (
+				<span>Balance: {formatProviderUsageCurrency(accountUsage.currency, accountUsage.remainingBalance)}</span>
+			) : null}
+			{accountUsage.dailyInputTokens !== undefined ? <span>Today In: {fmt(accountUsage.dailyInputTokens)}</span> : null}
+			{accountUsage.dailyOutputTokens !== undefined ? <span>Today Out: {fmt(accountUsage.dailyOutputTokens)}</span> : null}
+		</div>
+	)
+
+	const refresh = async () => {
+		if (!accountUsage.profileId || refreshing) return
+		setRefreshing(true)
+		try {
+			await AccountServiceClient.getProviderUsage(ProviderUsageRequest.create({ profileId: accountUsage.profileId }))
+		} finally {
+			setRefreshing(false)
+		}
 	}
 
-	if (accountUsage.remainingBalance === undefined) return null
+	const consumeResetCredit = async (creditId: string): Promise<AccountUsageResetResult | undefined> => {
+		if (!accountUsage.profileId || resetting) return undefined
+		setResetError(undefined)
+		setResetting(true)
+		try {
+			return await AccountServiceClient.consumeAccountUsageResetCredit(
+				AccountUsageResetCreditRequest.create({ profileId: accountUsage.profileId, creditId }),
+			)
+		} catch {
+			setResetError("The Provider rate-limit reset could not be completed.")
+			return undefined
+		} finally {
+			setResetting(false)
+		}
+	}
 
-	const balance = accountUsage.remainingBalance
-	const dailyIn = accountUsage?.dailyInputTokens ?? 0
-	const dailyOut = accountUsage?.dailyOutputTokens ?? 0
-	const dailyCacheTotal = (accountUsage?.dailyCacheHitTokens ?? 0) + (accountUsage?.dailyCacheMissTokens ?? 0)
-	const dailyCacheHitRate = dailyCacheTotal > 0 ? ((accountUsage?.dailyCacheHitTokens ?? 0) / dailyCacheTotal) * 100 : 0
 	return (
-		<span className={baseClass}>
-			<span className="font-medium text-foreground">{formatCurrency(accountUsage.currency, balance)}</span>
-			{/* Tooltip on hover */}
-			<span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:inline-flex flex-col gap-0.5 bg-dropdown-background border border-editor-group-border rounded-[3px] px-2 py-1 shadow-lg z-50 text-[10px] whitespace-nowrap">
-				<span>Today In: {fmt(dailyIn)}</span>
-				<span>Today Out: {fmt(dailyOut)}</span>
-				{dailyCacheHitRate > 0 && <span>Cache Hit: {dailyCacheHitRate.toFixed(1)}%</span>}
-				<span>Usage for the active profile</span>
-			</span>
-		</span>
+		<Popover onOpenChange={setOpen} open={open}>
+			<Tooltip>
+				{!open ? <TooltipContent side="top">{tooltip}</TooltipContent> : null}
+				<TooltipTrigger asChild>
+					<PopoverTrigger asChild>
+						<button
+							aria-label="Provider usage"
+							className="chat-input-control-outline inline-flex h-[18.5px] shrink-0 cursor-pointer items-center rounded-sm border-0 bg-toolbar-hover px-1 py-0 text-xs font-medium leading-[18px] text-foreground shadow-none max-[420px]:hidden"
+							data-chat-input-slot="provider-usage"
+							type="button">
+							{summary}
+						</button>
+					</PopoverTrigger>
+				</TooltipTrigger>
+			</Tooltip>
+			<PopoverContent
+				align="end"
+				aria-label="Provider usage details"
+				className="w-72 overflow-hidden p-0 text-xs"
+				side="top"
+				sideOffset={4}
+				style={{
+					background: "var(--vscode-dropdown-background)",
+					borderColor: "var(--vscode-dropdown-border)",
+					color: "var(--vscode-foreground)",
+				}}>
+				<div className="flex items-center justify-between gap-2 border-b border-dropdown-border px-3 py-2">
+					<span className="font-medium">Usage</span>
+					<button
+						aria-label="Refresh Provider usage"
+						className="flex size-6 items-center justify-center rounded-xs border-0 bg-transparent text-description hover:bg-toolbar-hover hover:text-foreground disabled:opacity-50"
+						disabled={!accountUsage.profileId || refreshing}
+						onClick={() => void refresh()}
+						type="button">
+						{refreshing ? <LoaderIcon className="size-3.5 animate-spin" /> : <RefreshCwIcon className="size-3.5" />}
+					</button>
+				</div>
+				<div className="p-3">
+					<ProviderUsageDetails
+						consumeResetCredit={consumeResetCredit}
+						resetError={resetError}
+						resetting={resetting}
+						usage={accountUsage}
+					/>
+				</div>
+			</PopoverContent>
+		</Popover>
 	)
 }

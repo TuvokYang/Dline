@@ -76,13 +76,13 @@ const ServersToggleModal: React.FC = () => {
 				<Tooltip>
 					{!isVisible && <TooltipContent>Manage MCP Servers</TooltipContent>}
 					<TooltipTrigger asChild>
-						<VSCodeButton
-							appearance="icon"
+						<button
 							aria-label={isVisible ? "Hide MCP Servers" : "Show MCP Servers"}
-							className="p-0 m-0 flex items-center"
-							onClick={() => setIsVisible(!isVisible)}>
+							className="chat-input-control-outline inline-flex size-[18.5px] shrink-0 cursor-pointer items-center justify-center rounded-sm border-0 bg-transparent p-0 text-foreground shadow-none transition-colors duration-150 hover:bg-toolbar-hover focus-visible:bg-toolbar-hover"
+							onClick={() => setIsVisible(!isVisible)}
+							type="button">
 							<i className="codicon codicon-server" style={{ fontSize: "12.5px" }} />
-						</VSCodeButton>
+						</button>
 					</TooltipTrigger>
 				</Tooltip>
 			</div>

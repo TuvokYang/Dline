@@ -9,7 +9,6 @@ import type { OpenAiServiceTier } from "@shared/storage/types"
 import { profileServiceTierEnabled, resolveProfileServiceTier } from "@shared/task-provider-overrides"
 import { resolveProfileReasoningConfig, resolveTaskThinkingConfig } from "@shared/task-reasoning"
 import { useEffect, useMemo, useState } from "react"
-import { TaskOpenAiCodexUsageControl } from "./TaskOpenAiCodexUsageControl"
 import { TaskServiceTierControl } from "./TaskServiceTierControl"
 
 /** Task-local reasoning and OpenAI service-tier controls for the chat input toolbar. */
@@ -43,7 +42,6 @@ export function TaskRuntimeControls() {
 	const supportsEffort = effortLevels.length > 0
 	const supportsBudget = Number.isSafeInteger(maxBudget) && (maxBudget ?? -1) >= 0
 	const supportsServiceTier = profileServiceTierEnabled(profile)
-	const supportsCodexUsage = profile?.provider === "openai-codex"
 
 	const reasoningOverride =
 		mode === "plan" ? apiConfiguration?.planModeReasoningOverride : apiConfiguration?.actModeReasoningOverride
@@ -128,7 +126,7 @@ export function TaskRuntimeControls() {
 	}
 
 	const hasTaskControls = Boolean(taskId && (supportsEffort || supportsBudget || supportsServiceTier))
-	if (!hasTaskControls && !supportsCodexUsage) return null
+	if (!hasTaskControls) return null
 
 	return (
 		<>
@@ -143,10 +141,10 @@ export function TaskRuntimeControls() {
 								<div className="inline-flex h-[18.5px] min-w-0 max-w-full items-center">
 									<SelectTrigger
 										aria-label="Task thinking override"
-										className="!h-[18.5px] inline-flex w-auto min-w-0 max-w-full items-center justify-center gap-0 overflow-hidden rounded-sm border-0 bg-transparent px-1 py-0 text-center text-[12.5px] leading-none text-description shadow-none outline-none transition-colors duration-150 hover:bg-toolbar-hover hover:text-foreground focus-visible:border-transparent focus-visible:bg-toolbar-hover focus-visible:ring-0"
+										className="chat-input-control-outline !h-[18.5px] inline-flex w-auto min-w-0 max-w-full items-center justify-center gap-0 overflow-hidden rounded-sm border-0 bg-toolbar-hover px-1 py-0 text-center text-xs font-medium leading-[18px] text-foreground shadow-none transition-colors duration-150 focus-visible:ring-0"
 										showIcon={false}
 										size="sm">
-										<SelectValue className="flex min-w-0 items-center justify-center truncate text-center leading-none" />
+										<SelectValue className="inline-flex h-full min-w-0 items-center justify-center truncate text-center leading-[18px]" />
 									</SelectTrigger>
 								</div>
 							</TooltipTrigger>
@@ -181,7 +179,6 @@ export function TaskRuntimeControls() {
 			{taskId && supportsServiceTier ? (
 				<TaskServiceTierControl onSelect={updateServiceTier} value={configuredServiceTier} />
 			) : null}
-			{supportsCodexUsage && profile ? <TaskOpenAiCodexUsageControl profileId={profile.id} /> : null}
 			{taskId && error && (
 				<span className="text-[10px] text-error" role="status" title={error}>
 					{error}

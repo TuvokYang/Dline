@@ -1,7 +1,8 @@
-import type { OpenAiCodexRateLimitResetOutcome, OpenAiCodexUsageResponse } from "@shared/proto/dline/account"
+import type { AccountUsageData } from "@shared/ExtensionMessage"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { codexUsageProgressTone, OpenAiCodexUsage, selectEffectiveCodexUsageWindow } from "./OpenAiCodexUsage"
+import { OpenAiCodexUsage } from "./OpenAiCodexUsage"
+import { providerUsageProgressTone, selectEffectiveUsageQuota } from "./ProviderUsageDetails"
 
 const mocks = vi.hoisted(() => ({
 	refresh: vi.fn(),
@@ -9,49 +10,35 @@ const mocks = vi.hoisted(() => ({
 	useUsage: vi.fn(),
 }))
 
-vi.mock("@shared/proto/dline/account", () => ({}))
-
-vi.mock("./useOpenAiCodexUsage", () => ({
-	useOpenAiCodexUsage: mocks.useUsage,
+vi.mock("./useProviderUsage", () => ({
+	useProviderUsage: mocks.useUsage,
 }))
 
-const usage: OpenAiCodexUsageResponse = {
+const usage: AccountUsageData = {
 	profileId: "profile-a",
+	providerId: "openai-codex",
+	currency: "",
 	planType: "pro",
-	windows: [
-		{
-			type: "5hour",
-			label: "5 hour",
-			usedPercent: 50,
-			remainingPercent: 50,
-			limitWindowSeconds: 18_000,
-			resetAtMs: 1_900_000_000_000,
-		},
-		{
-			type: "weekly",
-			label: "7 day",
-			usedPercent: 80,
-			remainingPercent: 20,
-			limitWindowSeconds: 604_800,
-			resetAtMs: 1_900_500_000_000,
-		},
+	quotas: [
+		{ type: "5hour", label: "5 hour", used: 50, limit: 100, windowSeconds: 18_000 },
+		{ type: "weekly", label: "7 day", used: 80, limit: 100, windowSeconds: 604_800 },
 	],
-	creditsBalance: undefined,
 	resetCreditsAvailableCount: 1,
-	resetCredits: [{ id: "credit-a", expiresAtMs: 1_900_750_000_000 }],
+	resetCredits: [{ id: "credit-a", expiresAt: "2030-03-25T00:00:00.000Z" }],
 	allowed: true,
 	limitReached: false,
 	isAvailable: true,
 }
 
-describe("OpenAiCodexUsage", () => {
+describe("ProviderUsage through OpenAiCodexUsage compatibility", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
 		mocks.refresh.mockResolvedValue(usage)
 		mocks.consumeResetCredit.mockResolvedValue({
 			profileId: "profile-a",
-			outcome: 1 as OpenAiCodexRateLimitResetOutcome,
-			windowsReset: ["primary", "secondary"],
+			outcome: "reset",
+			quotaTypesReset: ["primary", "secondary"],
+			usage: undefined,
 		})
 		mocks.useUsage.mockReturnValue({
 			usage,
@@ -66,7 +53,7 @@ describe("OpenAiCodexUsage", () => {
 	})
 
 	it("uses the tighter quota as the compact summary and expands both windows", () => {
-		expect(selectEffectiveCodexUsageWindow(usage.windows)?.type).toBe("weekly")
+		expect(selectEffectiveUsageQuota(usage.quotas ?? [])?.type).toBe("weekly")
 		render(<OpenAiCodexUsage enabled profileId="profile-a" />)
 
 		const summary = screen.getByRole("button", { name: "Usage 7 day 20%" })
@@ -94,10 +81,10 @@ describe("OpenAiCodexUsage", () => {
 		expect(await screen.findByText("Reset completed for primary and secondary.")).toBeInTheDocument()
 	})
 
-	it("uses green below 80%, orange from 80% through 99%, and red at 100%", () => {
-		expect(codexUsageProgressTone(79.99)).toBe("success")
-		expect(codexUsageProgressTone(80)).toBe("warning")
-		expect(codexUsageProgressTone(99)).toBe("warning")
-		expect(codexUsageProgressTone(100)).toBe("danger")
+	it("uses semantic color only inside progress details", () => {
+		expect(providerUsageProgressTone(79.99)).toBe("success")
+		expect(providerUsageProgressTone(80)).toBe("warning")
+		expect(providerUsageProgressTone(99)).toBe("warning")
+		expect(providerUsageProgressTone(100)).toBe("danger")
 	})
 })

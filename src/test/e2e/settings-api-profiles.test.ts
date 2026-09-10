@@ -15,6 +15,11 @@ interface StoredProfile {
 	modelId?: string
 	baseUrl?: string
 	deepseek?: { apiFormat?: string }
+	openaiCodex?: {
+		apiFormat?: string
+		websocketEnabled?: boolean
+		capabilities?: { contextWindow?: number; maxTokens?: number }
+	}
 	bedrock?: Record<string, unknown>
 	sapaicore?: Record<string, unknown>
 }
@@ -545,36 +550,83 @@ e2e(
 	},
 )
 
-e2e("Settings API Config - exposes OAuth-only controls for OpenAI Codex", async ({ helper, page, sidebar }, testInfo) => {
-	await helper.signin(sidebar)
-	await page.getByRole("button", { name: "Settings", exact: true }).click()
-	await expect(sidebar.getByRole("heading", { name: "API Configuration" })).toBeVisible()
-	await sidebar.getByRole("button", { name: "Add profile" }).click()
-
-	const profileCard = sidebar.getByTestId("api-profile-card").last()
-	await profileCard.getByRole("combobox", { name: "Provider", exact: true }).selectOption("openai-codex")
-	// The OAuth control is presented in the product UI language.
-	await expect(profileCard.getByRole("button", { name: "Sign in", exact: true })).toBeVisible()
-	await expect(profileCard.getByText("ChatGPT: Not signed in")).toBeVisible({ timeout: 15_000 })
-	await expect(profileCard.getByText("Invalid credential", { exact: true })).toHaveCount(0)
-	await expect(profileCard.getByRole("textbox", { name: /API Key|Access Token|Refresh Token|OAuth JSON/i })).toHaveCount(0)
-
-	for (const sidebarWidth of [320, 480, 700]) {
-		const actualSidebarWidth = await resizePrimarySidebar(page, sidebarWidth)
-		const cardBox = await profileCard.boundingBox()
-		expect(cardBox, "Codex Profile card should have a bounding box").not.toBeNull()
-		expect(cardBox?.width ?? 0, `Codex Profile card should grow with the ${sidebarWidth}px sidebar`).toBeGreaterThanOrEqual(
-			actualSidebarWidth - 195,
-		)
-		const layout = await sidebar.evaluate(() => ({
-			clientWidth: document.documentElement.clientWidth,
-			scrollWidth: document.documentElement.scrollWidth,
-		}))
-		expect(layout.scrollWidth, `Codex Provider should not overflow at ${sidebarWidth}px`).toBeLessThanOrEqual(
-			layout.clientWidth + 1,
-		)
-		await profileCard.screenshot({
-			path: testInfo.outputPath(`codex-provider-not-signed-in-${sidebarWidth}px.png`),
+e2e(
+	"Settings API Config - exposes and persists OpenAI Codex model controls",
+	async ({ dlineDir, helper, page, sidebar }, testInfo) => {
+		await helper.signin(sidebar)
+		await page.getByRole("button", { name: "Settings", exact: true }).click()
+		await expect(sidebar.getByRole("heading", { name: "API Configuration" })).toBeVisible()
+		const profilesPath = path.join(dlineDir, "data", "settings", "api_profiles.json")
+		const existingProfileIds = new Set((await readJson<StoredProfile[]>(profilesPath)).map((profile) => profile.id))
+		await sidebar.getByRole("button", { name: "Add profile" }).click()
+		const profileId = await E2ETestHelper.waitForValue(async () => {
+			const profiles = await readJson<StoredProfile[]>(profilesPath)
+			return profiles.find((profile) => !existingProfileIds.has(profile.id))?.id
 		})
-	}
-})
+
+		const profileCard = sidebar.getByTestId("api-profile-card").last()
+		await profileCard.getByRole("combobox", { name: "Provider", exact: true }).selectOption("openai-codex")
+		await E2ETestHelper.waitUntil(async () => {
+			const profiles = await readJson<StoredProfile[]>(profilesPath)
+			return profiles.find((profile) => profile.id === profileId)?.provider === "openai-codex"
+		})
+
+		const apiFormat = profileCard.getByRole("combobox", { name: "API Format" })
+		await expect(apiFormat).toBeVisible()
+		await expect(apiFormat).toHaveValue(String(ApiFormat.OPENAI_RESPONSES))
+		await expect(apiFormat).toBeDisabled()
+		const websocket = profileCard.locator("vscode-checkbox").filter({ hasText: "Use WebSocket transport" })
+		await expect(websocket).toHaveCount(1)
+		await expect.poll(() => websocket.evaluate((element) => Boolean((element as HTMLInputElement).checked))).toBe(false)
+		await websocket.click()
+		await expect.poll(() => websocket.evaluate((element) => Boolean((element as HTMLInputElement).checked))).toBe(true)
+		await E2ETestHelper.waitUntil(async () => {
+			const profiles = await readJson<StoredProfile[]>(profilesPath)
+			const config = profiles.find((profile) => profile.id === profileId)?.openaiCodex
+			return config?.apiFormat === "OPENAI_RESPONSES" && config.websocketEnabled === true
+		})
+
+		const contextWindow = profileCard.getByRole("textbox", { name: "Context Window Size" })
+		if (!(await contextWindow.isVisible())) {
+			await profileCard.getByRole("button", { name: "Model Configuration" }).click()
+		}
+		const maxTokens = profileCard.getByRole("textbox", { name: "Max Output Tokens" })
+		await expect(contextWindow).toHaveValue("372000")
+		await expect(maxTokens).toHaveValue("128000")
+		await contextWindow.fill("400000")
+		await contextWindow.press("Tab")
+		await maxTokens.fill("64000")
+		await maxTokens.press("Tab")
+		await E2ETestHelper.waitUntil(async () => {
+			const profiles = await readJson<StoredProfile[]>(profilesPath)
+			const capabilities = profiles.find((profile) => profile.id === profileId)?.openaiCodex?.capabilities
+			return capabilities?.contextWindow === 400_000 && capabilities.maxTokens === 64_000
+		})
+
+		// The OAuth control is presented in the product UI language.
+		await expect(profileCard.getByRole("button", { name: "Sign in", exact: true })).toBeVisible()
+		await expect(profileCard.getByText("ChatGPT: Not signed in")).toBeVisible({ timeout: 15_000 })
+		await expect(profileCard.getByText("Invalid credential", { exact: true })).toHaveCount(0)
+		await expect(profileCard.getByRole("textbox", { name: /API Key|Access Token|Refresh Token|OAuth JSON/i })).toHaveCount(0)
+
+		for (const sidebarWidth of [320, 480, 700]) {
+			const actualSidebarWidth = await resizePrimarySidebar(page, sidebarWidth)
+			const cardBox = await profileCard.boundingBox()
+			expect(cardBox, "Codex Profile card should have a bounding box").not.toBeNull()
+			expect(
+				cardBox?.width ?? 0,
+				`Codex Profile card should grow with the ${sidebarWidth}px sidebar`,
+			).toBeGreaterThanOrEqual(actualSidebarWidth - 195)
+			const layout = await sidebar.evaluate(() => ({
+				clientWidth: document.documentElement.clientWidth,
+				scrollWidth: document.documentElement.scrollWidth,
+			}))
+			expect(layout.scrollWidth, `Codex Provider should not overflow at ${sidebarWidth}px`).toBeLessThanOrEqual(
+				layout.clientWidth + 1,
+			)
+			await profileCard.screenshot({
+				path: testInfo.outputPath(`codex-provider-not-signed-in-${sidebarWidth}px.png`),
+			})
+		}
+	},
+)

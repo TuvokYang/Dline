@@ -13,7 +13,7 @@ import {
 	ToggleWindsurfRuleRequest,
 	ToggleWorkflowRequest,
 } from "@shared/proto/dline/file"
-import { VSCodeButton, VSCodeLink } from "@vscode/webview-ui-toolkit/react"
+import { VSCodeLink } from "@vscode/webview-ui-toolkit/react"
 import React, { useEffect, useRef, useState } from "react"
 import { useClickAway } from "react-use"
 import styled from "styled-components"
@@ -619,13 +619,13 @@ const ClineRulesToggleModal: React.FC = () => {
 				<Tooltip>
 					{!isVisible && <TooltipContent>Manage Dline Rules & Workflows</TooltipContent>}
 					<TooltipTrigger asChild>
-						<VSCodeButton
-							appearance="icon"
+						<button
 							aria-label={isVisible ? "Hide Dline Rules & Workflows" : "Show Dline Rules & Workflows"}
-							className="p-0 m-0 flex items-center"
-							onClick={() => setIsVisible(!isVisible)}>
+							className="chat-input-control-outline inline-flex size-[18.5px] shrink-0 cursor-pointer items-center justify-center rounded-sm border-0 bg-transparent p-0 text-foreground shadow-none transition-colors duration-150 hover:bg-toolbar-hover focus-visible:bg-toolbar-hover"
+							onClick={() => setIsVisible(!isVisible)}
+							type="button">
 							<i className="codicon codicon-law" style={{ fontSize: "12.5px" }} />
-						</VSCodeButton>
+						</button>
 					</TooltipTrigger>
 				</Tooltip>
 			</div>

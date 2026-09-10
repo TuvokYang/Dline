@@ -11,6 +11,18 @@ vscode-button::part(control):focus-visible {
 	outline-offset: 2px;
 }
 
+.chat-input-control-outline {
+	outline-color: transparent;
+	outline-offset: -1px;
+	outline-style: dotted;
+	outline-width: 1px;
+}
+
+.chat-input-control-outline:hover,
+.chat-input-control-outline:focus-visible {
+	outline-color: var(--vscode-focusBorder, #007fd4);
+}
+
 /*
 Use vscode native scrollbar styles
 https://github.com/gitkraken/vscode-gitlens/blob/b1d71d4844523e8b2ef16f9e007068e91f46fd88/src/webviews/apps/home/home.scss

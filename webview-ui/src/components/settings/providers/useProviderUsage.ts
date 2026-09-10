@@ -1,34 +1,32 @@
-import {
-	ConsumeOpenAiCodexRateLimitResetCreditRequest,
-	OpenAiCodexProfileRequest,
-	type OpenAiCodexRateLimitResetResult,
-	type OpenAiCodexUsageResponse,
-} from "@shared/proto/dline/account"
+import type { AccountUsageData } from "@shared/ExtensionMessage"
+import { AccountUsageResetCreditRequest, type AccountUsageResetResult, ProviderUsageRequest } from "@shared/proto/dline/account"
+import { protoToAccountUsage } from "@shared/proto-conversions/account-usage-conversion"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { AccountServiceClient } from "@/services/grpc-client"
 
 const USAGE_POLL_INTERVAL_MS = 60_000
 
-export interface OpenAiCodexUsageState {
-	readonly usage?: OpenAiCodexUsageResponse
+export interface ProviderUsageState {
+	readonly usage?: AccountUsageData
 	readonly loading: boolean
 	readonly refreshing: boolean
 	readonly resetting: boolean
 	readonly error?: string
 	readonly resetError?: string
-	readonly refresh: () => Promise<OpenAiCodexUsageResponse | undefined>
-	readonly consumeResetCredit: (creditId: string) => Promise<OpenAiCodexRateLimitResetResult | undefined>
+	readonly refresh: () => Promise<AccountUsageData | undefined>
+	readonly consumeResetCredit: (creditId: string) => Promise<AccountUsageResetResult | undefined>
 }
 
-export function useOpenAiCodexUsage(profileId: string, enabled: boolean): OpenAiCodexUsageState {
-	const [usage, setUsage] = useState<OpenAiCodexUsageResponse>()
+/** Profile-scoped client for the shared provider usage capability. */
+export function useProviderUsage(profileId: string, enabled: boolean): ProviderUsageState {
+	const [usage, setUsage] = useState<AccountUsageData>()
 	const [loading, setLoading] = useState(false)
 	const [refreshing, setRefreshing] = useState(false)
 	const [resetting, setResetting] = useState(false)
 	const [error, setError] = useState<string>()
 	const [resetError, setResetError] = useState<string>()
 	const profileRef = useRef(profileId)
-	const usageRef = useRef<OpenAiCodexUsageResponse>()
+	const usageRef = useRef<AccountUsageData>()
 	const requestSequence = useRef(0)
 	const mounted = useRef(true)
 	profileRef.current = profileId
@@ -42,7 +40,7 @@ export function useOpenAiCodexUsage(profileId: string, enabled: boolean): OpenAi
 		}
 	}, [])
 
-	const refresh = useCallback(async (): Promise<OpenAiCodexUsageResponse | undefined> => {
+	const refresh = useCallback(async (): Promise<AccountUsageData | undefined> => {
 		if (!enabled) return undefined
 		const requestProfileId = profileId
 		const sequence = ++requestSequence.current
@@ -50,17 +48,18 @@ export function useOpenAiCodexUsage(profileId: string, enabled: boolean): OpenAi
 		if (usageRef.current === undefined) setLoading(true)
 		else setRefreshing(true)
 		try {
-			const response = await AccountServiceClient.getOpenAiCodexUsage(
-				OpenAiCodexProfileRequest.create({ profileId: requestProfileId }),
+			const response = await AccountServiceClient.getProviderUsage(
+				ProviderUsageRequest.create({ profileId: requestProfileId }),
 			)
-			if (!mounted.current || sequence !== requestSequence.current || profileRef.current !== response.profileId) {
+			const nextUsage = protoToAccountUsage(response)
+			if (!mounted.current || sequence !== requestSequence.current || nextUsage?.profileId !== profileRef.current) {
 				return undefined
 			}
-			setUsage(response)
-			return response
+			setUsage(nextUsage)
+			return nextUsage
 		} catch {
 			if (mounted.current && sequence === requestSequence.current && profileRef.current === requestProfileId) {
-				setError("ChatGPT usage could not be loaded.")
+				setError("Provider usage could not be loaded.")
 			}
 			return undefined
 		} finally {
@@ -86,7 +85,7 @@ export function useOpenAiCodexUsage(profileId: string, enabled: boolean): OpenAi
 	}, [enabled, refresh])
 
 	const consumeResetCredit = useCallback(
-		async (creditId: string): Promise<OpenAiCodexRateLimitResetResult | undefined> => {
+		async (creditId: string): Promise<AccountUsageResetResult | undefined> => {
 			if (!enabled || resetting) return undefined
 			const normalizedCreditId = creditId.trim()
 			if (normalizedCreditId.length === 0) return undefined
@@ -94,25 +93,26 @@ export function useOpenAiCodexUsage(profileId: string, enabled: boolean): OpenAi
 			setResetError(undefined)
 			setResetting(true)
 			try {
-				const result = await AccountServiceClient.consumeOpenAiCodexRateLimitResetCredit(
-					ConsumeOpenAiCodexRateLimitResetCreditRequest.create({
+				const result = await AccountServiceClient.consumeAccountUsageResetCredit(
+					AccountUsageResetCreditRequest.create({
 						profileId: requestProfileId,
 						creditId: normalizedCreditId,
 					}),
 				)
 				if (!mounted.current || profileRef.current !== result.profileId) return undefined
-				await refresh()
+				const nextUsage = protoToAccountUsage(result.usage)
+				if (nextUsage) setUsage(nextUsage)
 				return result
 			} catch {
 				if (mounted.current && profileRef.current === requestProfileId) {
-					setResetError("The ChatGPT rate-limit reset could not be completed.")
+					setResetError("The Provider rate-limit reset could not be completed.")
 				}
 				return undefined
 			} finally {
 				if (mounted.current && profileRef.current === requestProfileId) setResetting(false)
 			}
 		},
-		[enabled, profileId, refresh, resetting],
+		[enabled, profileId, resetting],
 	)
 
 	return { usage, loading, refreshing, resetting, error, resetError, refresh, consumeResetCredit }

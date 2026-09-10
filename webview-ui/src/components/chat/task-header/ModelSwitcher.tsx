@@ -1,3 +1,4 @@
+import { ProfileCapabilityIcons } from "@components/settings/providers/ProfileCapabilityIcons"
 import type { ApiProfile } from "@shared/proto/dline/profile"
 import { CheckIcon, SettingsIcon } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
@@ -101,12 +102,8 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 	if (info) {
 		if (info.capabilities?.contextWindow)
 			tooltipLines.push(`Context: ${info.capabilities.contextWindow.toLocaleString()} tokens`)
-		if (info.pricing?.inputPrice != null)
-			tooltipLines.push(`In: $${info.pricing.inputPrice}/M | Out: $${info.pricing.outputPrice ?? "?"}/M`)
-		if (info.capabilities?.supportsReasoning)
-			tooltipLines.push(`🧠 Reasoning: ${info.capabilities?.thinking?.effortLevels?.[0] || "supported"}`)
-		if (info.capabilities?.supportsImages) tooltipLines.push("🖼️ Images: supported")
-		if (info.capabilities?.supportsPromptCache) tooltipLines.push("📦 Cache: supported")
+		if ((info.pricing?.inputPrice ?? 0) > 0 || (info.pricing?.outputPrice ?? 0) > 0)
+			tooltipLines.push(`In: $${info.pricing?.inputPrice ?? 0}/M | Out: $${info.pricing?.outputPrice ?? 0}/M`)
 	}
 	const tooltip = tooltipLines.join("\n")
 
@@ -194,13 +191,16 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 			<Tooltip>
 				{!open && (
 					<TooltipContent side="top">
-						<span className="whitespace-pre-line">{tooltip}</span>
+						<div className="flex flex-col gap-1">
+							<span className="whitespace-pre-line">{tooltip}</span>
+							<ProfileCapabilityIcons capabilities={info?.capabilities} className="items-start" showLabels />
+						</div>
 					</TooltipContent>
 				)}
 				<TooltipTrigger asChild>
 					<button
 						aria-label="Select model"
-						className="inline-flex h-[18.5px] w-full min-w-0 cursor-pointer items-center overflow-hidden rounded-sm border-0 bg-transparent px-1 py-0 text-left text-[12.5px] leading-none text-description transition-colors duration-150 hover:bg-toolbar-hover hover:text-foreground focus-visible:bg-toolbar-hover disabled:cursor-not-allowed disabled:opacity-60"
+						className="chat-input-control-outline inline-flex h-[18.5px] w-full min-w-0 cursor-pointer items-center overflow-hidden rounded-sm border-0 bg-toolbar-hover px-1 py-0 text-left text-xs font-medium leading-[18px] text-foreground shadow-none transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-60"
 						onClick={() => {
 							if (displayState.kind === "create") {
 								handleCreateProfile()
@@ -215,7 +215,9 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 							setOpen(true)
 						}}
 						type="button">
-						<span className="block min-w-0 flex-1 truncate text-center" data-chat-input-profile-text>
+						<span
+							className="inline-flex h-full min-w-0 flex-1 items-center truncate text-center"
+							data-chat-input-profile-text>
 							{profileSwitchFlow.statusText ? `${displayLine} · ${profileSwitchFlow.statusText}` : displayLine}
 						</span>
 					</button>

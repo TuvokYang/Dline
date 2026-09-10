@@ -9,21 +9,29 @@ interface ApiFormatSelectorProps {
 	selectedApiFormat: ApiFormat | undefined
 	fallbackApiFormat: ApiFormat
 	onChange: (apiFormat: ApiFormat) => void
+	showSingleOption?: boolean
 }
 
-/** Render a protocol picker only when the selected model supports multiple formats. */
-export function ApiFormatSelector({ apiFormats, selectedApiFormat, fallbackApiFormat, onChange }: ApiFormatSelectorProps) {
-	if (!apiFormats || apiFormats.length <= 1) {
+/** Render a protocol picker for multiple formats, or a fixed value when explicitly requested. */
+export function ApiFormatSelector({
+	apiFormats,
+	selectedApiFormat,
+	fallbackApiFormat,
+	onChange,
+	showSingleOption = false,
+}: ApiFormatSelectorProps) {
+	const inputId = useId()
+	if (!apiFormats?.length || (apiFormats.length === 1 && !showSingleOption)) {
 		return null
 	}
 
 	const selected = resolveApiFormat(selectedApiFormat, { apiFormats }, fallbackApiFormat)
-	const inputId = useId()
 	return (
 		<ProfileField htmlFor={inputId} label="API Format">
 			<select
 				aria-label="API Format"
 				className="min-h-7 w-full rounded-xs border px-2 text-sm"
+				disabled={apiFormats.length === 1}
 				id={inputId}
 				onChange={(event) => onChange(Number(event.target.value) as ApiFormat)}
 				style={nativeSelectStyle}

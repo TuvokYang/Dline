@@ -46,7 +46,7 @@ export function TaskServiceTierControl({ onSelect, value }: TaskServiceTierContr
 						<PopoverTrigger asChild>
 							<button
 								aria-label="Task service tier"
-								className="inline-flex size-[18.5px] shrink-0 cursor-pointer items-center justify-center rounded-sm border-0 bg-transparent p-0 text-[12.5px] leading-none text-description shadow-none outline-none transition-colors duration-150 hover:bg-toolbar-hover hover:text-foreground focus-visible:bg-toolbar-hover focus-visible:text-foreground"
+								className="chat-input-control-outline inline-flex size-[18.5px] shrink-0 cursor-pointer items-center justify-center rounded-sm border-0 bg-transparent p-0 text-xs leading-[18px] text-foreground shadow-none transition-colors duration-150 hover:bg-toolbar-hover focus-visible:bg-toolbar-hover"
 								data-icon-only="true"
 								data-service-tier-label={serviceTierLabel}
 								style={{ border: 0, boxShadow: "none" }}
@@ -56,7 +56,7 @@ export function TaskServiceTierControl({ onSelect, value }: TaskServiceTierContr
 									className="text-foreground"
 									data-service-tier-icon={value ?? "auto"}
 									data-testid="task-service-tier-icon"
-									style={{ height: "12.5px", width: "12.5px" }}
+									style={{ height: "15px", width: "15px" }}
 								/>
 							</button>
 						</PopoverTrigger>

@@ -20,6 +20,10 @@ interface OAuthScenario {
 interface CodexRequest {
 	authorization?: string
 	accountId?: string
+	sessionId?: string
+	threadId?: string
+	clientRequestId?: string
+	body: Record<string, unknown>
 }
 
 interface ModelRequest extends CodexRequest {
@@ -46,6 +50,7 @@ class CodexOAuthE2EServer {
 	private readonly exchanges = new Map<string, OAuthScenario>()
 	private readonly callbackByState = new Map<string, string>()
 	private readonly callbacks: string[] = []
+	private readonly codexResponseEventBatches: unknown[][] = []
 	readonly authorizationRequests: string[] = []
 	readonly codexRequests: CodexRequest[] = []
 	readonly modelRequests: ModelRequest[] = []
@@ -80,6 +85,10 @@ class CodexOAuthE2EServer {
 		this.scenarios.push(scenario)
 	}
 
+	enqueueCodexResponseEvents(events: readonly unknown[]): void {
+		this.codexResponseEventBatches.push([...events])
+	}
+
 	setUsageResponse(response: unknown): void {
 		this.usageResponse = response
 	}
@@ -108,7 +117,7 @@ class CodexOAuthE2EServer {
 				return
 			}
 			if (request.method === "POST" && url.pathname === "/codex/responses") {
-				this.codex(request, response)
+				await this.codex(request, response)
 				return
 			}
 			if (request.method === "GET" && url.pathname === "/codex/models") {
@@ -230,21 +239,52 @@ class CodexOAuthE2EServer {
 		})
 	}
 
-	private codex(request: IncomingMessage, response: ServerResponse): void {
+	private async codex(request: IncomingMessage, response: ServerResponse): Promise<void> {
 		const authorization = typeof request.headers.authorization === "string" ? request.headers.authorization : undefined
 		const accountId =
 			typeof request.headers["chatgpt-account-id"] === "string" ? request.headers["chatgpt-account-id"] : undefined
-		this.codexRequests.push({ authorization, accountId })
+		const body = JSON.parse(await this.readBody(request)) as Record<string, unknown>
+		const requestIndex = this.codexRequests.length + 1
+		this.codexRequests.push({
+			authorization,
+			accountId,
+			sessionId: typeof request.headers["session-id"] === "string" ? request.headers["session-id"] : undefined,
+			threadId: typeof request.headers["thread-id"] === "string" ? request.headers["thread-id"] : undefined,
+			clientRequestId:
+				typeof request.headers["x-client-request-id"] === "string" ? request.headers["x-client-request-id"] : undefined,
+			body,
+		})
 		const text = accountId ? `CODEX_E2E_${accountId}` : "CODEX_E2E_MISSING_ACCOUNT"
+		const messageId = `msg_e2e_${requestIndex}`
+		const responseId = `resp_e2e_${requestIndex}`
+		const events = this.codexResponseEventBatches.shift() ?? [
+			{
+				type: "response.output_item.added",
+				output_index: 0,
+				sequence_number: 1,
+				item: { type: "message", id: messageId, role: "assistant", content: [] },
+			},
+			{ type: "response.output_text.delta", item_id: messageId, delta: text, output_index: 0, sequence_number: 2 },
+			{
+				type: "response.output_item.done",
+				output_index: 0,
+				sequence_number: 3,
+				item: { type: "message", id: messageId, role: "assistant", content: [{ type: "output_text", text }] },
+			},
+			{
+				type: "response.completed",
+				response: {
+					id: responseId,
+					usage: { input_tokens: 1, input_tokens_details: { cached_tokens: 0 }, output_tokens: 1 },
+				},
+			},
+		]
 		response.writeHead(200, {
 			"Content-Type": "text/event-stream",
 			"Cache-Control": "no-cache",
 			Connection: "keep-alive",
 		})
-		response.write(`data: ${JSON.stringify({ type: "response.output_text.delta", delta: text })}\n\n`)
-		response.write(
-			`data: ${JSON.stringify({ type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 1 } } })}\n\n`,
-		)
+		for (const event of events) response.write(`data: ${JSON.stringify(event)}\n\n`)
 		response.end("data: [DONE]\n\n")
 	}
 
@@ -269,12 +309,118 @@ class CodexOAuthE2EServer {
 }
 
 function scenario(label: string): OAuthScenario {
+	const accountId = `account-${label}`
 	return {
-		accountId: `account-${label}`,
-		accessToken: randomUUID(),
+		accountId,
+		accessToken: `e2e.${Buffer.from(
+			JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
+		).toString("base64url")}.signature`,
 		refreshToken: randomUUID(),
-		responseText: `CODEX_E2E_account-${label}`,
+		responseText: `CODEX_E2E_${accountId}`,
 	}
+}
+
+interface CodexResponseTool {
+	itemId: string
+	callId: string
+	name: string
+	arguments: string
+}
+
+function codexConversationEvents(text: string, suffix: string, includeReasoning = false, tool?: CodexResponseTool): unknown[] {
+	const messageId = `msg_${suffix}`
+	const responseId = `resp_${suffix}`
+	const reasoningId = `rs_${suffix}`
+	return [
+		...(includeReasoning
+			? [
+					{
+						type: "response.output_item.added",
+						output_index: 0,
+						sequence_number: 1,
+						item: { type: "reasoning", id: reasoningId, summary: [], encrypted_content: "partial-cache-reasoning" },
+					},
+					{ type: "response.reasoning.delta", delta: "cache reasoning", output_index: 0, sequence_number: 2 },
+					{
+						type: "response.output_item.done",
+						output_index: 0,
+						sequence_number: 3,
+						item: {
+							type: "reasoning",
+							id: reasoningId,
+							text: "cache reasoning",
+							encrypted_content: "final-cache-reasoning",
+						},
+					},
+				]
+			: []),
+		{
+			type: "response.output_item.added",
+			output_index: includeReasoning ? 1 : 0,
+			sequence_number: 4,
+			item: { type: "message", id: messageId, role: "assistant", content: [] },
+		},
+		{ type: "response.text.delta", delta: text, output_index: includeReasoning ? 1 : 0, sequence_number: 5 },
+		{
+			type: "response.output_item.done",
+			output_index: includeReasoning ? 1 : 0,
+			sequence_number: 6,
+			item: { type: "message", id: messageId, role: "assistant", content: [{ type: "output_text", text }] },
+		},
+		...(tool
+			? [
+					{
+						type: "response.output_item.added",
+						output_index: includeReasoning ? 2 : 1,
+						sequence_number: 7,
+						item: {
+							type: "tool_call",
+							id: tool.itemId,
+							tool_call_id: tool.callId,
+							name: tool.name,
+							arguments: "",
+						},
+					},
+					{
+						type: "response.tool_call_arguments.delta",
+						item_id: tool.itemId,
+						tool_call_id: tool.callId,
+						function_name: tool.name,
+						delta: tool.arguments,
+						output_index: includeReasoning ? 2 : 1,
+						sequence_number: 8,
+					},
+					{
+						type: "response.tool_call_arguments.done",
+						item_id: tool.itemId,
+						tool_call_id: tool.callId,
+						function_name: tool.name,
+						arguments: tool.arguments,
+						output_index: includeReasoning ? 2 : 1,
+						sequence_number: 9,
+					},
+					{
+						type: "response.output_item.done",
+						output_index: includeReasoning ? 2 : 1,
+						sequence_number: 10,
+						item: {
+							type: "tool_call",
+							id: tool.itemId,
+							tool_call_id: tool.callId,
+							name: tool.name,
+							arguments: tool.arguments,
+						},
+					},
+				]
+			: []),
+		{
+			type: "response.done",
+			response: {
+				id: responseId,
+				usage: { input_tokens: 100, input_tokens_details: { cached_tokens: 80 }, output_tokens: 10 },
+			},
+		},
+	]
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -330,7 +476,7 @@ async function signInProfile(sidebar: Frame, name: string, server: CodexOAuthE2E
 	const callbackCount = server.allCallbacks().length
 	const tokenRequestCount = server.tokenRequestCount
 	const card = await expandProfile(sidebar, name)
-	await card.getByRole("button", { name: "开始 OAUTH 认证" }).click()
+	await card.getByRole("button", { name: "Sign in", exact: true }).click()
 	await expect.poll(() => server.authorizationRequests.length, { timeout: 30_000 }).toBeGreaterThan(authorizationCount)
 	await expect.poll(() => server.allCallbacks().length, { timeout: 30_000 }).toBeGreaterThan(callbackCount)
 	await expect
@@ -339,8 +485,8 @@ async function signInProfile(sidebar: Frame, name: string, server: CodexOAuthE2E
 			message: "OAuth browser redirect did not reach token exchange",
 		})
 		.toBeGreaterThan(tokenRequestCount)
-	await expect(sidebar.getByRole("dialog", { name: "OpenAI Codex OAUTH 认证" })).not.toBeVisible({ timeout: 30_000 })
-	await expect(card.getByText("已认证", { exact: true })).toBeVisible({ timeout: 30_000 })
+	await expect(sidebar.getByRole("dialog", { name: "Sign in to ChatGPT" })).not.toBeVisible({ timeout: 30_000 })
+	await expect(card.getByText("ChatGPT: Signed in", { exact: true })).toBeVisible({ timeout: 30_000 })
 }
 
 async function selectProfile(sidebar: Frame, name: string): Promise<void> {
@@ -477,7 +623,7 @@ e2e(
 )
 
 e2e(
-	"OpenAI Codex usage shows the effective window and confirms reset-card consumption",
+	"Provider usage renders one neutral effective quota and confirms reset-card consumption",
 	async ({ dlineDir, helper, openVSCode, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(120_000)
 		const server = new CodexOAuthE2EServer()
@@ -569,15 +715,34 @@ e2e(
 
 			await ready.sidebar.getByRole("button", { name: "Done", exact: true }).click()
 			await selectProfile(ready.sidebar, profile.name)
-			const inputUsage = ready.sidebar.getByRole("button", { name: "OpenAI Codex usage" })
+			await resizePrimarySidebar(ready.page, 700)
+			await expect.poll(() => ready.sidebar.evaluate(() => window.innerWidth)).toBeGreaterThan(420)
+			const inputUsage = ready.sidebar.getByRole("button", { name: "Provider usage" })
 			await expect(inputUsage).toBeVisible({ timeout: 30_000 })
+			await expect(inputUsage).toHaveCount(1)
+			await expect(inputUsage).toHaveText("5h: 20%")
+			await expect(inputUsage).toHaveClass(/text-foreground/)
+			await expect(inputUsage).not.toHaveClass(/text-success|text-editor-warning-foreground|text-error/)
+			await expect(ready.sidebar.getByRole("button", { name: "OpenAI Codex usage" })).toHaveCount(0)
+			const colors = await inputUsage.evaluate((element) => {
+				const successProbe = document.createElement("span")
+				successProbe.className = "text-success"
+				document.body.appendChild(successProbe)
+				const value = {
+					usage: getComputedStyle(element).color,
+					success: getComputedStyle(successProbe).color,
+				}
+				successProbe.remove()
+				return value
+			})
+			expect(colors.usage).not.toBe(colors.success)
 			await inputUsage.hover()
 			const usageTooltip = ready.sidebar.locator('[data-slot="tooltip-content"]:visible')
 			await expect(usageTooltip).toContainText("5 hour: 80% used")
 			await expect(usageTooltip).toContainText("Reset cards: 1")
 			await expect(usageTooltip).toContainText("Next card expires")
 			await inputUsage.click()
-			const usagePanel = ready.sidebar.getByLabel("OpenAI Codex usage details")
+			const usagePanel = ready.sidebar.getByLabel("Provider usage details")
 			await expect(usagePanel).toBeVisible()
 			await expect(usagePanel.getByRole("button", { name: "Use reset card 1" })).toBeVisible()
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
@@ -639,12 +804,47 @@ e2e(
 			await openSettings(reopenedPage, sidebar)
 			for (const profile of [profileA, profileB]) {
 				await expandProfile(sidebar, profile.name)
-				await expect(profileCard(sidebar, profile.name).getByText("已认证", { exact: true })).toBeVisible()
+				await expect(profileCard(sidebar, profile.name).getByText("ChatGPT: Signed in", { exact: true })).toBeVisible()
 			}
 			await sidebar.getByRole("button", { name: "Done", exact: true }).click()
 
 			await selectProfile(sidebar, profileA.name)
-			await send(sidebar, "Run Codex Profile A", authA.responseText)
+			const firstCacheText = `${authA.responseText}_CACHE_FIRST`
+			const secondCacheText = `${authA.responseText}_CACHE_SECOND`
+			server.enqueueCodexResponseEvents(
+				codexConversationEvents(firstCacheText, "cache_a_first", true, {
+					itemId: "fc_cache_read",
+					callId: "call_cache_read",
+					name: "read_file",
+					arguments: JSON.stringify({ path: "README.md" }),
+				}),
+			)
+			server.enqueueCodexResponseEvents(
+				codexConversationEvents(secondCacheText, "cache_a_second", false, {
+					itemId: "fc_cache_complete",
+					callId: "call_cache_complete",
+					name: "attempt_completion",
+					arguments: JSON.stringify({ result: secondCacheText }),
+				}),
+			)
+			const cacheRequestStart = server.codexRequests.length
+			await send(sidebar, "Run Codex Profile A", firstCacheText)
+			await expect(sidebar.getByText(firstCacheText, { exact: true }).last()).toBeVisible()
+			await expect(sidebar.getByText(secondCacheText, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+			await expect.poll(() => server.codexRequests.length, { timeout: 60_000 }).toBe(cacheRequestStart + 2)
+			const [firstCacheRequest, secondCacheRequest] = server.codexRequests.slice(cacheRequestStart)
+			if (!firstCacheRequest || !secondCacheRequest) throw new Error("Missing consecutive Codex cache requests")
+			expect(secondCacheRequest.body.prompt_cache_key).toBe(firstCacheRequest.body.prompt_cache_key)
+			expect(secondCacheRequest.sessionId).toBe(firstCacheRequest.sessionId)
+			expect(secondCacheRequest.threadId).toBe(firstCacheRequest.threadId)
+			expect(secondCacheRequest.clientRequestId).toBe(firstCacheRequest.clientRequestId)
+			const firstInput = firstCacheRequest.body.input as unknown[]
+			const secondInput = secondCacheRequest.body.input as unknown[]
+			expect(secondInput.slice(0, firstInput.length)).toEqual(firstInput)
+			const replayedHistory = JSON.stringify(secondInput)
+			expect(replayedHistory.match(new RegExp(firstCacheText, "g"))).toHaveLength(1)
+			expect(replayedHistory).toContain("rs_cache_a_first")
+			expect(replayedHistory).toContain("final-cache-reasoning")
 			await sidebar.getByRole("button", { name: "Close Task", exact: true }).click()
 			const profileBRequestStart = server.codexRequests.length
 			const profileARequests = server.codexRequests.slice(0, profileBRequestStart)
@@ -675,7 +875,7 @@ e2e(
 			await expect(profileCard(sidebar, renamedA)).toHaveCount(1)
 			expect(await pathExists(authPathA)).toBe(true)
 
-			await profileCard(sidebar, renamedA).getByRole("button", { name: "退出认证" }).click()
+			await profileCard(sidebar, renamedA).getByRole("button", { name: "Sign out", exact: true }).click()
 			await expect.poll(() => pathExists(authPathA)).toBe(false)
 			expect(await pathExists(authPathB)).toBe(true)
 			await signInProfile(sidebar, renamedA, server)

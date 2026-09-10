@@ -5,7 +5,6 @@ import { EmptyRequest, StringRequest } from "@shared/proto/dline/common"
 import { FileSearchRequest, FileSearchType, RefreshedDlineToggles, RelativePathsRequest } from "@shared/proto/dline/file"
 import { type SlashCommand } from "@shared/slashCommands"
 import { Mode } from "@shared/storage/types"
-import { VSCodeButton } from "@vscode/webview-ui-toolkit/react"
 import { AtSignIcon, PlusIcon } from "lucide-react"
 import type React from "react"
 import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
@@ -145,8 +144,10 @@ const ButtonGroup = styled.div`
 const ButtonContainer = styled.div`
 	display: flex;
 	align-items: center;
+	justify-content: center;
 	gap: 3px;
 	font-size: 10px;
+	height: 100%;
 	white-space: nowrap;
 	min-width: 0;
 	width: 100%;
@@ -1753,37 +1754,37 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 						<Tooltip>
 							<TooltipContent>Add Context</TooltipContent>
 							<TooltipTrigger asChild>
-								<VSCodeButton
-									appearance="icon"
+								<button
 									aria-label="Add Context"
-									className="p-0 m-0 flex items-center"
+									className="chat-input-control-outline inline-flex size-[18.5px] shrink-0 cursor-pointer items-center justify-center rounded-sm border-0 bg-transparent p-0 text-foreground shadow-none transition-colors duration-150 hover:bg-toolbar-hover focus-visible:bg-toolbar-hover"
 									data-testid="context-button"
-									onClick={handleContextButtonClick}>
+									onClick={handleContextButtonClick}
+									type="button">
 									<ButtonContainer>
 										<AtSignIcon size={12} />
 									</ButtonContainer>
-								</VSCodeButton>
+								</button>
 							</TooltipTrigger>
 						</Tooltip>
 
 						<Tooltip>
 							<TooltipContent>Add Files & Images</TooltipContent>
 							<TooltipTrigger asChild>
-								<VSCodeButton
-									appearance="icon"
+								<button
 									aria-label="Add Files & Images"
-									className="p-0 m-0 flex items-center"
+									className="chat-input-control-outline inline-flex size-[18.5px] shrink-0 cursor-pointer items-center justify-center rounded-sm border-0 bg-transparent p-0 text-foreground shadow-none transition-colors duration-150 hover:bg-toolbar-hover focus-visible:bg-toolbar-hover disabled:cursor-not-allowed disabled:opacity-50"
 									data-testid="files-button"
 									disabled={shouldDisableFilesAndImages}
 									onClick={() => {
 										if (!shouldDisableFilesAndImages) {
 											onSelectFilesAndImages()
 										}
-									}}>
+									}}
+									type="button">
 									<ButtonContainer>
 										<PlusIcon size={13} />
 									</ButtonContainer>
-								</VSCodeButton>
+								</button>
 							</TooltipTrigger>
 						</Tooltip>
 
@@ -1792,8 +1793,9 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 						<ClineRulesToggleModal />
 
 						<ChatInputRuntimeControls profileControl={<ModelSwitcher onOpenSettings={handleModelButtonClick} />} />
+
+						<UsageBar />
 					</ButtonGroup>
-					<UsageBar />
 					{/* Tooltip for Plan/Act toggle remains outside the conditional rendering */}
 					<div className="ml-auto shrink-0">
 						<ModeSwitchDialog

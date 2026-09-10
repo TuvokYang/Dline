@@ -1,7 +1,12 @@
+import { ApiFormat, type ModelCapabilities, type ModelPricing } from "@shared/proto/dline/models/metadata"
 import { OpenAiCodexProviderConfig } from "@shared/proto/dline/provider/openai_codex"
-import { buildEffectiveModelInfo } from "@shared/providers/effective-model-info"
+import { resolveApiFormat } from "@shared/providers/api-format"
+import { buildEffectiveModelInfo, mergeCapabilities, mergePricing } from "@shared/providers/effective-model-info"
 import { OPENAI_REASONING_EFFORT_OPTIONS } from "@shared/storage/types"
+import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
+import { ApiFormatSelector } from "../common/ApiFormatSelector"
 import { ModelAutocomplete } from "../common/ModelAutocomplete"
+import { ModelConfiguration } from "../common/ModelConfiguration"
 import { ModelInfoView } from "../common/ModelInfoView"
 import OpenAIServiceTierSelector from "../OpenAIServiceTierSelector"
 import ThinkingControl from "../ThinkingControl"
@@ -48,6 +53,23 @@ export const OpenAiCodexProvider = ({ showModelOptions, isPopup, profile, onUpda
 		capabilities: pc.capabilities,
 		pricing: pc.pricing,
 	})
+	const supportedApiFormats = registryModel.apiFormats ?? modelInfoSaneDefaults.apiFormats ?? [ApiFormat.OPENAI_RESPONSES]
+	const baseApiFormats = supportedApiFormats.filter((apiFormat) => apiFormat !== ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE)
+	const apiFormats = baseApiFormats.length > 0 ? baseApiFormats : [ApiFormat.OPENAI_RESPONSES]
+	const legacyWebsocketEnabled = pc.apiFormat === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE
+	const selectedApiFormat = resolveApiFormat(
+		legacyWebsocketEnabled ? ApiFormat.OPENAI_RESPONSES : pc.apiFormat,
+		{ apiFormats },
+		ApiFormat.OPENAI_RESPONSES,
+	)
+	const websocketSupported = supportedApiFormats.includes(ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE)
+	const websocketEnabled = websocketSupported && (pc.websocketEnabled ?? legacyWebsocketEnabled)
+	const handleCapabilitiesUpdate = (updates: Partial<ModelCapabilities>) => {
+		onUpdate({ openaiCodex: { ...pc, capabilities: mergeCapabilities(pc.capabilities, updates) } })
+	}
+	const handlePricingUpdate = (updates: Partial<ModelPricing>) => {
+		onUpdate({ openaiCodex: { ...pc, pricing: mergePricing(pc.pricing, updates) } })
+	}
 	return (
 		<div className="flex flex-col gap-4">
 			<OpenAiCodexOAuthControl profileId={profile.id} />
@@ -62,6 +84,36 @@ export const OpenAiCodexProvider = ({ showModelOptions, isPopup, profile, onUpda
 						placeholder="Search, select, or enter a model ID..."
 						selectedModelId={modelId}
 					/>
+					<ApiFormatSelector
+						apiFormats={apiFormats}
+						fallbackApiFormat={ApiFormat.OPENAI_RESPONSES}
+						onChange={(apiFormat) =>
+							onUpdate({
+								openaiCodex: {
+									...pc,
+									apiFormat,
+									websocketEnabled: apiFormat === ApiFormat.OPENAI_RESPONSES ? websocketEnabled : false,
+								},
+							})
+						}
+						selectedApiFormat={selectedApiFormat}
+						showSingleOption
+					/>
+					{websocketSupported && selectedApiFormat === ApiFormat.OPENAI_RESPONSES ? (
+						<VSCodeCheckbox
+							checked={websocketEnabled}
+							onChange={(event) =>
+								onUpdate({
+									openaiCodex: {
+										...pc,
+										apiFormat: ApiFormat.OPENAI_RESPONSES,
+										websocketEnabled: (event.target as HTMLInputElement).checked,
+									},
+								})
+							}>
+							Use WebSocket transport
+						</VSCodeCheckbox>
+					) : null}
 					{/* Store reasoning under the existing proto-generated openaiCodex field. */}
 					<ThinkingControl
 						effortOptions={OPENAI_REASONING_EFFORT_OPTIONS}
@@ -84,6 +136,14 @@ export const OpenAiCodexProvider = ({ showModelOptions, isPopup, profile, onUpda
 						}
 						serviceTier={pc.serviceTier}
 						serviceTierEnabled={pc.serviceTierEnabled !== false}
+					/>
+					<ModelConfiguration
+						capabilities={pc.capabilities}
+						defaults={registryModel}
+						fields={{ capabilities: ["contextWindow", "maxTokens"] }}
+						onCapabilitiesUpdate={handleCapabilitiesUpdate}
+						onPricingUpdate={handlePricingUpdate}
+						pricing={pc.pricing}
 					/>
 					<ModelInfoView isPopup={isPopup} modelInfo={modelInfo} selectedModelId={modelId} />
 				</>

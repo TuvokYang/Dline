@@ -61,19 +61,8 @@ function PromptCacheIcon() {
 				strokeLinejoin="round"
 				strokeWidth="1.25"
 			/>
-			<path
-				d="M13.15 10.15a2.75 2.75 0 1 0-.05 2.6"
-				stroke="currentColor"
-				strokeLinecap="round"
-				strokeWidth="1.25"
-			/>
-			<path
-				d="M11.85 8.75h1.5v1.5"
-				stroke="currentColor"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-				strokeWidth="1.25"
-			/>
+			<path d="M13.15 10.15a2.75 2.75 0 1 0-.05 2.6" stroke="currentColor" strokeLinecap="round" strokeWidth="1.25" />
+			<path d="M11.85 8.75h1.5v1.5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.25" />
 		</svg>
 	)
 }
@@ -94,12 +83,7 @@ function WebIcon() {
 	return (
 		<svg aria-hidden="true" className="size-4 shrink-0" fill="none" viewBox="0 0 16 16">
 			<circle cx="8" cy="8" r="5.75" stroke="currentColor" strokeWidth="1.25" />
-			<path
-				d="M2.55 8h10.9M3.6 4.75h8.8M3.6 11.25h8.8"
-				stroke="currentColor"
-				strokeLinecap="round"
-				strokeWidth="1.1"
-			/>
+			<path d="M2.55 8h10.9M3.6 4.75h8.8M3.6 11.25h8.8" stroke="currentColor" strokeLinecap="round" strokeWidth="1.1" />
 			<path
 				d="M8 2.25c1.55 1.5 2.35 3.4 2.35 5.75S9.55 12.25 8 13.75C6.45 12.25 5.65 10.35 5.65 8S6.45 3.75 8 2.25Z"
 				stroke="currentColor"
@@ -146,12 +130,31 @@ const capabilityDefinitions = [
 interface ProfileCapabilityIconsProps {
 	capabilities?: ModelCapabilities
 	className?: string
+	showLabels?: boolean
 }
 
-export function ProfileCapabilityIcons({ capabilities, className }: ProfileCapabilityIconsProps) {
+export function ProfileCapabilityIcons({ capabilities, className, showLabels = false }: ProfileCapabilityIconsProps) {
 	if (!capabilities) return null
 	const supported = capabilityDefinitions.filter((definition) => definition.supported(capabilities))
 	if (supported.length === 0) return null
+
+	if (showLabels) {
+		return (
+			<ul aria-label="Model capabilities" className={cn("m-0 flex list-none flex-col gap-0.5 p-0", className)}>
+				{supported.map((definition) => {
+					const Icon = definition.icon
+					return (
+						<li className="flex items-center gap-1 text-xs" key={definition.key}>
+							<span className="inline-flex size-3 items-center justify-center [&_svg]:size-3">
+								<Icon />
+							</span>
+							<span>{definition.label}: supported</span>
+						</li>
+					)
+				})}
+			</ul>
+		)
+	}
 
 	return (
 		<ul

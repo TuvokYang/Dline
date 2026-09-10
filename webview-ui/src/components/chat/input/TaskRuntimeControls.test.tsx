@@ -94,12 +94,6 @@ vi.mock("@components/settings/utils/settingsHandlers", () => ({
 	updateTaskSettings: mocks.updateTaskSettings,
 }))
 
-vi.mock("./TaskOpenAiCodexUsageControl", () => ({
-	TaskOpenAiCodexUsageControl: ({ profileId }: { profileId: string }) => (
-		<div data-chat-input-slot="codex-usage" data-profile-id={profileId} />
-	),
-}))
-
 beforeAll(() => {
 	Object.defineProperties(HTMLElement.prototype, {
 		hasPointerCapture: { configurable: true, value: () => false },
@@ -163,7 +157,7 @@ describe("chat input TaskRuntimeControls", () => {
 		expect(screen.queryByRole("button", { name: "Task service tier" })).not.toBeInTheDocument()
 	})
 
-	it("shows Profile-scoped Codex usage even before a Task is open", () => {
+	it("does not create a Provider-specific usage surface before a Task is open", () => {
 		mocks.state.apiConfiguration = { actModeProfileId: "codex-id", actModeProfile: "Codex" }
 		mocks.profiles = [{ ...mocks.profiles[0], id: "codex-id", name: "Codex", provider: "openai-codex" }]
 		Object.assign(mocks.state, {
@@ -174,7 +168,8 @@ describe("chat input TaskRuntimeControls", () => {
 
 		const { container } = render(<TaskRuntimeControls />)
 
-		expect(container.querySelector('[data-chat-input-slot="codex-usage"]')).toHaveAttribute("data-profile-id", "codex-id")
+		expect(container).toBeEmptyDOMElement()
+		expect(container.querySelector('[data-chat-input-slot="codex-usage"]')).toBeNull()
 		expect(screen.queryByRole("button", { name: "Task service tier" })).not.toBeInTheDocument()
 	})
 
