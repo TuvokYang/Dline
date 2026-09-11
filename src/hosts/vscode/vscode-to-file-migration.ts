@@ -3,7 +3,7 @@
  *
  * VSCode historically stored global state, workspace state, and secrets via the
  * ExtensionContext API (backed by SQLite under ~/.vscode/). This module migrates
- * that data to the shared file-backed stores in ~/.cline/data/ so all platforms
+ * that data to the shared file-backed stores in ~/.dline/data/ so all platforms
  * (VSCode, CLI, JetBrains) share the same persistence layer.
  *
  * ## Migration semantics
@@ -34,8 +34,8 @@
 
 import { isSettingsKey } from "@shared/storage/state-keys"
 import type * as vscode from "vscode"
-import { Logger } from "@/shared/services/Logger"
 import { LEGACY_WORKSPACE_STATE_KEYS } from "@/core/storage/settings/capability-toggle-migration"
+import { Logger } from "@/shared/services/Logger"
 import { GlobalStateAndSettingKeys, LocalStateKeys, SecretKeys } from "@/shared/storage/state-keys"
 import type { StorageContext } from "@/shared/storage/storage-context"
 

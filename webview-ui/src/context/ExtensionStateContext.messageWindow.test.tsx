@@ -377,7 +377,14 @@ describe("ExtensionStateContext persisted message reconciliation", () => {
 	})
 
 	it("walks backward through persisted windows until it finds an older interaction anchor", async () => {
-		const tail = convertClineMessageToProto({ ts: 400, type: "say", say: "text", text: "Latest message" })
+		const tail = Array.from({ length: 200 }, (_, index) =>
+			convertClineMessageToProto({
+				ts: 200 + index,
+				type: "say",
+				say: "text",
+				text: index === 199 ? "Latest message" : `Tail message ${index + 1}`,
+			}),
+		)
 		const ask = convertClineMessageToProto({
 			ts: 100,
 			type: "ask",
@@ -386,8 +393,8 @@ describe("ExtensionStateContext persisted message reconciliation", () => {
 			interactionId: "interaction-1",
 		})
 		vi.mocked(TaskServiceClient.fetchMessage)
-			.mockResolvedValueOnce({ messages: [tail], startIndex: 201 })
-			.mockResolvedValueOnce({ messages: [ask], startIndex: 1 })
+			.mockResolvedValueOnce({ messages: tail, startIndex: 1, totalCount: 201 })
+			.mockResolvedValueOnce({ messages: [ask], startIndex: 0, totalCount: 201 })
 		render(
 			<ExtensionStateContextProvider>
 				<InteractionProbe observedTaskIds={[]} />
@@ -396,12 +403,12 @@ describe("ExtensionStateContext persisted message reconciliation", () => {
 		await waitFor(() => expect(subscriptions.state).toBeDefined())
 
 		act(() => {
-			subscriptions.state?.onResponse({ stateJson: JSON.stringify(outOfSyncInteractionState(1, 401)) })
+			subscriptions.state?.onResponse({ stateJson: JSON.stringify(outOfSyncInteractionState(1, 201)) })
 		})
 
 		await waitFor(() => expect(screen.getByText("Older question")).toBeVisible())
 		expect(TaskServiceClient.fetchMessage).toHaveBeenNthCalledWith(1, { referenceIndex: -1, count: 200 })
-		expect(TaskServiceClient.fetchMessage).toHaveBeenNthCalledWith(2, { referenceIndex: 1, count: 200 })
+		expect(TaskServiceClient.fetchMessage).toHaveBeenNthCalledWith(2, { referenceIndex: 0, count: 200 })
 	})
 
 	it("does not let a stale completion say downgrade a realtime completion ask anchor", async () => {

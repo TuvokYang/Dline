@@ -450,12 +450,11 @@ describe("chat input TaskRuntimeControls", () => {
 			"px-1",
 			"py-0",
 			"rounded-sm",
-			"text-[12.5px]",
-			"leading-none",
-			"text-description",
-			"transition-colors",
-			"hover:bg-toolbar-hover",
-			"hover:text-foreground",
+			"bg-toolbar-hover",
+			"text-xs",
+			"font-medium",
+			"leading-[18px]",
+			"text-foreground",
 		)
 		expect(thinkingControl.querySelector("svg")).toBeNull()
 		expect(serviceTierControl).toBeInTheDocument()
@@ -463,18 +462,17 @@ describe("chat input TaskRuntimeControls", () => {
 		expect(serviceTierControl).toHaveAttribute("data-icon-only", "true")
 		expect(serviceTierControl).toHaveAttribute("data-service-tier-label", "Priority")
 		expect(serviceTierControl).toHaveClass(
+			"chat-input-control-outline",
 			"border-0",
 			"shadow-none",
 			"p-0",
 			"size-[18.5px]",
 			"rounded-sm",
-			"transition-colors",
 			"hover:bg-toolbar-hover",
-			"hover:text-foreground",
 		)
 		expect(screen.getByTestId("task-service-tier-icon")).toHaveAttribute("data-service-tier-icon", "priority")
 		expect(screen.getByTestId("task-service-tier-icon")).toHaveClass("text-foreground")
-		expect(screen.getByTestId("task-service-tier-icon")).toHaveStyle({ height: "12.5px", width: "12.5px" })
+		expect(screen.getByTestId("task-service-tier-icon")).toHaveStyle({ height: "15px", width: "15px" })
 		expect(screen.queryByText("Tier")).not.toBeInTheDocument()
 		expect(screen.queryByText("Thinking", { exact: true })).not.toBeInTheDocument()
 		expect(container.querySelector('[data-chat-input-slot="thinking"]')).toHaveClass(
@@ -550,8 +548,8 @@ describe("chat input TaskRuntimeControls", () => {
 				display: "block",
 				flex: "0 0 auto",
 				fontSize: "inherit",
-				height: "12.5px",
-				width: "12.5px",
+				height: "15px",
+				width: "15px",
 			})
 			expect(icon).toHaveAttribute("fill", "none")
 			expect(icon).toHaveAttribute("stroke", "currentColor")
@@ -590,8 +588,8 @@ describe("chat input TaskRuntimeControls", () => {
 			display: "block",
 			flex: "0 0 auto",
 			fontSize: "inherit",
-			height: "12.5px",
-			width: "12.5px",
+			height: "15px",
+			width: "15px",
 		})
 		expect(ultrafastIcon).toHaveAttribute("fill", "none")
 		expect(ultrafastIcon).toHaveAttribute("stroke", "currentColor")

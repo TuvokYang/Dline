@@ -30,8 +30,8 @@ vi.mock("@/services/grpc-client", () => ({
 		importOpenAiCodexCredentialJson: mocks.importOAuthJson,
 		cancelOpenAiCodexSignIn: mocks.cancel,
 		signOutOpenAiCodexProfile: mocks.signOut,
-		getOpenAiCodexUsage: mocks.getUsage,
-		consumeOpenAiCodexRateLimitResetCredit: mocks.consumeResetCredit,
+		getProviderUsage: mocks.getUsage,
+		consumeAccountUsageResetCredit: mocks.consumeResetCredit,
 	},
 	FileServiceClient: { copyToClipboard: mocks.copyToClipboard },
 	WebServiceClient: { openInBrowser: mocks.openInBrowser },
@@ -91,19 +91,21 @@ describe("OpenAiCodexProvider OAUTH control", () => {
 		mocks.signOut.mockResolvedValue({})
 		mocks.getUsage.mockResolvedValue({
 			profileId: profile.id,
+			providerId: "openai-codex",
+			currency: "",
 			planType: "pro",
-			windows: [
+			quotas: [
 				{
 					type: "weekly",
 					label: "7 day",
-					usedPercent: 83,
-					remainingPercent: 17,
-					limitWindowSeconds: 604_800,
-					resetAtMs: 1_900_500_000_000,
+					used: 83,
+					limit: 100,
+					windowSeconds: 604_800,
+					resetAt: new Date(1_900_500_000_000).toISOString(),
 				},
 			],
 			resetCreditsAvailableCount: 1,
-			resetCredits: [{ id: "credit-a", expiresAtMs: 1_900_750_000_000 }],
+			resetCredits: [{ id: "credit-a", expiresAt: new Date(1_900_750_000_000).toISOString() }],
 			allowed: true,
 			limitReached: false,
 			isAvailable: true,

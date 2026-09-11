@@ -158,9 +158,6 @@ message Settings {
   optional string global_workflow_toggles = 130;
   optional string global_skills_toggles = 131;
   optional BrowserSettings browser_settings = 132;
-  reserved 133; // was telemetry_setting; usage and error are consented separately
-  optional string usage_reporting_setting = 250;
-  optional string error_reporting_setting = 251;
   optional bool plan_act_separate_models_setting = 134;
   optional bool enable_checkpoints_setting = 135;
   optional int32 shell_integration_timeout = 136;
@@ -249,6 +246,8 @@ message Settings {
   optional string image_profile = 236;
   optional bool image_generation_enabled = 237;
   optional string image_profile_id = 238;
+  optional string usage_reporting_setting = 250;
+  optional string error_reporting_setting = 251;
 }
 
 // Account usage quota for rate-limited providers (e.g., Codex, Copilot)

@@ -15,9 +15,9 @@ import os from "os"
 import * as path from "path"
 import { HostProvider } from "@/hosts/host-provider"
 import { ExtensionRegistryInfo } from "@/registry"
+import { telemetryService } from "@/services/telemetry"
 import { recordPerfPhase } from "@/services/telemetry/instrumentation/duration-recorder"
 import { PerfDomain } from "@/services/telemetry/instrumentation/perf-domains"
-import { telemetryService } from "@/services/telemetry"
 import { McpMarketplaceCatalog } from "@/shared/mcp"
 import type { ClineStorageMessage } from "@/shared/messages/content"
 import { normalizeLegacyConversation } from "@/shared/messages/legacy-identity-migration"
@@ -820,7 +820,7 @@ async function getDlineStorageDir(...subdirs: string[]): Promise<string> {
 }
 
 // ─────────────────────────────────────────────────────────
-// TASK HISTORY — JSONL storage with file locking
+// LEGACY TASK HISTORY — JSON/JSONL compatibility and import helpers
 // ─────────────────────────────────────────────────────────
 
 const TASK_HISTORY_FILENAME = "taskHistory.jsonl"

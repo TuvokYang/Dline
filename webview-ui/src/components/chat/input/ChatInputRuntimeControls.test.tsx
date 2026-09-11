@@ -30,7 +30,15 @@ describe("ChatInputRuntimeControls", () => {
 		)
 
 		const controls = container.querySelector<HTMLElement>("[data-chat-input-runtime-controls]")
-		expect(controls).toHaveClass("flex", "h-[18.5px]", "min-w-0", "flex-1", "items-center", "gap-[4px]", "overflow-hidden")
+		expect(controls).toHaveClass(
+			"flex",
+			"h-[18.5px]",
+			"min-w-0",
+			"flex-[0_1_auto]",
+			"items-center",
+			"gap-[4px]",
+			"overflow-hidden",
+		)
 		expect(controls?.children).toHaveLength(3)
 	})
 

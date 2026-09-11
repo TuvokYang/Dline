@@ -225,7 +225,7 @@
 		{
 			"type": "node",
 			"request": "launch",
-			"name": "Debug Current Test File",
+			"name": "Debug Current Vitest File",
 			"skipFiles": [
 				"<node_internals>/**"
 			],
@@ -235,24 +235,14 @@
 				"!**/node_modules/**"
 			],
 			"cwd": "${workspaceFolder}",
-			"runtimeExecutable": "npx",
-			"runtimeArgs": [
-				"mocha"
-			],
+			"program": "${workspaceFolder}/node_modules/vitest/vitest.mjs",
 			"args": [
-				"--require",
-				"ts-node/register",
-				"--require",
-				"source-map-support/register",
-				"--require",
-				"./src/test/requires.ts",
-				"--exit",
-				"${file}"
+				"run",
+				"${relativeFile}"
 			],
 			"envFile": "${workspaceFolder}/.env",
 			"env": {
 				"DLINE_LOG_API_CONTEXT": "1",
-				"TS_NODE_PROJECT": "./tsconfig.unit-test.json",
 				"NODE_ENV": "test",
 				"IS_DEV": "true",
 				"DLINE_ENVIRONMENT": "local",

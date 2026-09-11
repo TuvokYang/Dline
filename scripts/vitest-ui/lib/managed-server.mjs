@@ -1,5 +1,13 @@
 import { spawn as spawnChild } from "node:child_process"
-import { DEFAULT_HOST, DEFAULT_PORT, normalizeBaseUrl } from "./client.mjs"
+import path from "node:path"
+import {
+	connectVitestUi,
+	DEFAULT_HOST,
+	DEFAULT_PORT,
+	getVitestUiIdentity,
+	isSameVitestUiIdentity,
+	normalizeBaseUrl,
+} from "./client.mjs"
 import { buildVitestUiArgs } from "./server-args.mjs"
 import { createVitestSpawnCommand } from "./spawn-command.mjs"
 
@@ -38,17 +46,44 @@ function writeChunk(stream, chunk) {
 	stream?.write(chunk)
 }
 
-/** Reuse a reachable Vitest UI or start the repository-local Vitest 4 UI process. */
+/** Read one reachable server's repository identity and release its RPC connection. */
+export async function readVitestUiIdentity(url, options = {}) {
+	const connectImpl = options.connectImpl || connectVitestUi
+	const client = await connectImpl({ url })
+	try {
+		return await getVitestUiIdentity(client)
+	} finally {
+		client.close()
+	}
+}
+
+function assertMatchingIdentity(url, actual, expected) {
+	if (isSameVitestUiIdentity(actual, expected)) return
+	throw new Error(
+		`Vitest UI at ${url} belongs to root=${actual?.root || "unknown"} config=${actual?.configFile || "unknown"}, not root=${expected.root} config=${expected.configFile}. Configure a dedicated VITEST_UI_PORT or VITEST_UI_URL.`,
+	)
+}
+
+/** Reuse a reachable repository-matched Vitest UI or start a local Vitest 4 UI process. */
 export async function ensureVitestUiServer(options = {}) {
 	const env = options.env || process.env
 	const cwd = options.cwd || process.cwd()
-	const host = env.VITEST_UI_HOST || DEFAULT_HOST
-	const port = Number(env.VITEST_UI_PORT || DEFAULT_PORT)
-	const url = normalizeBaseUrl(env.VITEST_UI_URL || `http://${host}:${port}/__vitest__/`)
+	const configuredUrl = env.VITEST_UI_URL ? new URL(normalizeBaseUrl(env.VITEST_UI_URL)) : undefined
+	const host = env.VITEST_UI_HOST || configuredUrl?.hostname || DEFAULT_HOST
+	const port = Number(env.VITEST_UI_PORT || configuredUrl?.port || DEFAULT_PORT)
+	const url = normalizeBaseUrl(configuredUrl?.toString() || `http://${host}:${port}/__vitest__/`)
 	const fetchImpl = options.fetchImpl || globalThis.fetch
+	const config = env.VITEST_UI_CONFIG || "vitest.config.ts"
+	const expectedIdentity = {
+		root: path.resolve(cwd),
+		configFile: path.resolve(cwd, config),
+	}
 
 	if (await isReachable(url, fetchImpl)) {
-		return { url, child: null, started: false }
+		const identityReader = options.identityReader || readVitestUiIdentity
+		const identity = await identityReader(url, { connectImpl: options.connectImpl })
+		assertMatchingIdentity(url, identity, expectedIdentity)
+		return { url, child: null, started: false, identity }
 	}
 	if (env.VITEST_UI_MCP_START === "false") {
 		throw new Error(
@@ -56,7 +91,6 @@ export async function ensureVitestUiServer(options = {}) {
 		)
 	}
 
-	const config = env.VITEST_UI_CONFIG || "vitest.config.ts"
 	const vitestArgs = buildVitestUiArgs({ host, port, config })
 	const spawnCommand = createVitestSpawnCommand({ cwd, execPath: options.execPath })
 	const args = [...spawnCommand.args, ...vitestArgs]
@@ -90,9 +124,12 @@ export async function ensureVitestUiServer(options = {}) {
 			fetchImpl,
 			getStartupError: () => startupError,
 		})
+		const identityReader = options.identityReader || readVitestUiIdentity
+		const identity = await identityReader(url, { connectImpl: options.connectImpl })
+		assertMatchingIdentity(url, identity, expectedIdentity)
+		return { url, child, started: true, identity }
 	} catch (error) {
 		if (!child.killed && child.exitCode === null) child.kill("SIGTERM")
 		throw error
 	}
-	return { url, child, started: true }
 }

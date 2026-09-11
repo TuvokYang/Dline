@@ -19,7 +19,7 @@ describe("built-in hosted Web Search metadata", () => {
 		expect(openAiCodexModels["gpt-6-astra"]).toMatchObject({
 			id: "gpt-6-astra",
 			name: "GPT-6-Astra",
-			capabilities: { contextWindow: 272_000, supportsImages: true },
+			capabilities: { contextWindow: 372_000, supportsImages: true },
 		})
 		expect(Object.keys(openAiCodexModels).filter((modelId) => modelId.startsWith("gpt-5.4"))).toEqual([])
 	})

@@ -149,7 +149,7 @@ export class StateManager {
 	// Callbacks to sync external state changes — multiple controllers may register.
 	private onSyncExternalChangeCallbacks = new Set<(event: StateSyncEvent) => void | Promise<void>>()
 
-	/** TaskHistory instance backed by the buffered raw JSONL store. */
+	/** TaskHistory instance backed by the shared SQLite UnifyStore database. */
 	private _taskHistory: TaskHistory | null = null
 
 	/** @deprecated Use the Set-based callbacks below. Kept for external compatibility. */
@@ -1781,7 +1781,7 @@ export class StateManager {
 		return { ...this.workspaceStateCache }
 	}
 
-	/** TaskHistory instance backed by the buffered raw JSONL store. */
+	/** TaskHistory instance backed by the shared SQLite UnifyStore database. */
 	get taskHistory(): TaskHistory {
 		if (!this._taskHistory) {
 			throw new Error("TaskHistory not initialized.")

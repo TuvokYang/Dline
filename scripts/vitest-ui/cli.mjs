@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 import { stringifyBoundedPayload } from "./lib/bounded-payload.mjs"
 import {
+	assertNoUnhandledErrors,
 	collectFailures,
 	connectVitestUi,
 	filterFiles,
+	getVitestUiIdentity,
+	readKnownFiles,
 	rerunWithScope,
 	simplifyFile,
 	summarizeFiles,
@@ -76,6 +79,9 @@ const MAX_PRINTED_FAILURES = 10
 
 function printStatus(result, { details = false } = {}) {
 	const { summary, files, failures } = result
+	if (result.identity?.root) {
+		console.log(`root=${result.identity.root}${result.identity.configFile ? ` config=${result.identity.configFile}` : ""}`)
+	}
 	console.log(
 		`files=${summary.total} fail=${summary.fail} pass=${summary.pass} running=${summary.running} skip=${summary.skip} unknown=${summary.unknown}`,
 	)
@@ -100,12 +106,14 @@ async function getStatus(client, options) {
 	const timeoutMs = numberOption(options.timeout, 180_000)
 	const files = asBoolean(options.waitIdle)
 		? await waitForIdle(client, { timeoutMs, allowUnknown: asBoolean(options.allowUnknown) })
-		: await client.getFiles()
+		: await readKnownFiles(client, { allowUnknown: asBoolean(options.allowUnknown) })
+	await assertNoUnhandledErrors(client)
 	const filteredFiles = filterFiles(files, options.filter || "all")
 	const simplifiedFiles = filteredFiles.map((file) => simplifyFile(file, { includeTasks: asBoolean(options.details) }))
 	const failures = collectFailures(filteredFiles, { includeContainers: asBoolean(options.includeContainers) })
 	return {
 		baseUrl: client.baseUrl,
+		identity: await getVitestUiIdentity(client),
 		summary: summarizeFiles(files),
 		filter: options.filter || "all",
 		files: simplifiedFiles,
@@ -161,11 +169,13 @@ async function main() {
 				files = await waitForIdle(client, {
 					timeoutMs: numberOption(options.timeout, 180_000),
 					since: rerun.startedAt,
-					allowUnknown: options.allowUnknown === undefined ? true : asBoolean(options.allowUnknown),
+					allowUnknown: asBoolean(options.allowUnknown),
 				})
+				await assertNoUnhandledErrors(client)
 			}
 			const result = {
 				baseUrl: client.baseUrl,
+				identity: await getVitestUiIdentity(client),
 				rerun,
 				summary: files ? summarizeFiles(files) : undefined,
 				failures: files ? collectFailures(files) : undefined,
@@ -174,7 +184,8 @@ async function main() {
 				printJson(result)
 			} else {
 				console.log(`rerun scope=${rerun.scope} targets=${Array.isArray(rerun.targets) ? rerun.targets.length : 0}`)
-				if (files) printStatus({ summary: result.summary, files: [], failures: result.failures })
+				if (files)
+					printStatus({ identity: result.identity, summary: result.summary, files: [], failures: result.failures })
 			}
 			return
 		}

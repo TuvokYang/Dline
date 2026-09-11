@@ -133,7 +133,9 @@
 			"!!**/generated",
 			"!!**/proto",
 			"!!**/tests/specs",
-			"!!**/tests/vscode/workspace*"
+			"!!**/tests/vscode/workspace*",
+			"!!**/.wt",
+			"!!**/.worktrees"
 		]
 	},
 	"plugins": [

@@ -17,10 +17,10 @@ describe("provider model tiers", () => {
 		}
 	})
 
-	it("keeps OpenAI Codex 5.6 fixed at 353K without tiers", () => {
+	it("keeps OpenAI Codex 5.6 fixed at 372K without tiers", () => {
 		for (const modelId of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
 			const model = openAiCodexModels[modelId]
-			expect(model?.capabilities?.contextWindow).toBe(353_000)
+			expect(model?.capabilities?.contextWindow).toBe(372_000)
 			expect(model?.capabilities?.contextWindowTiers).toBeUndefined()
 			expect(model?.pricing?.tiers).toBeUndefined()
 		}

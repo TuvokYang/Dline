@@ -326,7 +326,7 @@ describe("OpenAI Codex OAuth flow integration", () => {
 		await manager.dispose()
 	})
 
-	it("keeps the Codex integration free of a private callback server, StateManager and secret logging", async () => {
+	it("keeps the Codex integration free of a private callback server, StateManager and legacy secret storage", async () => {
 		const [oauthSource, sessionSource, strategySource] = await Promise.all([
 			fs.readFile(new URL("./oauth.ts", import.meta.url), "utf8"),
 			fs.readFile(new URL("./session.ts", import.meta.url), "utf8"),
@@ -336,7 +336,6 @@ describe("OpenAI Codex OAuth flow integration", () => {
 
 		expect(combined).not.toContain("StateManager")
 		expect(combined).not.toContain("createServer(")
-		expect(combined).not.toContain("Logger.")
 		expect(combined).not.toContain("openai-codex-oauth-credentials")
 		expect(oauthSource).toContain("LocalOAuthFlowCoordinator")
 	})

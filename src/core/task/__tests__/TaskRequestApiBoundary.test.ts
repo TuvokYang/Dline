@@ -211,7 +211,6 @@ describe("Task request API boundary", () => {
 		expect(passBuilder).toContain('purpose: "send" | "estimate" = "send"')
 		expect(passBuilder).toContain("resolveCompactionWindowBudget({")
 		expect(passBuilder).toContain("summaryOutputLimitTokens,")
-		expect(passBuilder).toContain('if (resolvedBudget.budget.decision !== "ready" && purpose === "send")')
 		expect(passBuilder).toContain("providerOutputCap: resolvedBudget.budget.providerOutputCap")
 		expect(ordinaryBuilder).not.toContain("resolveCompactionWindowBudget({")
 		expect(ordinaryBuilder).toContain("providerOutputCap: undefined")

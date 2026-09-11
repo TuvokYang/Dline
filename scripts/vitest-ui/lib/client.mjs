@@ -21,6 +21,41 @@ export function normalizeBaseUrl(input = process.env.VITEST_UI_URL || DEFAULT_BA
 	return url.toString()
 }
 
+function comparableIdentityPath(value, platform = process.platform) {
+	const resolved = path.resolve(String(value || ""))
+	return platform === "win32" ? resolved.toLowerCase() : resolved
+}
+
+/** Build the checkout identity exposed by one Vitest UI server. */
+export function createVitestUiIdentity(config) {
+	if (!config?.root) {
+		throw new Error("Vitest UI did not report a repository root")
+	}
+	const root = path.resolve(config.root)
+	const configFile =
+		typeof config.configFile === "string" && config.configFile
+			? path.resolve(path.isAbsolute(config.configFile) ? config.configFile : path.join(root, config.configFile))
+			: undefined
+	return { root, configFile }
+}
+
+/** Read the checkout identity through the Vitest UI RPC client. */
+export async function getVitestUiIdentity(client) {
+	return createVitestUiIdentity(await client.getConfig())
+}
+
+/** Compare checkout roots using platform-appropriate path semantics. */
+export function isSameVitestUiRoot(actualRoot, expectedRoot, platform = process.platform) {
+	return comparableIdentityPath(actualRoot, platform) === comparableIdentityPath(expectedRoot, platform)
+}
+
+/** Compare the repository root and, when known, the selected Vitest config. */
+export function isSameVitestUiIdentity(actual, expected, platform = process.platform) {
+	if (!isSameVitestUiRoot(actual?.root, expected?.root, platform)) return false
+	if (!expected?.configFile) return true
+	return Boolean(actual?.configFile) && isSameVitestUiRoot(actual.configFile, expected.configFile, platform)
+}
+
 function toWebSocketUrl(baseUrl, token) {
 	const url = new URL(baseUrl)
 	url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
@@ -178,19 +213,23 @@ export function hasState(task, predicate) {
 	return found
 }
 
+function hasUnknownRunnableTask(file) {
+	let sawRunnableTask = false
+	let sawUnknownTask = false
+	walkTasks(file, (task) => {
+		if (task === file || task.type !== "test") return
+		sawRunnableTask = true
+		if (getTaskState(task) === "unknown") sawUnknownTask = true
+	})
+	return sawUnknownTask || (!sawRunnableTask && getTaskState(file) === "unknown")
+}
+
 export function classifyFile(file) {
-	if (hasState(file, (state) => RUNNING_STATES.has(state))) {
-		return "running"
-	}
-	if (hasState(file, (state) => FAILED_STATES.has(state))) {
-		return "fail"
-	}
-	if (hasState(file, (state) => PASSED_STATES.has(state))) {
-		return "pass"
-	}
-	if (hasState(file, (state) => SKIPPED_STATES.has(state))) {
-		return "skip"
-	}
+	if (hasState(file, (state) => RUNNING_STATES.has(state))) return "running"
+	if (hasState(file, (state) => FAILED_STATES.has(state))) return "fail"
+	if (hasUnknownRunnableTask(file)) return "unknown"
+	if (hasState(file, (state) => PASSED_STATES.has(state))) return "pass"
+	if (hasState(file, (state) => SKIPPED_STATES.has(state))) return "skip"
 	return "unknown"
 }
 
@@ -366,30 +405,70 @@ export function findMatchingTasks(files, { file, testName, taskId, exact = false
 	return matches
 }
 
+function inspectCollection(targetPaths, files) {
+	const expectedPaths = new Set(targetPaths.map(normalizePathForMatch).filter(Boolean))
+	const collectedPaths = new Set(files.map((file) => normalizePathForMatch(file.filepath)).filter(Boolean))
+	const missingPaths = [...expectedPaths].filter((expectedPath) => !collectedPaths.has(expectedPath))
+	return {
+		expectedFileCount: expectedPaths.size,
+		collectedFileCount: collectedPaths.size,
+		missingPaths,
+		summary: summarizeFiles(files),
+	}
+}
+
+function assertKnownCollection(collection, { allowUnknown = false } = {}) {
+	if (collection.expectedFileCount === 0) {
+		throw new Error("Vitest UI has not discovered any test paths")
+	}
+	if (collection.missingPaths.length > 0) {
+		throw new Error(
+			`Vitest UI collection is incomplete. Missing ${collection.missingPaths.length} paths: ${collection.missingPaths.slice(0, 5).join(", ")}`,
+		)
+	}
+	if (!allowUnknown && collection.summary.unknown > 0) {
+		throw new Error(`Vitest UI collection contains ${collection.summary.unknown} unknown files`)
+	}
+}
+
+/** Read the current collection while rejecting empty, missing, or unknown results by default. */
+export async function readKnownFiles(client, { allowUnknown = false } = {}) {
+	const [targetPaths, files] = await Promise.all([client.getPaths(), client.getFiles()])
+	assertKnownCollection(inspectCollection(targetPaths, files), { allowUnknown })
+	return files
+}
+
+/** Reject a result snapshot when Vitest recorded errors outside individual files. */
+export async function assertNoUnhandledErrors(client) {
+	const errors = (await client.getUnhandledErrors()).map(simplifyError)
+	if (errors.length > 0) {
+		throw new Error(`Vitest reported ${errors.length} unhandled errors: ${errors.map((error) => error.message).join(" | ")}`)
+	}
+}
+
 export async function waitForIdle(client, { timeoutMs = 180_000, pollMs = 1_500, since = 0, allowUnknown = false } = {}) {
 	const started = Date.now()
-	const targetPaths = await client.getPaths()
-	const expectedFileCount = new Set(targetPaths.map(normalizePathForMatch)).size
-	let lastFiles = await client.getFiles()
-	let lastSummary = summarizeFiles(lastFiles)
+	let lastFiles = []
+	let lastCollection = inspectCollection([], lastFiles)
 
 	while (Date.now() - started < timeoutMs) {
-		lastSummary = summarizeFiles(lastFiles)
-		const collectionComplete = expectedFileCount === 0 || lastFiles.length >= expectedFileCount
+		const [targetPaths, files] = await Promise.all([client.getPaths(), client.getFiles()])
+		lastFiles = files
+		lastCollection = inspectCollection(targetPaths, files)
+		const collectionComplete = lastCollection.expectedFileCount > 0 && lastCollection.missingPaths.length === 0
 		if (
 			collectionComplete &&
-			lastSummary.running === 0 &&
-			(allowUnknown || lastSummary.unknown === 0) &&
+			lastCollection.summary.running === 0 &&
+			(allowUnknown || lastCollection.summary.unknown === 0) &&
 			(!since || client.state.lastFinishedAt >= since)
 		) {
 			return lastFiles
 		}
 		await new Promise((resolve) => setTimeout(resolve, pollMs))
-		lastFiles = await client.getFiles()
 	}
 
 	throw new Error(
-		`Timed out waiting for Vitest UI to become idle after ${timeoutMs}ms. Collected ${lastFiles.length}/${expectedFileCount} files. Last summary: ${JSON.stringify(lastSummary)}`,
+		`Timed out waiting for Vitest UI to become idle after ${timeoutMs}ms. Collected ${lastCollection.collectedFileCount}/${lastCollection.expectedFileCount} paths; missing=${lastCollection.missingPaths.length}. Last summary: ${JSON.stringify(lastCollection.summary)}`,
 	)
 }
 
@@ -399,6 +478,7 @@ export async function rerunWithScope(client, options = {}) {
 
 	if (scope === "all") {
 		const paths = await client.getPaths()
+		if (paths.length === 0) throw new Error("Vitest UI has not discovered any test paths to rerun")
 		await client.rerun(paths, true)
 		return { scope, startedAt, targets: paths }
 	}

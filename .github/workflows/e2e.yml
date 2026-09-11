@@ -64,11 +64,12 @@ jobs:
               if: matrix.runner != 'ubuntu'
               run: npm run test:e2e:optimal
 
-            - name: Upload failed E2E recordings
+            - name: Upload failed E2E artifacts
               if: failure()
               uses: actions/upload-artifact@v5
               with:
-                  name: playwright-recordings-${{ matrix.runner }}-${{ github.sha }}
-                  path: test-results/playwright/
-                  if-no-files-found: ignore
+                  name: playwright-artifacts-${{ matrix.runner }}-${{ github.sha }}
+                  path: tmp/test-result/
+                  if-no-files-found: warn
+                  include-hidden-files: true
                   retention-days: 7

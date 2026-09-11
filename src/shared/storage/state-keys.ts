@@ -28,9 +28,9 @@ import { type BlobStoreSettings } from "./types"
 // SINGLE SOURCE OF TRUTH FOR STORAGE KEYS
 //
 // Property definitions with types, default values, and metadata
-// NOTE: When adding a new field, the scripts/generate-state-proto.mjs will be
-// executed automatically to regenerate the proto/cline/state.proto file with the
-// new fields once the file is staged and committed.
+// NOTE: When adding a new field, scripts/generate-state-proto.mjs regenerates
+// proto/dline/state.proto. The repository's staged-file hook runs the generator
+// when this source is staged; manual verification should still inspect the generated diff.
 // ============================================================================
 
 /**

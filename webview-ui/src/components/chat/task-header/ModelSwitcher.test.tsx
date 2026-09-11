@@ -129,19 +129,15 @@ describe("ModelSwitcher Profile transitions", () => {
 		const profileText = profileButton.querySelector<HTMLElement>("[data-chat-input-profile-text]")
 		expect(profileButton).toHaveTextContent("large-profile")
 		expect(profileButton).toHaveClass(
+			"chat-input-control-outline",
 			"inline-flex",
 			"h-[18.5px]",
+			"w-full",
+			"min-w-0",
 			"items-center",
 			"overflow-hidden",
-			"rounded-sm",
-			"px-1",
-			"text-[12.5px]",
-			"leading-none",
-			"transition-colors",
-			"hover:bg-toolbar-hover",
-			"hover:text-foreground",
 		)
-		expect(profileText).toHaveClass("block", "min-w-0", "flex-1", "truncate")
+		expect(profileText).toHaveClass("inline-flex", "h-full", "min-w-0", "flex-1", "items-center", "truncate")
 	})
 
 	it("shows loading instead of an empty placeholder while the Catalog loads", () => {

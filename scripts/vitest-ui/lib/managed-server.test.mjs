@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
+import path from "node:path"
 import test from "node:test"
 import { ensureVitestUiServer } from "./managed-server.mjs"
 
@@ -25,11 +26,13 @@ function createStderr() {
 	}
 }
 
-test("reuses an already reachable Vitest UI without spawning", async () => {
+test("reuses an already reachable Vitest UI from the same repository without spawning", async () => {
 	let spawnCalls = 0
 	const result = await ensureVitestUiServer({
+		cwd: process.cwd(),
 		env: { VITEST_UI_URL: "http://localhost:51205/__vitest__/" },
 		fetchImpl: async () => ({ ok: true }),
+		identityReader: async () => ({ root: process.cwd(), configFile: path.resolve("vitest.config.ts") }),
 		spawnImpl: () => {
 			spawnCalls++
 			return createChild()
@@ -39,6 +42,25 @@ test("reuses an already reachable Vitest UI without spawning", async () => {
 	assert.equal(result.started, false)
 	assert.equal(result.child, null)
 	assert.equal(result.url, "http://localhost:51205/__vitest__/")
+	assert.equal(result.identity.root, process.cwd())
+	assert.equal(spawnCalls, 0)
+})
+
+test("rejects a reachable Vitest UI owned by another repository", async () => {
+	let spawnCalls = 0
+	await assert.rejects(
+		ensureVitestUiServer({
+			cwd: process.cwd(),
+			env: { VITEST_UI_URL: "http://localhost:51205/__vitest__/" },
+			fetchImpl: async () => ({ ok: true }),
+			identityReader: async () => ({ root: path.resolve("other-checkout") }),
+			spawnImpl: () => {
+				spawnCalls++
+				return createChild()
+			},
+		}),
+		/belongs to root=.*other-checkout.*not root=/,
+	)
 	assert.equal(spawnCalls, 0)
 })
 
@@ -76,6 +98,7 @@ test("starts the local Vitest 4 UI without a shell and waits for readiness", asy
 			VITEST_UI_MCP_START_TIMEOUT: "100",
 		},
 		fetchImpl: async () => ({ ok: ++fetchCalls >= 2 }),
+		identityReader: async () => ({ root: process.cwd(), configFile: path.resolve("vitest.config.ts") }),
 		pollMs: 0,
 		stderr: stderr.stream,
 		spawnImpl: (file, args, options) => {
@@ -87,6 +110,8 @@ test("starts the local Vitest 4 UI without a shell and waits for readiness", asy
 	assert.equal(result.started, true)
 	assert.equal(result.child, child)
 	assert.equal(result.url, "http://127.0.0.1:51208/__vitest__/")
+	assert.equal(result.identity.root, process.cwd())
+	assert.equal(result.identity.configFile, path.resolve("vitest.config.ts"))
 	assert.equal(spawnCall.file, "C:\\Program Files\\nodejs\\node.exe")
 	assert.equal(spawnCall.options.shell, false)
 	assert.equal(
@@ -107,6 +132,28 @@ test("starts the local Vitest 4 UI without a shell and waits for readiness", asy
 	])
 	assert.match(stderr.read(), /--api\.host 127\.0\.0\.1 --api\.port 51208/)
 	assert.doesNotMatch(stderr.read(), /(?:^|\s)--host(?:\s|$)|(?:^|\s)--port(?:\s|$)/)
+})
+
+test("rejects and terminates a foreign server that wins the startup race", async () => {
+	const child = createChild()
+	let fetchCalls = 0
+	await assert.rejects(
+		ensureVitestUiServer({
+			cwd: process.cwd(),
+			env: { VITEST_UI_PORT: "51207", VITEST_UI_MCP_START_TIMEOUT: "100" },
+			fetchImpl: async () => ({ ok: ++fetchCalls >= 2 }),
+			identityReader: async () => ({
+				root: path.resolve("foreign-checkout"),
+				configFile: path.resolve("vitest.config.ts"),
+			}),
+			pollMs: 0,
+			stderr: { write() {} },
+			spawnImpl: () => child,
+		}),
+		/belongs to root=.*foreign-checkout/,
+	)
+	assert.equal(child.killed, true)
+	assert.equal(child.killSignal, "SIGTERM")
 })
 
 test("surfaces a child startup exit before the reachability timeout", async () => {

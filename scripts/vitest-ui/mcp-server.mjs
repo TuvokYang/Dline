@@ -4,9 +4,13 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod/v4"
 import { boundStructuredPayload, stringifyBoundedPayload } from "./lib/bounded-payload.mjs"
 import {
+	assertNoUnhandledErrors,
 	collectFailures,
 	connectVitestUi,
 	filterFiles,
+	getVitestUiIdentity,
+	isSameVitestUiIdentity,
+	readKnownFiles,
 	rerunWithScope,
 	simplifyFile,
 	summarizeFiles,
@@ -27,18 +31,28 @@ function textResult(structuredContent) {
 	}
 }
 
-async function withClient(url, callback) {
+let ownedServerExitError
+
+async function withClient(url, expectedIdentity, callback) {
+	if (ownedServerExitError) throw ownedServerExitError
 	const client = await connectVitestUi({ url })
 	try {
-		return await callback(client)
+		const actualIdentity = await getVitestUiIdentity(client)
+		if (!isSameVitestUiIdentity(actualIdentity, expectedIdentity)) {
+			throw new Error(
+				`Vitest UI endpoint identity changed: expected root=${expectedIdentity.root} config=${expectedIdentity.configFile}, received root=${actualIdentity.root} config=${actualIdentity.configFile}`,
+			)
+		}
+		return await callback(client, actualIdentity)
 	} finally {
 		client.close()
 	}
 }
 
-const { url, child } = await ensureVitestUiServer({
+const { url, child, identity } = await ensureVitestUiServer({
 	onExit: (code, signal) => {
-		console.error(`[vitest-ui-mcp] vitest ui exited code=${code ?? ""} signal=${signal ?? ""}`)
+		ownedServerExitError = new Error(`Owned Vitest UI exited code=${code ?? ""} signal=${signal ?? ""}`)
+		console.error(`[vitest-ui-mcp] ${ownedServerExitError.message}`)
 	},
 })
 
@@ -63,11 +77,15 @@ server.registerTool(
 		},
 	},
 	async ({ filter, includeTasks, includeFailures, includeContainers, waitForIdle: shouldWait, allowUnknown, timeoutMs }) =>
-		withClient(url, async (client) => {
-			const files = shouldWait ? await waitForIdle(client, { timeoutMs, allowUnknown }) : await client.getFiles()
+		withClient(url, identity, async (client, actualIdentity) => {
+			const files = shouldWait
+				? await waitForIdle(client, { timeoutMs, allowUnknown })
+				: await readKnownFiles(client, { allowUnknown })
+			await assertNoUnhandledErrors(client)
 			const filtered = filterFiles(files, filter)
 			return textResult({
 				url: client.baseUrl,
+				identity: actualIdentity,
 				summary: summarizeFiles(files),
 				filter,
 				files: filtered.map((file) => simplifyFile(file, { includeTasks })),
@@ -89,16 +107,18 @@ server.registerTool(
 			exact: z.boolean().default(false),
 			allMatches: z.boolean().default(false),
 			waitForIdle: z.boolean().default(true),
-			allowUnknown: z.boolean().default(true),
+			allowUnknown: z.boolean().default(false),
 			timeoutMs: z.number().int().positive().default(180_000),
 		},
 	},
 	async ({ scope, file, testName, taskId, exact, allMatches, waitForIdle: shouldWait, allowUnknown, timeoutMs }) =>
-		withClient(url, async (client) => {
+		withClient(url, identity, async (client, actualIdentity) => {
 			const rerun = await rerunWithScope(client, { scope, file, testName, taskId, exact, allMatches })
 			const files = shouldWait ? await waitForIdle(client, { timeoutMs, since: rerun.startedAt, allowUnknown }) : undefined
+			if (files) await assertNoUnhandledErrors(client)
 			return textResult({
 				url: client.baseUrl,
+				identity: actualIdentity,
 				rerun,
 				summary: files ? summarizeFiles(files) : undefined,
 				failures: files ? collectFailures(files) : undefined,
@@ -119,11 +139,15 @@ server.registerTool(
 		},
 	},
 	async ({ includeContainers, waitForIdle: shouldWait, allowUnknown, timeoutMs }) =>
-		withClient(url, async (client) => {
-			const files = shouldWait ? await waitForIdle(client, { timeoutMs, allowUnknown }) : await client.getFiles()
+		withClient(url, identity, async (client, actualIdentity) => {
+			const files = shouldWait
+				? await waitForIdle(client, { timeoutMs, allowUnknown })
+				: await readKnownFiles(client, { allowUnknown })
+			await assertNoUnhandledErrors(client)
 			const failedFiles = filterFiles(files, "fail")
 			return textResult({
 				url: client.baseUrl,
+				identity: actualIdentity,
 				summary: summarizeFiles(files),
 				failures: collectFailures(failedFiles, { includeContainers }),
 			})
@@ -132,7 +156,7 @@ server.registerTool(
 
 const transport = new StdioServerTransport()
 await server.connect(transport)
-console.error(`[vitest-ui-mcp] ready: ${url}`)
+console.error(`[vitest-ui-mcp] ready: ${url} root=${identity.root}`)
 
 function shutdown() {
 	if (child && !child.killed) {
