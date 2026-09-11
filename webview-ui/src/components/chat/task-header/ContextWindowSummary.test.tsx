@@ -75,7 +75,7 @@ describe("ContextWindowSummary", () => {
 		)
 
 		const segmentDetails = screen.getByTestId("context-window-segment-details")
-		expect(segmentDetails.closest(".context-window-tooltip-content")).toHaveClass("w-72")
+		expect(segmentDetails.closest(".context-window-tooltip-content")).toHaveClass("w-full")
 		for (const kind of ["durable", "active", "staged", "environment"] as const) {
 			const detail = segmentDetails.querySelector<HTMLElement>(`[data-segment-detail="${kind}"]`)
 			const label = detail?.querySelector<HTMLElement>("span:first-child")

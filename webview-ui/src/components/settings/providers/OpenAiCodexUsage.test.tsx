@@ -65,6 +65,9 @@ describe("ProviderUsage through OpenAiCodexUsage compatibility", () => {
 		expect(screen.getAllByText("7 day").length).toBeGreaterThan(0)
 		expect(screen.getByText("50% remaining")).toBeInTheDocument()
 		expect(screen.getByText("20% remaining")).toBeInTheDocument()
+		expect(screen.getByRole("progressbar", { name: "5 hour usage" })).toHaveAttribute("aria-valuenow", "50")
+		expect(screen.getByRole("progressbar", { name: "7 day usage" })).toHaveAttribute("aria-valuenow", "20")
+		expect(screen.getByRole("progressbar", { name: "7 day usage" }).firstElementChild).toHaveStyle({ width: "20%" })
 		expect(screen.getByText("Reset cards: 1")).toBeInTheDocument()
 	})
 
@@ -81,10 +84,13 @@ describe("ProviderUsage through OpenAiCodexUsage compatibility", () => {
 		expect(await screen.findByText("Reset completed for primary and secondary.")).toBeInTheDocument()
 	})
 
-	it("uses semantic color only inside progress details", () => {
-		expect(providerUsageProgressTone(79.99)).toBe("success")
-		expect(providerUsageProgressTone(80)).toBe("warning")
-		expect(providerUsageProgressTone(99)).toBe("warning")
-		expect(providerUsageProgressTone(100)).toBe("danger")
+	it("colors the progress bar by remaining capacity", () => {
+		expect(providerUsageProgressTone(100)).toBe("success")
+		expect(providerUsageProgressTone(40.01)).toBe("success")
+		expect(providerUsageProgressTone(40)).toBe("warning")
+		expect(providerUsageProgressTone(20)).toBe("warning")
+		expect(providerUsageProgressTone(19.99)).toBe("caution")
+		expect(providerUsageProgressTone(1)).toBe("caution")
+		expect(providerUsageProgressTone(0)).toBe("danger")
 	})
 })

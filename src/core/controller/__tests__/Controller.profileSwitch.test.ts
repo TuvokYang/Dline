@@ -20,6 +20,7 @@ describe("Controller Profile switch integration", () => {
 		const flushPendingState = vi.fn(async () => undefined)
 		const request = vi.fn()
 		const postStateToWebview = vi.fn(async () => undefined)
+		const restartAccountUsagePolling = vi.fn()
 		const fakeController = {
 			task: undefined,
 			stateManager: {
@@ -28,6 +29,7 @@ describe("Controller Profile switch integration", () => {
 			},
 			profileSwitchCoordinator: { request },
 			postStateToWebview,
+			restartAccountUsagePolling,
 		}
 
 		const result = await Controller.prototype.requestProfileSwitch.call(fakeController, "target-id", ["plan", "act"])
@@ -40,6 +42,7 @@ describe("Controller Profile switch integration", () => {
 			actModeProfile: "target-profile",
 		})
 		expect(flushPendingState).toHaveBeenCalledOnce()
+		expect(restartAccountUsagePolling).toHaveBeenCalledOnce()
 		expect(postStateToWebview).toHaveBeenCalledWith({ immediate: true })
 		expect(request).not.toHaveBeenCalled()
 	})
@@ -50,6 +53,7 @@ describe("Controller Profile switch integration", () => {
 		const compact = vi.fn(async () => "completed" as const)
 		const release = vi.fn()
 		const commitProfileBindings = vi.fn(async () => undefined)
+		const restartAccountUsagePolling = vi.fn()
 		const fakeController = {
 			task: {
 				taskId: "task-1",
@@ -79,6 +83,7 @@ describe("Controller Profile switch integration", () => {
 			})),
 			validateProfileSwitch: vi.fn(() => true),
 			postStateToWebview: vi.fn(async () => undefined),
+			restartAccountUsagePolling,
 		}
 		const createProfileSwitchCoordinator = Reflect.get(Controller.prototype, "createProfileSwitchCoordinator") as (
 			this: typeof fakeController,
@@ -103,10 +108,12 @@ describe("Controller Profile switch integration", () => {
 		expect(compact).not.toHaveBeenCalled()
 		expect(release).not.toHaveBeenCalled()
 		expect(commitProfileBindings).toHaveBeenCalledWith({ profileId: "target-id", profileName: "target-profile" }, ["act"])
+		expect(restartAccountUsagePolling).toHaveBeenCalledOnce()
 	})
 
 	it("switches Profiles while a Mode transition still owns its own transaction", async () => {
 		const commitProfileBindings = vi.fn(async () => undefined)
+		const restartAccountUsagePolling = vi.fn()
 		const fakeController = {
 			task: {
 				taskId: "task-1",
@@ -125,6 +132,7 @@ describe("Controller Profile switch integration", () => {
 			validateModeSwitch: vi.fn(() => true),
 			resolveModeProfile: vi.fn(() => undefined),
 			postStateToWebview: vi.fn(async () => undefined),
+			restartAccountUsagePolling,
 		}
 
 		const createContextTransitionEngine = Reflect.get(Controller.prototype, "createContextTransitionEngine") as (
@@ -155,5 +163,6 @@ describe("Controller Profile switch integration", () => {
 
 		expect(result.status).toBe("switched")
 		expect(commitProfileBindings).toHaveBeenCalledWith({ profileId: "target-id", profileName: "target-profile" }, ["act"])
+		expect(restartAccountUsagePolling).toHaveBeenCalledOnce()
 	})
 })

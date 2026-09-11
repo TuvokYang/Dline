@@ -213,7 +213,10 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 						data-testid="context-window-progress-track"
 						onMouseEnter={() => setIsOpened(true)}>
 						<HoverCard closeDelay={0} open={isOpened} openDelay={0}>
-							<HoverCardContent className="bg-menu rounded-xs shadow-sm">
+							<HoverCardContent
+								arrowClassName="border-menu-foreground/10 bg-menu fill-menu"
+								className="w-72 bg-menu"
+								data-context-window-surface="summary">
 								<ContextWindowSummary
 									cacheReads={cacheReads}
 									cacheWrites={cacheWrites}

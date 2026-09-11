@@ -9,11 +9,12 @@ const HoverCardTrigger = HoverCardPrimitive.Trigger
 
 function HoverCardContent({
 	className,
+	arrowClassName,
 	align = "center",
 	sideOffset = 4,
 	children,
 	...props
-}: React.ComponentProps<typeof HoverCardPrimitive.Content>) {
+}: React.ComponentProps<typeof HoverCardPrimitive.Content> & { arrowClassName?: string }) {
 	return (
 		<HoverCardPrimitive.Portal data-slot="hover-card-portal">
 			<HoverCardPrimitive.Content
@@ -26,7 +27,12 @@ function HoverCardContent({
 				sideOffset={sideOffset}
 				{...props}>
 				{children}
-				<HoverCardPrimitive.Arrow className="bg-code fill-background z-50 size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-[2px] border-b border-r border-muted-foreground/30" />
+				<HoverCardPrimitive.Arrow
+					className={cn(
+						"bg-code fill-background z-50 size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-[2px] border-b border-r border-muted-foreground/30",
+						arrowClassName,
+					)}
+				/>
 			</HoverCardPrimitive.Content>
 		</HoverCardPrimitive.Portal>
 	)

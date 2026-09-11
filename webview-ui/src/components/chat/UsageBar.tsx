@@ -1,7 +1,9 @@
+import type { AccountUsageData, AccountUsageQuotaData } from "@shared/ExtensionMessage"
 import { AccountUsageResetCreditRequest, type AccountUsageResetResult, ProviderUsageRequest } from "@shared/proto/dline/account"
+import { protoToAccountUsage } from "@shared/proto-conversions/account-usage-conversion"
 import { LoaderIcon, RefreshCwIcon } from "lucide-react"
-import { useState } from "react"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { useEffect, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { AccountServiceClient } from "@/services/grpc-client"
@@ -10,82 +12,183 @@ import {
 	ProviderUsageDetails,
 	selectEffectiveUsageQuota,
 	usageRemainingPercent,
-	usageUsedPercent,
 } from "../settings/providers/ProviderUsageDetails"
 
-const fmt = (n: number): string => {
-	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
-	if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-	return String(n)
+interface RefreshOverlay {
+	readonly source: AccountUsageData
+	readonly value: AccountUsageData
 }
 
-const formatTime = (value: string | undefined): string | undefined => {
-	if (!value) return undefined
-	const date = new Date(value)
-	return Number.isNaN(date.getTime()) ? undefined : date.toLocaleString()
+interface UsageClickMenuPosition {
+	readonly left: number
+	readonly width: number
+	readonly maxHeight: number
+	readonly top?: number
+	readonly bottom?: number
+}
+
+const CLICK_MENU_MARGIN = 8
+const CLICK_MENU_GAP = 4
+const CLICK_MENU_WIDTH = 300
+const CLICK_MENU_MAX_HEIGHT = 360
+
+function calculateUsageClickMenuPosition(
+	anchor: Pick<DOMRect, "left" | "right" | "top" | "bottom">,
+	viewportWidth: number,
+	viewportHeight: number,
+): UsageClickMenuPosition {
+	const width = Math.min(CLICK_MENU_WIDTH, Math.max(1, viewportWidth - CLICK_MENU_MARGIN * 2))
+	const maxLeft = Math.max(CLICK_MENU_MARGIN, viewportWidth - width - CLICK_MENU_MARGIN)
+	const centeredLeft = anchor.left + (anchor.right - anchor.left - width) / 2
+	const left = Math.min(Math.max(centeredLeft, CLICK_MENU_MARGIN), maxLeft)
+	const availableAbove = Math.max(0, anchor.top - CLICK_MENU_GAP - CLICK_MENU_MARGIN)
+	const availableBelow = Math.max(0, viewportHeight - anchor.bottom - CLICK_MENU_GAP - CLICK_MENU_MARGIN)
+	const placeAbove = availableAbove >= availableBelow
+	const maxHeight = Math.min(CLICK_MENU_MAX_HEIGHT, placeAbove ? availableAbove : availableBelow)
+
+	return placeAbove
+		? { left, width, maxHeight, bottom: viewportHeight - anchor.top + CLICK_MENU_GAP }
+		: { left, width, maxHeight, top: anchor.bottom + CLICK_MENU_GAP }
+}
+
+const ignoreResetCredit = async (_creditId: string): Promise<AccountUsageResetResult | undefined> => undefined
+
+function selectChatInputUsageQuota(quotas: readonly AccountUsageQuotaData[]): AccountUsageQuotaData | undefined {
+	const activeFiveHourQuota = quotas.find(
+		(quota) =>
+			quota.type === "5hour" && Number.isFinite(quota.limit) && quota.limit > 0 && usageRemainingPercent(quota) < 100,
+	)
+	return activeFiveHourQuota ?? selectEffectiveUsageQuota(quotas)
 }
 
 /** Existing account usage surface, enhanced by provider-owned capability data. */
 export const UsageBar = () => {
 	const { accountUsage } = useExtensionState()
 	const [open, setOpen] = useState(false)
+	const [tooltipOpen, setTooltipOpen] = useState(false)
+	const [menuPosition, setMenuPosition] = useState<UsageClickMenuPosition>()
 	const [refreshing, setRefreshing] = useState(false)
+	const [refreshError, setRefreshError] = useState<string>()
+	const [refreshOverlay, setRefreshOverlay] = useState<RefreshOverlay>()
 	const [resetting, setResetting] = useState(false)
 	const [resetError, setResetError] = useState<string>()
+	const refreshSequence = useRef(0)
+	const accountUsageRef = useRef(accountUsage)
+	const containerRef = useRef<HTMLDivElement>(null)
+	const menuRef = useRef<HTMLDivElement>(null)
+	accountUsageRef.current = accountUsage
 
-	if (!accountUsage) return null
-	const quotas = accountUsage.quotas?.filter((quota) => quota.limit > 0) ?? []
-	const effectiveQuota = selectEffectiveUsageQuota(quotas)
-	const supportsResetCredits = accountUsage.resetCredits !== undefined || accountUsage.resetCreditsAvailableCount !== undefined
-	const nextResetCreditExpiry = accountUsage.resetCredits
-		?.map((credit) => credit.expiresAt)
-		.filter((value): value is string => value !== undefined && Number.isFinite(Date.parse(value)))
-		.sort((left, right) => Date.parse(left) - Date.parse(right))[0]
+	useEffect(() => {
+		refreshSequence.current += 1
+		setOpen(false)
+		setTooltipOpen(false)
+		setMenuPosition(undefined)
+		setRefreshOverlay(undefined)
+		setRefreshError(undefined)
+		setResetError(undefined)
+		setRefreshing(false)
+		setResetting(false)
+	}, [accountUsage?.profileId])
+
+	useEffect(() => {
+		if (!open) return
+		const updateMenuPosition = (): void => {
+			const anchor = containerRef.current?.getBoundingClientRect()
+			if (!anchor) return
+			setMenuPosition(calculateUsageClickMenuPosition(anchor, window.innerWidth, window.innerHeight))
+		}
+		const handlePointerDown = (event: PointerEvent): void => {
+			const target = event.target
+			const isResetConfirmation = target instanceof Element && target.closest('[aria-modal="true"]') !== null
+			if (
+				target instanceof Node &&
+				!isResetConfirmation &&
+				!containerRef.current?.contains(target) &&
+				!menuRef.current?.contains(target)
+			) {
+				setOpen(false)
+			}
+		}
+		const handleKeyDown = (event: KeyboardEvent): void => {
+			if (event.key === "Escape") setOpen(false)
+		}
+		updateMenuPosition()
+		document.addEventListener("pointerdown", handlePointerDown)
+		document.addEventListener("keydown", handleKeyDown)
+		window.addEventListener("resize", updateMenuPosition)
+		window.addEventListener("scroll", updateMenuPosition, true)
+		return () => {
+			document.removeEventListener("pointerdown", handlePointerDown)
+			document.removeEventListener("keydown", handleKeyDown)
+			window.removeEventListener("resize", updateMenuPosition)
+			window.removeEventListener("scroll", updateMenuPosition, true)
+		}
+	}, [open])
+
+	const usage = refreshOverlay && refreshOverlay.source === accountUsage ? refreshOverlay.value : accountUsage
+	if (!usage) return null
+	const quotas = usage.quotas?.filter((quota) => quota.limit > 0) ?? []
+	const effectiveQuota = selectChatInputUsageQuota(quotas)
 	const summary = effectiveQuota
 		? `${effectiveQuota.type === "5hour" ? "5h:" : effectiveQuota.type === "weekly" ? "7d:" : `${effectiveQuota.label}:`} ${usageRemainingPercent(effectiveQuota).toFixed(0)}%`
-		: !accountUsage.planType && accountUsage.remainingBalance !== undefined
-			? formatProviderUsageCurrency(accountUsage.currency, accountUsage.remainingBalance)
+		: !usage.planType && usage.remainingBalance !== undefined
+			? formatProviderUsageCurrency(usage.currency, usage.remainingBalance)
 			: undefined
 	if (!summary) return null
 
-	const tooltip = (
-		<div className="flex max-w-72 flex-col gap-1">
-			{quotas.map((quota) => {
-				const resetAt = formatTime(quota.resetAt)
-				return (
-					<span key={`${quota.type}:${quota.label}`}>
-						{quota.label}: {usageUsedPercent(quota).toFixed(0)}% used
-						{resetAt ? ` · resets ${resetAt}` : ""}
-					</span>
-				)
-			})}
-			{supportsResetCredits ? <span>Reset cards: {accountUsage.resetCreditsAvailableCount ?? 0}</span> : null}
-			{nextResetCreditExpiry ? <span>Next card expires {formatTime(nextResetCreditExpiry)}</span> : null}
-			{!accountUsage.planType && accountUsage.remainingBalance !== undefined ? (
-				<span>Balance: {formatProviderUsageCurrency(accountUsage.currency, accountUsage.remainingBalance)}</span>
-			) : null}
-			{accountUsage.dailyInputTokens !== undefined ? <span>Today In: {fmt(accountUsage.dailyInputTokens)}</span> : null}
-			{accountUsage.dailyOutputTokens !== undefined ? <span>Today Out: {fmt(accountUsage.dailyOutputTokens)}</span> : null}
-		</div>
-	)
-
 	const refresh = async () => {
-		if (!accountUsage.profileId || refreshing) return
+		if (!usage.profileId || refreshing) return
+		const requestProfileId = usage.profileId
+		const sourceUsage = accountUsage
+		if (!sourceUsage || sourceUsage.profileId !== requestProfileId) return
+		const sequence = ++refreshSequence.current
+		setRefreshError(undefined)
 		setRefreshing(true)
 		try {
-			await AccountServiceClient.getProviderUsage(ProviderUsageRequest.create({ profileId: accountUsage.profileId }))
+			const response = await AccountServiceClient.getProviderUsage(
+				ProviderUsageRequest.create({ profileId: requestProfileId }),
+			)
+			const nextUsage = protoToAccountUsage(response)
+			if (
+				sequence !== refreshSequence.current ||
+				accountUsageRef.current !== sourceUsage ||
+				nextUsage?.profileId !== requestProfileId
+			) {
+				return
+			}
+			setRefreshOverlay({ source: sourceUsage, value: nextUsage })
+		} catch {
+			if (sequence === refreshSequence.current && accountUsageRef.current === sourceUsage) {
+				setRefreshError("Provider usage could not be refreshed.")
+			}
 		} finally {
-			setRefreshing(false)
+			if (sequence === refreshSequence.current) setRefreshing(false)
 		}
 	}
 
+	const handleDetailsClick = (): void => {
+		setTooltipOpen(false)
+		if (open) {
+			setOpen(false)
+			return
+		}
+		const anchor = containerRef.current?.getBoundingClientRect()
+		if (!anchor) return
+		setMenuPosition(calculateUsageClickMenuPosition(anchor, window.innerWidth, window.innerHeight))
+		setOpen(true)
+	}
+
+	const handleTooltipOpenChange = (nextOpen: boolean) => {
+		setTooltipOpen(!open && nextOpen)
+	}
+
 	const consumeResetCredit = async (creditId: string): Promise<AccountUsageResetResult | undefined> => {
-		if (!accountUsage.profileId || resetting) return undefined
+		if (!usage.profileId || resetting) return undefined
 		setResetError(undefined)
 		setResetting(true)
 		try {
 			return await AccountServiceClient.consumeAccountUsageResetCredit(
-				AccountUsageResetCreditRequest.create({ profileId: accountUsage.profileId, creditId }),
+				AccountUsageResetCreditRequest.create({ profileId: usage.profileId, creditId }),
 			)
 		} catch {
 			setResetError("The Provider rate-limit reset could not be completed.")
@@ -96,52 +199,102 @@ export const UsageBar = () => {
 	}
 
 	return (
-		<Popover onOpenChange={setOpen} open={open}>
-			<Tooltip>
-				{!open ? <TooltipContent side="top">{tooltip}</TooltipContent> : null}
+		<div className="relative inline-flex h-[18.5px] shrink-0 items-center" ref={containerRef}>
+			<Tooltip onOpenChange={handleTooltipOpenChange} open={!open && tooltipOpen}>
+				{!open && tooltipOpen ? (
+					<TooltipContent
+						align="end"
+						arrowStyle={{
+							background: "var(--vscode-dropdown-background, var(--vscode-menu-background))",
+							borderColor: "var(--vscode-dropdown-border, var(--vscode-menu-border))",
+							fill: "var(--vscode-dropdown-background, var(--vscode-menu-background))",
+						}}
+						className="w-72 overflow-visible border-dropdown-border bg-menu text-foreground"
+						contentClassName="block w-full p-0"
+						contentTag="div"
+						data-usage-surface="preview"
+						side="top"
+						sideOffset={4}
+						style={{
+							background: "var(--vscode-dropdown-background, var(--vscode-menu-background))",
+							borderColor: "var(--vscode-dropdown-border, var(--vscode-menu-border))",
+							color: "var(--vscode-foreground, var(--vscode-menu-foreground))",
+						}}>
+						<div className="w-full p-3">
+							<ProviderUsageDetails
+								consumeResetCredit={ignoreResetCredit}
+								resetCreditsDisplay="summary"
+								resetting={false}
+								showResetActions={false}
+								usage={usage}
+							/>
+						</div>
+					</TooltipContent>
+				) : null}
 				<TooltipTrigger asChild>
-					<PopoverTrigger asChild>
-						<button
-							aria-label="Provider usage"
-							className="chat-input-control-outline inline-flex h-[18.5px] shrink-0 cursor-pointer items-center rounded-sm border-0 bg-toolbar-hover px-1 py-0 text-xs font-medium leading-[18px] text-foreground shadow-none max-[420px]:hidden"
-							data-chat-input-slot="provider-usage"
-							type="button">
-							{summary}
-						</button>
-					</PopoverTrigger>
+					<button
+						aria-expanded={open}
+						aria-haspopup="dialog"
+						aria-label="Provider usage"
+						className="chat-input-control-outline inline-flex h-[18.5px] shrink-0 cursor-pointer items-center rounded-sm border-0 bg-toolbar-hover px-1 py-0 text-xs font-medium leading-[18px] text-foreground shadow-none max-[420px]:hidden"
+						data-chat-input-slot="provider-usage"
+						onClick={handleDetailsClick}
+						onPointerDownCapture={() => setTooltipOpen(false)}
+						type="button">
+						{summary}
+					</button>
 				</TooltipTrigger>
 			</Tooltip>
-			<PopoverContent
-				align="end"
-				aria-label="Provider usage details"
-				className="w-72 overflow-hidden p-0 text-xs"
-				side="top"
-				sideOffset={4}
-				style={{
-					background: "var(--vscode-dropdown-background)",
-					borderColor: "var(--vscode-dropdown-border)",
-					color: "var(--vscode-foreground)",
-				}}>
-				<div className="flex items-center justify-between gap-2 border-b border-dropdown-border px-3 py-2">
-					<span className="font-medium">Usage</span>
-					<button
-						aria-label="Refresh Provider usage"
-						className="flex size-6 items-center justify-center rounded-xs border-0 bg-transparent text-description hover:bg-toolbar-hover hover:text-foreground disabled:opacity-50"
-						disabled={!accountUsage.profileId || refreshing}
-						onClick={() => void refresh()}
-						type="button">
-						{refreshing ? <LoaderIcon className="size-3.5 animate-spin" /> : <RefreshCwIcon className="size-3.5" />}
-					</button>
-				</div>
-				<div className="p-3">
-					<ProviderUsageDetails
-						consumeResetCredit={consumeResetCredit}
-						resetError={resetError}
-						resetting={resetting}
-						usage={accountUsage}
-					/>
-				</div>
-			</PopoverContent>
-		</Popover>
+			{open && menuPosition
+				? createPortal(
+						<div
+							aria-label="Provider usage details"
+							className="fixed z-[2000] flex flex-col overflow-hidden rounded border border-editor-group-border bg-menu text-menu-foreground shadow-lg"
+							data-slot="click-menu-content"
+							data-usage-surface="details"
+							ref={menuRef}
+							role="dialog"
+							style={{
+								bottom: menuPosition.bottom,
+								left: menuPosition.left,
+								maxHeight: menuPosition.maxHeight,
+								top: menuPosition.top,
+								width: menuPosition.width,
+							}}>
+							<div
+								className="flex shrink-0 items-center justify-between gap-2 border-b border-editor-group-border px-3 py-2"
+								data-usage-header>
+								<span className="font-medium">Usage</span>
+								<button
+									aria-label="Refresh Provider usage"
+									className="flex size-6 items-center justify-center rounded-xs border-0 bg-transparent text-description hover:bg-toolbar-hover hover:text-foreground disabled:opacity-50"
+									disabled={!usage.profileId || refreshing}
+									onClick={() => void refresh()}
+									type="button">
+									{refreshing ? (
+										<LoaderIcon className="size-3.5 animate-spin" />
+									) : (
+										<RefreshCwIcon className="size-3.5" />
+									)}
+								</button>
+							</div>
+							<div className="min-h-0 overflow-y-auto p-3">
+								{refreshError ? (
+									<div className="mb-2 text-error" role="alert">
+										{refreshError}
+									</div>
+								) : null}
+								<ProviderUsageDetails
+									consumeResetCredit={consumeResetCredit}
+									resetError={resetError}
+									resetting={resetting}
+									usage={usage}
+								/>
+							</div>
+						</div>,
+						document.body,
+					)
+				: null}
+		</div>
 	)
 }

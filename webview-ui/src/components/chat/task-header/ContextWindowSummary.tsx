@@ -63,7 +63,7 @@ export const ContextWindowSummary: React.FC<TaskContextWindowButtonsProps> = ({
 	percentage,
 	indicatorViewModel,
 }) => (
-	<div className="context-window-tooltip-content flex w-72 flex-col gap-2 rounded bg-menu p-2 shadow-sm z-100">
+	<div className="context-window-tooltip-content flex w-full flex-col gap-2" data-testid="context-window-summary">
 		<div className="flex items-center justify-between gap-3">
 			<span className="font-semibold">Context Window</span>
 			<span className="font-mono text-muted-foreground">{percentage.toFixed(1)}%</span>

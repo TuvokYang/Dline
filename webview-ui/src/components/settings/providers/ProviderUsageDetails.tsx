@@ -11,7 +11,7 @@ import {
 	AlertDialogTitle,
 } from "@/components/common/AlertDialog"
 
-export type ProviderUsageProgressTone = "success" | "warning" | "danger"
+export type ProviderUsageProgressTone = "success" | "warning" | "caution" | "danger"
 
 export function formatProviderUsageCurrency(currency: string | undefined, amount: number): string {
 	const code = (currency || "USD").toUpperCase()
@@ -50,9 +50,10 @@ export function selectEffectiveUsageQuota(quotas: readonly AccountUsageQuotaData
 		})[0]
 }
 
-export function providerUsageProgressTone(usedPercent: number): ProviderUsageProgressTone {
-	if (usedPercent >= 100) return "danger"
-	if (usedPercent >= 80) return "warning"
+export function providerUsageProgressTone(remainingPercent: number): ProviderUsageProgressTone {
+	if (remainingPercent <= 0) return "danger"
+	if (remainingPercent < 20) return "caution"
+	if (remainingPercent <= 40) return "warning"
 	return "success"
 }
 
@@ -65,6 +66,8 @@ function progressColor(tone: ProviderUsageProgressTone): string {
 		case "danger":
 			return "var(--vscode-charts-red, #ef4444)"
 		case "warning":
+			return "var(--vscode-charts-yellow, #eab308)"
+		case "caution":
 			return "var(--vscode-charts-orange, #f59e0b)"
 		default:
 			return "var(--vscode-charts-green, #22c55e)"
@@ -72,20 +75,20 @@ function progressColor(tone: ProviderUsageProgressTone): string {
 }
 
 export function ProviderUsageProgressBar({ quota }: { quota: AccountUsageQuotaData }) {
-	const usedPercent = usageUsedPercent(quota)
-	const tone = providerUsageProgressTone(usedPercent)
+	const remainingPercent = usageRemainingPercent(quota)
+	const tone = providerUsageProgressTone(remainingPercent)
 	return (
 		<div
 			aria-label={`${quota.label} usage`}
 			aria-valuemax={100}
 			aria-valuemin={0}
-			aria-valuenow={usedPercent}
+			aria-valuenow={remainingPercent}
 			className="h-1.5 overflow-hidden rounded-full bg-editor-widget-border/60"
 			data-usage-tone={tone}
 			role="progressbar">
 			<div
 				className="h-full rounded-full transition-[width]"
-				style={{ backgroundColor: progressColor(tone), width: `${usedPercent}%` }}
+				style={{ backgroundColor: progressColor(tone), width: `${remainingPercent}%` }}
 			/>
 		</div>
 	)
@@ -118,14 +121,24 @@ export interface ProviderUsageDetailsProps {
 	readonly usage: AccountUsageData
 	readonly resetting: boolean
 	readonly resetError?: string
+	readonly showResetActions?: boolean
+	readonly resetCreditsDisplay?: "full" | "summary"
 	readonly consumeResetCredit: (creditId: string) => Promise<AccountUsageResetResult | undefined>
 }
 
 /** Provider-neutral quota, progress, and reset-credit renderer. */
-export function ProviderUsageDetails({ usage, resetting, resetError, consumeResetCredit }: ProviderUsageDetailsProps) {
+export function ProviderUsageDetails({
+	usage,
+	resetting,
+	resetError,
+	showResetActions = true,
+	resetCreditsDisplay = "full",
+	consumeResetCredit,
+}: ProviderUsageDetailsProps) {
 	const [selectedCreditId, setSelectedCreditId] = useState<string>()
 	const [resultMessage, setResultMessage] = useState<string>()
 	const resetCredits = usage.resetCredits ?? []
+	const nextResetCredit = resetCredits[0]
 	const selectedCredit = resetCredits.find((credit) => credit.id === selectedCreditId)
 	const supportsResetCredits = usage.resetCredits !== undefined || usage.resetCreditsAvailableCount !== undefined
 
@@ -171,7 +184,7 @@ export function ProviderUsageDetails({ usage, resetting, resetError, consumeRese
 								</span>
 							</div>
 							<ProviderUsageProgressBar quota={quota} />
-							{resetAt ? <span className="text-description">Resets {resetAt}</span> : null}
+							{resetAt ? <span className="whitespace-nowrap text-description">Resets {resetAt}</span> : null}
 						</div>
 					)
 				})}
@@ -180,7 +193,14 @@ export function ProviderUsageDetails({ usage, resetting, resetError, consumeRese
 						<span className="font-medium text-foreground">
 							Reset cards: {usage.resetCreditsAvailableCount ? usage.resetCreditsAvailableCount : "none"}
 						</span>
-						{resetCredits.length > 0 ? (
+						{resetCredits.length > 0 && resetCreditsDisplay === "summary" ? (
+							<div className="flex flex-col gap-0.5 text-description">
+								<span>Next card expires</span>
+								<span className="whitespace-nowrap">
+									{nextResetCredit?.expiresAt ? formatTime(nextResetCredit.expiresAt) : "Expiry unavailable"}
+								</span>
+							</div>
+						) : resetCredits.length > 0 ? (
 							<ul className="m-0 flex list-none flex-col gap-1 p-0">
 								{resetCredits.map((credit, index) => {
 									const expiresAt = formatTime(credit.expiresAt)
@@ -188,23 +208,25 @@ export function ProviderUsageDetails({ usage, resetting, resetError, consumeRese
 										<li
 											className="flex min-w-0 items-center justify-between gap-2 rounded-xs bg-toolbar-hover/30 px-2 py-1.5"
 											key={credit.id}>
-											<span className="min-w-0">
+											<div className="min-w-0" data-reset-credit-copy>
 												<span className="block font-medium text-foreground">Reset card {index + 1}</span>
-												<span className="block truncate text-description">
+												<span className="block whitespace-nowrap text-description">
 													{expiresAt ? `Expires ${expiresAt}` : "Expiry unavailable"}
 												</span>
-											</span>
-											<button
-												aria-label={`Use reset card ${index + 1}`}
-												className="inline-flex min-h-7 shrink-0 items-center rounded-xs border border-error/70 bg-error/15 px-2 font-medium text-error hover:bg-error/25 disabled:opacity-50"
-												disabled={resetting}
-												onClick={() => {
-													setResultMessage(undefined)
-													setSelectedCreditId(credit.id)
-												}}
-												type="button">
-												Use card
-											</button>
+											</div>
+											{showResetActions ? (
+												<button
+													aria-label={`Use reset card ${index + 1}`}
+													className="inline-flex min-h-7 shrink-0 items-center rounded-xs border border-error/70 bg-error/15 px-2 font-medium text-error hover:bg-error/25 disabled:opacity-50"
+													disabled={resetting}
+													onClick={() => {
+														setResultMessage(undefined)
+														setSelectedCreditId(credit.id)
+													}}
+													type="button">
+													Use card
+												</button>
+											) : null}
 										</li>
 									)
 								})}

@@ -1245,6 +1245,7 @@ export class Controller {
 						{ profileId: operation.targetProfileId, profileName: operation.targetProfile },
 						operation.targetModes,
 					)
+					this.restartAccountUsagePolling()
 					await this.postStateToWebview({ immediate: true })
 				},
 			},
@@ -1439,6 +1440,7 @@ export class Controller {
 			}
 			this.stateManager.setGlobalStateBatch(updates)
 			await this.stateManager.flushPendingState()
+			this.restartAccountUsagePolling()
 			await this.postStateToWebview({ immediate: true })
 			return { status: "switched", operationId: randomUUID() }
 		}

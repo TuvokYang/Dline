@@ -175,7 +175,11 @@ describe("ContextWindow metrics", () => {
 		)
 
 		fireEvent.mouseEnter(screen.getByTestId("context-window-progress-track"))
-		expect(document.querySelector('[data-slot="hover-card-content"]')).toBeInTheDocument()
+		const surface = document.querySelector('[data-context-window-surface="summary"]')
+		expect(surface).toHaveClass("w-72", "bg-menu", "text-code-foreground")
+		expect(document.querySelectorAll('[data-slot="hover-card-content"]')).toHaveLength(1)
+		expect(screen.getByTestId("context-window-summary")).toHaveClass("w-full")
+		expect(screen.getByTestId("context-window-summary")).not.toHaveClass("w-72", "bg-menu", "p-2", "shadow-sm")
 
 		fireEvent.mouseLeave(screen.getByTestId("context-window-indicator"))
 		await waitFor(() => expect(document.querySelector('[data-slot="hover-card-content"]')).not.toBeInTheDocument())

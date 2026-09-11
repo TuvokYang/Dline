@@ -5,15 +5,38 @@
  * even if you confirm the IME conversion (Enter) in message re-edit mode.
  */
 
-import { act, fireEvent, render, renderHook, screen } from "@testing-library/react"
-import { describe, expect, it, vi } from "vitest"
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
 const mockedContext = vi.hoisted(() => ({ value: {} as Record<string, unknown> }))
+const usageServiceMocks = vi.hoisted(() => ({
+	consumeAccountUsageResetCredit: vi.fn(),
+	getProviderUsage: vi.fn(),
+}))
 
 vi.mock("@/context/ExtensionStateContext", () => ({
 	__esModule: true,
 	useExtensionState: () => mockedContext.value,
 }))
+vi.mock("@/services/grpc-client", () => ({
+	AccountServiceClient: usageServiceMocks,
+}))
+
+class TestResizeObserver implements ResizeObserver {
+	disconnect = vi.fn()
+	observe = vi.fn()
+	unobserve = vi.fn()
+}
+
+beforeAll(() => {
+	globalThis.ResizeObserver = TestResizeObserver
+	Object.defineProperties(HTMLElement.prototype, {
+		hasPointerCapture: { configurable: true, value: () => false },
+		releasePointerCapture: { configurable: true, value: () => undefined },
+		setPointerCapture: { configurable: true, value: () => undefined },
+	})
+})
 
 import { useChatState } from "../chat-view/hooks/useChatState"
 import { runNewTaskSubmission } from "../chat-view/hooks/useMessageHandlers"
@@ -45,35 +68,95 @@ describe("UserMessage – IME composition handling", () => {
 })
 
 describe("UsageBar", () => {
-	it("shows Codex short-window and weekly usage", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+		usageServiceMocks.consumeAccountUsageResetCredit.mockResolvedValue({
+			profileId: "profile-a",
+			outcome: "reset",
+			quotaTypesReset: ["primary"],
+			usage: undefined,
+		})
+	})
+
+	it("renders one neutral trigger for the controlling quota", () => {
 		mockedContext.value = {
 			accountUsage: {
+				profileId: "profile-a",
+				providerId: "openai-codex",
 				currency: "",
 				quotas: [
-					{ type: "5hour", label: "5 hour", used: 25, limit: 100 },
-					{ type: "weekly", label: "Weekly", used: 60, limit: 100 },
+					{ type: "5hour", label: "5 hour", used: 0, limit: 100 },
+					{ type: "weekly", label: "7 day", used: 22, limit: 100 },
+				],
+				resetCreditsAvailableCount: 1,
+				resetCredits: [{ id: "credit-a", expiresAt: "2030-03-25T00:00:00.000Z" }],
+			},
+		}
+
+		const { container } = render(<UsageBar />)
+		const trigger = screen.getByRole("button", { name: "Provider usage" })
+
+		expect(trigger).toHaveTextContent("7d: 78%")
+		expect(trigger).toHaveClass("text-foreground")
+		expect(trigger).not.toHaveClass("text-success", "text-editor-warning-foreground", "text-error")
+		expect(trigger.querySelector("svg")).toBeNull()
+		expect(container.querySelectorAll('[data-chat-input-slot="provider-usage"]')).toHaveLength(1)
+		expect(container.querySelector('[data-chat-input-slot="codex-usage"]')).toBeNull()
+	})
+
+	it("shows the five-hour quota when it is controlling", () => {
+		mockedContext.value = {
+			accountUsage: {
+				profileId: "profile-a",
+				providerId: "openai-codex",
+				currency: "",
+				quotas: [
+					{ type: "5hour", label: "5 hour", used: 95, limit: 100 },
+					{ type: "weekly", label: "7 day", used: 83, limit: 100 },
 				],
 			},
 		}
 
-		const { container } = render(<UsageBar />)
-
-		expect(container.querySelector(".font-medium")).toHaveTextContent("5 hour 75%")
-		expect(container).toHaveTextContent("Weekly 40%")
-		expect(container).not.toHaveTextContent("left")
+		render(<UsageBar />)
+		expect(screen.getByRole("button", { name: "Provider usage" })).toHaveTextContent("5h: 5%")
 	})
 
-	it("uses weekly usage as the compact value when the 5 hour window is absent", () => {
+	it("uses the shared tooltip, details renderer, and reset-credit action", async () => {
+		const user = userEvent.setup()
 		mockedContext.value = {
 			accountUsage: {
+				profileId: "profile-a",
+				providerId: "openai-codex",
 				currency: "",
-				quotas: [{ type: "weekly", label: "Weekly", used: 60, limit: 100 }],
+				planType: "plus",
+				quotas: [
+					{ type: "5hour", label: "5 hour", used: 20, limit: 100, windowSeconds: 18_000 },
+					{ type: "weekly", label: "7 day", used: 83, limit: 100, windowSeconds: 604_800 },
+				],
+				resetCreditsAvailableCount: 1,
+				resetCredits: [{ id: "credit-a", expiresAt: "2030-03-25T00:00:00.000Z" }],
 			},
 		}
+		render(<UsageBar />)
+		const trigger = screen.getByRole("button", { name: "Provider usage" })
 
-		const { container } = render(<UsageBar />)
+		await user.hover(trigger)
+		expect((await screen.findAllByText("80% remaining")).length).toBeGreaterThan(0)
+		expect(screen.getAllByText("17% remaining").length).toBeGreaterThan(0)
+		expect(screen.getAllByText("Reset cards: 1").length).toBeGreaterThan(0)
 
-		expect(container.querySelector(".font-medium")).toHaveTextContent("Weekly 40%")
+		await user.click(trigger)
+		expect(screen.getByLabelText("Provider usage details")).toBeInTheDocument()
+		expect(screen.getByRole("progressbar", { name: "7 day usage" })).toHaveAttribute("data-usage-tone", "caution")
+		await user.click(screen.getByRole("button", { name: "Use reset card 1" }))
+		expect(screen.getByRole("dialog", { name: "Use a rate-limit reset card?" })).toBeInTheDocument()
+		await user.click(screen.getByRole("button", { name: "Use reset card" }))
+
+		await waitFor(() =>
+			expect(usageServiceMocks.consumeAccountUsageResetCredit).toHaveBeenCalledWith(
+				expect.objectContaining({ profileId: "profile-a", creditId: "credit-a" }),
+			),
+		)
 	})
 
 	it("does not render when the active profile has no usage or balance", () => {
@@ -83,26 +166,17 @@ describe("UsageBar", () => {
 		expect(screen.queryByText("--")).not.toBeInTheDocument()
 	})
 
-	it("does not render an account usage object without a valid quota or balance", () => {
-		mockedContext.value = {
-			accountUsage: {
-				currency: "USD",
-				quotas: [{ type: "weekly", label: "Weekly", used: 0, limit: 0 }],
-			},
-		}
-		const { container } = render(<UsageBar />)
-		expect(container).toBeEmptyDOMElement()
-	})
-
 	it("keeps a zero balance visible", () => {
 		mockedContext.value = {
 			accountUsage: {
+				profileId: "profile-a",
+				providerId: "deepseek",
 				currency: "USD",
 				remainingBalance: 0,
 			},
 		}
 		render(<UsageBar />)
-		expect(screen.getByText("$0.00")).toBeInTheDocument()
+		expect(screen.getByRole("button", { name: "Provider usage" })).toHaveTextContent("$0.00")
 	})
 })
 

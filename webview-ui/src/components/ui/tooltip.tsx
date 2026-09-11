@@ -21,12 +21,23 @@ function TooltipTrigger({ ...props }: React.ComponentProps<typeof TooltipPrimiti
 
 function TooltipContent({
 	className,
+	arrowClassName,
+	arrowStyle,
+	contentClassName,
+	contentTag = "span",
 	sideOffset = 0,
 	showArrow = true,
 	children,
 	...props
-}: React.ComponentProps<typeof TooltipPrimitive.Content> & { showArrow?: boolean }) {
-	const side = (props as any).side
+}: React.ComponentProps<typeof TooltipPrimitive.Content> & {
+	showArrow?: boolean
+	arrowClassName?: string
+	arrowStyle?: React.CSSProperties
+	contentClassName?: string
+	contentTag?: "div" | "span"
+}) {
+	const side = props.side
+	const Content = contentTag
 
 	return (
 		<TooltipPrimitive.Portal>
@@ -39,7 +50,7 @@ function TooltipContent({
 				data-slot="tooltip-content"
 				sideOffset={sideOffset}
 				{...props}>
-				<span className="leading-tight text-ellipsis p-2 select-text">{children}</span>
+				<Content className={cn("leading-tight text-ellipsis p-2 select-text", contentClassName)}>{children}</Content>
 				{showArrow && (
 					<TooltipPrimitive.Arrow
 						className={cn(
@@ -47,7 +58,9 @@ function TooltipContent({
 							side === "left" || side === "right"
 								? "translate-y-[calc(-50%_-_4px)]" // Horizontal adjustment for side tooltips
 								: "translate-y-[calc(-50%_-_0px)]", // Vertical adjustment for top/bottom tooltips
+							arrowClassName,
 						)}
+						style={arrowStyle}
 					/>
 				)}
 			</TooltipPrimitive.Content>
