@@ -2,6 +2,33 @@
 
 # Changelog
 
+## [0.9.3]
+
+### Features
+- OpenAI Codex Provider 能力扩展：支持动态模型发现、OpenAI Responses HTTP / WebSocket、托管 Web Search、推理与 Service Tier 控制，并统一 Profile 与任务输入区的账户配额、刷新和速率限制重置卡操作
+- OpenAI / OpenAI Codex 图像来源配置：OpenAI 可选择 GPT Subscription、GPT API、Independent 或 Hosted，Codex 可选择 GPT Subscription、Independent 或 Hosted；统一默认使用 `gpt-image-2.5` 并自动迁移旧配置
+
+### Changed
+- 使用统计与错误/运行时诊断改为两个独立授权通道；旧单一遥测授权不自动迁移，未授权时不会创建对应 Journal 或远程客户端
+- 诊断信号统一为有界本地 Journal 与 OpenTelemetry Events / Metrics / Traces；Dline 默认仅连接本机 `127.0.0.1:4318`，并在导出或发送前过滤提示词、文件内容、命令输入输出和凭据
+- Provider 选择器改由 ModelRegistry 统一生成并分组展示；Cline 模型目录使用配置的 Dline catalog，移除上游推荐与推广卡片
+- 实验功能开关改为本地配置解析，不再依赖登录或远程 PostHog
+
+### Fixed
+- 修复 Profile 切换后 Usage 短暂显示旧数据、手动刷新不更新或无反馈，以及 5 小时/7 天配额摘要选择错误
+- 修复 Usage hover/click 浮层重叠、reset card 布局溢出与 Context Window 双层面板；点击详情改为自适应宽度的独立菜单
+- 修复子代理达到超时或上下文压力上限时无法可靠收敛、最终结果被截断或丢失的问题
+- 修复扩展重载后的上下文压缩重试恢复，并改进单 Pass 可发送历史、图片 token 估算与完整 logical turn 边界
+- 修复长对话首次定位、流式跟随、向上浏览锚点、窗口扩展与尺寸变化时的虚拟滚动抖动和错位
+- 修复关闭任务后的 Recent 路由与完成态操作，并将 View Changes / Explain Changes 限定到当前任务拥有的净变化
+- 修复 MCP Marketplace 重复刷新、搜索焦点丢失、错误态输入卸载与滚动容器作用域问题
+- 修复任务速率图表的 Total Tokens 计算，并将 TPM 与 RPM 显示在语义正确的独立坐标轴
+- 修复图像生成失败或取消后重复读取已删除临时预览的问题，并避免在错误中暴露宿主机绝对路径
+- 前台命令输出超过展示上限时，聊天与 Activities 现在会显示可点击的完整日志文件链接
+- 修复窄窗口中工具路径、文件名、行号和匹配数的重叠或裁剪，并限制超长工具响应卡片高度
+- 命令执行提示现在严格匹配环境报告的实际 shell，减少 PowerShell、cmd 与 POSIX 语法混用导致的失败
+- 修正文件访问被忽略规则阻止时，错误卡仍显示旧 `.clineignore` 名称的问题
+
 ## [0.9.2]
 
 ### Features

@@ -1,0 +1,172 @@
+name: Publish Draft Release (Dev)
+
+on:
+  push:
+    tags:
+      - "dev-v*"
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dev-draft-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-tag:
+    name: Verify dev release tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.verify.outputs.tag }}
+      version: ${{ steps.verify.outputs.version }}
+      commit_sha: ${{ steps.verify.outputs.commit_sha }}
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Verify tag, version, and dev head
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="$GITHUB_REF_NAME"
+          if [[ ! "$tag" =~ ^dev-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "Error: development release tag must match dev-vX.Y.Z"
+            exit 1
+          fi
+
+          version="${BASH_REMATCH[1]}"
+          package_version=$(node -p "require('./package.json').version")
+          if [[ "$version" != "$package_version" ]]; then
+            echo "Error: tag version '$version' does not match package version '$package_version'"
+            exit 1
+          fi
+
+          tag_sha=$(git rev-parse "${tag}^{commit}")
+          dev_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/dev" --jq '.object.sha')
+          if [[ "$tag_sha" != "$dev_sha" ]]; then
+            echo "Error: development release tag '$tag' must point to current dev head '$dev_sha', got '$tag_sha'"
+            exit 1
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=$tag_sha" >> "$GITHUB_OUTPUT"
+
+  tests:
+    name: Test and package development release
+    needs: verify-tag
+    uses: ./.github/workflows/test.yml
+    with:
+      package_profile: ci
+
+  release:
+    name: Publish GitHub draft release
+    needs: [verify-tag, tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: publish
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout tested tag
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Download tested VSIX
+        uses: actions/download-artifact@v6
+        with:
+          name: dline-vsix-${{ github.sha }}
+          path: release-artifact
+
+      - name: Verify tested VSIX identity
+        id: vsix
+        env:
+          VERSION: ${{ needs.verify-tag.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -t assets < <(find release-artifact -maxdepth 1 -type f -name '*.vsix' -print)
+          if [[ "${#assets[@]}" -ne 1 ]]; then
+            echo "Error: expected exactly one tested VSIX, found ${#assets[@]}"
+            exit 1
+          fi
+
+          vsix_path="${assets[0]}"
+          manifest_path="$RUNNER_TEMP/vsix-package.json"
+          unzip -p "$vsix_path" extension/package.json > "$manifest_path"
+          if ! jq -e --arg version "$VERSION" '
+            .name == "dline" and
+            .publisher == "tuvokyang" and
+            .version == $version and
+            (.preview != true)
+          ' "$manifest_path" >/dev/null; then
+            echo "Error: tested VSIX identity or version does not match the development release"
+            jq '{name, publisher, version, preview}' "$manifest_path"
+            exit 1
+          fi
+
+          sha256=$(sha256sum "$vsix_path" | cut -d' ' -f1)
+          echo "$sha256  $vsix_path"
+          echo "path=$vsix_path" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Build release notes from changelog
+        env:
+          VERSION: ${{ needs.verify-tag.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          notes_path="$RUNNER_TEMP/release-notes.md"
+          awk -v version="$VERSION" '
+            $0 == "## [" version "]" { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > "$notes_path"
+          if [[ ! -s "$notes_path" ]]; then
+            echo "Error: no CHANGELOG.md entry found for version $VERSION"
+            exit 1
+          fi
+
+      - name: Create or update GitHub draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.verify-tag.outputs.tag }}
+          VERSION: ${{ needs.verify-tag.outputs.version }}
+          VSIX_PATH: ${{ steps.vsix.outputs.path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          title="Dline ${VERSION} Development Release"
+          notes_path="$RUNNER_TEMP/release-notes.md"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" \
+              --draft \
+              --prerelease=false \
+              --title "$title" \
+              --notes-file "$notes_path" \
+              --repo "$GITHUB_REPOSITORY"
+            gh release upload "$TAG" "$VSIX_PATH" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" "$VSIX_PATH" \
+              --verify-tag \
+              --draft \
+              --title "$title" \
+              --notes-file "$notes_path" \
+              --repo "$GITHUB_REPOSITORY"
+          fi

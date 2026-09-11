@@ -2,6 +2,33 @@ English | [中文版](../../CHANGELOG.md)
 
 # Changelog
 
+## [0.9.3]
+
+### Features
+- Expanded OpenAI Codex provider support with dynamic model discovery, OpenAI Responses over HTTP / WebSocket, hosted Web Search, reasoning and Service Tier controls, plus shared account quota, refresh, and rate-limit reset-card actions across Profiles and task input
+- Expanded OpenAI / OpenAI Codex image source configuration: OpenAI can use GPT Subscription, GPT API, Independent, or Hosted sources, while Codex can use GPT Subscription, Independent, or Hosted; `gpt-image-2.5` is now the shared default and legacy settings migrate automatically
+
+### Changed
+- Usage reporting and error/runtime diagnostics now use independent consent channels; the legacy single telemetry consent is not migrated automatically, and no corresponding journal or remote client is created without consent
+- Diagnostic signals now use a bounded local journal and OpenTelemetry Events / Metrics / Traces; Dline targets loopback `127.0.0.1:4318` by default and filters prompts, file contents, command input/output, and credentials before export or delivery
+- The provider selector is now generated and grouped from ModelRegistry; the Cline model catalog uses the configured Dline catalog and no longer shows upstream recommendation or promotion cards
+- Experimental feature flags now resolve from local configuration instead of requiring sign-in or remote PostHog
+
+### Fixed
+- Fixed stale account usage after Profile switches, refreshes that did not update or provide feedback, and incorrect 5-hour/7-day quota summary selection
+- Fixed overlapping Usage hover/click overlays, overflowing reset-card layouts, and the double-layer Context Window panel; click details now use a responsive standalone menu
+- Fixed subagents failing to converge reliably at timeout or context-pressure limits, which could truncate or lose final results
+- Fixed context compaction retry recovery after extension reload, and improved single-pass sendable history, image token estimation, and complete logical-turn boundaries
+- Fixed virtual scrolling jitter and incorrect positioning during initial long-chat navigation, streaming follow, upward browsing, window expansion, and container resize
+- Fixed Recent routing and completion actions when closing tasks, and scoped View Changes / Explain Changes to the current task's remaining net changes
+- Fixed repeated MCP Marketplace refreshes, lost search focus, input unmounting in error states, and incorrect scroll-container scope
+- Fixed Total Tokens calculation in task rate charts and placed TPM and RPM on semantically correct independent axes
+- Fixed failed or cancelled image generation repeatedly reading deleted temporary previews, and stopped preview errors from exposing absolute host paths
+- Foreground command output that exceeds the display limit now shows a clickable link to the complete log file in Chat and Activities
+- Fixed overlapping or clipped tool paths, file names, line numbers, and match counts in narrow views, and capped oversized tool response cards
+- Command prompts now strictly follow the actual shell reported by the environment, reducing PowerShell, cmd, and POSIX syntax mismatches
+- Fixed ignore-policy error cards still referring to the legacy `.clineignore` filename instead of `.agentignore`
+
 ## [0.9.2]
 
 ### Features

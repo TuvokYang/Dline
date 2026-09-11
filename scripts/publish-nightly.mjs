@@ -8,17 +8,16 @@
  * 1. Backs up the original package.json
  * 2. Updates package.json with:
  *    - New version (major.minor.timestamp format)
- *    - Changes name to "cline-nightly"
- *    - Changes displayName to "Cline (Nightly)"
+ *    - Changes name to "dline-nightly"
+ *    - Changes displayName to "Dline (Nightly)"
  * 3. Packages the extension as a .vsix file
  * 4. Publishes to OpenVSX Registry (if OVSX_PAT is set)
  * 5. Restores the original package.json
  *
  * Channels:
  *   By default, the extension is published to the RELEASE channel of
- *   `cline-nightly` (this is what the scheduled daily nightly workflow
- *   uses). Pass --pre-release to instead publish to the pre-release
- *   channel of `cline-nightly` (used for manual publishes from feature
+ *   `dline-nightly`. Pass --pre-release to instead publish to the pre-release
+ *   channel of `dline-nightly` (used for manual publishes from feature
  *   branches that need tester opt-in via "Switch to Pre-Release Version").
  *
  *   Note on version ordering: because VS Code serves pre-release users
@@ -410,9 +409,8 @@ Usage:
   npm run publish:marketplace:nightly [options]
 
 Options:
-  --pre-release    Publish to the pre-release channel of cline-nightly.
-                   Default is the release channel (used by the scheduled
-                   nightly workflow).
+  --pre-release    Publish to the pre-release channel of dline-nightly.
+                   Default is the release channel.
   --dry-run, -n    Run without actually publishing (package only)
   --help, -h       Show this help message
 
