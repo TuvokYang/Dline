@@ -280,7 +280,7 @@ async function expectRateMetricsDialog(frame: Frame, summary: RateSummary, exerc
 	expect(ariaLabel).not.toContain("Request")
 	await rate.click()
 	const dialog = frame.getByRole("dialog")
-	await expect(dialog.getByRole("heading", { name: "API rate history", exact: true })).toBeVisible()
+	await expect(dialog.getByRole("heading", { name: "API Rate History", exact: true })).toBeVisible()
 	const resolutionSelect = dialog.getByRole("combobox", { name: "History resolution", exact: true })
 	await expect(resolutionSelect).toHaveValue("hour")
 	await expect(dialog.getByRole("radio", { name: "Token/Cache", exact: true })).toHaveAttribute("aria-checked", "true")

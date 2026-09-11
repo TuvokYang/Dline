@@ -135,17 +135,61 @@ describe("TaskMetricsChart", () => {
 		expect(screen.getAllByTestId(/^task-metrics-bar-input-/)).toHaveLength(4)
 	})
 
-	it("shows a contained keyboard tooltip without internal Round or Request identity", () => {
+	it("shows a floating tooltip only when the pointer reaches a concrete line point", () => {
 		render(<TaskMetricsChart chartType="line" degraded={true} points={[point(0)]} view="tokenCache" />)
-		const hitArea = screen.getByTestId("task-metrics-hit-area-0")
-		expect(hitArea).toHaveAttribute("pointer-events", "all")
-		fireEvent.focus(hitArea)
+		const chart = screen.getByRole("img", { name: "Task metrics history chart" })
+		fireEvent.pointerEnter(chart)
+		expect(screen.queryByRole("tooltip")).not.toBeInTheDocument()
+		expect(screen.queryByTestId(/^task-metrics-hit-area-/)).not.toBeInTheDocument()
+
+		const inputPoint = screen.getByTestId("task-metrics-point-input-0")
+		fireEvent.pointerEnter(inputPoint)
 		const tooltip = screen.getByRole("tooltip")
-		expect(tooltip).toHaveClass("inset-x-2", "bottom-2", "max-h-[45%]", "overflow-auto")
+		expect(tooltip).toHaveAttribute("data-anchor-bucket-start-ms", "0")
+		expect(tooltip).toHaveStyle({ position: "fixed" })
+		expect(tooltip).not.toHaveClass("inset-x-2", "bottom-2")
 		expect(tooltip).toHaveTextContent("Cache Write: 10")
 		expect(tooltip).toHaveTextContent("Cache Hit Rate: 4.3%")
 		expect(tooltip).toHaveTextContent("History: Degraded")
 		expect(tooltip).not.toHaveTextContent(/Round|Request|API index|Provider attempt/i)
+
+		fireEvent.pointerLeave(inputPoint)
+		expect(screen.queryByRole("tooltip")).not.toBeInTheDocument()
+	})
+
+	it("anchors the tooltip to a concrete bar without restoring full-column hover", () => {
+		render(<TaskMetricsChart chartType="bar" points={[point(0)]} view="tokenCache" />)
+		const bar = screen.getByTestId("task-metrics-bar-input-0")
+
+		fireEvent.pointerEnter(bar)
+		expect(screen.getByRole("tooltip")).toHaveAttribute("data-anchor-bucket-start-ms", "0")
+		fireEvent.pointerLeave(bar)
+		expect(screen.queryByRole("tooltip")).not.toBeInTheDocument()
+	})
+
+	it("keeps one point-positioned keyboard focus anchor per time bucket", () => {
+		render(<TaskMetricsChart chartType="line" points={[point(0), point(60_000)]} view="tokenCache" />)
+		const focusAnchors = screen.getAllByTestId(/^task-metrics-focus-anchor-/)
+		expect(focusAnchors).toHaveLength(2)
+		const firstFocusAnchor = focusAnchors[0]
+		expect(firstFocusAnchor).toBeDefined()
+		if (!firstFocusAnchor) throw new Error("Expected a focus anchor for the first time bucket")
+		expect(firstFocusAnchor).toHaveAttribute("pointer-events", "none")
+
+		fireEvent.focus(firstFocusAnchor)
+		expect(screen.getByRole("tooltip")).toHaveAttribute("data-anchor-bucket-start-ms", "0")
+		fireEvent.blur(firstFocusAnchor)
+		expect(screen.queryByRole("tooltip")).not.toBeInTheDocument()
+	})
+
+	it("clears an active point tooltip when its series is disabled", async () => {
+		const user = userEvent.setup()
+		render(<TaskMetricsChart chartType="line" points={[point(0)]} view="tokenCache" />)
+		fireEvent.pointerEnter(screen.getByTestId("task-metrics-point-input-0"))
+		expect(screen.getByRole("tooltip")).toBeInTheDocument()
+
+		await user.click(within(screen.getByRole("group", { name: "Chart series" })).getByRole("button", { name: "Input" }))
+		expect(screen.queryByRole("tooltip")).not.toBeInTheDocument()
 	})
 
 	it("produces a finite monotone cubic path for three or more points", () => {

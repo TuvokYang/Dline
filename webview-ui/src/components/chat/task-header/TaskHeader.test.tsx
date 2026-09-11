@@ -136,7 +136,7 @@ describe("TaskHeader pricing", () => {
 		)
 
 		fireEvent.click(screen.getByTestId("task-rate-metrics"))
-		expect(screen.getByRole("dialog", { name: "API rate history" })).toBeInTheDocument()
+		expect(screen.getByRole("dialog", { name: "API Rate History" })).toBeInTheDocument()
 		expect(mocks.setExpandTaskHeader).not.toHaveBeenCalled()
 
 		fireEvent.click(screen.getByRole("radio", { name: "TPM/RPM" }))

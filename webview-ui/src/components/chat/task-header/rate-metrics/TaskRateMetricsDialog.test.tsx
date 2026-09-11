@@ -28,6 +28,7 @@ beforeEach(() => {
 describe("TaskRateMetricsDialog", () => {
 	it("defaults to Hour and exposes only the two compact views", () => {
 		renderDialog()
+		expect(screen.getByRole("dialog", { name: "API Rate History" })).toBeInTheDocument()
 		expect(mocks.useTaskRateMetrics).toHaveBeenLastCalledWith({ enabled: true, resolution: "hour", taskId: "task-1" })
 		const resolution = screen.getByRole("combobox", { name: "History resolution" })
 		expect(resolution).toHaveValue("hour")

@@ -156,7 +156,7 @@ demo("R4", async ({ finishRecording, helper, pace, registerRecording, server, si
 		await rateMetrics.click()
 
 		const dialog = sidebar.getByRole("dialog")
-		await expect(dialog.getByRole("heading", { name: "API rate history", exact: true })).toBeVisible()
+		await expect(dialog.getByRole("heading", { name: "API Rate History", exact: true })).toBeVisible()
 		await dialog.getByRole("radio", { name: "TPM/RPM", exact: true }).click()
 		await dialog.getByRole("radio", { name: "Bar", exact: true }).click()
 

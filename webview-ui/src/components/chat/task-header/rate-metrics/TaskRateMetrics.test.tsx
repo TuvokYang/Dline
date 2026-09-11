@@ -49,14 +49,14 @@ describe("TaskRateMetrics", () => {
 
 		const button = screen.getByRole("button", { name: /View API rate history/ })
 		fireEvent.click(button)
-		expect(screen.getByRole("dialog", { name: "API rate history" })).toBeInTheDocument()
+		expect(screen.getByRole("dialog", { name: "API Rate History" })).toBeInTheDocument()
 		expect(parentClick).not.toHaveBeenCalled()
 
 		fireEvent.click(screen.getByRole("button", { name: "Close" }))
 		parentClick.mockClear()
 		button.focus()
 		await user.keyboard("{Enter}")
-		expect(screen.getByRole("dialog", { name: "API rate history" })).toBeInTheDocument()
+		expect(screen.getByRole("dialog", { name: "API Rate History" })).toBeInTheDocument()
 		expect(parentClick).not.toHaveBeenCalled()
 	})
 })

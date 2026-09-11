@@ -39,7 +39,7 @@ export function TaskRateMetricsDialog({ taskId, open, onOpenChange }: TaskRateMe
 		<Dialog onOpenChange={onOpenChange} open={open}>
 			<DialogContent className="max-w-3xl gap-2 p-2">
 				<DialogHeader>
-					<DialogTitle>API rate history</DialogTitle>
+					<DialogTitle>API Rate History</DialogTitle>
 					<DialogDescription>Token, cache and complete-execution rate history for the active Task.</DialogDescription>
 				</DialogHeader>
 

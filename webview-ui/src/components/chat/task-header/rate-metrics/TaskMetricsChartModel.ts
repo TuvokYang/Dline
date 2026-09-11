@@ -58,10 +58,11 @@ export interface TaskMetricsChartSeries {
 	readonly segments: TaskMetricsChartPoint[][]
 }
 
-export interface TaskMetricsHitArea {
+export interface TaskMetricsFocusAnchor {
 	readonly point: TaskRateMetricPoint
 	readonly pointIndex: number
 	readonly x: number
+	readonly y: number
 }
 
 export interface TaskMetricsChartLayout {
@@ -76,7 +77,7 @@ export interface TaskMetricsChartLayout {
 	readonly secondaryTicks: TaskMetricsChartTick[]
 	readonly percentageTicks: TaskMetricsChartTick[]
 	readonly series: TaskMetricsChartSeries[]
-	readonly hitAreas: TaskMetricsHitArea[]
+	readonly focusAnchors: TaskMetricsFocusAnchor[]
 }
 
 export const DEFAULT_TASK_METRICS_CHART_DIMENSIONS: TaskMetricsChartDimensions = {
@@ -249,6 +250,29 @@ export function createTaskMetricsChartLayout(
 		return plotLeft + ((getBucketMidpointMs(point) - firstMidpointMs) / durationMs) * plotWidth
 	}
 
+	const series = descriptors.map((descriptor, index) =>
+		createSeries(
+			sortedPoints,
+			descriptor,
+			xForPoint,
+			plotLeft,
+			plotRight,
+			plotTop,
+			plotBottom,
+			descriptor.axis === "secondary" ? secondaryAxisMax : primaryAxisMax,
+			index,
+			descriptors.length,
+			durationMs,
+			plotWidth,
+		),
+	)
+	const focusAnchors = sortedPoints.map((point, pointIndex) => ({
+		point,
+		pointIndex,
+		x: xForPoint(point),
+		y: series[0]?.points[pointIndex]?.y ?? plotBottom,
+	}))
+
 	return {
 		dimensions,
 		plotLeft,
@@ -260,23 +284,8 @@ export function createTaskMetricsChartLayout(
 		primaryTicks,
 		secondaryTicks,
 		percentageTicks,
-		series: descriptors.map((descriptor, index) =>
-			createSeries(
-				sortedPoints,
-				descriptor,
-				xForPoint,
-				plotLeft,
-				plotRight,
-				plotTop,
-				plotBottom,
-				descriptor.axis === "secondary" ? secondaryAxisMax : primaryAxisMax,
-				index,
-				descriptors.length,
-				durationMs,
-				plotWidth,
-			),
-		),
-		hitAreas: sortedPoints.map((point, pointIndex) => ({ point, pointIndex, x: xForPoint(point) })),
+		series,
+		focusAnchors,
 	}
 }
 

@@ -186,7 +186,7 @@ async function assertDefaultTokenCacheChart(dialog: Locator): Promise<void> {
 		await expect(dialog.getByRole("button", { name: label, exact: true })).toHaveAttribute("aria-pressed", String(enabled))
 	}
 	await expect(dialog.getByTestId("task-metrics-percentage-tick")).toHaveText(["0%", "20%", "40%", "60%", "80%", "100%"])
-	await expect(dialog.locator('[data-testid^="task-metrics-hit-area-"]')).toHaveCount(24)
+	await expect(dialog.locator('[data-testid^="task-metrics-focus-anchor-"]')).toHaveCount(24)
 	const inputPoints = dialog.locator('[data-testid^="task-metrics-point-input-"]')
 	await expect(inputPoints).toHaveCount(24)
 	await expect(inputPoints.first()).toHaveAttribute("data-value", "0")
@@ -267,16 +267,18 @@ e2e(
 			if (!initialHeaderLabel) throw new Error("Expected the Task header expansion label before opening rate history")
 			await rate.click()
 			const dialog = sidebar.getByRole("dialog")
-			await expect(dialog.getByRole("heading", { name: "API rate history", exact: true })).toBeVisible()
+			await expect(dialog.getByRole("heading", { name: "API Rate History", exact: true })).toBeVisible()
 			await assertDefaultTokenCacheChart(dialog)
 			await expect(taskHeaderToggle).toHaveAttribute("aria-label", initialHeaderLabel)
 			await waitForRateMetricsRpcCount(recorderPath, 1)
 			await captureDialog(dialog, testInfo, "task-statistics-hour-token-cache-line.png")
 
 			const activeHourStarts = seeded.completedAtMs.map((completedAtMs) => Math.floor(completedAtMs / HOUR_MS) * HOUR_MS)
-			const secondHitArea = dialog.locator(`[data-bucket-start-ms="${activeHourStarts[1]}"]`)
-			await secondHitArea.hover({ force: true })
-			let tooltip = dialog.getByRole("tooltip")
+			const secondInputPoint = dialog.locator(
+				`[data-testid^="task-metrics-point-input-"][data-bucket-start-ms="${activeHourStarts[1]}"]`,
+			)
+			await secondInputPoint.hover()
+			let tooltip = sidebar.getByRole("tooltip")
 			await expect(tooltip).toContainText("Input: 800")
 			await expect(tooltip).toContainText("Output: 300")
 			await expect(tooltip).not.toContainText("Cache Write")
@@ -287,8 +289,10 @@ e2e(
 			await expectTooltipWithinDialog(dialog, tooltip)
 			await captureDialog(dialog, testInfo, "task-statistics-hour-token-cache-hover-tooltip.png")
 
-			await dialog.locator(`[data-bucket-start-ms="${activeHourStarts[2]}"]`).focus()
-			tooltip = dialog.getByRole("tooltip")
+			await dialog
+				.locator(`[data-testid^="task-metrics-focus-anchor-"][data-bucket-start-ms="${activeHourStarts[2]}"]`)
+				.focus()
+			tooltip = sidebar.getByRole("tooltip")
 			await expect(tooltip).toContainText("Input: 1,600")
 			await expect(tooltip).toContainText("Cache Hit Rate: 33.3%")
 			await expectTooltipWithinDialog(dialog, tooltip)
@@ -334,7 +338,7 @@ e2e(
 			await expect(dialog.locator('[data-testid^="task-metrics-bar-tpm-"]:not([height="0"])').first()).toBeVisible()
 			await resolution.selectOption("day")
 			await waitForRateMetricsRpcCount(recorderPath, 3)
-			await expect(dialog.locator('[data-testid^="task-metrics-hit-area-"]')).toHaveCount(30)
+			await expect(dialog.locator('[data-testid^="task-metrics-focus-anchor-"]')).toHaveCount(30)
 			expect(server.getMockConsumptions("openai-compatible-responses")).toHaveLength(1)
 
 			await dialog.getByRole("button", { name: "Refresh", exact: true }).click()

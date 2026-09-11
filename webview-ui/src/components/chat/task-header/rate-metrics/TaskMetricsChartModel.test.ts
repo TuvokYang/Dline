@@ -89,6 +89,20 @@ describe("TaskMetricsChartModel", () => {
 		expect(layout.percentageTicks.map(({ label }) => label)).toEqual(["0%", "20%", "40%", "60%", "80%", "100%"])
 	})
 
+	it("anchors each keyboard focus target to a rendered point instead of a full-height chart column", () => {
+		const layout = createTaskMetricsChartLayout([point(0), point(60_000)], "tokenCache", new Set(["input"] as const))
+		const input = layout.series.find(({ descriptor }) => descriptor.key === "input")
+
+		expect(layout.focusAnchors).toHaveLength(2)
+		expect(layout.focusAnchors.map(({ x, y }) => ({ x, y }))).toEqual(input?.points.map(({ x, y }) => ({ x, y })))
+		for (const anchor of layout.focusAnchors) {
+			expect(Number.isFinite(anchor.x)).toBe(true)
+			expect(Number.isFinite(anchor.y)).toBe(true)
+			expect(anchor.y).toBeGreaterThanOrEqual(layout.plotTop)
+			expect(anchor.y).toBeLessThanOrEqual(layout.plotBottom)
+		}
+	})
+
 	it("shows RPM only for complete-execution basis and derives Total Tokens from visible token facts", () => {
 		expect(readTaskMetricsSeriesValue(point(0), "rpm")).toBe(30)
 		expect(

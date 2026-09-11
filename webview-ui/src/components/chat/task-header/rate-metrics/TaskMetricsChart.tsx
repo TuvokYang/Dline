@@ -4,15 +4,14 @@ import { useMemo, useState } from "react"
 import {
 	createDefaultEnabledTaskMetricsSeries,
 	createTaskMetricsChartLayout,
-	formatTaskMetricsSeriesValue,
 	getTaskMetricsAxisTitles,
 	getVisibleTaskMetricsSeries,
-	readTaskMetricsSeriesValue,
 	type TaskMetricsChartPoint,
 	type TaskMetricsChartType,
 	type TaskMetricsSeriesKey,
 	type TaskMetricsView,
 } from "./TaskMetricsChartModel"
+import { TaskMetricsTooltip, type TaskMetricsTooltipTarget } from "./TaskMetricsTooltip"
 
 interface TaskMetricsChartProps {
 	readonly points: TaskRateMetricPoint[]
@@ -21,16 +20,37 @@ interface TaskMetricsChartProps {
 	readonly degraded?: boolean
 }
 
+interface ActiveTaskMetricsTooltipTarget extends TaskMetricsTooltipTarget {
+	readonly chartType: TaskMetricsChartType
+	readonly enabledSeries: ReadonlySet<TaskMetricsSeriesKey>
+	readonly points: TaskRateMetricPoint[]
+	readonly view: TaskMetricsView
+}
+
 /** Render the selected compact Task metrics view with locally toggleable series. */
 export function TaskMetricsChart({ points, view, chartType, degraded = false }: TaskMetricsChartProps) {
 	const [enabledSeries, setEnabledSeries] = useState<Set<TaskMetricsSeriesKey>>(createDefaultEnabledTaskMetricsSeries)
-	const [activePointIndex, setActivePointIndex] = useState<number>()
+	const [activeTarget, setActiveTarget] = useState<ActiveTaskMetricsTooltipTarget>()
 	const chart = useMemo(() => createTaskMetricsChartLayout(points, view, enabledSeries), [enabledSeries, points, view])
 	const descriptors = useMemo(() => getVisibleTaskMetricsSeries(points, view), [points, view])
 	const axisTitles = getTaskMetricsAxisTitles(view)
 	const rightTicks = chart.percentageTicks.length > 0 ? chart.percentageTicks : chart.secondaryTicks
-	const activePoint = activePointIndex === undefined ? undefined : chart.hitAreas[activePointIndex]?.point
+	const currentTarget =
+		activeTarget?.chartType === chartType &&
+		activeTarget.enabledSeries === enabledSeries &&
+		activeTarget.points === points &&
+		activeTarget.view === view
+			? activeTarget
+			: undefined
+
+	const activateTooltip = (point: TaskRateMetricPoint, element: SVGElement) => {
+		setActiveTarget({ point, element, chartType, enabledSeries, points, view })
+	}
+	const deactivateTooltip = (element: SVGElement) => {
+		setActiveTarget((current) => (current?.element === element ? undefined : current))
+	}
 	const toggleSeries = (key: TaskMetricsSeriesKey) => {
+		setActiveTarget(undefined)
 		setEnabledSeries((current) => {
 			const next = new Set(current)
 			if (next.has(key)) next.delete(key)
@@ -155,11 +175,15 @@ export function TaskMetricsChart({ points, view, chartType, degraded = false }: 
 					? chart.series.flatMap(({ descriptor, points: seriesPoints }) =>
 							seriesPoints.map((item, index) => (
 								<rect
+									data-bucket-start-ms={item.point.bucketStartMs}
 									data-testid={`task-metrics-bar-${descriptor.key}-${index}`}
 									fill={descriptor.color}
 									height={item.barHeight}
 									key={`${descriptor.key}-${item.point.bucketStartMs}`}
+									onPointerEnter={(event) => activateTooltip(item.point, event.currentTarget)}
+									onPointerLeave={(event) => deactivateTooltip(event.currentTarget)}
 									opacity="0.82"
+									pointerEvents="all"
 									rx="1"
 									width={item.barWidth}
 									x={item.barX}
@@ -188,32 +212,38 @@ export function TaskMetricsChart({ points, view, chartType, degraded = false }: 
 							<circle
 								cx={item.x}
 								cy={item.y}
+								data-bucket-start-ms={item.point.bucketStartMs}
 								data-testid={`task-metrics-point-${descriptor.key}-${index}`}
 								data-value={item.value}
 								fill={descriptor.color}
 								key={`${descriptor.key}-${item.point.bucketStartMs}`}
+								onPointerEnter={(event) => activateTooltip(item.point, event.currentTarget)}
+								onPointerLeave={(event) => deactivateTooltip(event.currentTarget)}
+								pointerEvents="all"
 								r="3"
+								stroke="transparent"
+								strokeWidth="10"
 							/>
 						)),
 					)}
-				{chart.hitAreas.map((hitArea) => (
-					<rect
-						aria-label={`Show metrics at ${new Date(hitArea.point.bucketStartMs).toLocaleString()}`}
-						data-bucket-start-ms={hitArea.point.bucketStartMs}
-						data-testid={`task-metrics-hit-area-${hitArea.pointIndex}`}
+				{chart.focusAnchors.map((focusAnchor) => (
+					<circle
+						aria-label={`Show metrics at ${new Date(focusAnchor.point.bucketStartMs).toLocaleString()}`}
+						className="focus:outline-none focus:stroke-(--vscode-focusBorder)"
+						cx={focusAnchor.x}
+						cy={focusAnchor.y}
+						data-bucket-start-ms={focusAnchor.point.bucketStartMs}
+						data-testid={`task-metrics-focus-anchor-${focusAnchor.pointIndex}`}
 						fill="transparent"
-						height={chart.plotBottom - chart.plotTop}
-						key={`${hitArea.point.bucketStartMs}-${hitArea.pointIndex}`}
-						onBlur={() => setActivePointIndex(undefined)}
-						onFocus={() => setActivePointIndex(hitArea.pointIndex)}
-						onMouseEnter={() => setActivePointIndex(hitArea.pointIndex)}
-						onMouseLeave={() => setActivePointIndex(undefined)}
-						pointerEvents="all"
+						key={`${focusAnchor.point.bucketStartMs}-${focusAnchor.pointIndex}`}
+						onBlur={(event) => deactivateTooltip(event.currentTarget)}
+						onFocus={(event) => activateTooltip(focusAnchor.point, event.currentTarget)}
+						pointerEvents="none"
+						r="6"
 						role="button"
+						stroke="transparent"
+						strokeWidth="2"
 						tabIndex={0}
-						width="20"
-						x={hitArea.x - 10}
-						y={chart.plotTop}
 					/>
 				))}
 				<text fill="currentColor" fontSize="10" opacity="0.7" x={chart.plotLeft} y={chart.dimensions.height - 10}>
@@ -229,26 +259,12 @@ export function TaskMetricsChart({ points, view, chartType, degraded = false }: 
 					{new Date(points.at(-1)?.bucketEndMs ?? 0).toLocaleString()}
 				</text>
 			</svg>
-			{activePoint && (
-				<div
-					className="pointer-events-none absolute inset-x-2 bottom-2 z-10 max-h-[45%] overflow-auto rounded-sm border border-input-placeholder/20 bg-background p-2 text-xs shadow-lg"
-					role="tooltip">
-					<div className="mb-1 font-medium">{new Date(activePoint.bucketStartMs).toLocaleString()}</div>
-					<div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
-						{descriptors
-							.filter(({ key }) => enabledSeries.has(key))
-							.map((descriptor) => {
-								const value = readTaskMetricsSeriesValue(activePoint, descriptor.key) ?? 0
-								return (
-									<div key={descriptor.key}>
-										{descriptor.label}: {formatTaskMetricsSeriesValue(descriptor, value)}
-									</div>
-								)
-							})}
-						<div>History: {degraded ? "Degraded" : "Complete"}</div>
-					</div>
-				</div>
-			)}
+			<TaskMetricsTooltip
+				degraded={degraded}
+				descriptors={descriptors}
+				enabledSeries={enabledSeries}
+				target={currentTarget}
+			/>
 		</div>
 	)
 }
