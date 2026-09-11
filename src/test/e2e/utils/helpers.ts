@@ -638,9 +638,6 @@ export const e2e = test
 			workspacePath: string,
 			environmentOverrides?: Readonly<Record<string, string>>,
 			launchOptions?: {
-				recordVideo?: boolean
-				showVideoActions?: boolean
-				recordVideoSize?: { width: number; height: number }
 				windowSize?: { width: number; height: number }
 				forceDeviceScaleFactor?: number
 			},
@@ -737,27 +734,6 @@ export const e2e = test
 						// IS_DEV: "true",
 						DEV_WORKSPACE_FOLDER: E2ETestHelper.CODEBASE_ROOT_DIR,
 					},
-					recordVideo:
-						launchOptions.recordVideo === false
-							? undefined
-							: {
-									dir: E2ETestHelper.getResultsDir(
-										testInfo.title,
-										"recordings",
-										`${testInfo.testId}-retry-${testInfo.retry}`,
-									),
-									...(launchOptions.recordVideoSize ? { size: launchOptions.recordVideoSize } : {}),
-									...(launchOptions.showVideoActions
-										? {
-												showActions: {
-													cursor: "pointer" as const,
-													duration: 500,
-													// Playwright accepts integers only; zero is ignored and falls back to its 24px CSS default.
-													fontSize: 1,
-												},
-											}
-										: {}),
-								},
 					args: [
 						"--no-sandbox",
 						...(cdpPort !== undefined ? [`--remote-debugging-port=${cdpPort}`] : []),

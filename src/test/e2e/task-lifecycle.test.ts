@@ -22,7 +22,7 @@ async function submitWithEnter(sidebar: Frame, text: string): Promise<void> {
 }
 
 async function expectSingleUserFeedback(sidebar: Frame, text: string): Promise<void> {
-	const feedback = sidebar.locator("span.ph-no-capture:not(button span)").filter({ hasText: text })
+	const feedback = sidebar.getByTestId(/^(?:user|queued)-input-markdown-scroll$/).filter({ hasText: text })
 	await expect(feedback).toHaveCount(1)
 	await expect(feedback).toHaveText(text)
 }
@@ -37,9 +37,9 @@ async function startEchoOverlapObserver(sidebar: Frame, marker: string): Promise
 		scope.__dlineEchoOverlap = false
 		const checkForOverlap = () => {
 			const input = document.querySelector<HTMLTextAreaElement>('[data-testid="chat-input"]')
-			const echoedFeedback = Array.from(document.querySelectorAll("span.ph-no-capture")).some(
-				(element) => !element.closest("button") && element.textContent?.includes(submittedText),
-			)
+			const echoedFeedback = Array.from(
+				document.querySelectorAll('[data-testid="direct-user-input"], [data-testid="queued-user-input"]'),
+			).some((element) => element.textContent?.includes(submittedText))
 			if (echoedFeedback && input?.value === submittedText) {
 				scope.__dlineEchoOverlap = true
 			}
@@ -214,7 +214,7 @@ e2e(
 		await page.waitForTimeout(1_000)
 
 		await expect(input).toHaveValue(unsentDraft)
-		const submittedFeedback = sidebar.locator("span.ph-no-capture:not(button span)").filter({ hasText: unsentDraft })
+		const submittedFeedback = sidebar.getByTestId(/^(?:direct|queued)-user-input$/).filter({ hasText: unsentDraft })
 		await expect(submittedFeedback).toHaveCount(0)
 		expect(server.openAiRequestCount).toBe(1)
 		expect(JSON.stringify(server.getOpenAiRequestBodies())).not.toContain(unsentDraft)
@@ -317,7 +317,7 @@ e2e(
 		await page.waitForTimeout(1_000)
 
 		await expect(input).toHaveValue(unsentDraft)
-		const submittedFeedback = sidebar.locator("span.ph-no-capture:not(button span)").filter({ hasText: unsentDraft })
+		const submittedFeedback = sidebar.getByTestId(/^(?:direct|queued)-user-input$/).filter({ hasText: unsentDraft })
 		await expect(submittedFeedback).toHaveCount(0)
 		expect(server.getRequestCount("deepseek-chat")).toBe(1)
 		expect(JSON.stringify(server.getMockConsumptions("deepseek-chat").map((entry) => entry.requestBody))).not.toContain(
@@ -339,19 +339,19 @@ e2e(
 				type: "tool",
 				name: "qna_respond",
 				arguments: { response: "E2E_HISTORY_RACE_TURN_END_1" },
-				delayMs: 500,
+				delayMs: 1_000,
 			},
 			{
 				type: "tool",
 				name: "qna_respond",
 				arguments: { response: "E2E_HISTORY_RACE_TURN_END_2" },
-				delayMs: 500,
+				delayMs: 1_000,
 			},
 			{
 				type: "tool",
 				name: "attempt_completion",
 				arguments: { result: "E2E_HISTORY_RACE_COMPLETION_3" },
-				delayMs: 500,
+				delayMs: 1_000,
 			},
 			{
 				type: "error",
@@ -373,11 +373,14 @@ e2e(
 			await expect.poll(() => server.openAiRequestCount, { timeout: 60_000 }).toBe(expectedRequestCount)
 
 			finalDraft = `E2E_CURRENT_DRAFT_${turn}_MUST_STAY_LOCAL_WHILE_THE_TURN_END_TOOL_IS_RENDERING`
+			const splitIndex = 12
+			const prefix = finalDraft.slice(0, splitIndex)
 			await input.click()
-			const typing = input.pressSequentially(finalDraft, { delay: 20 })
+			await input.pressSequentially(prefix, { delay: 20 })
 			const turnEndText = turn === 3 ? "E2E_HISTORY_RACE_COMPLETION_3" : `E2E_HISTORY_RACE_TURN_END_${turn}`
 			await expect(sidebar.getByText(turnEndText, { exact: true })).toBeVisible({ timeout: 60_000 })
-			await typing
+			await expect(input).toHaveValue(prefix)
+			await input.pressSequentially(finalDraft.slice(splitIndex), { delay: 20 })
 			await page.waitForTimeout(500)
 
 			await expect(input).toHaveValue(finalDraft)
@@ -396,7 +399,7 @@ e2e(
 			expect(requestBodies[index + 1]).toContain(submitted)
 		}
 		expect(requestBodies.join("\n")).not.toContain(finalDraft)
-		await expect(sidebar.locator("span.ph-no-capture:not(button span)").filter({ hasText: finalDraft })).toHaveCount(0)
+		await expect(sidebar.getByTestId(/^(?:direct|queued)-user-input$/).filter({ hasText: finalDraft })).toHaveCount(0)
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )
@@ -450,7 +453,7 @@ e2e(
 		await page.waitForTimeout(1_000)
 
 		await expect(input).toHaveValue(unsentDraft)
-		const submittedFeedback = sidebar.locator("span.ph-no-capture:not(button span)").filter({ hasText: unsentDraft })
+		const submittedFeedback = sidebar.getByTestId(/^(?:direct|queued)-user-input$/).filter({ hasText: unsentDraft })
 		await expect(submittedFeedback).toHaveCount(0)
 		expect(server.openAiRequestCount).toBe(2)
 		expect(JSON.stringify(server.getOpenAiRequestBodies())).not.toContain(unsentDraft)
@@ -533,7 +536,7 @@ for (const turnEndCase of waitingTurnEndDraftCases) {
 			await page.waitForTimeout(1_000)
 
 			await expect(input).toHaveValue(unsentDraft)
-			const submittedFeedback = sidebar.locator("span.ph-no-capture:not(button span)").filter({ hasText: unsentDraft })
+			const submittedFeedback = sidebar.getByTestId(/^(?:direct|queued)-user-input$/).filter({ hasText: unsentDraft })
 			await expect(submittedFeedback).toHaveCount(0)
 			expect(server.openAiRequestCount).toBe(1)
 			expect(JSON.stringify(server.getOpenAiRequestBodies())).not.toContain(unsentDraft)

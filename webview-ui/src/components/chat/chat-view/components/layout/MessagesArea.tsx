@@ -63,6 +63,26 @@ type PendingAnchor = {
 
 type ScrollEdge = "top" | "bottom"
 type UserScrollIntent = { direction: "up" | "down"; recordedAt: number }
+type TailMessageSnapshot = {
+	ts: number
+	contentSignature: string
+	renderSignature: string
+}
+
+function createTailMessageSnapshot(message: ClineMessage | undefined): TailMessageSnapshot | null {
+	if (!message) return null
+	const contentSignature = JSON.stringify([message.partial === true, message.text ?? ""])
+	return {
+		ts: message.ts,
+		contentSignature,
+		renderSignature: JSON.stringify([
+			message.type,
+			message.ask ?? message.say ?? "",
+			message.interactionId ?? "",
+			contentSignature,
+		]),
+	}
+}
 
 export const MessagesArea: React.FC<MessagesAreaProps> = ({
 	task,
@@ -103,7 +123,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 	const [isWebviewHidden, setIsWebviewHidden] = useState(() => document.visibilityState === "hidden")
 	const isWebviewHiddenRef = useRef(isWebviewHidden)
 	isWebviewHiddenRef.current = isWebviewHidden
-	const lastMessageSignatureRef = useRef("")
+	const tailMessageSnapshotRef = useRef<TailMessageSnapshot | null>(null)
 	// A hidden snapshot belongs to exactly one Task and is invalidated on visibility restoration.
 	const cachedVisibleMessagesRef = useRef<{ taskTs: number; rows: (ClineMessage | ClineMessage[])[] } | null>(null)
 
@@ -113,10 +133,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 	clineMessagesLengthRef.current = clineMessages.length
 
 	const lastRawMessage = useMemo(() => clineMessages.at(-1), [clineMessages])
-	const lastMessageSignature = useMemo(() => {
-		if (!lastRawMessage) return ""
-		return `${lastRawMessage.ts}:${lastRawMessage.partial === true ? "partial" : "final"}:${lastRawMessage.text ?? ""}`
-	}, [lastRawMessage])
+	const tailMessageSnapshot = useMemo(() => createTailMessageSnapshot(lastRawMessage), [lastRawMessage])
 
 	// Reset auto-scroll flag when entering a new task so the view scrolls
 	// to the bottom instead of staying wherever the previous task left it.
@@ -131,7 +148,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		latestExtensionRangeRef.current = null
 		latestVisibleAnchorTsRef.current = null
 		userScrollIntentRef.current = null
-		lastMessageSignatureRef.current = ""
+		tailMessageSnapshotRef.current = null
 		scrollBehavior.cancelProgrammaticScroll()
 	}, [task.ts, scrollBehavior.cancelProgrammaticScroll, scrollBehavior.disableAutoScrollRef])
 
@@ -370,10 +387,17 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 	useLayoutEffect(() => {
 		const window = currentMessageWindow()
 		const absoluteBottomLoaded = window.start + window.length >= window.total
-		const previousSignature = lastMessageSignatureRef.current
-		const lastMessageTsChanged = previousSignature.split(":", 1)[0] !== String(lastRawMessage?.ts ?? "")
-		const lastMessageContentChanged = previousSignature !== "" && previousSignature !== lastMessageSignature
-		lastMessageSignatureRef.current = lastMessageSignature
+		const previousSnapshot = tailMessageSnapshotRef.current
+		const lastMessageTsChanged = previousSnapshot?.ts !== tailMessageSnapshot?.ts
+		const lastMessageContentChanged =
+			previousSnapshot !== null && previousSnapshot.renderSignature !== tailMessageSnapshot?.renderSignature
+		const renderIdentityChangedWithoutContent =
+			previousSnapshot !== null &&
+			tailMessageSnapshot !== null &&
+			previousSnapshot.ts === tailMessageSnapshot.ts &&
+			previousSnapshot.contentSignature === tailMessageSnapshot.contentSignature &&
+			previousSnapshot.renderSignature !== tailMessageSnapshot.renderSignature
+		tailMessageSnapshotRef.current = tailMessageSnapshot
 
 		const intent = getBottomFollowIntent({
 			disableAutoScroll: disableAutoScrollRef.current,
@@ -382,10 +406,10 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 			lastMessageContentChanged,
 		})
 
-		if (intent === "follow" && previousSignature !== "") {
-			scrollToLoadedEdge("bottom", "auto")
+		if (intent === "follow" && previousSnapshot !== null) {
+			scrollToLoadedEdge("bottom", "auto", renderIdentityChangedWithoutContent)
 		}
-	}, [currentMessageWindow, disableAutoScrollRef, lastRawMessage?.ts, lastMessageSignature, scrollToLoadedEdge])
+	}, [currentMessageWindow, disableAutoScrollRef, scrollToLoadedEdge, tailMessageSnapshot])
 
 	const scrolledPastUserMessageRowOffset = useMemo(() => {
 		if (!scrolledPastUserMessage) return -1

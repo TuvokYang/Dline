@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
 	totalMessageCount: 0,
 	currentMessages: [] as ClineMessage[],
 	currentFirstItemIndex: 0,
+	setCurrentMessages: undefined as React.Dispatch<React.SetStateAction<ClineMessage[]>> | undefined,
 	virtuosoProps: undefined as VirtuosoTestProps | undefined,
 	scrollToIndex: vi.fn(),
 }))
@@ -32,6 +33,7 @@ vi.mock("@/context/ExtensionStateContext", async () => {
 
 			mocks.currentMessages = clineMessages
 			mocks.currentFirstItemIndex = firstItemIndex
+			mocks.setCurrentMessages = setClineMessages
 
 			return {
 				clineMessages,
@@ -149,6 +151,7 @@ describe("MessagesArea sliding-window integration", () => {
 		mocks.totalMessageCount = 1000
 		mocks.currentMessages = []
 		mocks.currentFirstItemIndex = 0
+		mocks.setCurrentMessages = undefined
 	})
 
 	afterEach(() => {
@@ -164,6 +167,45 @@ describe("MessagesArea sliding-window integration", () => {
 
 		expect(mocks.virtuosoProps?.initialTopMostItemIndex).toEqual({ index: 199, align: "end" })
 		expect(scrollBehavior.requestProgrammaticScroll).not.toHaveBeenCalled()
+	})
+
+	it("re-follows the loaded bottom when a completion say becomes an ask with the same timestamp and text", async () => {
+		const completionText = "Completion is ready"
+		mocks.initialMessages = [
+			createMessages(0, 1)[0],
+			{
+				ts: 2,
+				type: "say",
+				say: "completion_result",
+				text: completionText,
+				partial: false,
+			} as ClineMessage,
+		]
+		mocks.initialFirstItemIndex = 0
+		mocks.totalMessageCount = 2
+		const scrollBehavior = renderMessagesArea()
+
+		act(() => {
+			mocks.setCurrentMessages?.((messages) => [
+				...messages.slice(0, -1),
+				{
+					...messages.at(-1)!,
+					type: "ask",
+					ask: "completion_result",
+					say: undefined,
+					interactionId: "completion-interaction",
+				},
+			])
+		})
+
+		await waitFor(() => {
+			expect(scrollBehavior.requestProgrammaticScroll).toHaveBeenCalledWith(
+				expect.objectContaining({
+					priority: "layout",
+					retryDelaysMs: [50, 200, 500],
+				}),
+			)
+		})
 	})
 
 	it("does not lose a boundary fetch when two ranges arrive within the old throttle window", async () => {

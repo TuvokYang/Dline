@@ -27,7 +27,6 @@ export interface MultiInstanceLauncherOptions {
 	/** Extension host storage shared by every instance of the current worker. */
 	readonly extensionsDir: string
 	readonly environment?: Readonly<Record<string, string>>
-	readonly recordVideo?: boolean
 	readonly server: ClineApiServerMock
 	readonly testInfo: TestInfo
 	readonly workspaceDir: string
@@ -147,16 +146,6 @@ export class MultiInstanceLauncher {
 				),
 				DEV_WORKSPACE_FOLDER: E2ETestHelper.CODEBASE_ROOT_DIR,
 			},
-			recordVideo:
-				this.options.recordVideo === false
-					? undefined
-					: {
-							dir: E2ETestHelper.getResultsDir(
-								this.options.testInfo.title,
-								`${label}-recordings`,
-								`${this.options.testInfo.testId}-retry-${this.options.testInfo.retry}`,
-							),
-						},
 			args: [
 				"--no-sandbox",
 				"--disable-updates",

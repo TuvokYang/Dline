@@ -146,7 +146,7 @@ async function submitInteractionFeedback(sidebar: Frame, text: string): Promise<
 }
 
 async function expectSingleUserFeedback(sidebar: Frame, text: string): Promise<void> {
-	const feedback = sidebar.locator("span.ph-no-capture:not(button span)").filter({ hasText: text })
+	const feedback = sidebar.getByTestId("direct-user-input").filter({ hasText: text })
 	await expect(feedback).toHaveCount(1)
 	await expect(feedback).toHaveText(text)
 }
@@ -369,7 +369,7 @@ const protocolCases = [
 		profileName: E2E_PROFILE_NAMES.mockAnthropic,
 		contextWindow: 1_000_000,
 		responseText: "E2E_ANTHROPIC_USAGE_OK",
-		thinking: { mode: "budget" as const, budget: 2_048 },
+		thinking: { mode: "effort" as const, effort: "high" },
 		exposesReasoningSummary: true,
 		replaysReasoningInRequestBody: true,
 		requiresWebSearchApproval: true,
@@ -697,7 +697,7 @@ for (const status of [403, 429, 502] as const) {
 			e2e.setTimeout(180_000)
 			const marker = `E2E_HTTP_${status}`
 			const retryFeedback = `E2E_HTTP_${status}_RETRY_FEEDBACK`
-			const expectedFailureRequestCount = status === 403 ? 1 : status === 429 ? 12 : 4
+			const expectedFailureRequestCount = status === 403 ? 1 : 4
 			server.enqueueResponses(
 				"openai-compatible-chat",
 				...Array.from({ length: 24 }, () => ({
@@ -744,8 +744,8 @@ for (const status of [403, 429, 502] as const) {
 					code: `e2e_http_${status}`,
 					details: { type: "e2e_mock_error" },
 				})
-				await expect(sidebar.getByTestId("error-retry-box")).toHaveCount(0)
-				await expect(sidebar.getByText("Automatic retry stopped", { exact: true })).toHaveCount(0)
+				await expect(errorBox).toContainText("Automatic retry stopped")
+				await expect(errorBox).toContainText("All 3 automatic attempts were used.")
 			}
 
 			const retryButton = sidebar.locator('vscode-button[aria-label="Retry"]')
@@ -832,7 +832,7 @@ e2e(
 		await page.waitForTimeout(1_000)
 
 		await expect(input).toHaveValue(unsentDraft)
-		const submittedFeedback = sidebar.locator("span.ph-no-capture:not(button span)").filter({ hasText: unsentDraft })
+		const submittedFeedback = sidebar.getByTestId(/^(?:direct|queued)-user-input$/).filter({ hasText: unsentDraft })
 		await expect(submittedFeedback).toHaveCount(0)
 		expect(server.openAiRequestCount).toBe(3)
 		expect(JSON.stringify(server.getOpenAiRequestBodies())).not.toContain(unsentDraft)
@@ -1060,7 +1060,7 @@ e2e(
 			})),
 		)
 		await sendTask(sidebar, "Exercise an Anthropic connection failure.")
-		const expectedFailureRequestCount = 12
+		const expectedFailureRequestCount = 4
 		const hostedSearchApproval = sidebar.getByRole("contentinfo").getByText("Approve", { exact: true })
 		const approveNextHostedRequest = async (completedRequestCount: number): Promise<void> => {
 			await expect(hostedSearchApproval).toHaveCount(1, { timeout: 60_000 })
@@ -1088,8 +1088,8 @@ e2e(
 			provider: "anthropic",
 			model: "claude-sonnet-4-6",
 		})
-		await expect(errorBox).toHaveCount(0)
-		await expect(sidebar.getByText("Automatic retry stopped", { exact: true })).toHaveCount(0)
+		await expect(errorBox).toContainText("Automatic retry stopped")
+		await expect(errorBox).toContainText("All 3 automatic attempts were used.")
 		const failures = server.getMockConsumptions("anthropic-messages")
 		expect(failures).toHaveLength(expectedFailureRequestCount)
 		expect(failures.every((entry) => entry.status === 0)).toBe(true)
@@ -1101,7 +1101,10 @@ e2e(
 			arguments: { result: "E2E_ANTHROPIC_CONNECTION_RETRY_OK" },
 		})
 		await sidebar.locator('vscode-button[aria-label="Retry"]').click()
-		await approveNextHostedRequest(expectedFailureRequestCount)
+		await expect(hostedSearchApproval).toHaveCount(0)
+		await expect
+			.poll(() => server.getRequestCount("anthropic-messages"), { timeout: 60_000 })
+			.toBe(expectedFailureRequestCount + 1)
 		await expect(sidebar.getByText("E2E_ANTHROPIC_CONNECTION_RETRY_OK", { exact: false }).last()).toBeVisible({
 			timeout: 60_000,
 		})
@@ -1219,7 +1222,7 @@ e2e(
 		await page.waitForTimeout(1_000)
 
 		await expect(input).toHaveValue(unsentDraft)
-		const submittedFeedback = sidebar.locator("span.ph-no-capture:not(button span)").filter({ hasText: unsentDraft })
+		const submittedFeedback = sidebar.getByTestId(/^(?:direct|queued)-user-input$/).filter({ hasText: unsentDraft })
 		await expect(submittedFeedback).toHaveCount(0)
 		expect(server.getRequestCount("deepseek-chat")).toBe(2)
 		expect(JSON.stringify(server.getMockConsumptions("deepseek-chat").map((entry) => entry.requestBody))).not.toContain(

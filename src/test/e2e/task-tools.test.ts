@@ -25,7 +25,7 @@ async function sendTask(sidebar: Frame, text: string): Promise<void> {
 }
 
 async function expectSingleUserFeedback(sidebar: Frame, text: string): Promise<void> {
-	const feedback = sidebar.locator("span.ph-no-capture:not(button span)").filter({ hasText: text })
+	const feedback = sidebar.getByTestId(/^(?:user|queued)-input-markdown-scroll$/).filter({ hasText: text })
 	await expect(feedback).toHaveCount(1)
 	await expect(feedback).toHaveText(text)
 }
@@ -110,7 +110,7 @@ e2e(
 			code: "ENOENT",
 		})
 		await helper.signin(sidebar)
-		await setAutoApproveAction(sidebar, "Execute safe commands", true)
+		await setAutoApproveAction(sidebar, "Execute safe commands", false)
 		server.resetOpenAiMock()
 		const successMarker = "E2E_MUTED_SUCCESS_STDOUT"
 		const failureMarker = "E2E_MUTED_FAILURE_STDERR"
@@ -318,9 +318,9 @@ e2e(
 	async ({ helper, page, server, sidebar, userDataDir }) => {
 		e2e.setTimeout(180_000)
 		await helper.signin(sidebar)
-		await setAutoApproveAction(sidebar, "Execute safe commands", true)
+		await setAutoApproveAction(sidebar, "Execute safe commands", false)
 		server.resetOpenAiMock()
-		const command = `node -e "console.log('E2E_DRAFT_COMMAND_STARTED'); setTimeout(() => console.log('E2E_DRAFT_COMMAND_FINISHED'), 5000)"`
+		const command = `node -e "console.log('E2E_DRAFT_COMMAND_STARTED'); setTimeout(() => console.log('E2E_DRAFT_COMMAND_FINISHED'), 2000)"`
 		server.enqueueOpenAiResponses(
 			{
 				type: "tool",
@@ -329,7 +329,7 @@ e2e(
 				arguments: {
 					command,
 					workdirectory: ".",
-					requires_approval: false,
+					requires_approval: true,
 					synchronous: true,
 					timeout: 60,
 				},
@@ -355,6 +355,9 @@ e2e(
 		)
 
 		await sendTask(sidebar, "E2E_UNSENT_DRAFT_FOREGROUND_TASK")
+		const approveButton = sidebar.getByText("Approve", { exact: true })
+		await expect(approveButton).toBeVisible({ timeout: 60_000 })
+		await approveButton.click()
 		const copyCommandButton = sidebar.getByRole("button", { name: "Copy command" }).last()
 		await expect(copyCommandButton).toBeVisible({ timeout: 60_000 })
 		const commandActions = copyCommandButton.locator("xpath=ancestor::div[.//button[normalize-space()='Cancel']][1]")
@@ -367,13 +370,13 @@ e2e(
 		await input.pressSequentially(unsentDraft, { delay: 20 })
 		await expect(input).toHaveValue(unsentDraft)
 
-		await expect(sidebar.getByText("E2E_UNSENT_DRAFT_FOREGROUND_DONE", { exact: false }).last()).toBeVisible({
-			timeout: 60_000,
-		})
+		await expect(
+			sidebar.getByTestId("completion-output-scroll").filter({ hasText: "E2E_UNSENT_DRAFT_FOREGROUND_DONE" }),
+		).toBeVisible({ timeout: 60_000 })
 		await page.waitForTimeout(1_000)
 
 		await expect(input).toHaveValue(unsentDraft)
-		const submittedFeedback = sidebar.locator("span.ph-no-capture:not(button span)").filter({ hasText: unsentDraft })
+		const submittedFeedback = sidebar.getByTestId(/^(?:direct|queued)-user-input$/).filter({ hasText: unsentDraft })
 		await expect(submittedFeedback).toHaveCount(0)
 		expect(server.openAiRequestCount).toBe(2)
 		expect(JSON.stringify(server.getOpenAiRequestBodies())).not.toContain(unsentDraft)

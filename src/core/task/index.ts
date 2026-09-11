@@ -3064,7 +3064,7 @@ export class Task {
 		compactionConversationRange?: ClineMessage["compactionConversationRange"],
 	): Promise<ClineMessage> {
 		if (!snapshot.existingTs) throw new Error("Context compaction card is unavailable for durable commit.")
-		const committed = await this.messageStateHandler.commitTransientClineMessage(
+		const committed = await this.messageStateHandler.finalizeClineMessage(
 			this.createContextCompactionMessage(input, snapshot, false, compactionConversationRange),
 		)
 		this.contextCompactionPresentation.markDurable(snapshot)
@@ -3141,8 +3141,9 @@ export class Task {
 			presentation: summary,
 			existingTs,
 		}
+		const runtimeState = this.getRuntimeState()
 		const outcome =
-			this.getRuntimeState().interaction?.status === "awaiting"
+			runtimeState.interaction?.status === "awaiting"
 				? await this.interactionCoordinator.interrupt(review)
 				: await this.interactionCoordinator.open(review)
 		if (outcome.actionId === "confirm_utility") return { action: "accept" }
@@ -10091,6 +10092,7 @@ export class Task {
 					remoteSkills: remoteConfigSettings.remoteGlobalSkills ?? [],
 					remoteWorkflows: remoteConfigSettings.remoteGlobalWorkflows ?? [],
 				},
+				{ trustedUserText: true },
 			)
 
 			if (needsCheck) {

@@ -1245,7 +1245,7 @@ e2e(
 			await input.fill(task.followUp)
 			await input.press("Enter")
 			await expect(input).toHaveValue("")
-			const feedback = task.frame.locator("span.ph-no-capture:not(button span)").filter({ hasText: task.followUp })
+			const feedback = task.frame.getByTestId(/^(?:user|queued)-input-markdown-scroll$/).filter({ hasText: task.followUp })
 			await expect(feedback).toHaveCount(1)
 			await expect(feedback).toHaveText(task.followUp)
 			await expect.poll(() => server.getRequestCount("openai-compatible-responses"), { timeout: 30_000 }).toBe(index + 4)

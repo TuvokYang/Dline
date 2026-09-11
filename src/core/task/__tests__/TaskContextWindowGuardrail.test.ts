@@ -265,7 +265,7 @@ describe("Task context-window final admission guard", () => {
 		expect(commit).toContain("createCompactionConversationRange(state")
 		expect(commit).toContain("this.commitContextCompactionSnapshot(input, snapshot, range)")
 		expect(source).toContain("private async commitContextCompactionSnapshot(")
-		expect(source).toContain("this.messageStateHandler.commitTransientClineMessage(")
+		expect(source).toContain("this.messageStateHandler.finalizeClineMessage(")
 		expect(source).toContain("compactionDurable: partial === false")
 		expect(commit).toContain("this.taskState.targetWindowFittingCommitted = true")
 		expect(commit).not.toContain("overwriteApiConversationHistory(")
