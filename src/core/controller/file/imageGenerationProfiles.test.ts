@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { ImageGenerationProfile } from "@shared/proto/dline/profile"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const state = vi.hoisted(() => ({
 	fileText: "[]",

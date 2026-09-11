@@ -394,9 +394,21 @@ export class E2ETestHelper {
 	/** Dismiss "What's New" version announcement modal if visible. */
 	public static async dismissWhatsNewModal(sidebar: Frame): Promise<void> {
 		const whatsNewDialog = sidebar.getByRole("heading", { name: /New in v/ })
-		if (!(await whatsNewDialog.isVisible())) return
+		const closeButton = sidebar.getByRole("button", { name: "Close" }).last()
+		let consecutiveHiddenChecks = 0
 
-		await sidebar.getByRole("button", { name: "Close" }).click()
+		for (let attempt = 0; attempt < 12; attempt += 1) {
+			if (await whatsNewDialog.isVisible()) {
+				consecutiveHiddenChecks = 0
+				await closeButton.click({ force: true, timeout: 1_000 }).catch(() => undefined)
+			} else {
+				consecutiveHiddenChecks += 1
+				if (consecutiveHiddenChecks === 3) return
+			}
+
+			await sidebar.page().waitForTimeout(250)
+		}
+
 		await expect(whatsNewDialog).not.toBeVisible()
 	}
 }
@@ -624,7 +636,13 @@ export const e2e = test
 		openVSCode: (
 			workspacePath: string,
 			environmentOverrides?: Readonly<Record<string, string>>,
-			launchOptions?: { recordVideo?: boolean },
+			launchOptions?: {
+				recordVideo?: boolean
+				showVideoActions?: boolean
+				recordVideoSize?: { width: number; height: number }
+				windowSize?: { width: number; height: number }
+				forceDeviceScaleFactor?: number
+			},
 		) => Promise<ElectronApplication>
 	}>({
 		openVSCode: async (
@@ -727,12 +745,29 @@ export const e2e = test
 										"recordings",
 										`${testInfo.testId}-retry-${testInfo.retry}`,
 									),
+									...(launchOptions.recordVideoSize ? { size: launchOptions.recordVideoSize } : {}),
+									...(launchOptions.showVideoActions
+										? {
+												showActions: {
+													cursor: "pointer" as const,
+													duration: 500,
+													// Playwright accepts integers only; zero is ignored and falls back to its 24px CSS default.
+													fontSize: 1,
+												},
+											}
+										: {}),
 								},
 					args: [
 						"--no-sandbox",
 						...(cdpPort !== undefined ? [`--remote-debugging-port=${cdpPort}`] : []),
 						"--disable-updates",
 						"--disable-workspace-trust",
+						...(launchOptions.windowSize
+							? [`--window-size=${launchOptions.windowSize.width},${launchOptions.windowSize.height}`]
+							: []),
+						...(launchOptions.forceDeviceScaleFactor !== undefined
+							? [`--force-device-scale-factor=${launchOptions.forceDeviceScaleFactor}`]
+							: []),
 						"--disable-extensions", // Run VS Code with all extensions disabled other than the one under test.
 						"--skip-welcome",
 						"--skip-release-notes",

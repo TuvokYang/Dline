@@ -12,8 +12,10 @@
 //     inside the extension after install. It stays focused on the VS Code UX.
 //
 // vsce reads README.md from the extension root at `vsce package` / `vsce publish`
-// time and has no flag to point it elsewhere, so we copy README.marketplace.md
-// over README.md just before packaging and put the original back afterwards.
+// time. Its `--readme-path` flag only selects among files that survive
+// .vscodeignore, and README.marketplace.md is deliberately excluded from the
+// .vsix, so we copy README.marketplace.md over README.md just before packaging
+// and put the original back afterwards.
 //
 // swapIn is idempotent: if README.md already matches README.marketplace.md
 // (e.g., an outer wrapper has already swapped), it no-ops instead of erroring
@@ -23,6 +25,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import { withSignalSafeCleanup } from "./signal-safe-cleanup.mjs"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -67,6 +70,29 @@ export function restore() {
 	fs.copyFileSync(BACKUP_PATH, README_PATH)
 	fs.unlinkSync(BACKUP_PATH)
 	return { skipped: false }
+}
+
+/**
+ * Run `work` while README.marketplace.md is swapped into README.md.
+ *
+ * The cleanup stack is shared with callers so every temporary packaging file
+ * is restored by the same normal, error, SIGINT, and SIGTERM lifecycle. When
+ * `swapIn` skips because an outer wrapper already swapped, this call does not
+ * register a README restore and remains safe to nest.
+ *
+ * @template T
+ * @param {(cleanups: import("./signal-safe-cleanup.mjs").SynchronousCleanupStack) => T | Promise<T>} work
+ * @param {Parameters<typeof withSignalSafeCleanup>[1]} [options]
+ * @returns {Promise<T>}
+ */
+export async function withMarketplaceReadme(work, options) {
+	return withSignalSafeCleanup(async (cleanups) => {
+		const swapped = !swapIn().skipped
+		if (swapped) {
+			cleanups.defer(() => restore())
+		}
+		return work(cleanups)
+	}, options)
 }
 
 const invokedAsCli = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename)

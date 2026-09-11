@@ -78,6 +78,7 @@ webview-ui/package-lock.json
 webview-ui/node_modules/**
 webview-ui/.vite-port
 webview-ui/.storybook/**
+webview-ui/storybook-static/**
 webview-ui/components.json
 webview-ui/tailwind.config.mjs
 webview-ui/tsconfig*.json
@@ -106,6 +107,8 @@ test-results/
 tmp_sdk_check/
 tmp/
 dist/tmp/
+# Diagnostic bundles and other archives dropped at the repository root
+*.zip
 # Ignore tests
 tests/
 

@@ -78,6 +78,30 @@ Run tests in headed mode (visible browser):
 npm run e2e -- --headed
 ```
 
+## Demo Recordings
+
+Marketplace demo assets use a separate Playwright configuration and are never included in the default E2E suite or CI jobs.
+They reuse the mock API server and worker-isolated temporary Dline state, so they must not read local credentials, task history,
+or a developer's real workspace.
+
+Build and run one or more demo scenarios:
+
+```bash
+npm run e2e:demo -- smoke
+npm run e2e:demo -- --grep "R1|R2"
+```
+
+Convert registered WebM recordings to GIF assets:
+
+```bash
+npm run demo:media -- --id r1-hero
+npm run demo:media -- --id smoke --out-dir tmp/demo-media
+```
+
+Set `DLINE_DEMO_FFMPEG` when the Playwright-managed ffmpeg executable is stored in a non-standard location. Generated marketplace
+GIFs must be at most 20 seconds and 3 MB; PNG screenshots must be 1200 px wide and at most 500 KB. Before accepting an asset,
+verify that the frame contains no real API key, username, or personal absolute path.
+
 ## Writing Tests
 
 ### Basic Test Structure

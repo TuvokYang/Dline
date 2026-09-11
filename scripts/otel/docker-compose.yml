@@ -1,0 +1,67 @@
+services:
+  otel-lgtm:
+    image: grafana/otel-lgtm:0.32.1
+    container_name: otel-lgtm
+    restart: unless-stopped
+
+    ports:
+      - "3000:3000"
+      - "4317:4317"
+      - "4318:4318"
+      - "4040:4040"
+      - "9090:9090"
+
+    volumes:
+      - otel-lgtm-data:/data
+
+    environment:
+      ENABLE_LOGS_ALL: "true"
+
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+    networks:
+      - observability
+
+
+  grafana-mcp:
+    image: grafana/mcp-grafana:latest
+    container_name: grafana-mcp
+    restart: unless-stopped
+
+    depends_on:
+      otel-lgtm:
+        condition: service_healthy
+
+    environment:
+      GRAFANA_URL: http://otel-lgtm:3000
+
+      # 本地开发最简单
+      GRAFANA_USERNAME: admin
+      GRAFANA_PASSWORD: admin
+
+    command:
+      - "-t"
+      - "streamable-http"
+      - "--address"
+      - ":8000"
+      - "--disable-write"
+
+    ports:
+      # 只允许本机访问 MCP
+      - "127.0.0.1:8000:8000"
+
+    networks:
+      - observability
+
+
+volumes:
+  otel-lgtm-data:
+
+
+networks:
+  observability: {}

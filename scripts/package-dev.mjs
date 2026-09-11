@@ -11,8 +11,8 @@
  * This script:
  * 1. Checks if current HEAD is on main branch or a git tag
  * 2. If not, backs up package.json and temporarily modifies version to include hash
- * 3. Runs vsce package
- * 4. Restores package.json if modified
+ * 3. Swaps README.marketplace.md into README.md and runs vsce package
+ * 4. Restores README.md and package.json
  */
 
 import { execSync } from "node:child_process"
@@ -20,6 +20,7 @@ import fs from "node:fs"
 import { createRequire } from "node:module"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import { withMarketplaceReadme } from "./marketplace-readme.mjs"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -103,26 +104,6 @@ console.log(`[package-dev] Git hash: ${hash}`)
 console.log(`[package-dev] On tag: ${onTag}`)
 console.log(`[package-dev] On main branch: ${onMain}`)
 
-let modified = false
-let originalVersion = ""
-let originalContent = ""
-
-if (onTag || onMain) {
-	console.log("[package-dev] On main branch or tag, packaging with original version...")
-} else {
-	// Save original package.json content for restoration
-	originalContent = fs.readFileSync(PACKAGE_JSON_PATH, "utf-8")
-	const pkg = JSON.parse(originalContent)
-	originalVersion = pkg.version
-
-	// Append git hash to version
-	pkg.version = `${pkg.version}-${hash}`
-	writePackageJson(pkg)
-	modified = true
-
-	console.log(`[package-dev] Modified version: ${originalVersion} → ${pkg.version}`)
-}
-
 /**
  * Verify the built bundle is a dev build right before packing.
  *
@@ -145,7 +126,25 @@ function assertDevBundle() {
 	console.log("[package-dev] Verified dist/extension.js is a dev bundle.")
 }
 
-try {
+await withMarketplaceReadme(async (cleanups) => {
+	if (onTag || onMain) {
+		console.log("[package-dev] On main branch or tag, packaging with original version...")
+	} else {
+		const originalContent = fs.readFileSync(PACKAGE_JSON_PATH, "utf-8")
+		const pkg = JSON.parse(originalContent)
+		const originalVersion = pkg.version
+
+		// Register restoration before mutating package.json so signals during any
+		// subsequent build or pack step restore both temporary files.
+		cleanups.defer(() => {
+			console.log(`[package-dev] Restoring original version: ${originalVersion}`)
+			fs.writeFileSync(PACKAGE_JSON_PATH, originalContent)
+		})
+		pkg.version = `${pkg.version}-${hash}`
+		writePackageJson(pkg)
+		console.log(`[package-dev] Modified version: ${originalVersion} → ${pkg.version}`)
+	}
+
 	// 1. Run the same validation and Webview build as vscode:prepublish,
 	// then produce a dev extension bundle with IS_DEV=true and source maps.
 	console.log("[package-dev] Building extension in dev mode...")
@@ -168,10 +167,4 @@ try {
 	})
 	const packageSizeMb = fs.statSync(packagePath).size / 1_000_000
 	console.log(`[package-dev] Package completed: ${packagePath} (${packageSizeMb.toFixed(2)} MB)`)
-} finally {
-	// Always restore package.json if modified
-	if (modified) {
-		console.log(`[package-dev] Restoring original version: ${originalVersion}`)
-		fs.writeFileSync(PACKAGE_JSON_PATH, originalContent)
-	}
-}
+})

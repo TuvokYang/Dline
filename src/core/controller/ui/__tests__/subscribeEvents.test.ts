@@ -2,17 +2,17 @@ import { strict as assert } from "node:assert"
 import { describe, it, vi } from "vitest"
 // sinon import removed: using vitest globals
 import type { Controller } from "../../index"
+import { sendMcpMarketplaceCatalogEvent, subscribeToMcpMarketplaceCatalog } from "../../mcp/subscribeToMcpMarketplaceCatalog"
+import { sendAccountButtonClickedEvent, subscribeToAccountButtonClicked } from "../subscribeToAccountButtonClicked"
 import { sendAddToInputEvent, subscribeToAddToInput } from "../subscribeToAddToInput"
 import { sendChatButtonClickedEvent, subscribeToChatButtonClicked } from "../subscribeToChatButtonClicked"
-import { sendPartialMessageEvent, subscribeToPartialMessage } from "../subscribeToPartialMessage"
-import { sendShowWebviewEvent, subscribeToShowWebview } from "../subscribeToShowWebview"
-import { sendRelinquishControlEvent, subscribeToRelinquishControl } from "../subscribeToRelinquishControl"
-import { sendAccountButtonClickedEvent, subscribeToAccountButtonClicked } from "../subscribeToAccountButtonClicked"
 import { sendHistoryButtonClickedEvent, subscribeToHistoryButtonClicked } from "../subscribeToHistoryButtonClicked"
 import { sendMcpButtonClickedEvent, subscribeToMcpButtonClicked } from "../subscribeToMcpButtonClicked"
+import { sendPartialMessageEvent, subscribeToPartialMessage } from "../subscribeToPartialMessage"
+import { sendRelinquishControlEvent, subscribeToRelinquishControl } from "../subscribeToRelinquishControl"
 import { sendSettingsButtonClickedEvent, subscribeToSettingsButtonClicked } from "../subscribeToSettingsButtonClicked"
+import { sendShowWebviewEvent, subscribeToShowWebview } from "../subscribeToShowWebview"
 import { sendWorktreesButtonClickedEvent, subscribeToWorktreesButtonClicked } from "../subscribeToWorktreesButtonClicked"
-import { sendMcpMarketplaceCatalogEvent, subscribeToMcpMarketplaceCatalog } from "../../mcp/subscribeToMcpMarketplaceCatalog"
 
 /**
  * Creates a minimal mock Controller object that can serve as a unique Map key.

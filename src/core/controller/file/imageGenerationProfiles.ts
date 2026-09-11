@@ -2,7 +2,7 @@ import fsSync from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { getDlineDataDir } from "@core/storage/disk"
-import { getAllApiKeys, getApiKey, setApiKeysBatch, type ApiKeyEntry } from "@core/storage/secrets"
+import { type ApiKeyEntry, getAllApiKeys, getApiKey, setApiKeysBatch } from "@core/storage/secrets"
 import { ImageGenerationProfile, type UpdateImageGenerationProfilesRequest } from "@shared/proto/dline/profile"
 
 const IMAGE_GENERATION_PROFILES_FILE = "image_generation_profiles.json"

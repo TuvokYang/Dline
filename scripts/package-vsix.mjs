@@ -5,22 +5,21 @@
  *
  * Behavior:
  * - On main branch or git tag: packages normally (e.g., dline-5.0.4.vsix)
- * - On feature/development branches:
- *   1. Appends git hash to version (e.g., dline-5.0.4-a1b2c3d.vsix)
- *   2. Applies nightly theme (preview: true, name → dline-nightly,
- *      displayName → Dline (Nightly))
+ * - On feature/development branches: applies the nightly identity
+ *   (preview: true, name → dline-nightly, displayName → Dline (Nightly))
  *
  * This script:
  * 1. Checks if current HEAD is on main branch or a git tag
  * 2. If not, backs up package.json and applies nightly modifications
- * 3. Runs vsce package
- * 4. Restores package.json if modified
+ * 3. Swaps README.marketplace.md into README.md and runs vsce package
+ * 4. Restores README.md and package.json
  */
 
 import { execSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import { withMarketplaceReadme } from "./marketplace-readme.mjs"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -101,38 +100,31 @@ console.log(`[package-vsix] Git hash: ${hash}`)
 console.log(`[package-vsix] On tag: ${onTag}`)
 console.log(`[package-vsix] On main branch: ${onMain}`)
 
-let modified = false
-let originalContent = ""
-let originalVersion = ""
+await withMarketplaceReadme((cleanups) => {
+	if (onTag || onMain) {
+		console.log("[package-vsix] On main branch or tag, packaging with original version...")
+	} else {
+		const originalContent = fs.readFileSync(PACKAGE_JSON_PATH, "utf-8")
+		const pkg = JSON.parse(originalContent)
 
-if (onTag || onMain) {
-	console.log("[package-vsix] On main branch or tag, packaging with original version...")
-} else {
-	// Save original package.json content for restoration
-	originalContent = fs.readFileSync(PACKAGE_JSON_PATH, "utf-8")
-	const pkg = JSON.parse(originalContent)
-	originalVersion = pkg.version
-
-	// Append git hash to version
-
-	// Apply nightly theme: preview flag + renamed identity
-	const originalName = pkg.name
-	const originalDisplayName = pkg.displayName
-	pkg.preview = true
-	pkg.name = originalName + NIGHTLY_SUFFIX
-	pkg.displayName = originalDisplayName + NIGHTLY_DISPLAY_SUFFIX
-	if (pkg.contributes?.viewsContainers?.activitybar?.title) {
-		pkg.contributes.viewsContainers.activitybar.title = originalDisplayName + NIGHTLY_DISPLAY_SUFFIX
+		// Register restoration before mutating package.json so signals during
+		// vscode:prepublish or vsce packaging restore both temporary files.
+		cleanups.defer(() => {
+			console.log("[package-vsix] Restoring original package.json")
+			fs.writeFileSync(PACKAGE_JSON_PATH, originalContent)
+		})
+		const originalName = pkg.name
+		const originalDisplayName = pkg.displayName
+		pkg.preview = true
+		pkg.name = originalName + NIGHTLY_SUFFIX
+		pkg.displayName = originalDisplayName + NIGHTLY_DISPLAY_SUFFIX
+		if (pkg.contributes?.viewsContainers?.activitybar?.title) {
+			pkg.contributes.viewsContainers.activitybar.title = originalDisplayName + NIGHTLY_DISPLAY_SUFFIX
+		}
+		writePackageJson(pkg)
+		console.log(`[package-vsix] Applied nightly theme: preview=true, name=${pkg.name}`)
 	}
 
-	writePackageJson(pkg)
-	modified = true
-
-	console.log(`[package-vsix] Modified version: ${originalVersion} → ${pkg.version}`)
-	console.log(`[package-vsix] Applied nightly theme: preview=true, name=${pkg.name}`)
-}
-
-try {
 	// Ensure dist directory exists
 	if (!fs.existsSync(DIST_DIR)) {
 		fs.mkdirSync(DIST_DIR, { recursive: true })
@@ -146,10 +138,4 @@ try {
 		shell: true,
 	})
 	console.log("[package-vsix] Package completed successfully!")
-} finally {
-	// Always restore package.json if modified
-	if (modified) {
-		console.log(`[package-vsix] Restoring original version: ${originalVersion}`)
-		fs.writeFileSync(PACKAGE_JSON_PATH, originalContent)
-	}
-}
+})

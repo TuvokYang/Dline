@@ -65,12 +65,14 @@ describe("ErrorRow", () => {
 		).toBeInTheDocument()
 	})
 
-	it("renders clineignore error", () => {
-		const clineignoreMessage = { ...mockMessage, text: "/path/to/file.txt" }
-		render(<ErrorRow errorType="clineignore_error" message={clineignoreMessage} />)
+	it("renders agentignore error", () => {
+		const agentignoreMessage = { ...mockMessage, text: "/path/to/file.txt" }
+		render(<ErrorRow errorType="clineignore_error" message={agentignoreMessage} />)
 
 		expect(screen.getByText(/Dline tried to access/)).toBeInTheDocument()
 		expect(screen.getByText("/path/to/file.txt")).toBeInTheDocument()
+		expect(screen.getByText(".agentignore")).toBeInTheDocument()
+		expect(screen.queryByText(".clineignore")).not.toBeInTheDocument()
 	})
 
 	describe("API error handling", () => {
