@@ -1,109 +1,40 @@
 ---
 name: add-new-tool
-description: Add a new AI-callable tool to the Cline extension. Covers proto/host bridge, tool enum, i18n prompts, tool spec, handler, webview rendering, say vs ask, ToolGroupRenderer, and variant configuration.
+description: Add a new AI-callable tool to Dline across canonical descriptors, prompt profiles, execution, interaction ownership, host bridges, Webview presentation, cancellation, persistence, and tests.
 ---
 
-# Add New Tool
+# Add a New Dline Tool
 
-Complete guide for adding a new tool to Cline. Follow ALL steps in order.
-
----
-
-## Step 0: Determine Tool Category
-
-Tools fall into two categories with different rendering paths.
-
-### Read Tools (low-stakes)
-Tools that only READ data without modifying files. Examples: `readFile`, `searchFiles`, `listFiles`, `findReferences`.
-
-**Rendering**: ToolGroupRenderer groups read tools into a single collapsible row:
-```
-Dline read 1 file, performed 2 searches:
-[icon] "greet" in test-tools/ (*.ts)
-[icon] test-tools/utils/math.ts · lines 1-3
-```
-Each item shows icon + formatted text, expandable to show content.
-
-**Registration**:
-- Add to `LOW_STAKES_TOOLS` Set in `messageUtils.ts`
-- Add to `getToolDisplayInfo()` in `ToolGroupRenderer.tsx`
-- Add to `EXPANDABLE_TOOLS` if content is expandable
-- Add to `getToolGroupSummaryFromParsedTools()` for summary count
-- Add to `getActivityText()` for "in progress" state
-- Add to `getIconByToolName()` for icon mapping
-
-### Edit Tools (high-stakes)
-Tools that MODIFY files. Examples: `editedExistingFile`, `rename`, `replaceText`.
-
-**Rendering**: Standalone component in ChatRow. For edit results, use `EditResultRow` (collapsible with red/green line diffs).
-
-### Ask Tools (interactive)
-Tools that ASK the user a question. Examples: `ask_followup_question`, `make_plan`, `qna_respond`.
-
-**Rendering**: `message.ask` triggers question UI with option buttons. The handler returns a `ToolResponse` string that the ToolExecutor pushes as a tool_result.
-
-**Key difference**: `say("tool", ...)` creates a tool execution notification in chat. `ask("followup", ...)` shows an interactive question with buttons. Read/edit tools use `say`, Q&A tools use `ask`.
-
-### Decision Tree
-```
-Will the tool MODIFY files?
-├── YES → Edit Tool → ClineSayTool + standalone ChatRow component
-└── NO  → Read Tool → LOW_STAKES_TOOLS + ToolGroupRenderer
-                └── Will the tool ASK a question?
-                    ├── YES → ClineAsk + ask() callback
-                    └── NO  → ClineSay tool message
-```
+Use this skill only after reading the nearest analogous tool end to end. A tool is complete only when its identity, canonical prompt contract, runtime handler, presentation ownership, approval or interaction behavior, cancellation, recovery, and tests agree.
 
 ---
 
-## Step 1: Proto & Host Bridge (only for LSP/IDE-native tools)
+## Step 0: Classify Ownership Before Editing
 
-**Skip this step if the tool is pure Node.js (no IDE API calls needed).**
+Choose the existing ownership model that matches the behavior:
 
-For tools that call VSCode APIs (LSP, diagnostics, etc.), define a gRPC service:
+1. **Grouped tool row** — routine read-only or low-stakes operations rendered by `ToolGroupRenderer`.
+2. **Dedicated say/ask row** — tools with distinct output or interactive presentation in `ChatRow` and a focused component.
+3. **Backend-owned interaction** — causal user interactions such as follow-up, plan, completion, report, retry, or resume, coordinated through `InteractionCoordinator` and durable interaction state.
+4. **Task activity** — long-running command or subagent work whose output, cancellation, retry, and recovery belong to `TaskActivityStore` and the Activities view.
 
-### 1a. Create proto file
-```
-proto/host/{service}.proto
-```
+Also decide whether the tool is read-only, state-changing, approval-gated, turn-ending, IDE-native, available to subagents, and enabled in Standard, Lite, or both profiles. Do not create a parallel lifecycle boolean beside `TaskRuntime`, duplicate interaction state in the Webview, or assume every tool needs a custom component.
 
-```proto
-syntax = "proto3";
-package host;
-option go_package = "github.com/cline/grpc-go/host";
+---
 
-service XxxService {
-  rpc methodName(XxxRequest) returns (XxxResponse);
-}
+## Step 1: Add a Host Bridge Only for IDE-Native Capability
 
-message XxxRequest { ... }
-message XxxResponse { ... }
-```
+Skip this step when core Node.js code can implement the tool without importing VS Code APIs. Shared core must depend on `HostProvider`, not `vscode`.
 
-### 1b. Run proto generation
-```bash
-npm run protos
-```
-Auto-generates: types (`src/shared/proto/host/`), client interfaces (`host-bridge-client-types.ts`), standalone clients, VSCode service config.
+For an IDE-native capability:
 
-### 1c. Create VSCode handler
-```
-src/hosts/vscode/hostbridge/{service}/methodName.ts
-```
-```typescript
-import * as vscode from "vscode"
-import { XxxRequest, XxxResponse } from "@/shared/proto/host/{service}"
+1. Add the owning contract under `proto/dline/host/{service}.proto` using the existing `dline` namespace and compatible field numbers.
+2. Run `npm run protos`; never edit generated files as the source change.
+3. Implement the VS Code adapter under `src/hosts/vscode/hostbridge/{service}/`.
+4. Follow the nearest generated host client and external-host adapter to expose the capability through `HostProvider`.
+5. Verify the generated projections under `src/shared/proto/`, `src/generated/hosts/`, grpc-js/nice-grpc output, the Webview client when applicable, and the standalone descriptor set.
 
-export async function methodName(request: XxxRequest): Promise<XxxResponse> {
-    // Call vscode.commands.executeCommand(...) or vscode.languages.*
-}
-```
-
-### 1d. Register in HostProvider
-- `src/hosts/host-provider-types.ts`: Add `XxxServiceClientInterface` import and `xxxClient` field to `HostBridgeClientProvider`
-- `src/hosts/host-provider.ts`: Add `static get xxx()` accessor
-- `src/hosts/vscode/hostbridge/client/host-grpc-client.ts`: Add `xxxClient: createGrpcClient(host.XxxServiceDefinition)`
-- `src/hosts/external/host-bridge-client-manager.ts`: Add import + property + initialization for `XxxServiceClientImpl`
+Treat Webview ProtoBus as generated envelopes over `postMessage`, not as a network gRPC socket. Keep VS Code-only types and behavior inside the host adapter.
 
 ### Important: Save after applyEdit
 For VSCode handlers that use `vscode.workspace.applyEdit()`, the edit only changes the text buffer — NOT the disk. Always save modified documents:
@@ -139,95 +70,37 @@ export const READ_ONLY_TOOLS = [
 
 ---
 
-## Step 3: I18n Prompt File (MANDATORY)
+## Step 3: Define AI-Visible Text Through I18n
 
-**ALL English text visible to the AI MUST be in i18n files.** No hardcoded strings in tool specs or handlers. This includes: tool descriptions, parameter instructions, AND handler result/error messages returned to the AI via `toolError()` or similar. Use `getPrompt("toolName", "key")` in handlers just like in specs.
+AI-visible descriptions, parameter instructions, usage constraints, and handler diagnostics belong under `src/core/prompts/i18n/en/` and are read with `getPrompt()`. Follow the nearest current tool's key naming; there is no required `description`/`nativeDescription` pair.
 
-### 3a. Create i18n file
-```
-src/core/prompts/i18n/en/{toolNameCamelCase}.ts
-```
-
-```typescript
-const prompts: Record<string, string> = {
-    description: "What the tool does and when to use it. Rendered as XML text in system prompt (GENERIC variant).",
-    nativeDescription: "Shorter variant for native function calling (NATIVE_NEXT_GEN variant). MUST be complete -- the AI reads this as the tool's function description.",
-    paramNameInstruction: "Clear instruction on what this parameter expects.",
-    paramNameUsage: "Example value (just the example, not instruction text).",
-}
-export default prompts
-```
-
-File name must be camelCase (e.g., `findReferences.ts` for `find_references` tool).
-
-### 3b. `description` vs `nativeDescription`
-
-| | `description` | `nativeDescription` |
-|---|---|---|
-| **Used by** | GENERIC variant (XML tool calling) | NATIVE_NEXT_GEN / NATIVE_GPT_5 variants (native function calling) |
-| **Rendered as** | Text in system prompt | API function definition `description` field |
-| **Token source** | System prompt tokens | Tools array tokens |
-| **Style** | Can be longer, may include usage tips | Concise but complete -- must cover ALL constraints |
-
-**Rule**: Write `nativeDescription` first (it is the primary one for modern models), then derive `description` from it. Both must cover the same constraints: what the tool does, what it does NOT do, sub-behavior warnings, and fallback guidance.
+The canonical descriptor must be complete enough for both native provider tools and XML documentation. Provider transport differences are projections, not separate model-family prose.
 
 ---
 
-## Step 4: Tool Spec Definition
+## Step 4: Add the Canonical Descriptor
 
-File: `src/core/prompts/system-prompt/tools/{tool_name}.ts`
+Edit `src/core/prompts/tools/tool-specs.ts`:
 
-**MUST define TWO variants**: GENERIC (XML text) and NATIVE_NEXT_GEN (native function calling).
+- add exactly one canonical `ProfileToolSpec` descriptor;
+- use `spec(...)` for native and XML transport, or `nativeSpec(...)` only when XML exposure is intentionally unsupported;
+- model parameter type, requiredness, enum values, dependencies, and runtime `contextRequirements` explicitly;
+- include `task_progress` only when the tool participates in the current focus-tracking contract;
+- keep runtime capability gates in named predicates rather than provider or model-family branches.
 
-```typescript
-import { ModelFamily } from "@/shared/prompts"
-import { ClineDefaultTool } from "@/shared/tools"
-import { getPrompt } from "../../i18n"
-import type { ClineToolSpec } from "../spec"
-import { TASK_PROGRESS_PARAMETER } from "../types"
-
-const id = ClineDefaultTool.MY_NEW_TOOL
-
-const generic: ClineToolSpec = {
-    variant: ModelFamily.GENERIC,
-    id,
-    name: "my_new_tool",
-    description: getPrompt("myNewTool", "description"),     // ← XML text
-    parameters: [
-        { name: "required_param", required: true, instruction: getPrompt(...), usage: getPrompt(...) },
-        { name: "optional_param", required: false, type: "boolean", instruction: getPrompt(...) },
-        TASK_PROGRESS_PARAMETER,  // always include
-    ],
-}
-
-const nativeNextGen: ClineToolSpec = {
-    ...generic,                                             // reuse parameters
-    variant: ModelFamily.NATIVE_NEXT_GEN,
-    description: getPrompt("myNewTool", "nativeDescription"), // ← native function desc
-}
-
-export const my_new_tool_variants = [generic, nativeNextGen]
-```
-
-If the tool also supports NATIVE_GPT_5 or GEMINI_3 variants, add them the same way (spread from nativeNextGen, override variant and description).
+`provider-projector.ts` and `xml-tool-projector.ts` project the same descriptor to provider-native schemas and XML documentation. Do not add `ModelFamily.GENERIC`, `NATIVE_NEXT_GEN`, GPT-specific, Gemini-specific, Hermes, GLM, or other model-family variants.
 
 ---
 
-## Step 5: Tool Spec Registration
+## Step 5: Add Profile Membership
 
-### 5a. Export from index
-File: `src/core/prompts/system-prompt/tools/index.ts`
-```typescript
-export * from "./my_new_tool"
-```
+Edit `src/core/prompts/tools/tool-ids.ts`:
 
-### 5b. Register in init
-File: `src/core/prompts/system-prompt/tools/init.ts`
-```typescript
-import { my_new_tool_variants } from "./my_new_tool"
-// In registerClineToolSets():
-const allToolVariants = [ ...my_new_tool_variants, ...]
-```
+- add the ID to `STANDARD_TOOL_IDS` when Standard should expose it;
+- add it to `LITE_TOOL_IDS` only when it fits Lite's intentionally smaller contract;
+- preserve the deliberate order because prompt/tool ordering is observable and snapshot-tested.
+
+The supported prompt profiles are exactly `PromptProfile.Standard` and `PromptProfile.Lite`. Do not create a third profile or a per-model tool list.
 
 ---
 
@@ -235,40 +108,40 @@ const allToolVariants = [ ...my_new_tool_variants, ...]
 
 File: `src/core/task/tools/handlers/{ToolName}Handler.ts`
 
-**Always implement `IFullyManagedTool`.**
+Implement the smallest runtime contract that owns the behavior:
 
-### Two-phase rendering pattern:
+- `IToolHandler` is the required base contract;
+- add `IPartialBlockHandler` only when streaming partial presentation is meaningful;
+- use `IFullyManagedTool` only when the handler truly owns its complete approval flow.
+
+The executor checks partial support structurally, so do not add partial UI or approval ownership merely for consistency.
+
+### Optional two-phase rendering pattern
+
 ```typescript
-export class MyNewToolHandler implements IFullyManagedTool {
+export class MyNewToolHandler implements IToolHandler, IPartialBlockHandler {
     readonly name = ClineDefaultTool.MY_NEW_TOOL
 
-    async handlePartialBlock(block: ToolUse, uiHelpers: StronglyTypedUIHelpers): Promise<void> {
-        // Phase 1: Create tool message for UI while streaming
-        const config = uiHelpers.getConfig()
-        if (config.isSubagentExecution) return
-        const msg = JSON.stringify({
-            tool: "myNewTool",           // ← must match ClineSayTool type
-            path: getReadablePath(config.cwd, rawPath),
-            operationIsLocatedInWorkspace: true,
-        })
-        await uiHelpers.say("tool", msg, undefined, undefined, true, block.ts)
+    getDescription(block: ToolUse): string {
+        return `Run my new tool for ${block.params.required_param}`
     }
 
-    async execute(config: TaskConfig, block: ToolUse): Promise<ToolResponse> {
-        // Phase 2: Run the tool, then update the message with results
-        const result = await doWork(...)
+    async handlePartialBlock(block: ToolUse, uiHelpers: StronglyTypedUIHelpers): Promise<void> {
+        const config = uiHelpers.getConfig()
+        if (config.isSubagentExecution) return
+        await uiHelpers.say("tool", buildPresentation(block, true), undefined, undefined, true, block.ts)
+    }
+
+    async execute(config: TaskConfig, block: ToolUse): Promise<ToolHandlerResult> {
+        const result = await doWork(block.params)
         const content = formatResult(result)
-        // Update the tool message with content (partial: false = complete)
-        await config.callbacks.say("tool", JSON.stringify({
-            tool: "myNewTool",
-            path: relPath,
-            content,                     // ← content shown in expanded view
-            operationIsLocatedInWorkspace: true,
-        }), undefined, undefined, false, block.ts)
+        await config.callbacks.say("tool", buildPresentation(block, false, content), undefined, undefined, false, block.ts)
         return content
     }
 }
 ```
+
+Follow an existing handler with the same approval and presentation ownership. Keep validation, side effects, final rendering, and returned tool result consistent.
 
 ### Path rules:
 - **Always use workspace-relative paths** via `getReadablePath(config.cwd, absPath)`
@@ -408,130 +281,90 @@ const NEW_BG = "bg-green-500/20"  // 20% green on VSCode bg-code
 
 ---
 
-### 8C. Q&A Tools (Ask-type)
+### 8C. Interactive and Turn-Ending Tools
 
-Tools that ask questions use `ClineAsk` and the `ask()` callback:
-```typescript
-// In handler's execute():
-const { response, text } = await config.callbacks.ask("followup", questionText)
-```
+Do not model a new interactive tool as a standalone button table in the Webview. First inspect `AskFollowupQuestionToolHandler`, `MakePlanHandler`, `QnaRespondHandler`, `AttemptCompletionHandler`, or `GenerateReportHandler` and follow the matching ownership model.
 
-The webview renders these via ChatRow's `message.ask` branch:
-- `"followup"` → OptionsButtons with question text
-- `"make_plan"` → PlanCompletionOutputRow
-- `"qna_respond"` → QnaOutputRow
+Interactive tools must:
 
-### 8C-1. Proto ClineAsk Enum (for ask tools)
-File: `proto/cline/ui.proto`
-```proto
-enum ClineAsk {
-    // ... existing
-    MY_NEW_ASK_TYPE = XX;
-}
-```
-Run `npm run protos` after editing.
+- establish or resume a causal interaction through `InteractionCoordinator`;
+- persist enough state to survive interruption and restart;
+- implement `continueInteraction(...)` when a response can arrive after recovery;
+- distinguish approval, rejection, feedback, retry, and cancellation outcomes;
+- avoid replaying already committed side effects when an interaction resumes.
 
-### 8C-2. ClineAsk Type & Proto Conversions (for ask tools)
-File: `src/shared/ExtensionMessage.ts`
-```typescript
-export type ClineAsk = "followup" | ... | "my_new_ask_type"
-```
-File: `src/shared/proto-conversions/cline-message.ts` — add bidirectional mapping in both `convertClineAskToProtoEnum` and `convertProtoEnumToClineAsk`.
+Only add a transport enum or conversion under `proto/dline/` and `src/shared/proto-conversions/` when the durable message contract truly needs a new value. There is no current `buttonConfig.ts` registry to update.
 
-### 8C-3. ButtonConfig (for ask tools with approve/acknowledge buttons)
-File: `webview-ui/src/components/chat/chat-view/shared/buttonConfig.ts`
-- Add entry in `BUTTON_CONFIGS` with `primaryText`, `secondaryText`, `primaryAction`, `secondaryAction`
-- Add case in `getButtonConfig` switch
-- Set `enableButtons: false` for turn-end tools without user interaction (like Q&A, plan, report)
+If custom presentation is required, add a focused component under `webview-ui/src/components/chat/` and route it from `ChatRow.tsx`. Reuse existing rows only when their semantics match; a custom component is not mandatory for every tool.
 
-### 8C-4. Standalone TSX Component (MANDATORY for ask/say tools)
-**Every tool with custom rendering needs its own TSX component.** Do NOT reuse inline JSX in ChatRow — create a separate file:
-```
-webview-ui/src/components/chat/MyNewToolRow.tsx
-```
-Reference patterns: `QnaOutputRow.tsx`, `PlanCompletionOutputRow.tsx`, `StatusUpdateRow.tsx`.
-Use border + background color themes matching the tool's semantic category.
-
-### 8C-5. TURN_ENDING_TOOL_NAMES (for turn-end ask tools)
-File: `src/core/task/assistant-message-order.ts`
-```typescript
-const TURN_ENDING_TOOL_NAMES = new Set<string>([
-    ClineDefaultTool.ATTEMPT,
-    ClineDefaultTool.ASK,
-    ClineDefaultTool.MAKE_PLAN,
-    ClineDefaultTool.QNA_RESPOND,
-    ClineDefaultTool.MY_NEW_TOOL,  // ← ADD if turn-end
-])
-```
+For turn-ending tools, update `src/core/task/assistant-message-order.ts` and test both native and XML ordering. Turn-ending behavior also needs durable interaction and recovery tests; ordering alone is insufficient.
 
 ---
 
-## Step 9: Variant Configuration
+## Step 9: Preserve Lifecycle, Cancellation, and Recovery
 
-File: `src/core/prompts/system-prompt/variants/*/config.ts`
+A running tool must define its terminal projections: completed, failed, cancelled, interrupted, and restored. Long-running work should use the existing command/subagent activity model rather than inventing a parallel spinner or process registry.
 
-Add the tool to ALL variant `.tools()` lists:
-
-**Rule**: LSP-dependent tools skip local model variants (hermes, glm, devstral, trinity). Pure Node.js tools always included.
+When a tool changes Task lifecycle, express it through `TaskRuntime` events and reducer transitions. When it owns durable user interaction, use `InteractionCoordinator`. When it owns long-running output or retry metadata, use `TaskActivityStore`.
 
 ---
 
-## Step 10: Build & Verify
+## Step 10: Verify the Complete Chain
 
-```bash
-npm run compile
-npm run test:unit -- --update-snapshots
-# Verify: 1591+ passing, 0 new failures
+Choose the smallest tests that prove each changed boundary, then broaden for shared contracts:
+
+```text
+npm run check-types
+npm run lint
+npm run test:run -- <focused test files or --project ...>
+npm run test:snapshot             # when canonical prompt output changed
+npm run protos                    # when a Proto source changed
 ```
 
+Also verify, when applicable:
+
+- Standard and Lite profile membership;
+- provider-native and XML projections from the same descriptor;
+- required and optional parameter schemas;
+- approval, rejection, cancellation, timeout, and sanitized errors;
+- partial streaming and final tool result ordering;
+- Webview grouped/dedicated/activity rendering;
+- interruption and restart recovery;
+- VS Code host behavior for host-bridged capabilities;
+- E2E behavior when the change crosses a real host, ProtoBus, persistence, or Task lifecycle boundary.
+
+Never hand-edit generated Proto output or prompt snapshots.
+
 ---
 
-## Complete File Checklist
+## Completion Checklist
 
-### Core (always needed)
-- [ ] `src/shared/tools.ts` (enum + READ_ONLY_TOOLS)
-- [ ] `src/core/prompts/i18n/en/{toolName}.ts` (MANDATORY — description + nativeDescription)
-- [ ] `src/core/prompts/system-prompt/tools/{tool_name}.ts` (spec — must define GENERIC + NATIVE_NEXT_GEN variants)
-- [ ] `src/core/prompts/system-prompt/tools/index.ts` (export)
-- [ ] `src/core/prompts/system-prompt/tools/init.ts` (register)
-- [ ] `src/core/task/tools/handlers/{ToolName}Handler.ts` (IFullyManagedTool)
-- [ ] `src/core/task/tools/ToolExecutorCoordinator.ts` (import + map entry)
-- [ ] `src/core/prompts/system-prompt/variants/*/config.ts` x12
+### Canonical contract
+- [ ] `src/shared/tools.ts`: identity and read-only classification
+- [ ] `src/core/prompts/i18n/en/`: AI-visible prose
+- [ ] `src/core/prompts/tools/tool-specs.ts`: one canonical descriptor
+- [ ] `src/core/prompts/tools/tool-ids.ts`: Standard/Lite membership
+- [ ] provider-native and XML projection tests
 
-### Host Bridge (LSP/IDE tools only)
-- [ ] `proto/host/{service}.proto`
-- [ ] `src/hosts/vscode/hostbridge/{service}/*.ts`
-- [ ] `src/hosts/host-provider-types.ts` (+ xxxClient)
-- [ ] `src/hosts/host-provider.ts` (+ static get xxx)
-- [ ] `src/hosts/vscode/hostbridge/client/host-grpc-client.ts`
-- [ ] `src/hosts/external/host-bridge-client-manager.ts`
+### Runtime
+- [ ] focused handler under `src/core/task/tools/handlers/`
+- [ ] registration in `ToolExecutorCoordinator`
+- [ ] validation, approval, cancellation, errors, and partial/final output tests
+- [ ] `TaskRuntime`, `InteractionCoordinator`, snapshot, or activity integration only where the ownership model requires it
 
-### Webview — Read Tools
-- [ ] `messageUtils.ts` — LOW_STAKES_TOOLS + getIconByToolName
-- [ ] `ToolGroupRenderer.tsx` — getToolDisplayInfo + EXPANDABLE_TOOLS + getToolGroupSummaryFromParsedTools + getActivityText
+### Host and transport, when required
+- [ ] source contract under `proto/dline/` or `proto/dline/host/`
+- [ ] regenerated projections through `npm run protos`
+- [ ] host adapter and `HostProvider` exposure
+- [ ] transport and cancellation tests
 
-### Webview — Ask Tools
-- [ ] `proto/cline/ui.proto` — ClineAsk enum (run `npm run protos`)
-- [ ] `src/shared/ExtensionMessage.ts` — ClineAsk type
-- [ ] `src/shared/proto-conversions/cline-message.ts` — bidirectional mapping
-- [ ] `webview-ui/src/components/chat/chat-view/shared/buttonConfig.ts` — BUTTON_CONFIGS + getButtonConfig case
-- [ ] `webview-ui/src/components/chat/{ToolName}Row.tsx` — standalone TSX component (MANDATORY)
-- [ ] `webview-ui/src/components/chat/ChatRow.tsx` — rendering case in ask switch
-- [ ] `src/core/task/assistant-message-order.ts` — TURN_ENDING_TOOL_NAMES (if turn-end)
+### Presentation, when required
+- [ ] grouped row, dedicated say/ask row, or activity rendering selected intentionally
+- [ ] `ExtensionMessage`/Proto conversion updated only for a real shared contract
+- [ ] loading, completed, failed, cancelled, interrupted, and restored states covered
 
-### Webview — Edit Tools
-- [ ] `src/shared/ExtensionMessage.ts` — ClineSayTool type
-- [ ] `webview-ui/src/components/chat/ChatRow.tsx` — rendering case
-
-### Native Variant Sync
-- [ ] `src/core/prompts/i18n/en/toolUseIndex.ts` — prompt rule updates (if tool changes prompt behavior)
-- [ ] `src/core/prompts/i18n/en/rules.ts` — rule updates
-- [ ] `src/core/prompts/system-prompt/variants/native-next-gen/template.ts` — TOOL_USE / RULES sync
-- [ ] `src/core/prompts/system-prompt/variants/native-gpt-5/template.ts` — TOOL_USE / RULES sync
-- [ ] `src/core/prompts/i18n/en/nativeGpt51Overrides.ts` — TOOL_USE / RULES sync
-- [ ] `src/core/prompts/i18n/en/gemini3Overrides.ts` — TOOL_USE / RULES sync
-
-
-### Verify
-- [ ] `npm run compile` ✅
-- [ ] `npm run test:unit -- --update-snapshots` ✅
+### Verification
+- [ ] focused tests pass
+- [ ] prompt snapshots regenerated and verified when changed
+- [ ] type checking and lint pass for the affected chain
+- [ ] relevant Webview or E2E coverage passes

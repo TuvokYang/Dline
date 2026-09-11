@@ -1,187 +1,74 @@
+---
+name: hotfix-release
+description: Ship an urgent patch through dev, optionally using an isolated bugfix branch, then pass the dev gate before main promotion and a production tag.
+---
+
 # Hotfix Release
 
-Create a hotfix release by cherry-picking specific commits from main onto the latest release tag.
+Ship an urgent patch through the same protected branch and release path as ordinary development.
 
-## Overview
+Follow `repository-and-release` and load `release` before using this workflow.
 
-This workflow helps you:
-1. Select specific commits from main to include in a hotfix
-2. Create a release notes commit on main (changelog + version bump)
-3. Cherry-pick everything onto the latest release tag
-4. Tag and push the new release
+## Default path
 
-## Step 1: Setup and Gather Information
-
-First, ensure we're on main and up to date:
-
-```bash
-git checkout main && git pull origin main
+```text
+fix directly on dev, or use an independent bugfix branch
+  -> focused verification
+  -> if using a PR: independent source branch -> dev
+  -> complete integrated dev gate
+  -> dev-to-main release promotion
+  -> vX.Y.Z on the verified main commit
 ```
 
-Get the latest release tag:
+A hotfix does not authorize direct development on `main`, a feature/bugfix PR to `main`, or a production tag from an old detached tag.
 
-```bash
-git tag --sort=-v:refname | head -1
-```
+## 1. Establish the production baseline
 
-## Step 2: Present Commits Since Last Release
+Dynamically discover `<repository>`, the remote containing the production refs, current `main`, current `dev`, and the latest valid production tag matching `vX.Y.Z`.
 
-Show all commits on main since the last release tag:
+Do not select `dev-vX.Y.Z` as the production baseline. It identifies a tested nightly from `dev`; verify that the chosen production tag belongs to `main` history.
 
-```bash
-LAST_TAG=$(git tag --sort=-v:refname | head -1)
-git log ${LAST_TAG}..HEAD --oneline --format="%h %s (%an)"
-```
+Record the production symptom, affected versions, exact fixes required, non-goals, and recovery requirements.
 
-Also get the commit messages already on the tag (to identify previously cherry-picked commits). Note: Run these as separate commands to avoid shell parsing issues with parentheses in author names:
+## 2. Implement on dev or an isolated branch
 
-```bash
-LAST_TAG=$(git tag --sort=-v:refname | head -1)
-PREV_TAG=$(git tag --sort=-v:refname | head -2 | tail -1)
-```
+Direct implementation on `dev` is allowed. Use a `bugfix/<slug>` branch or dedicated worktree when isolation is valuable or when a PR is required. Any worktree branch must have a clear owner and must not overlap another active worktree's writes.
 
-```bash
-git log $PREV_TAG..$LAST_TAG --oneline --format="%s"
-```
+Validate the original production symptom and add regression coverage when the behavior is stable and observable.
 
-**Present the list** to the user in a numbered format with commit hash, subject, and author. For any commits whose subject line already appears in the tag's history (previously cherry-picked in an earlier hotfix) or are "Release Notes" commits, add `(already in previous hotfix)` or `(release notes - skip)` after them so the user knows to skip those.
+Commit, push, and PR creation are separate operations. The ordinary hotfix PR base is `dev`, not `main`.
 
-Ask which commits to include in the hotfix.
+## 3. Prepare the patch version
 
-Use the ask_followup_question tool to let the user specify which commits they want (by number or hash).
+Load `dev-version-bump` on `dev` or a recommended independent release-preparation branch to update:
 
-## Step 3: Analyze Selected Commits
+- `CHANGELOG.md`;
+- `docs/changelog/CHANGELOG_en.md`;
+- `package.json`;
+- `package-lock.json`.
 
-For each selected commit:
-1. Get the full commit message: `git show --no-patch --format="%B" <hash>`
-2. Get the diff to understand the change: `git show <hash> --stat`
-3. Find the associated PR if any: `gh pr list --search "<hash>" --state merged --json number,title --jq '.[0]'`
+Merge both the fix and version preparation into `dev`, then run the complete integrated gate on the exact resulting commit.
 
-Build a mental model of what these changes do for the changelog.
+## 4. Promote and release
 
-## Step 4: Determine New Version Number
+Only after the `dev` gate passes, load `release` to promote `dev` to `main`, re-verify the final `main` commit, and create the production `vX.Y.Z` tag.
 
-Parse the current version from package.json and the last tag:
+The standard Release and Marketplace workflows must package and publish the tested artifact. Do not rebuild or manually replace the release VSIX.
 
-```bash
-LAST_TAG=$(git tag --sort=-v:refname | head -1)
-echo "Last release: $LAST_TAG"
-cat package.json | grep '"version"'
-```
+## 5. When dev contains changes that cannot ship
 
-Hotfixes always increment the patch version (e.g., 3.40.0 -> 3.40.1, or 3.40.1 -> 3.40.2).
+Stop. The default hotfix path cannot selectively publish an older product state while preserving the required ancestry.
 
-**Ask the user to confirm the new version number.**
+Before continuing, obtain explicit approval for a release-candidate and back-merge strategy that defines:
 
-## Step 5: Create Release Notes Commit on Main
+- the exact branch and base commit;
+- how the fix enters both `dev` and `main`;
+- how unreleased features are excluded;
+- how the final tag remains in `main` history;
+- validation, conflict handling, back-merge, and recovery order.
 
-On the main branch, create a commit that updates:
+Do not invent a detached-tag cherry-pick path and do not weaken the production workflow's `main` ancestry check.
 
-1. **CHANGELOG.md** - Add a new section for the hotfix version at the top:
-   ```markdown
-   ## [3.40.1]
+## 6. Final report
 
-   - Description of fix 1
-   - Description of fix 2
-   ```
-
-   Write clear, user-friendly descriptions based on your analysis of the commits.
-
-2. **package.json** - Update the version field to the new version
-
-3. No changelog-entry file cleanup is needed. Contributors do not create changelog-entry files in this repo.
-
-**Skip running `npm run install:all`** - release automation handles lockfile consistency as needed.
-
-Commit with message format: `v{VERSION} Release Notes (hotfix)`
-
-In the commit body, mention:
-- This is for a hotfix release
-- List the cherry-picked commits that will be included
-
-```bash
-git add CHANGELOG.md package.json
-git commit -m "v3.40.1 Release Notes (hotfix)
-
-Hotfix release including:
-- <commit1-hash>: <description>
-- <commit2-hash>: <description>
-"
-```
-
-Push to main:
-
-```bash
-git push origin main
-```
-
-## Step 6: Build the Hotfix on the Tag
-
-Checkout the last release tag (detached HEAD):
-
-```bash
-LAST_TAG=$(git tag --sort=-v:refname | head -1)
-git checkout $LAST_TAG
-```
-
-Cherry-pick the selected commits in order:
-
-```bash
-git cherry-pick <commit1-hash>
-git cherry-pick <commit2-hash>
-# ... etc
-```
-
-Finally, cherry-pick the release notes commit you just pushed to main:
-
-```bash
-# Get the hash of the release notes commit (should be HEAD of main)
-RELEASE_NOTES_COMMIT=$(git rev-parse main)
-git cherry-pick $RELEASE_NOTES_COMMIT
-```
-
-## Step 7: Tag and Push
-
-After all cherry-picks are applied successfully:
-
-```bash
-# Tag the new release
-git tag v{VERSION}
-
-# Push the tag to remote
-git push origin v{VERSION}
-```
-
-## Step 8: Return to Main and Summary
-
-Return to main branch:
-
-```bash
-git checkout main
-```
-
-**Copy a Slack announcement message to clipboard** with the version and PR links for each included fix:
-
-```
-VS Code Hotfix v{VERSION} Published
-
-- Description of fix 1 https://github.com/cline/cline/pull/{PR_NUMBER}
-- Description of fix 2 https://github.com/cline/cline/pull/{PR_NUMBER}
-```
-
-Present a final summary:
-- New version: v{VERSION}
-- Tag pushed: yes
-- Commits included: (list them)
-- Slack message copied to clipboard: yes
-
-Remind the user to:
-1. Manually trigger the publish release GitHub Action at: https://github.com/cline/cline/actions/workflows/publish.yml (paste `v{VERSION}` as the tag)
-2. Post the Slack message to announce the hotfix
-
-## Important Notes
-
-- This workflow does NOT create a release branch - only tags
-- The release notes commit goes to main first, then gets cherry-picked to the tag
-- This keeps main's history accurate while allowing hotfix releases from tags
-- If cherry-pick conflicts occur, resolve them before continuing
+Report the fixed behavior, patch version, source and destination SHAs, dev gate evidence, production workflow status, released VSIX identity, and any back-merge or follow-up work.

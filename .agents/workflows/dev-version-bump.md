@@ -1,123 +1,88 @@
-# Dev Version Bump
+---
+name: dev-version-bump
+description: Prepare package and bilingual changelog versions on dev or an isolated branch, with independent source branches required only when creating a PR into dev.
+---
 
-Update the development version, curate changelog entries, and create branch-specific local release tags.
+# Development Version Preparation
 
-## Overview
+Prepare a release version directly on `dev` or on a recommended isolated branch. This workflow does not publish, promote `main`, or create a production tag.
 
-This workflow helps you:
-1. Confirm the source range since the previous version
-2. Decide whether the new release has Features, Changed, and Fixed entries
-3. Update `CHANGELOG.md` and `docs/changelog/CHANGELOG_en.md`
-4. Update `package.json` to the target version
-5. Validate, commit, and create branch-specific local tags
+Follow `repository-and-release` first.
 
-## Process
+## 1. Confirm the development branch
 
-### 1) Confirm current branch and version
+Inspect the current branch and working tree:
 
-```bash
+```text
+git branch --show-current
 git status --short
-git --no-pager log --oneline --decorate -20
-cat package.json | grep '"version"'
+git branch -vv
 ```
 
-Confirm the target version with the maintainer, for example `0.9.1`.
+Stop on `main`. Direct preparation on `dev` is allowed. An independent branch such as `chore/release-X.Y.Z` is recommended for isolation and is mandatory only when the preparation will be submitted through a PR.
 
-### 2) Compare changes since the previous version
+Do not include unrelated or unknown working-tree changes.
 
-Use the previous version commit or tag as the base:
+## 2. Establish the version range
 
-```bash
+Confirm the target `X.Y.Z` and a precise previous version ref. Never infer the base from the newest lexicographic tag alone because development and production tags have different roles.
+
+```text
 git --no-pager log --oneline <previous-version-ref>..HEAD
 git --no-pager diff --stat <previous-version-ref>..HEAD
 ```
 
-Classify user-visible changes:
-- `Features`: only include real new features. If there are no new features, do not write this section.
-- `Changed`: behavior, architecture, configuration, workflow, or performance changes.
-- `Fixed`: bug fixes, stability fixes, and recovery/state-correction fixes.
+Review implementation, tests, and user-visible behavior rather than deriving release notes only from commit subjects.
 
-### 3) Update changelog files
+## 3. Update the release files
 
-Add the new version entry at the top of both changelog files:
-- `CHANGELOG.md`
-- `docs/changelog/CHANGELOG_en.md`
+Update all four release facts together:
 
-Follow the existing format:
+- `CHANGELOG.md` (Chinese);
+- `docs/changelog/CHANGELOG_en.md` (English);
+- `package.json`;
+- `package-lock.json`.
+
+Use the existing changelog structure and include only sections that contain real entries:
 
 ```markdown
 ## [X.Y.Z]
 
 ### Features
-- New feature description
-
 ### Changed
-- Behavior change description
-
 ### Fixed
-- Bug fix description
 ```
 
-If the version has no feature additions, omit `### Features` completely instead of adding placeholder text.
+The two changelogs must describe the same user-visible changes, not independent release scopes.
 
-### 4) Update package version
+Update package and lockfile versions without changing dependency ranges. If using a package-manager command to synchronize them, that dependency/tooling operation requires the applicable authorization and its resulting diff must be reviewed.
 
-Update `package.json`:
+## 4. Validate the prepared state
 
-```json
-"version": "X.Y.Z"
-```
+At minimum run:
 
-Only update lockfiles when the project convention or package manager output requires it. Do not change unrelated dependency versions.
-
-### 5) Validate changes
-
-Run the project checks before committing:
-
-```bash
+```text
+npm run check-types
 npm run lint
-npx tsc --noEmit --pretty false
+npm run test:smoke
 ```
 
-Then review the final diff:
+Run focused Vitest, E2E, Storybook, or package checks required by the changed release surface. Review the final diff and ensure only intended release-preparation files and approved companion changes are present.
 
-```bash
-git status --short
-git --no-pager diff --stat
-git --no-pager diff --cached --stat
+## 5. Commit and PR boundaries
+
+A commit is optional and requires its own authorization. If approved, stage only owned files and use the repository commit-message convention, for example:
+
+```text
+chore(release): prepare X.Y.Z
 ```
 
-### 6) Commit version changes
+Push and PR creation require separate authorization. If an ordinary PR is created, its head must be an independent release-preparation branch and its base must be `dev`; direct `dev` work is not itself submitted as a PR source.
 
-Stage exactly the intended release files and any explicitly approved companion changes:
+Do not create `vX.Y.Z` here. A `dev-vX.Y.Z` development release tag may be created only after the prepared commit is the exact `dev` head, its target SHA is explicit, and tag creation is separately authorized. Pushing the tag triggers `Publish Draft Release (Dev)`; GitHub draft release creation remains blocked until the complete reusable Tests workflow, including full Vitest, three-platform E2E, and package success, produces the tested VSIX.
 
-```bash
-git add CHANGELOG.md docs/changelog/CHANGELOG_en.md package.json <approved-extra-files>
-git commit -m "Bump dev version to X.Y.Z"
-```
+## 6. After merge to dev
 
-Do not include unrelated work unless the maintainer explicitly asks to include it.
+Re-run the integrated checks on the exact `dev` commit. Only the production release workflow may promote a passing release candidate to `main` and create `vX.Y.Z`.
 
-### 7) Create local release tags
-
-Create local tags after the release commit exists. Use `dev-` tags on `dev`; use plain `vX.Y.Z` tags on `main`.
-
-```bash
-# On dev
-git tag dev-<previous-version> <previous-version-ref>
-git tag dev-<new-version> HEAD
-
-# On main
-git tag v<previous-version> <previous-version-ref>
-git tag v<new-version> HEAD
-```
-
-Only push tags when the maintainer separately authorizes push.
-
-### 8) Final summary
-
-Present to the user:
-- New version and commit hash
-- Created local tags and branch-specific tag prefix
-- Validation commands and results
-- Any remaining uncommitted or unpushed work
+Report the target version, previous ref, changed release files, verification evidence, and any uncommitted, unpushed, or unmerged work.

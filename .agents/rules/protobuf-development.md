@@ -1,89 +1,94 @@
-# Cline Protobuf Development Guide
+# Dline Protobuf and ProtoBus Development Guide
 
-This guide outlines how to add new gRPC endpoints for communication between the webview (frontend) and the extension host (backend).
+Dline uses Protobuf for typed contracts across the Webview, core Controller, standalone gRPC surfaces, and host bridges.
 
-## Overview
+The VS Code Webview transport is ProtoBus envelopes over `postMessage`. Generated APIs may look gRPC-like, but a Webview RPC is not a network gRPC socket.
 
-Cline uses [Protobuf](https://protobuf.dev/) to define a strongly-typed API, ensuring efficient and type-safe communication. All definitions are in the `/proto` directory. The compiler and plugins are included as project dependencies, so no manual installation is needed.
+## Source layout
 
-## Key Concepts & Best Practices
+- application and Webview services: `proto/dline/*.proto`;
+- provider/model messages: `proto/dline/models/` and `proto/dline/provider/`;
+- IDE host services: `proto/dline/host/*.proto`;
+- shared messages: `proto/dline/common.proto`.
 
--   **File Structure**: Each feature domain should have its own `.proto` file (e.g., `account.proto`, `task.proto`).
--   **Message Design**:
-    -   For simple, single-value data, use the shared types in `proto/common.proto` (e.g., `StringRequest`, `Empty`, `Int64Request`). This promotes consistency.
-    -   For complex data structures, define custom messages within the feature's `.proto` file (see `task.proto` for examples like `NewTaskRequest`).
--   **Naming Conventions**:
-    -   Services: `PascalCaseService` (e.g., `AccountService`).
-    -   RPCs: `camelCase` (e.g., `accountEmailIdentified`).
-    -   Messages: `PascalCase` (e.g., `StringRequest`).
--   **Streaming**: For server-to-client streaming, use the `stream` keyword on the response type. See `subscribeToAuthCallback` in `account.proto` for an example.
+Use `package dline...` namespaces and imports rooted under `dline/`. Follow the existing domain file rather than creating a catch-all service.
 
----
+Naming conventions:
 
-## 4-Step Development Workflow
+- services: `PascalCaseService`;
+- RPC methods: `camelCase`;
+- messages and enums: `PascalCase`;
+- fields: `snake_case` in Proto, projected to TypeScript by the generator.
 
-Here’s how to add a new RPC, using `scrollToSettings` as an example.
+Use an existing common request/response only when its semantics match. Define a domain message when validation, evolution, or multiple fields matter.
 
-### 1. Define the RPC in a `.proto` File
+## Development workflow
 
-Add your service method to the appropriate file in the `proto/` directory.
+### 1. Define the contract
 
-**File: `proto/ui.proto`**
-```proto
-service UiService {
-  // ... other RPCs
-  // Scrolls to a specific settings section in the settings view
-  rpc scrollToSettings(StringRequest) returns (KeyValuePair);
-}
-```
-Here, we use the common `StringRequest` and `KeyValuePair` types.
+Add the message and RPC to the owning file under `proto/dline/` or `proto/dline/host/`.
 
-### 2. Compile Definitions
+Specify:
 
-After editing a `.proto` file, regenerate the TypeScript code. From the project root, run:
-```bash
+- request and response ownership;
+- optional, repeated, and default semantics;
+- unary or streaming behavior;
+- error/cancellation expectations;
+- compatibility with existing field numbers and consumers.
+
+Never reuse or renumber an existing field for a different meaning. Reserve removed field numbers/names when compatibility requires it.
+
+### 2. Regenerate all projections
+
+Run from the repository root:
+
+```text
 npm run protos
 ```
-This command compiles all `.proto` files and outputs the generated code to `src/generated/` and `src/shared/`. Do not edit these generated files manually.
 
-### 3. Implement the Backend Handler
+`scripts/build-proto.mjs` regenerates and cleans generated outputs, including:
 
-Create the RPC implementation in the backend. Handlers are located in `src/core/controller/[service-name]/`.
+- `src/shared/proto/` TypeScript message types and Dline barrel files;
+- `src/generated/grpc-js/` service definitions;
+- `src/generated/nice-grpc/` promise clients;
+- `src/generated/hosts/` ProtoBus and host-bridge glue;
+- `webview-ui/src/services/grpc-client.ts` Webview clients;
+- `dist-standalone/proto/descriptor_set.pb`.
 
-**File: `src/core/controller/ui/scrollToSettings.ts`**
-```typescript
-import { Controller } from ".."
-import { StringRequest, KeyValuePair } from "../../../shared/proto/common"
+Do not edit generated files manually. If generated output is wrong, change the Proto or generator.
 
-/**
- * Executes a scroll to settings action
- * @param controller The controller instance
- * @param request The request containing the ID of the settings section to scroll to
- * @returns KeyValuePair with action and value fields for the UI to process
- */
-export async function scrollToSettings(controller: Controller, request: StringRequest): Promise<KeyValuePair> {
-	return KeyValuePair.create({
-		key: "scrollToSettings",
-		value: request.value || "",
-	})
-}
-```
+### 3. Implement the owning handler
 
-### 4. Call the RPC from the Webview
+Application RPC handlers normally live under `src/core/controller/<domain>/`. Host bridge handlers live under `src/hosts/vscode/hostbridge/<service>/`.
 
-Call the new RPC from a React component in `webview-ui/`. The generated client makes this simple.
+Generated registries discover handlers according to service/method names. Follow an existing RPC in the same service and verify the generated registration instead of maintaining a second manual registry.
 
-**File: `webview-ui/src/components/browser/BrowserSettingsMenu.tsx`** (Example)
-```tsx
-import { UiServiceClient } from "../../../services/grpc"
-import { StringRequest } from "../../../../shared/proto/common"
+Keep transport DTOs at the boundary. Convert to domain/runtime types before applying business rules.
 
-// ... inside a React component
-const handleMenuClick = async () => {
-    try {
-        await UiServiceClient.scrollToSettings(StringRequest.create({ value: "browser" }))
-    } catch (error) {
-        console.error("Error scrolling to browser settings:", error)
-    }
-}
-```
+### 4. Call through the generated client
+
+The Webview imports generated clients from `webview-ui/src/services/grpc-client.ts` and message types from `@shared/proto/dline/...`.
+
+Core/standalone and host adapters use the generated grpc-js, nice-grpc, or host client interfaces appropriate to their transport.
+
+Do not send an ad-hoc `postMessage` object when an RPC contract owns the interaction.
+
+## Enum and message conversion
+
+Some persisted/UI message enums also require explicit compatibility conversion in `src/shared/proto-conversions/`. Search for both conversion directions before adding a value.
+
+Adding a Proto field does not automatically make it part of Controller state projection, Webview defaults, CLI settings, persistence, or validation. Trace the full round trip.
+
+## Verification
+
+After generation:
+
+1. inspect the generated diff for unexpected deletions or namespace drift;
+2. run `npm run check-types`;
+3. run `npm run lint` for Proto lint and code lint;
+4. run focused handler, conversion, and transport tests;
+5. test streaming cancellation and disposal for streaming RPCs;
+6. test Webview/host integration when the RPC crosses process or IDE boundaries;
+7. run `git diff --check` and verify generated files are not manually edited.
+
+A successful `npm run protos` alone does not prove the handler is registered or the consumer uses the new contract.

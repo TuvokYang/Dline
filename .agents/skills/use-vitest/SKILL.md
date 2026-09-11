@@ -1,6 +1,6 @@
 ---
 name: use-vitest
-description: Run, rerun, inspect, and diagnose Vitest tests in the Dline repository without blocking the agent on watch processes. Use bounded one-shot commands for focused tests, and automatically start or reuse a background Vitest UI server for full-suite runs before reading results through scripts/vitest-ui/cli.mjs.
+description: Run, rerun, inspect, and diagnose Dline Vitest tests with bounded focused commands or a repository-identified background Vitest UI server, without treating unknown collection state as success.
 ---
 
 # Use Vitest
@@ -21,9 +21,14 @@ npm run watch-tests
 vitest
 ```
 
-The last command starts watch mode when `run` is omitted. Background Vitest UI startup must include the shared `--no-open` argument and must never open the UI URL in a system browser. Use `npm run vitest:ui:server` for an authorized full-suite run and use `scripts/vitest-ui/cli.mjs` for status and reruns.
+The last command starts watch mode when `run` is omitted. Background Vitest UI startup must include `--no-open` and must never open the UI URL in a system browser. The repository provides two managed paths:
 
-Always start the authorized UI server with `execute_command` using both `background=true` and `timeout=0`. `background=true` detaches the server from the tool turn and marks it as explicit background work; `timeout=0` means no finite command deadline, so the server remains resident until it exits or is explicitly cancelled. Record the returned `function_id` and URL, and never attach the foreground server command to the conversation execution session. Keep a healthy UI server running after the test task completes unless the user asks to stop it or it must be replaced because it is unhealthy.
+- `npm run vitest:ui:server` starts the long-lived repository-local server for CLI use;
+- `npm run vitest:ui:mcp` uses `ensureVitestUiServer()` to reuse the configured endpoint or start the repository-local Vitest 4 process automatically.
+
+When starting the CLI server through `execute_command`, use `background=true` and `timeout=0`. Record the returned `function_id`, repository root, config, and URL. Keep a healthy server running after the test task completes unless the user asks to stop it or it must be replaced because it is unhealthy.
+
+A reachable URL alone does not prove that the server belongs to the current checkout. Managed startup reads the Vitest UI RPC config, compares its repository root with the current checkout, and rejects cross-checkout reuse. Status and rerun results expose the resolved identity; record and verify it before trusting results.
 
 ### Background Server Cancellation
 
@@ -44,8 +49,9 @@ Treat these files as the source of truth if commands appear stale:
 - `package.json`: npm script names and lifecycle hooks.
 - `vitest.config.ts`: root projects, aliases, workers, and the 60-second test timeout.
 - `webview-ui/vitest.config.ts`: Webview test root and jsdom setup.
-- `scripts/vitest-ui/cli.mjs`: supported status and rerun arguments.
-- `scripts/vitest-ui/server.mjs`: UI server startup behavior.
+- `scripts/vitest-ui/cli.mjs`: supported status/rerun arguments and their default `unknown` handling.
+- `scripts/vitest-ui/server.mjs`: direct background server startup.
+- `scripts/vitest-ui/lib/managed-server.mjs`: MCP reuse/start behavior and configured endpoint selection.
 
 Do not infer a command from memory when one of these files has changed.
 
@@ -137,11 +143,9 @@ When broader validation is appropriate, run the owning project before considerin
 
 The CLI in `scripts/vitest-ui/cli.mjs` only connects to an existing server; it does not start one. For an explicit full-suite request, first reuse a healthy server or automatically start one in the background.
 
-Probe at most five consecutive ports. Start at the default port `51205`, then increment by one through `51209`; the default port counts as the first attempt. Stop at the first reachable Vitest UI and use that exact URL for all subsequent CLI commands:
+Probe at most five consecutive ports, from `51205` through `51209`. A 2xx/3xx response proves reachability only. Stop at the first endpoint whose Vitest UI identity reports the current repository root; managed startup rejects a reachable endpoint owned by another checkout and requires a dedicated port or URL.
 
-Each candidate URL has the form `http://localhost:<port>/__vitest__/`. Probe it with whatever HTTP client the current shell provides, treat any 2xx/3xx response as reachable, and use a short per-probe timeout of a few seconds so an unused port fails fast.
-
-Pass the discovered URL through `--url`; do not keep assuming port `51205` after a later port succeeds.
+Each candidate URL has the form `http://localhost:<port>/__vitest__/`. Use a short per-probe timeout. Pass the selected URL through `--url` on every subsequent CLI command; do not keep assuming port `51205` after another port is selected.
 
 If all five probes fail during a full-suite request, start the server automatically on the first candidate port with `execute_command`:
 
@@ -166,10 +170,10 @@ npm run vitest:ui -- status --url <vitest-ui-url> --wait-idle --timeout 900000 -
 For a reused UI server, first wait for any active run to become idle, then explicitly rerun all collected files so the result reflects the current workspace:
 
 ```
-npm run vitest:ui -- rerun all --url <vitest-ui-url> --wait --timeout 900000 --rpc-timeout 900000
+npm run vitest:ui -- rerun all --url <vitest-ui-url> --wait --allow-unknown=false --timeout 900000 --rpc-timeout 900000
 ```
 
-Persistent `unknown` files are not passing files. Diagnose collection failures or report them as unresolved; use `--allow-unknown` only when the user explicitly accepts placeholder files.
+Persistent `unknown` files are not passing files. Both CLI and MCP waited reruns default to rejecting unknown placeholders. Keep the explicit `--allow-unknown=false` flag in verification commands for readability. Use `--allow-unknown=true` only for diagnostic work where the user accepts an incomplete collection result, and never report that result as passing.
 
 Read current failures:
 
@@ -194,17 +198,17 @@ npm run vitest:ui -- status --wait-idle --timeout 180000 --rpc-timeout 180000
 Rerun failures on the existing server:
 
 ```
-npm run vitest:ui -- rerun failed --wait --timeout 180000 --rpc-timeout 180000
+npm run vitest:ui -- rerun failed --wait --allow-unknown=false --timeout 180000 --rpc-timeout 180000
 ```
 
 Rerun one file or test:
 
 ```
-npm run vitest:ui -- rerun file --file src/core/foo.test.ts --wait --timeout 180000 --rpc-timeout 180000
-npm run vitest:ui -- rerun test --file src/core/foo.test.ts --test "does the thing" --wait --timeout 180000 --rpc-timeout 180000
+npm run vitest:ui -- rerun file --file src/core/foo.test.ts --wait --allow-unknown=false --timeout 180000 --rpc-timeout 180000
+npm run vitest:ui -- rerun test --file src/core/foo.test.ts --test "does the thing" --wait --allow-unknown=false --timeout 180000 --rpc-timeout 180000
 ```
 
-Use `--all-matches` only after confirming that rerunning every match is intended. Use `--allow-unknown` only to tolerate uncollected placeholder files; never report unknown files as passing.
+Use `--all-matches` only after confirming that rerunning every match is intended. Use `--allow-unknown=true` only to tolerate uncollected placeholder files for diagnostics; verification commands must use `--allow-unknown=false`, and unknown files must never be counted as passing.
 
 ## Waiting For The Full Suite
 

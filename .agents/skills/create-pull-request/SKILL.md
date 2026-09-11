@@ -1,211 +1,147 @@
 ---
 name: create-pull-request
-description: Create a GitHub pull request following project conventions. Use when the user asks to create a PR, submit changes for review, or open a pull request. Handles commit analysis, branch management, PR template usage, and PR creation using the gh CLI tool.
+description: Create a fork-safe pull request from an independent development branch into dev. Discovers repository and remote topology dynamically, previews all writes, follows the project template, and keeps commit, push, PR creation, reviewers, and labels as separate authorizations.
 ---
 
 # Create Pull Request
 
-This skill guides you through creating a well-structured GitHub pull request that follows project conventions and best practices.
+Create an ordinary development PR without assuming a remote alias, repository owner, URL, or writable base repository.
 
-## Prerequisites Check
+Follow `repository-and-release` before using this skill.
 
-Before proceeding, verify the following:
+## 1. Check local and platform prerequisites
 
-### 1. Check if `gh` CLI is installed
+Use read-only checks:
 
-```bash
+```text
+git branch --show-current
+git status --short
+git remote -v
+git branch -vv
+git rev-parse HEAD
 gh --version
-```
-
-If not installed, inform the user:
-> The GitHub CLI (`gh`) is required but not installed. Please install it:
-> - macOS: `brew install gh`
-> - Other: https://cli.github.com/
-
-### 2. Check if authenticated with GitHub
-
-```bash
 gh auth status
 ```
 
-If not authenticated, guide the user to run `gh auth login`.
+If `gh` is unavailable or unauthenticated, report the blocker. Installing software or changing credentials requires separate user action or authorization.
 
-### 3. Verify clean working directory
+Do not stash, discard, restore, commit, rebase, or switch branches merely to make the working tree clean. Unknown or unrelated changes must be preserved and reported.
 
-```bash
-git status
+## 2. Enforce the branch contract
+
+The current branch must be an independent branch such as `feature/*`, `bugfix/*`, `docs/*`, `refactor/*`, or `chore/*`.
+
+Stop when the current branch is `dev` or `main`. Ordinary PRs must not use either shared branch as the source/head. Require a dedicated branch or worktree instead.
+
+The ordinary PR base is `dev`. A `dev`-to-`main` PR is a release promotion and must use the release workflow, not this skill.
+
+## 3. Resolve repository and fork topology
+
+Resolve:
+
+- `<base-repository>`: the repository that owns the target `dev` branch;
+- `<head-repository>`: the repository that will host the contributor branch;
+- `<push-remote>`: the local remote whose push URL maps to `<head-repository>`;
+- `<head-owner>` and `<head-ref>`;
+- the current base SHA and head SHA.
+
+Use explicit user input, branch upstream configuration, platform metadata, and remote URLs in the order defined by the repository contract.
+
+Stop when:
+
+- the branch has no upstream;
+- more than one remote may be writable;
+- fetch and push URLs imply different repositories and intent is unclear;
+- pushing would write the contributor branch to the base repository without explicit authorization;
+- the GitHub repository cannot be distinguished from another hosting target;
+- adding or changing a remote/tracking configuration would be required.
+
+## 4. Analyze the proposed PR
+
+Compare against the resolved `dev` base or merge base:
+
+```text
+git --no-pager log <base-ref>..HEAD --oneline --decorate
+git --no-pager diff --stat <base-ref>...HEAD
+git --no-pager diff --name-status <base-ref>...HEAD
+git --no-pager diff <base-ref>...HEAD
 ```
 
-If there are uncommitted changes, ask the user whether to:
-- Commit them as part of this PR
-- Stash them temporarily
-- Discard them (with caution)
+Read changed implementation, tests, consumers, and relevant project contracts. Confirm the branch represents one coherent goal and contains no unrelated workspace changes or commits.
 
-## Gather Context
+Do not rewrite history merely for cosmetic commit preferences. Rebase, squash, reset, or force-with-lease are Git writes that require an explicit impact preview and separate authorization.
 
-### 1. Identify the current branch
+## 5. Verify before remote writes
 
-```bash
-git branch --show-current
+Run the checks appropriate to the blast radius. At minimum, record focused tests and the applicable type, lint, format, build, or package checks.
+
+Feature-branch verification does not replace the integration checks that run after the PR enters `dev`.
+
+Contributors must not create changelog-entry files or perform release version bumps unless the user explicitly requested release preparation. Maintainers curate release versions and changelogs through the release workflow.
+
+## 6. Prepare the PR body
+
+Read `.github/pull_request_template.md` and preserve its current section structure when applicable. Fill it with evidence from the actual diff and verification.
+
+Include:
+
+- problem and motivation;
+- solution and important design decisions;
+- user-visible or compatibility impact;
+- tests and manual verification;
+- risks, screenshots, or follow-up work when relevant;
+- a real issue reference only when one exists. Use the template's documented no-issue value rather than leaving a fake placeholder.
+
+Determine whether the PR should be draft. Do not mark unchecked work as completed.
+
+## 7. Preview each write
+
+Before pushing, show:
+
+- `<head-repository>` and `<push-remote>` push URL;
+- local branch and head SHA;
+- destination branch;
+- commits to be uploaded;
+- normal push or force-with-lease and its expected remote SHA.
+
+Obtain push authorization. If force-with-lease is required, refresh the remote SHA immediately before the write and bind the lease to that SHA. Never use unconditional force.
+
+Before PR creation, show:
+
+- `<base-repository>`;
+- `head=<head-owner>:<head-ref>`;
+- `base=dev`;
+- title, full body, and draft state;
+- verification evidence.
+
+PR creation requires authorization separate from push.
+
+## 8. Create the PR
+
+Use repository-qualified arguments:
+
+```text
+gh pr create --repo <base-repository> --head <head-owner>:<head-ref> --base dev --title <title> --body-file -
 ```
 
-Ensure you're not on `main` or `master`. If so, ask the user to create or switch to a feature branch.
+Add `--draft` only when the approved preview is draft.
 
-### 2. Find the base branch
+For multiline bodies, use a shell-appropriate standard-input mechanism. If a temporary file is necessary, use an approved system temporary location, not a repository-local file, and remove it afterward.
 
-```bash
-git remote show origin | grep "HEAD branch"
-```
+If a PR already exists for the same base/head pair, stop and show it. Updating an existing PR is a separate external write.
 
-This is typically `main` or `master`.
+## 9. Keep follow-up writes separate
 
-### 3. Analyze recent commits relevant to this PR
+Do not automatically add reviewers, labels, milestones, comments, or merge the PR. Each is an external write requiring its own preview and authorization.
 
-```bash
-git log origin/main..HEAD --oneline --no-decorate
-```
+After creation, report the PR URL, repository, head/base refs, head SHA, draft state, verification, and remaining CI or review work.
 
-Review these commits to understand:
-- What changes are being introduced
-- The scope of the PR (single feature/fix or multiple changes)
-- Whether commits should be squashed or reorganized
+## Completion checklist
 
-### 4. Review the diff
-
-```bash
-git diff origin/main..HEAD --stat
-```
-
-This shows which files changed and helps identify the type of change.
-
-## Information Gathering
-
-Before creating the PR, you need the following information. Check if it can be inferred from:
-- Commit messages
-- Branch name (e.g., `fix/issue-123`, `feature/new-login`)
-- Changed files and their content
-
-If any critical information is missing, use `ask_followup_question` to ask the user:
-
-### Required Information
-
-1. **Related Issue Number**: Look for patterns like `#123`, `fixes #123`, or `closes #123` in commit messages
-2. **Description**: What problem does this solve? Why were these changes made?
-3. **Type of Change**: Bug fix, new feature, breaking change, refactor, cosmetic, documentation, or workflow
-4. **Test Procedure**: How was this tested? What could break?
-
-### Example clarifying question
-
-If the issue number is not found:
-> I couldn't find a related issue number in the commit messages or branch name. What GitHub issue does this PR address? (Enter the issue number, e.g., "123" or "N/A" for small fixes)
-
-## Git Best Practices
-
-Before creating the PR, consider these best practices:
-
-### Commit Hygiene
-
-1. **Atomic commits**: Each commit should represent a single logical change
-2. **Clear commit messages**: Follow conventional commit format when possible
-3. **No merge commits**: Prefer rebasing over merging to keep history clean
-
-### Branch Management
-
-1. **Rebase on latest main** (if needed):
-   ```bash
-   git fetch origin
-   git rebase origin/main
-   ```
-
-2. **Squash if appropriate**: If there are many small "WIP" commits, consider interactive rebase:
-   ```bash
-   git rebase -i origin/main
-   ```
-   Only suggest this if commits appear messy and the user is comfortable with rebasing.
-
-### Push Changes
-
-Ensure all commits are pushed:
-```bash
-git push origin HEAD
-```
-
-If the branch was rebased, you may need:
-```bash
-git push origin HEAD --force-with-lease
-```
-
-## Create the Pull Request
-
-**IMPORTANT**: Read and use the PR template at `.github/pull_request_template.md`. The PR body format must **strictly match** the template structure. Do not deviate from the template format.
-
-When filling out the template:
-- Replace `#XXXX` with the actual issue number, or keep as `#XXXX` if no issue exists (for small fixes)
-- Fill in all sections with relevant information gathered from commits and context
-- Mark the appropriate "Type of Change" checkbox(es)
-- Complete the "Pre-flight Checklist" items that apply
-
-### Create PR with gh CLI
-
-**Use a temporary file for the PR body** to avoid shell escaping issues, newline problems, and other command-line flakiness:
-
-1. Write the PR body to a temporary file:
-   ```
-   /tmp/pr-body.md
-   ```
-
-2. Create the PR using the file:
-   ```bash
-   gh pr create --title "PR_TITLE" --body-file /tmp/pr-body.md --base main
-   ```
-
-3. Clean up the temporary file:
-   ```bash
-   rm /tmp/pr-body.md
-   ```
-
-For draft PRs:
-```bash
-gh pr create --title "PR_TITLE" --body-file /tmp/pr-body.md --base main --draft
-```
-
-**Why use a file?** Passing complex markdown with newlines, special characters, and checkboxes directly via `--body` is error-prone. The `--body-file` flag handles all content reliably.
-
-## Post-Creation
-
-After creating the PR:
-
-1. **Display the PR URL** so the user can review it
-2. **Remind about CI checks**: Tests and linting will run automatically
-3. **Suggest next steps**:
-   - Add reviewers if needed: `gh pr edit --add-reviewer USERNAME`
-   - Add labels if needed: `gh pr edit --add-label "bug"`
-
-## Error Handling
-
-### Common Issues
-
-1. **No commits ahead of main**: The branch has no changes to submit
-   - Ask if the user meant to work on a different branch
-
-2. **Branch not pushed**: Remote doesn't have the branch
-   - Push the branch first: `git push -u origin HEAD`
-
-3. **PR already exists**: A PR for this branch already exists
-   - Show the existing PR: `gh pr view`
-   - Ask if they want to update it instead
-
-4. **Merge conflicts**: Branch conflicts with base
-   - Guide user through resolving conflicts or rebasing
-
-## Summary Checklist
-
-Before finalizing, ensure:
-- [ ] `gh` CLI is installed and authenticated
-- [ ] Working directory is clean
-- [ ] All commits are pushed
-- [ ] Branch is up-to-date with base branch
-- [ ] Related issue number is identified, or placeholder is used
-- [ ] PR description follows the template exactly
-- [ ] Appropriate type of change is selected
-- [ ] Pre-flight checklist items are addressed
+- [ ] Repository and fork topology were discovered, not assumed.
+- [ ] Source is an independent branch; base is `dev`.
+- [ ] Unknown workspace changes were preserved.
+- [ ] Diff, commits, and verification were reviewed.
+- [ ] Push target and PR payload were previewed separately.
+- [ ] Only explicitly authorized remote writes were performed.
+- [ ] No release versioning, reviewer, label, review, or merge action was inferred.

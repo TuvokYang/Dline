@@ -1,90 +1,80 @@
-# Networking & Proxy Support
+# Networking, Proxy, and Provider Observability
 
-To ensure Cline works correctly in all environments (VSCode, JetBrains, CLI) and with various network configurations (especially corporate proxies), strictly follow these guidelines for all network activity.
+Dline currently runs as a VS Code extension. Extension-host network traffic must use the shared transport layer so corporate proxies, cancellation, request headers, timeouts, and provider-attempt observability remain consistent.
 
-In extension code, do NOT use the global `fetch` or a default `axios` instance. (Note, `shared/net.ts` is exempt from these rules because it sets up the fetch wrappers.) In Webview code, you SHOULD use global `fetch`.
+## Core and extension code
 
-Global `fetch` and default `axios` do not automatically pick up proxy configurations in all environments (specifically JetBrains and CLI). You MUST use the provided utilities in `@/shared/net` which handle proxy agent configuration. In the webview, the browser/embedder handles proxies.
+Do not use global `fetch` or a default Axios instance outside the shared networking implementation.
 
-## Guidelines
-
-### 1. Using `fetch`
-
-Instead of `fetch(...)`, import the proxy-aware wrapper:
+Use `@shared/net`:
 
 ```typescript
-import { fetch } from '@/shared/net'
+import { fetch } from "@shared/net"
 
-// Usage is identical to global fetch
-const response = await fetch('https://api.example.com/data')
+const response = await fetch(url, { signal })
 ```
 
-### 2. Using `axios`
-
-When using `axios`, you must apply the settings from `getAxiosSettings()`:
+For Axios, include the shared settings:
 
 ```typescript
-import axios from 'axios'
-import { getAxiosSettings } from '@/shared/net'
+import axios from "axios"
+import { getAxiosSettings } from "@shared/net"
 
-const response = await axios.get('https://api.example.com/data', {
-  headers: { 'Authorization': '...' },
-  ...getAxiosSettings() // <--- CRITICAL: Injects the proxy agent if needed
+const response = await axios.get(url, {
+  signal,
+  ...getAxiosSettings(),
 })
 ```
 
-### 3. Third-Party Clients (OpenAI, Ollama, etc.)
+`src/shared/net.ts` is allowed to use lower-level primitives because it owns the wrappers.
 
-Most API client libraries allow you to customize the `fetch` implementation. You **MUST** pass the proxy-aware `fetch` to these clients.
+## Provider traffic
 
-**Example (OpenAI):**
+API provider requests should use `providerFetch` so the request participates in provider-attempt observation and shared transport behavior:
+
 ```typescript
-import OpenAI from "openai"
-import { fetch } from "@/shared/net"
+import { providerFetch } from "@shared/net"
 
-this.client = new OpenAI({
-  apiKey: '...',
-  fetch, // <--- CRITICAL: Pass our fetch wrapper
-})
+const response = await providerFetch(url, { method: "POST", signal })
 ```
 
-### 4. Tests
+For OpenAI-compatible SDKs, prefer `createOpenAIClient()` or the provider-specific shared factory, such as `createOpenAIClientForProfile()`. These factories inject `providerFetch`, proxy support, external headers, and profile-specific authentication behavior.
 
-Use `mockFetchForTesting` to mock the underlying fetch implementation.
+Do not construct a raw OpenAI client with global fetch when an existing factory applies. If a third-party SDK accepts a custom fetch/dispatcher/agent, inject the shared Dline transport.
 
-**Example (callback):**
+Use plain shared `fetch` only for non-provider network traffic that should not be counted as an API generation attempt.
 
-```
-import { mockFetchForTesting } from "@/shared/net"
+## Webview code
 
-...
-  let mockFetch = ...
-  mockFetchForTesting(mockFetch, () => {
-    // This calls mockFetch
-    fetch('https://foo.example').then(...)
-  })
-  // Original fetch is restored immediately when the call returns.
-```
+The Webview runs in the browser/embedder network environment and may use browser `fetch`. Do not import Node proxy agents into the Webview bundle.
 
-**Example (Promise):**
+Security-sensitive authorization and secret-bearing requests should remain in the extension/core host unless the product contract explicitly places them in the Webview.
 
-```
-import { mockFetchForTesting } from "@/shared/net"
+## Required behavior
 
-...
-  let mockFetch = ...
-  await mockFetchForTesting(mockFetch, async () => {
-    await ...
-    // This calls mockFetch
-    await fetch('https://foo.example')
-    ...
-  })
-  // Original fetch is restored when the Promise from the callback settles
-```
+Every new network boundary must define:
 
-## Verification
+- finite timeout or inherited bounded timeout;
+- `AbortSignal` propagation where cancellation is possible;
+- retry conditions, maximum attempts, and idempotency;
+- sanitized errors that do not expose tokens, headers, account payloads, or request bodies;
+- proxy behavior for standalone and IDE hosts;
+- response-body cleanup when a stream consumer stops early;
+- telemetry/observability ownership without logging sensitive content.
 
-If you are adding a new network call or integration:
-1.  Check `@/shared/net.ts` is imported.
-2.  Ensure `fetch` or `getAxiosSettings` is being used.
-3.  Verify that third-party clients are configured to use the custom fetch.
+Do not retry authentication, billing, or non-idempotent writes generically.
+
+## Tests
+
+Use `mockFetchForTesting` to replace the shared transport for a bounded callback or promise. Restore is automatic when the callback settles.
+
+Provider tests should assert that the shared factory or `providerFetch` is used, and should cover cancellation, timeout, retry/fallback identity, stream cleanup, and sanitized failures as applicable.
+
+## Verification checklist
+
+1. No global `fetch` or default Axios was introduced in core/extension code.
+2. Provider traffic uses `providerFetch` or an approved shared client factory.
+3. Third-party clients receive the custom transport.
+4. Abort and timeout reach the underlying request.
+5. Errors and logs omit secrets and unnecessary user data.
+6. Proxy-aware behavior is covered or explicitly documented as unverified for the target host.

@@ -68,7 +68,7 @@ Hooks run automatically when enabled.
 
 ## Cross-Platform Hook Format
 
-Cline uses a git-style approach for hooks that works consistently across all platforms:
+Dline uses a git-style approach for hooks that works consistently across supported operating systems:
 
 ### Hook Files (All Platforms)
 - **No file extensions**: Hooks are named exactly `PreToolUse` or `PostToolUse` (no `.bat`, `.cmd`, `.sh` etc.)
@@ -82,7 +82,7 @@ Like git hooks, Cline executes hook files through a shell that interprets the sh
 - On Unix/Linux/macOS: Native shell execution with shebang support
 
 This means:
-- ✅ Same hook script works on all platforms
+- ✅ The same hook contract works across supported operating systems
 - ✅ Write once, run anywhere
 - ✅ Use any scripting language (bash, node, python, etc.)
 
@@ -289,7 +289,7 @@ fi
 input=$(cat)
 
 # Log to file
-echo "$input" >> ~/.cline/hook-logs/tool-usage.jsonl
+echo "$input" >> ~/.dline/hook-logs/tool-usage.jsonl
 
 # Allow execution
 echo '{"cancel": false}'

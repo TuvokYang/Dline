@@ -23,26 +23,36 @@ Do not launch full VS Code merely to verify a pure function, one React class nam
 
 ## Core Commands
 
-The project root is `e:\workspace\vscode\dline`. Commands use PowerShell by default and must be collected until the process exits.
+Run commands from the repository root and collect them until the process exits.
 
 | Purpose | Command |
 | --- | --- |
-| Build, then run the full E2E suite | `npm run test:e2e` |
-| Run E2E after the build already exists | `npm run e2e` |
-| Run one file | `npm run e2e -- src/test/e2e/mode-switch-context.test.ts` |
-| Run one test | `npm run e2e -- src/test/e2e/mode-switch-context.test.ts -g "Automatic compaction"` |
+| Package the E2E VSIX, build fixtures, then run the full production-style suite | `npm run test:e2e` |
+| Run the regular Playwright suite through its npm lifecycle | `npm run e2e` |
+| Run one regular E2E file | `npm run e2e -- src/test/e2e/mode-switch-context.test.ts` |
+| Run one regular test | `npm run e2e -- src/test/e2e/mode-switch-context.test.ts -g "Automatic compaction"` |
+| Run the demo/capture suite | `npm run e2e:demo` |
+| Run one demo file | `npm run e2e:demo -- src/test/e2e/demo/<file>.demo.ts` |
 | Show the VS Code window | `npm run e2e -- <path> --headed` |
 | Open the Playwright debugger | `npm run e2e -- <path> --debug` |
 | List tests without launching VS Code | `npx playwright test -c playwright.config.ts <path> --list` |
-| Run a low-cost fixture/state test | `npx playwright test -c playwright.config.ts src/test/e2e/profile-preprocess.test.ts --project="e2e tests"` |
+
+`npm run e2e` is not a build-skipping shortcut: npm automatically runs `pree2e`, which regenerates Proto output and rebuilds the Webview and extension bundle. `npm run e2e:demo` likewise runs `pree2e:demo`, which delegates to the same prebuild. Use raw `npx playwright test -c <config>` only when you intentionally want to skip npm lifecycle hooks and have already established that the required build is current.
 
 Start with one test file or one test name. Broaden only when the change crosses multiple protocols, fixtures, or shared components. Do not use `--debug`, `--headed`, or a long-running watcher as a substitute for one-shot verification.
 
+## Test Domains
+
+- **Regular VS Code E2E**: `playwright.config.ts` and `src/test/e2e/**/*.test.ts`; proves extension host, Webview, Task, storage, provider mock, and ProtoBus integration.
+- **Demo/capture E2E**: `playwright.demo.config.ts` and `src/test/e2e/demo/**/*.demo.ts`; optimized for deterministic media or scenario capture and not a substitute for the regular regression suite.
+- **Legacy E2E**: `playwright.legacy.config.ts`; use only for explicitly retained compatibility scenarios.
+- **Storybook**: stories live under `webview-ui/src/**/*.stories.tsx`. Use `npm run storybook` for interactive inspection or `npm --prefix webview-ui run build-storybook` for a bounded static build. Storybook rendering is a Webview component surface, not real VS Code E2E, and there is currently no separate Storybook test-runner script in `package.json`.
+
 ## Pre-Run Checks
 
-1. Read `package.json` and `playwright.config.ts`; do not infer script names or project names from memory.
-2. Decide whether the `npm run test:e2e` build prerequisite is needed. If only tests or fixtures changed and the build is current, use `npm run e2e`.
-3. Set a unique run ID for parallel or repeatable runs:
+1. Read `package.json` and the selected Playwright config; do not infer script names, lifecycle hooks, or project names from memory.
+2. Choose regular, demo, legacy, or Storybook validation based on the behavior being proved. Do not report one domain as coverage for another.
+3. Set a unique run ID for parallel or repeatable Playwright runs:
 
 ```powershell
 $env:DLINE_E2E_RUN_ID = "compact-debug-20260807"
@@ -92,7 +102,7 @@ Real VS Code tests use `e2e`, not the base `test` fixture:
 
 ```typescript
 import { expect } from "@playwright/test"
-import { e2e } from "./utils/helpers"
+import { e2e, E2ETestHelper } from "./utils/helpers"
 
 e2e("Task renders the completed result", async ({ helper, sidebar, server, userDataDir }) => {
 	await helper.signin(sidebar)

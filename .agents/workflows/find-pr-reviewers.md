@@ -1,49 +1,57 @@
-# Find Best Reviewers for Current Branch
+---
+name: find-pr-reviewers
+description: Rank eligible pull request reviewers from actual PR metadata, domain ownership, file history, and recent architecture work without assuming a repository or remote.
+---
 
-Analyze my current branch to find the best people to review my PR based on **domain expertise** and git history.
+# Find Pull Request Reviewers
 
-## Steps
+Recommend reviewers from real repository and PR evidence without assuming a remote alias, repository owner, or default branch.
 
-1. Get the current branch name and verify it's not `main`
-2. Get the diff between the current branch and `origin/main`:
-   - Use `git diff origin/main...HEAD --name-only` to get changed files
-   - Use `git diff origin/main...HEAD` to understand the nature/spirit of the changes
-3. **Identify the domain/feature area** being changed:
-   - Read the diff carefully to understand WHAT is being changed conceptually (e.g., "slash commands", "authentication", "API client", "UI components")
-   - This semantic understanding is crucial for finding the right reviewers
-4. Find domain experts by searching for related files and their contributors:
-   - Identify all files related to the feature/domain (not just the ones changed)
-   - Example: if changing slash commands, find ALL slash-command related files across the codebase
-   - Use `git log --format="%an <%ae>" -- <related-files-pattern>` to find who has expertise in that domain
-5. For additional context, also gather:
-   - `git blame -L <start>,<end> origin/main -- <file-path>` for exact lines changed
-   - Recent commit activity on related files
-6. Score and rank contributors by:
-   - **Highest weight: Domain expertise** - who has the most commits to files in this feature area (even files not touched by this PR)
-   - **Medium weight: Direct file expertise** - commits to the specific files being changed
-   - **Lower weight: Line-level ownership** - authored the exact lines being modified
-7. Exclude myself (check against my git config user.email)
-8. Present the top 5 reviewers as an ordered list
+Follow `repository-and-release` first.
 
-## Output Format
+## 1. Resolve the change set
 
-Output an ordered list:
+Prefer an explicit `<repository>` and `<pr-number>`. Otherwise, resolve the PR from the current independent branch and verify that the branch is neither `dev` nor `main`.
 
-1. **Name** - Domain expert: 15 commits to slash-command related files, authored core parsing logic
-2. **Name** - 8 commits to affected files, recently added the feature being modified
-3. ...
+Read PR metadata including base/head repositories, base/head refs, author, changed files, commits, and requested reviewers. Use the actual PR base for comparisons.
 
-## Commands Reference
-```bash
-git config user.email
-git diff origin/main...HEAD --name-only
-git diff origin/main...HEAD
-# Find related files for a domain (adjust pattern based on what you learn from the diff)
-find . -type f \( -name "*slash-command*" -o -name "*SlashCommand*" \) | head -20
-# Get contributors for related files
-find . -type f \( -name "*slash-command*" -o -name "*SlashCommand*" \) -print0 | xargs -0 git log --format="%an <%ae>" -- | sort | uniq -c | sort -rn
-git log --format="%an <%ae>" -- <file> | sort | uniq -c | sort -rn
-git blame -L 10,20 origin/main -- <file>
-```
+If no PR exists, determine an explicit comparison base from the user's instruction or the branch upstream. If the base cannot be established, stop and ask instead of falling back to `HEAD` or `main`.
 
-Do NOT ask questions - analyze the changes, identify the domain, and output the reviewer list.
+## 2. Identify the domain
+
+Read the diff and related code to determine the conceptual areas affected, such as task runtime, prompt tooling, storage, host bridges, providers, Webview state, or release automation.
+
+Use project search tools to find related files. Do not rely on POSIX-only `find`, `xargs`, or pipeline recipes in a cross-platform workflow.
+
+## 3. Gather ownership evidence
+
+For changed and closely related files, inspect:
+
+- commit authorship and recency;
+- direct file history;
+- line-level blame where it is meaningful;
+- authors of the relevant architecture or tests;
+- current PR author and already requested reviewers.
+
+Use the PR's base ref or merge base for blame and comparisons. Exclude the PR author, current authenticated user, bots, and accounts that cannot be requested when platform data exposes eligibility.
+
+Commit count alone is not expertise. Weight evidence in this order:
+
+1. ownership of the affected domain or contract;
+2. recent work on related architecture and tests;
+3. direct history on changed files;
+4. line-level ownership;
+5. raw commit count.
+
+## 4. Report candidates
+
+Return up to five candidates with:
+
+- login/name;
+- domain evidence;
+- relevant files or commits;
+- recency;
+- confidence and limitations;
+- whether request eligibility was confirmed.
+
+Do not request reviewers automatically. Adding reviewers is an external write and requires separate authorization after the candidate list and target repository are shown.
