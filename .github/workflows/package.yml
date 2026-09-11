@@ -85,7 +85,7 @@ jobs:
         run: npm exec -- vsce package --no-dependencies --allow-package-secrets sendgrid --out "dist/${{ steps.package.outputs.filename }}"
 
       - name: Upload tested VSIX
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: dline-vsix-${{ github.sha }}
           path: dist/${{ steps.package.outputs.filename }}
@@ -142,7 +142,7 @@ jobs:
         run: npm exec -- vsce package --no-dependencies --allow-package-secrets sendgrid --out "dist/${{ steps.package.outputs.filename }}"
 
       - name: Upload release VSIX
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: dline-vsix-${{ github.sha }}
           path: dist/${{ steps.package.outputs.filename }}
