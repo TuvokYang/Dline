@@ -6,6 +6,8 @@ import {
 	materializeCompactionSourceRange,
 } from "../compaction-source-snapshot"
 
+const ONE_PIXEL_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z8WQAAAAASUVORK5CYII="
+
 function message(role: "user" | "assistant", text: string): ClineStorageMessage {
 	return { role, content: [{ type: "text", text }] }
 }
@@ -40,6 +42,26 @@ describe("CompactionSourceSnapshot", () => {
 		expect(firstTwo).toBe(snapshot.messageTokenPrefixSums[2] - snapshot.messageTokenPrefixSums[0])
 		expect(last).toBe(snapshot.messageTokenPrefixSums[3] - snapshot.messageTokenPrefixSums[2])
 		expect(materializeCompactionSourceRange(snapshot, 0, 1)).toEqual(snapshot.messages.slice(0, 2))
+	})
+
+	it("does not charge a padded base64 image payload as text in source prefix sums", () => {
+		const snapshot = createCompactionSourceSnapshot(
+			[
+				{
+					role: "user",
+					content: [
+						{
+							type: "image",
+							source: { type: "base64", media_type: "image/png", data: `${ONE_PIXEL_PNG}${"A".repeat(400_000)}` },
+						},
+					],
+				},
+			],
+			[],
+			{ providerId: "openai", modelId: "gpt-5.6-sol" },
+		)
+
+		expect(estimateCompactionSourceRangeTokens(snapshot, 0, 0)).toBeLessThan(10_000)
 	})
 
 	it("rejects an out-of-bounds token range", () => {

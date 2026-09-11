@@ -1,4 +1,11 @@
 import { randomUUID } from "node:crypto"
+import {
+	type CompactionWireDiagnosticSnapshot,
+	createCompactionWireDiagnosticSnapshot,
+	findCompactionWireFirstDivergence,
+	hashCompactionDiagnosticValue,
+	isCompactionDevDiagnosticsEnabled,
+} from "@core/context/context-management/compaction-dev-diagnostics"
 import { ModelInfo, OpenAiCodexModelId, openAiCodexDefaultModelId, openAiCodexModels } from "@shared/api"
 import { providerFetch } from "@shared/net"
 import { observeProviderStream } from "@shared/provider-attempt-observer"
@@ -60,6 +67,10 @@ export class OpenAiCodexHandler implements ApiHandler {
 	private accountUsageActionController?: AbortController
 	private readonly profileId: string
 	private runtimeMutationDispose?: () => void
+	private latestOrdinaryCodexDiagnostic?: {
+		primary: CompactionWireDiagnosticSnapshot
+		fallback: CompactionWireDiagnosticSnapshot
+	}
 	private activeRuntimeOperations = 0
 	private readonly runtimeConfig = resolveOpenAiCodexRuntimeConfig()
 
@@ -89,6 +100,51 @@ export class OpenAiCodexHandler implements ApiHandler {
 	}
 	private get userAgent(): string {
 		return `dline/${ExtensionRegistryInfo.version} (${os.platform()} ${os.release()}; ${os.arch()}) node/${process.version.slice(1)}`
+	}
+
+	private recordCodexCompactionDiagnostic(input: {
+		requestKind: "ordinary" | "compaction"
+		modelId: string
+		taskNamespace?: string
+		useWebsocketMode: boolean
+		primaryBody: Record<string, unknown>
+		fallbackBody: Record<string, unknown>
+	}): void {
+		if (!isCompactionDevDiagnosticsEnabled()) return
+
+		const createSnapshot = (body: Record<string, unknown>) =>
+			createCompactionWireDiagnosticSnapshot({
+				requestKind: input.requestKind,
+				promptCacheKey: String(body.prompt_cache_key ?? ""),
+				instructions: body.instructions,
+				tools: Array.isArray(body.tools) ? body.tools : [],
+				previousResponseId: typeof body.previous_response_id === "string" ? body.previous_response_id : undefined,
+				wireInput: body.input,
+			})
+		const primary = createSnapshot(input.primaryBody)
+		const fallback = createSnapshot(input.fallbackBody)
+		const ordinaryBaseline = input.requestKind === "ordinary" ? undefined : this.latestOrdinaryCodexDiagnostic
+		Logger.debug("[CompactionDiag] openai-codex-wire", {
+			requestKind: input.requestKind,
+			modelId: input.modelId,
+			taskNamespaceHash: hashCompactionDiagnosticValue(input.taskNamespace ?? null),
+			useWebsocketMode: input.useWebsocketMode,
+			primaryPreviousResponseIdPresent: typeof input.primaryBody.previous_response_id === "string",
+			fallbackPreviousResponseIdPresent: typeof input.fallbackBody.previous_response_id === "string",
+			primaryPromptCacheKeyHash: primary.promptCacheKeyHash,
+			fallbackPromptCacheKeyHash: fallback.promptCacheKeyHash,
+			primaryInputCount: primary.inputHashes.length,
+			fallbackInputCount: fallback.inputHashes.length,
+			ordinaryBaselineAvailable: ordinaryBaseline !== undefined,
+			primaryFirstDivergence: ordinaryBaseline
+				? findCompactionWireFirstDivergence(ordinaryBaseline.primary, primary)
+				: null,
+			fallbackFirstDivergence: ordinaryBaseline
+				? findCompactionWireFirstDivergence(ordinaryBaseline.fallback, fallback)
+				: null,
+			primaryToFallbackDivergence: findCompactionWireFirstDivergence(primary, fallback),
+		})
+		if (input.requestKind === "ordinary") this.latestOrdinaryCodexDiagnostic = { primary, fallback }
 	}
 
 	private buildCodexHeaders(credential: OpenAiCodexCredentialContext): Record<string, string> {
@@ -285,6 +341,14 @@ export class OpenAiCodexHandler implements ApiHandler {
 			// Build request body
 			const requestBody = this.buildRequestBody(model, input, systemPrompt, tools, previousResponseId, options)
 			const fallbackRequestBody = this.buildRequestBody(model, input, systemPrompt, tools, undefined, options)
+			this.recordCodexCompactionDiagnostic({
+				requestKind: options?.generation?.purpose === "compaction" ? "compaction" : "ordinary",
+				modelId: model.id,
+				taskNamespace: options?.taskNamespace,
+				useWebsocketMode,
+				primaryBody: requestBody,
+				fallbackBody: fallbackRequestBody,
+			})
 
 			// Make the request with retry on auth failure
 			for (let attempt = 0; attempt < 2; attempt++) {

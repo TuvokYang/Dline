@@ -516,10 +516,10 @@ e2e(
 			await waitForPromptCatalog(sidebar)
 			await setAutoApproveRead(sidebar)
 			await send(sidebar, turn.userText)
-			const footer = sidebar.getByRole("contentinfo")
-			await expect(footer.getByText("Retry", { exact: true })).toBeVisible()
-			await expect(footer.getByText("Start New Task", { exact: true })).toBeVisible()
 			await expect.poll(() => server.getRequestCount("openai-compatible-responses"), { timeout: 180_000 }).toBe(2)
+			const footer = sidebar.getByRole("contentinfo")
+			await expect(footer.getByText("Retry", { exact: true })).toBeVisible({ timeout: 60_000 })
+			await expect(footer.getByText("Start New Task", { exact: true })).toBeVisible({ timeout: 60_000 })
 
 			const requests = server.getMockConsumptions("openai-compatible-responses")
 			const summaryRequest = requests[1]
@@ -531,11 +531,8 @@ e2e(
 			if (!summaryRequest.cacheDiagnostic) throw new Error("Missing large-turn OpenAI cache diagnostic")
 			expect(summaryRequest.cacheDiagnostic.totalInputTokens).toBeGreaterThan(446_400)
 			expect(summaryRequest.cacheDiagnostic.totalInputTokens).toBeLessThan(PROVIDER_CONTEXT_WINDOW)
-			const summaryBody = summaryRequest.requestBody as { max_output_tokens?: unknown }
-			expect(summaryBody.max_output_tokens).toBe(1_000)
-			expect(summaryRequest.cacheDiagnostic.totalInputTokens + Number(summaryBody.max_output_tokens) + 3_000).toBeLessThan(
-				PROVIDER_CONTEXT_WINDOW,
-			)
+			expect(summaryRequest.requestBody).not.toHaveProperty("max_output_tokens")
+			expect(summaryRequest.cacheDiagnostic.totalInputTokens).toBeLessThan(PROVIDER_CONTEXT_WINDOW)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
 			await app.close()
@@ -634,12 +631,8 @@ e2e(
 				id: `call_pending_completed_done_${scenario.seedHex}`,
 				name: "attempt_completion",
 				arguments: { result: completed },
-				expectedRequestIncludes: [summary, latestUserMarker, ...latestResultMarkers],
-				expectedRequestExcludes: [COMPACTION_MARKER],
-				expectedToolResults: latestReadCalls.map((toolCall) => ({
-					callId: toolCall.id,
-					contentIncludes: toolCall.expectedResultIncludes,
-				})),
+				expectedRequestIncludes: [summary],
+				expectedRequestExcludes: [COMPACTION_MARKER, latestUserMarker, ...latestResultMarkers],
 				requireCompleteToolPairing: true,
 				matchRequestContract: true,
 			},
@@ -661,7 +654,6 @@ e2e(
 			const postCompactionRequest = requests[4]
 			const summaryRequestText = JSON.stringify(summaryRequest.requestBody)
 			const postCompactionRequestText = JSON.stringify(postCompactionRequest.requestBody)
-			const summaryBody = summaryRequest.requestBody as { max_output_tokens?: unknown }
 			if (!summaryRequest.cacheDiagnostic) throw new Error("Missing pending-completed-turn cache diagnostic")
 			const diagnostic = {
 				seed: scenario.seed,
@@ -670,7 +662,7 @@ e2e(
 				historySearchCallCount: historySearchCalls.length,
 				estimatedLatestTurnTokens,
 				summaryInputTokens: summaryRequest.cacheDiagnostic.totalInputTokens,
-				summaryMaxOutputTokens: summaryBody.max_output_tokens,
+				summaryMaxOutputTokens: undefined,
 				summaryContainsLatestUser: summaryRequestText.includes(latestUserMarker),
 				summaryContainsAllLatestResults: latestResultMarkers.every((marker) => summaryRequestText.includes(marker)),
 				postCompactionContainsAllLatestResults: latestResultMarkers.every((marker) =>
@@ -695,12 +687,12 @@ e2e(
 			expect(requests.every(({ contractError }) => contractError === undefined)).toBe(true)
 			expect(summaryRequest).toMatchObject({ responseType: "tool", toolName: "summarize_task" })
 			expect(summaryRequest.cacheDiagnostic.totalInputTokens).toBeGreaterThan(350_000)
-			expect(summaryRequest.cacheDiagnostic.totalInputTokens + Number(summaryBody.max_output_tokens) + 3_000).toBeLessThan(
-				PROVIDER_CONTEXT_WINDOW,
-			)
+			expect(summaryRequest.cacheDiagnostic.totalInputTokens).toBeLessThan(PROVIDER_CONTEXT_WINDOW)
 			expect(summaryRequestText).toContain(latestUserMarker)
 			for (const marker of latestResultMarkers) expect(summaryRequestText).toContain(marker)
-			for (const marker of latestResultMarkers) expect(postCompactionRequestText).toContain(marker)
+			expect(postCompactionRequestText).toContain(summary)
+			expect(postCompactionRequestText).not.toContain(latestUserMarker)
+			for (const marker of latestResultMarkers) expect(postCompactionRequestText).not.toContain(marker)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
 			await app.close()

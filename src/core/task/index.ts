@@ -12,6 +12,13 @@ import {
 	readCompletedCompactionCards,
 } from "@core/context/context-management/compaction-context-projection"
 import { createCompactionConversationRange } from "@core/context/context-management/compaction-conversation-range"
+import {
+	type CompactionProviderDiagnosticSnapshot,
+	createCompactionProviderDiagnosticSnapshot,
+	findCompactionProviderFirstDivergence,
+	hashCompactionDiagnosticValue,
+	isCompactionDevDiagnosticsEnabled,
+} from "@core/context/context-management/compaction-dev-diagnostics"
 import { CompactionPassBudgetError } from "@core/context/context-management/compaction-pass-budget-error"
 import { elapsedCompactionMs } from "@core/context/context-management/compaction-phase-timing"
 import { CompactionRetryPolicy } from "@core/context/context-management/compaction-retry-policy"
@@ -35,6 +42,7 @@ import {
 	computeCompactTrigger,
 	computeSummarizeBudget,
 	getContextWindowInfo,
+	MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS,
 	resolveCompactTriggerPolicy,
 	shouldCompactProjectedUsage,
 } from "@core/context/context-management/context-window-utils"
@@ -470,6 +478,8 @@ export class Task {
 	private resumeCoordinator: ResumeCoordinator
 	private readonly historyResumeMaintenance: HistoryResumeMaintenance
 	private historyPreparationPending = false
+	private readonly restoredFromHistory: boolean
+	private latestOrdinaryCompactionDiagnostic?: CompactionProviderDiagnosticSnapshot
 
 	// ONE mutex for ALL state modifications to prevent race conditions
 	private stateMutex = new Mutex()
@@ -693,6 +703,7 @@ export class Task {
 		} = params
 
 		this.taskInitializationStartTime = performance.now()
+		this.restoredFromHistory = historyItem !== undefined
 		this.taskState = new TaskState()
 		this.remoteWorkspaceDetectionPromise = HostProvider.env
 			.getHostVersion({})
@@ -2430,6 +2441,37 @@ export class Task {
 		}
 	}
 
+	private resolveCompactionProviderInputCalibrationRatio(input: ContextCompactionSessionInput): number {
+		if (input.transition) return 1
+		const baseline = this.latestOrdinaryCompactionDiagnostic
+		const provider = input.compactionApi.getProviderId?.() ?? DEFAULT_API_PROVIDER
+		const modelId = input.compactionApi.getModel().id
+		if (!baseline || baseline.providerId !== provider || baseline.modelId !== modelId) return 1
+		for (let index = this.messageStateHandler.clineMessages.length - 1; index >= 0; index--) {
+			const message = this.messageStateHandler.clineMessages[index]
+			if (message.say !== "api_req_started" || !message.text) continue
+			try {
+				const info = JSON.parse(message.text) as ClineApiReqInfo
+				const estimatedInputTokens = info.estimatedContextTokens ?? 0
+				const providerInputTokens = (info.tokensIn ?? 0) + (info.cacheReads ?? 0) + (info.cacheWrites ?? 0)
+				if (estimatedInputTokens <= 0 || providerInputTokens <= 0 || info.contextTokensSource === "estimate") return 1
+				const ratio = Math.min(1, Math.max(0.5, providerInputTokens / estimatedInputTokens))
+				if (isCompactionDevDiagnosticsEnabled()) {
+					Logger.debug("[CompactionDiag] pass-zero-calibration", {
+						taskId: this.taskId,
+						estimatedInputTokens,
+						providerInputTokens,
+						ratio,
+					})
+				}
+				return ratio
+			} catch {
+				return 1
+			}
+		}
+		return 1
+	}
+
 	/** Create the sole Task-local execution boundary shared by every compaction trigger. */
 	private createContextCompactionSession(): ContextCompactionSession {
 		return new ContextCompactionSession(
@@ -2442,7 +2484,23 @@ export class Task {
 						this.getAutoCondenseTriggerOptions(),
 					).passInputCeilingTokens
 				},
-				estimatePassInput: async (input, passHistory) => {
+				getSingleTurnInputCeiling: (input) => {
+					const { contextWindow } = getContextWindowInfo(input.compactionApi)
+					const policy = resolveCompactTriggerPolicy(
+						contextWindow,
+						computeSummarizeBudget(),
+						this.getAutoCondenseTriggerOptions(),
+					)
+					return Math.max(
+						0,
+						policy.hardPassContextWindowTokens -
+							COMPACTION_CLOSURE_RESERVE_TOKENS -
+							MIN_COMPACTION_SUMMARY_OUTPUT_TOKENS,
+					)
+				},
+				estimatePassInput: async (input, passHistory, state) => {
+					const calibrationRatio =
+						state.passIndex === 0 ? this.resolveCompactionProviderInputCalibrationRatio(input) : 1
 					const request = await this.buildContextCompactionPassRequest(
 						input,
 						passHistory,
@@ -2451,10 +2509,12 @@ export class Task {
 						"estimate",
 					)
 					try {
-						return estimateContextWindowCandidate(request.providerInput, {
-							providerId: input.compactionApi.getProviderId?.() ?? DEFAULT_API_PROVIDER,
-							modelId: input.compactionApi.getModel().id,
-						})
+						return Math.ceil(
+							estimateContextWindowCandidate(request.providerInput, {
+								providerId: input.compactionApi.getProviderId?.() ?? DEFAULT_API_PROVIDER,
+								modelId: input.compactionApi.getModel().id,
+							}) * calibrationRatio,
+						)
 					} finally {
 						request.explicitInstructions.cancel()
 					}
@@ -2465,6 +2525,8 @@ export class Task {
 						passHistory ?? buildCompactionPassHistory(state),
 						feedback,
 						state.nextPassSummaryCarryLimitTokens,
+						"send",
+						state.passIndex === 0 ? this.resolveCompactionProviderInputCalibrationRatio(input) : 1,
 					),
 				buildSummaryRefitRequest: (input, state, carryLimitTokens, refitAttempt) => {
 					if (!state.cumulativeSummary) throw new Error("Summary refit requires an existing cumulative summary")
@@ -2490,7 +2552,24 @@ export class Task {
 				commit: (input, state) => this.commitContextCompaction(input, state),
 				publish: (input, event) => this.publishContextCompactionEvent(input, event),
 				waitForRetry: (_input, retryAttempt, signal) => this.waitForContextCompactionRetry(retryAttempt, signal),
-				recordUsage: (usage) => this.apiRateMetricsService.recordExactUsage(usage),
+				recordUsage: (usage) => {
+					this.apiRateMetricsService.recordExactUsage(usage)
+					if (isCompactionDevDiagnosticsEnabled()) {
+						const fittingState = this.taskState.targetWindowFittingState
+						Logger.debug(`[CompactionDiag] provider-usage`, {
+							taskId: this.taskId,
+							operationId: fittingState?.operationId ?? null,
+							passIndex: fittingState?.passIndex ?? null,
+							inputTokens: usage.inputTokens,
+							outputTokens: usage.outputTokens,
+							cacheReadTokens: usage.cacheReadTokens,
+							cacheWriteTokens: usage.cacheWriteTokens,
+							providerInputTokens: usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens,
+							providerContextTokens:
+								usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens,
+						})
+					}
+				},
 				recordTiming: (timing) => {
 					Logger.debug(`[Task ${this.taskId}] Context compaction timing`, timing)
 				},
@@ -2608,6 +2687,7 @@ export class Task {
 		feedback?: readonly ClineContent[],
 		summaryOutputLimitTokens?: number,
 		purpose: "send" | "estimate" = "send",
+		inputCalibrationRatio = 1,
 	) {
 		const requestScope = createRequestApiScope(
 			input.compactionApi,
@@ -2679,7 +2759,9 @@ export class Task {
 				},
 				buildMessages: buildCandidateHistory,
 			})
-			if (resolvedBudget.budget.decision !== "ready" && purpose === "send") {
+			const calibratedInputTokens = Math.ceil(resolvedBudget.budget.estimatedInputTokens * inputCalibrationRatio)
+			const calibratedPassFits = calibratedInputTokens <= policy.passInputCeilingTokens
+			if (resolvedBudget.budget.decision !== "ready" && purpose === "send" && !calibratedPassFits) {
 				// Structured so the session can shrink the next Pass range using the measurement that
 				// rejected this one instead of reproposing the range that just failed.
 				throw new CompactionPassBudgetError({
@@ -7110,6 +7192,67 @@ export class Task {
 		const ordinaryIndicatorLineage = isOrdinaryIndicatorRequest
 			? await this.beginOrdinaryContextWindowIndicator(apiIndex, providerAttempt, requestScope, providerInput)
 			: undefined
+
+		if (isCompactionDevDiagnosticsEnabled()) {
+			const requestKind = this.taskState.isInternalContextCompactionRequest
+				? "automatic_compaction"
+				: this.taskState.isManualContextCompactionRequest
+					? "manual_compaction"
+					: "ordinary"
+			const snapshot = createCompactionProviderDiagnosticSnapshot({
+				requestKind,
+				providerId: providerInfo.providerId,
+				modelId: providerInfo.model.id,
+				apiFormat: api.getSelectedApiFormat?.(),
+				systemPrompt,
+				messages: apiConversationMessages,
+				tools,
+				serverTools,
+			})
+			const ordinaryBaseline = requestKind === "ordinary" ? undefined : this.latestOrdinaryCompactionDiagnostic
+			const fittingState = this.taskState.targetWindowFittingState
+			const completedCards = readCompletedCompactionCards(this.messageStateHandler.clineMessages)
+			Logger.debug(`[CompactionDiag] provider-input`, {
+				taskId: this.taskId,
+				apiIndex,
+				providerAttempt,
+				providerInputSource,
+				requestKind,
+				restoredFromHistory: this.restoredFromHistory,
+				provider: snapshot.providerId,
+				modelId: snapshot.modelId,
+				apiFormat: snapshot.apiFormat,
+				operationId: fittingState?.operationId ?? null,
+				passIndex: fittingState?.passIndex ?? null,
+				passStartTurnIndex: fittingState?.passStartTurnIndex ?? null,
+				passEndTurnIndex: fittingState?.passEndTurnIndex ?? null,
+				coveredTurnCount: fittingState?.coveredTurnCount ?? null,
+				passStartMessageIndex: fittingState?.passStartMessageIndex ?? null,
+				passEndMessageIndex: fittingState?.passEndMessageIndex ?? null,
+				passInputCeiling: fittingState?.passInputCeiling ?? null,
+				estimatedInputTokens: fittingState?.estimatedInputTokens ?? null,
+				candidateEstimateCount: fittingState?.candidateEstimateCount ?? null,
+				deletedRange: this.taskState.conversationHistoryDeletedRange ?? null,
+				completedCards: completedCards.map((card) => ({
+					range: card.range,
+					summaryHash: hashCompactionDiagnosticValue(card.summary),
+				})),
+				cumulativeSummaryHash: fittingState?.cumulativeSummary
+					? hashCompactionDiagnosticValue(fittingState.cumulativeSummary)
+					: null,
+				pendingPromptRefreshReason: this.pendingSystemPromptRefreshReason ?? null,
+				runtimeHash: hashCompactionDiagnosticValue(runtime ?? null),
+				promptIdentityHash: snapshot.promptIdentityHash,
+				systemPromptHash: snapshot.systemPromptHash,
+				toolsHash: snapshot.toolsHash,
+				serverToolsHash: snapshot.serverToolsHash,
+				messageCount: snapshot.messageHashes.length,
+				firstMessageHash: snapshot.messageHashes[0] ?? null,
+				ordinaryBaselineAvailable: ordinaryBaseline !== undefined,
+				firstDivergence: ordinaryBaseline ? findCompactionProviderFirstDivergence(ordinaryBaseline, snapshot) : null,
+			})
+			if (requestKind === "ordinary") this.latestOrdinaryCompactionDiagnostic = snapshot
+		}
 
 		if (Logger.isDebugEnabled()) {
 			const rawMessages = this.messageStateHandler.apiConversationHistory

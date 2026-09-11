@@ -85,13 +85,22 @@ export function estimateContextWindowCandidateBreakdown(
 	input: EstimateContextWindowCandidateInput,
 	estimator: ContextWindowCandidateEstimator = {},
 ): ContextWindowCandidateBreakdown {
+	return estimateContextValueBreakdown(input, estimator)
+}
+
+/** Estimate one JSON-compatible value with the same binary-image normalization as a complete request. */
+export function estimateContextValueBreakdown(
+	value: unknown,
+	estimator: ContextWindowCandidateEstimator = {},
+): ContextWindowCandidateBreakdown {
 	const model = resolveImageTokenModel(estimator)
 	let imageTokens = 0
-	const normalized = JSON.stringify(input, (_key, value: unknown) => {
-		if (!isBase64ImageSource(value)) return value
-		imageTokens += estimateImageTokens(value, model)
-		return { ...value, data: "" }
-	})
+	const normalized =
+		JSON.stringify(value, (_key, candidate: unknown) => {
+			if (!isBase64ImageSource(candidate)) return candidate
+			imageTokens += estimateImageTokens(candidate, model)
+			return { ...candidate, data: "" }
+		}) ?? ""
 	const textTokens = Math.ceil(Buffer.byteLength(normalized, "utf8") / TOKEN_ESTIMATE_BYTES)
 	return { totalTokens: Math.max(1, textTokens + imageTokens), textTokens, imageTokens }
 }

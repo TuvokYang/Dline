@@ -122,6 +122,27 @@ describe("compaction Pass planner", () => {
 		})
 	})
 
+	it("uses the summary-safe hard ceiling only for an indivisible single turn", async () => {
+		const state = startFitting(createHistory(), "operation-single-turn-hard-ceiling")
+
+		const result = await planNextCompactionPass({
+			state,
+			passInputCeiling: 199,
+			singleTurnInputCeiling: 200,
+			estimateInputTokens: estimateByTurnMarkers,
+		})
+
+		expect(result).toMatchObject({
+			kind: "planned",
+			plan: {
+				passStartTurnIndex: 0,
+				passEndTurnIndex: 0,
+				estimatedInputTokens: 200,
+				passInputCeiling: 199,
+			},
+		})
+	})
+
 	it("reports a true single-turn overflow using the turn-only estimate", async () => {
 		const state = startFitting(createHistory(), "operation-too-large-turn")
 
@@ -163,7 +184,8 @@ describe("compaction Pass planner", () => {
 		})
 		if (result.kind !== "planned") throw new Error("Expected a planned compaction Pass")
 		expect(result.plan.candidateEstimateCount).toBe(estimateCount)
-		// One extra estimate covers the complete-range probe that prevents needless Pass splits.
-		expect(estimateCount).toBeLessThanOrEqual(7)
+		// Full-range, seeded, and adjacent-overflow probes preserve an exact maximality proof while
+		// keeping candidate estimation logarithmic instead of scanning every turn.
+		expect(estimateCount).toBeLessThanOrEqual(10)
 	})
 })

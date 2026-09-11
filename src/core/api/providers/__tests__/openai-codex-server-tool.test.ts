@@ -141,6 +141,43 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 		expect(JSON.stringify(first)).not.to.contain("prompt_cache_breakpoint")
 	})
 
+	it("keeps the ordinary Responses cache envelope unchanged for a compaction request", () => {
+		const handler = createHandler()
+		const model = handler.getModel()
+		const formattedInput = [
+			{ type: "message", role: "user", content: [{ type: "input_text", text: "oldest cached turn" }] },
+			{ type: "message", role: "assistant", content: [{ type: "output_text", text: "cached answer" }] },
+		]
+		const ordinary = (handler as any).buildRequestBody(model, formattedInput, "stable system", localTools, undefined, {
+			taskNamespace: "task-a",
+		}) as Record<string, unknown>
+		const compaction = (handler as any).buildRequestBody(model, formattedInput, "stable system", localTools, undefined, {
+			taskNamespace: "task-a",
+			generation: { purpose: "compaction", maxOutputTokens: 30_000 },
+		}) as Record<string, unknown>
+
+		expect(compaction.prompt_cache_key).to.equal(ordinary.prompt_cache_key)
+		expect(compaction.instructions).to.deep.equal(ordinary.instructions)
+		expect(compaction.tools).to.deep.equal(ordinary.tools)
+		expect(compaction.input).to.deep.equal(ordinary.input)
+	})
+
+	it("isolates previous_response_id as the only primary/fallback body difference", () => {
+		const handler = createHandler()
+		const model = handler.getModel()
+		const input = [{ type: "message", role: "user", content: [] }]
+		const primary = (handler as any).buildRequestBody(model, input, "stable system", localTools, "response-a", {
+			taskNamespace: "task-a",
+		}) as Record<string, unknown>
+		const fallback = (handler as any).buildRequestBody(model, input, "stable system", localTools, undefined, {
+			taskNamespace: "task-a",
+		}) as Record<string, unknown>
+		const { previous_response_id: previousResponseId, ...primaryWithoutPreviousResponse } = primary
+
+		expect(previousResponseId).to.equal("response-a")
+		expect(primaryWithoutPreviousResponse).to.deep.equal(fallback)
+	})
+
 	it("uses Profile model limits and the selected Responses transport at runtime", () => {
 		const configuredProfile = ApiProfile.create({
 			id: "profile-websocket",

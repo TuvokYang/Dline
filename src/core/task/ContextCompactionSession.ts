@@ -211,7 +211,13 @@ export type ContextCompactionSessionEvent =
 export interface ContextCompactionSessionPorts {
 	/** Maximum estimated input one Pass request may carry, including the reserve concession. */
 	getPassInputCeiling(input: ContextCompactionSessionInput): number
-	estimatePassInput(input: ContextCompactionSessionInput, passHistory: readonly ClineStorageMessage[]): Promise<number>
+	/** Summary-safe hard ceiling available only to an indivisible first uncovered logical turn. */
+	getSingleTurnInputCeiling?(input: ContextCompactionSessionInput): number
+	estimatePassInput(
+		input: ContextCompactionSessionInput,
+		passHistory: readonly ClineStorageMessage[],
+		state: TargetWindowFittingState,
+	): Promise<number>
 	buildPassRequest(
 		input: ContextCompactionSessionInput,
 		state: TargetWindowFittingState,
@@ -295,7 +301,10 @@ export class ContextCompactionSession {
 			settle: () => settleActive?.(),
 		}
 		const signal = combineSignals(input.signal, abortController.signal)
-		const sourceSnapshot = createCompactionSourceSnapshot(input.sourceHistory, input.sourceCanonicalRanges)
+		const sourceSnapshot = createCompactionSourceSnapshot(input.sourceHistory, input.sourceCanonicalRanges, {
+			providerId: input.compactionApi.getProviderId?.(),
+			modelId: typeof input.compactionApi.getModel === "function" ? input.compactionApi.getModel().id : undefined,
+		})
 		const logicalTurnIndexStartedAtMs = performance.now()
 		const logicalTurnIndex = indexLogicalTurns(sourceSnapshot.messages)
 		const logicalTurnIndexMs = elapsedCompactionMs(logicalTurnIndexStartedAtMs)
@@ -554,14 +563,16 @@ export class ContextCompactionSession {
 		signal: AbortSignal,
 	): Promise<FittedCompactionPass> {
 		const passInputCeiling = this.ports.getPassInputCeiling(input)
+		const singleTurnInputCeiling = this.ports.getSingleTurnInputCeiling?.(input)
 		let maxEndTurnIndex: number | undefined
 
 		for (let attempt = 0; ; attempt++) {
 			const planResult = await planNextCompactionPass({
 				state,
 				passInputCeiling,
+				...(singleTurnInputCeiling === undefined ? {} : { singleTurnInputCeiling }),
 				...(maxEndTurnIndex === undefined ? {} : { maxEndTurnIndex }),
-				estimateInputTokens: (passHistory) => this.ports.estimatePassInput(input, passHistory),
+				estimateInputTokens: (passHistory) => this.ports.estimatePassInput(input, passHistory, state),
 			})
 			this.assertCurrent(input.operationId, signal)
 			if (planResult.kind !== "planned") {

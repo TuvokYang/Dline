@@ -1,4 +1,11 @@
 import { setTimeout as setTimeoutPromise } from "node:timers/promises"
+import {
+	type CompactionWireDiagnosticSnapshot,
+	createCompactionWireDiagnosticSnapshot,
+	findCompactionWireFirstDivergence,
+	hashCompactionDiagnosticValue,
+	isCompactionDevDiagnosticsEnabled,
+} from "@core/context/context-management/compaction-dev-diagnostics"
 import { ModelInfo, openAiModelInfoSaneDefaults, openAiModels } from "@shared/api"
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import { ImageGenerationSource } from "@shared/proto/dline/profile"
@@ -71,6 +78,7 @@ export class OpenAiHandler implements ApiHandler {
 	private client: OpenAI | undefined
 	private requestController: AbortController | undefined
 	private explicitPromptCacheRejected = false
+	private latestOrdinaryResponsesDiagnostic?: CompactionWireDiagnosticSnapshot
 
 	constructor(private ctx: ApiHandlerContext) {}
 
@@ -123,6 +131,36 @@ export class OpenAiHandler implements ApiHandler {
 			!this.explicitPromptCacheRejected
 			? "explicit"
 			: "automatic"
+	}
+
+	private recordResponsesCompactionDiagnostic(input: {
+		requestKind: "ordinary" | "compaction"
+		modelId: string
+		mode: OpenAIPromptCacheProjectionMode
+		taskNamespace?: string
+		promptCacheKey: string
+		instructions?: unknown
+		tools: readonly unknown[]
+		wireInput: unknown
+	}): void {
+		if (!isCompactionDevDiagnosticsEnabled()) return
+
+		const snapshot = createCompactionWireDiagnosticSnapshot(input)
+		const ordinaryBaseline = input.requestKind === "ordinary" ? undefined : this.latestOrdinaryResponsesDiagnostic
+		Logger.debug("[CompactionDiag] openai-responses-wire", {
+			requestKind: input.requestKind,
+			modelId: input.modelId,
+			mode: input.mode,
+			taskNamespaceHash: hashCompactionDiagnosticValue(input.taskNamespace ?? null),
+			promptCacheKeyHash: snapshot.promptCacheKeyHash,
+			instructionsHash: snapshot.instructionsHash,
+			toolsHash: snapshot.toolsHash,
+			inputCount: snapshot.inputHashes.length,
+			firstInputHash: snapshot.inputHashes[0] ?? null,
+			ordinaryBaselineAvailable: ordinaryBaseline !== undefined,
+			firstDivergence: ordinaryBaseline ? findCompactionWireFirstDivergence(ordinaryBaseline, snapshot) : null,
+		})
+		if (input.requestKind === "ordinary") this.latestOrdinaryResponsesDiagnostic = snapshot
 	}
 
 	private async createWithPromptCacheFallback<T>(
@@ -452,6 +490,16 @@ export class OpenAiHandler implements ApiHandler {
 				tools: responseTools,
 				taskNamespace: options?.taskNamespace,
 				mode,
+			})
+			this.recordResponsesCompactionDiagnostic({
+				requestKind: options?.generation?.purpose === "compaction" ? "compaction" : "ordinary",
+				modelId: model.id,
+				mode,
+				taskNamespace: options?.taskNamespace,
+				promptCacheKey: promptCache.promptCacheKey,
+				instructions: promptCache.instructions,
+				tools: responseTools,
+				wireInput: promptCache.input,
 			})
 			return {
 				model: model.id,

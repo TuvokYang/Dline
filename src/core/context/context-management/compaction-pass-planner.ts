@@ -36,6 +36,8 @@ export interface PlanNextCompactionPassInput {
 	 * applies it uniformly and never maintains a second, looser bound.
 	 */
 	passInputCeiling: number
+	/** Summary-safe hard input ceiling used only when the first uncovered logical turn is indivisible. */
+	singleTurnInputCeiling?: number
 	/**
 	 * Highest logical turn index this Pass may still cover.
 	 *
@@ -82,7 +84,14 @@ export async function planNextCompactionPass(input: PlanNextCompactionPassInput)
 		estimateExactInput,
 	)
 	const isSingleTurnPass = exactCandidate.passEndTurnIndex === passStartTurnIndex
-	if (isSingleTurnPass && exactCandidate.breakdown.combinedEstimatedInputTokens > passInputCeiling) {
+	const singleTurnInputCeiling = Math.max(passInputCeiling, normalizeTokenCount(input.singleTurnInputCeiling ?? 0))
+	const singleTurnFitsHardCeiling =
+		isSingleTurnPass && exactCandidate.breakdown.combinedEstimatedInputTokens <= singleTurnInputCeiling
+	if (
+		isSingleTurnPass &&
+		exactCandidate.breakdown.combinedEstimatedInputTokens > passInputCeiling &&
+		!singleTurnFitsHardCeiling
+	) {
 		const turnFitsWithoutSummary =
 			exactCandidate.breakdown.requestEnvelopeTokens + exactCandidate.breakdown.turnTokens <= passInputCeiling
 		return {
@@ -95,7 +104,7 @@ export async function planNextCompactionPass(input: PlanNextCompactionPassInput)
 			...exactCandidate.breakdown,
 		}
 	}
-	if (exactCandidate.breakdown.combinedEstimatedInputTokens > passInputCeiling) {
+	if (exactCandidate.breakdown.combinedEstimatedInputTokens > passInputCeiling && !singleTurnFitsHardCeiling) {
 		throw new Error("Unable to find a fitting compaction Pass after bounded exact candidate calibration")
 	}
 	const acceptedEndIndex = exactCandidate.passEndTurnIndex
@@ -177,78 +186,77 @@ async function selectExactCandidate(
 	staticCosts: StaticPassCosts,
 	estimateExactInput: (messages: readonly ClineStorageMessage[], purpose: CompactionPassEstimatePurpose) => Promise<number>,
 ): Promise<RangeEstimate> {
-	const firstTurn = input.state.turns[passStartTurnIndex]
-	if (!firstTurn) throw new Error("Compaction Pass has no first uncovered logical turn")
-	const firstPassHistory = buildCompactionPassHistoryForRange(input.state, passStartTurnIndex, passStartTurnIndex)
-	const firstCombinedTokens = await estimateExactInput(firstPassHistory, "final_candidate")
-	const firstBreakdown = createBreakdown(firstCombinedTokens, passInputCeiling, staticCosts)
-	const firstRawTurnTokens = estimateCompactionSourceRangeTokens(
-		input.state.sourceSnapshot,
-		firstTurn.startMessageIndex,
-		firstTurn.endMessageIndex,
-	)
-	const tokenScale = firstRawTurnTokens > 0 ? firstBreakdown.turnTokens / firstRawTurnTokens : 1
-	const firstEstimate = {
-		passEndTurnIndex: passStartTurnIndex,
-		passHistory: firstPassHistory,
-		breakdown: firstBreakdown,
-		tokenScale,
-	}
-	if (firstCombinedTokens > passInputCeiling || passStartTurnIndex === maxEndTurnIndex) {
-		return firstEstimate
-	}
+	const exactEstimates = new Map<number, RangeEstimate>()
+	const estimateRange = async (passEndTurnIndex: number): Promise<RangeEstimate> => {
+		const cached = exactEstimates.get(passEndTurnIndex)
+		if (cached) return cached
 
-	// Probe the complete uncovered range before any extrapolation. The calibration
-	// loop below scales from a single turn, so a locally expensive first turn can
-	// project the whole range as oversized and permanently lower the search bound.
-	// That split a conversation which fits in one Pass into several Passes and made
-	// the first post-compaction request carry far less context than the window allows.
-	const fullEndTurnIndex = maxEndTurnIndex
-	const fullPassHistory = buildCompactionPassHistoryForRange(input.state, passStartTurnIndex, fullEndTurnIndex)
-	const fullCombinedTokens = await estimateExactInput(fullPassHistory, "final_candidate")
-	// The ceiling already includes the reserve concession, so a complete range that fits it is
-	// always sent as one request. Splitting here would strand a large part of the window and
-	// force the excluded tail to be replayed as a fresh prefix after compaction.
-	if (fullCombinedTokens <= passInputCeiling) {
-		return {
-			passEndTurnIndex: fullEndTurnIndex,
-			passHistory: fullPassHistory,
-			breakdown: createBreakdown(fullCombinedTokens, passInputCeiling, staticCosts),
-			tokenScale,
-		}
-	}
-
-	let bestEstimate = firstEstimate
-	let lowerEndTurnIndex = passStartTurnIndex + 1
-	let upperEndTurnIndex = maxEndTurnIndex
-	let calibrationOffsetTokens = 0
-	for (let attempt = 0; attempt < 4 && lowerEndTurnIndex <= upperEndTurnIndex; attempt++) {
-		const approximateEndTurnIndex = findApproximatePassEnd(
-			input.state,
-			passStartTurnIndex,
-			maxEndTurnIndex,
-			passInputCeiling - calibrationOffsetTokens,
-			staticCosts,
-			tokenScale,
-		)
-		const passEndTurnIndex = Math.min(upperEndTurnIndex, Math.max(lowerEndTurnIndex, approximateEndTurnIndex))
 		const passHistory = buildCompactionPassHistoryForRange(input.state, passStartTurnIndex, passEndTurnIndex)
 		const combinedEstimatedInputTokens = await estimateExactInput(passHistory, "final_candidate")
 		const breakdown = createBreakdown(combinedEstimatedInputTokens, passInputCeiling, staticCosts)
-		const estimate = { passEndTurnIndex, passHistory, breakdown, tokenScale }
-		const approximateTokens = approximateCombinedTokens(
-			input.state,
-			passStartTurnIndex,
-			passEndTurnIndex,
-			staticCosts,
-			tokenScale,
+		const firstTurn = input.state.turns[passStartTurnIndex]
+		const lastTurn = input.state.turns[passEndTurnIndex]
+		if (!firstTurn || !lastTurn) throw new Error("Compaction Pass has an invalid exact turn range")
+		const rawTurnTokens = estimateCompactionSourceRangeTokens(
+			input.state.sourceSnapshot,
+			firstTurn.startMessageIndex,
+			lastTurn.endMessageIndex,
 		)
-		calibrationOffsetTokens += combinedEstimatedInputTokens - approximateTokens
-		if (combinedEstimatedInputTokens <= passInputCeiling) {
+		const estimate = {
+			passEndTurnIndex,
+			passHistory,
+			breakdown,
+			tokenScale: rawTurnTokens > 0 ? breakdown.turnTokens / rawTurnTokens : 1,
+		}
+		exactEstimates.set(passEndTurnIndex, estimate)
+		return estimate
+	}
+	const fits = (estimate: RangeEstimate) => estimate.breakdown.combinedEstimatedInputTokens <= passInputCeiling
+
+	const firstEstimate = await estimateRange(passStartTurnIndex)
+	if (!fits(firstEstimate) || passStartTurnIndex === maxEndTurnIndex) return firstEstimate
+
+	// A fitting complete range must remain one Pass. Splitting it would replace the original
+	// conversation prefix with a generated summary in the next Pass and forfeit prompt-cache reuse.
+	const fullEstimate = await estimateRange(maxEndTurnIndex)
+	if (fits(fullEstimate)) return fullEstimate
+
+	// Prefix sums are an efficient seed only. Exact candidates establish the final boundary:
+	// the accepted range fits and its immediate successor is known to overflow.
+	const approximateEndTurnIndex = findApproximatePassEnd(
+		input.state,
+		passStartTurnIndex,
+		maxEndTurnIndex,
+		passInputCeiling,
+		staticCosts,
+		firstEstimate.tokenScale,
+	)
+	const seedEndTurnIndex = Math.min(maxEndTurnIndex, Math.max(passStartTurnIndex + 1, approximateEndTurnIndex))
+	const seedEstimate = await estimateRange(seedEndTurnIndex)
+	let bestEstimate = firstEstimate
+	let lowerEndTurnIndex = passStartTurnIndex + 1
+	let upperEndTurnIndex = maxEndTurnIndex - 1
+
+	if (fits(seedEstimate)) {
+		bestEstimate = seedEstimate
+		if (seedEndTurnIndex === maxEndTurnIndex - 1) return bestEstimate
+
+		const nextEstimate = await estimateRange(seedEndTurnIndex + 1)
+		if (!fits(nextEstimate)) return bestEstimate
+		bestEstimate = nextEstimate
+		lowerEndTurnIndex = seedEndTurnIndex + 2
+	} else {
+		upperEndTurnIndex = seedEndTurnIndex - 1
+	}
+
+	while (lowerEndTurnIndex <= upperEndTurnIndex) {
+		const midpoint = Math.floor((lowerEndTurnIndex + upperEndTurnIndex) / 2)
+		const estimate = await estimateRange(midpoint)
+		if (fits(estimate)) {
 			bestEstimate = estimate
-			lowerEndTurnIndex = passEndTurnIndex + 1
+			lowerEndTurnIndex = midpoint + 1
 		} else {
-			upperEndTurnIndex = passEndTurnIndex - 1
+			upperEndTurnIndex = midpoint - 1
 		}
 	}
 	return bestEstimate

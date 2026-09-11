@@ -2,6 +2,7 @@ import type { ClineStorageMessage } from "@shared/messages/content"
 import cloneDeep from "clone-deep"
 import type { CanonicalMessageRange } from "./compaction-context-projection"
 import { hashCompactionValue } from "./compaction-hash"
+import { type ContextWindowCandidateEstimator, estimateContextValueBreakdown } from "./context-window-projection"
 
 /** Immutable operation-scoped canonical source shared by every compaction Pass. */
 export interface CompactionSourceSnapshot {
@@ -16,6 +17,7 @@ export interface CompactionSourceSnapshot {
 export function createCompactionSourceSnapshot(
 	messages: readonly ClineStorageMessage[],
 	canonicalRanges: readonly (CanonicalMessageRange | undefined)[] = [],
+	estimator: ContextWindowCandidateEstimator = {},
 ): CompactionSourceSnapshot {
 	if (canonicalRanges.length > 0 && canonicalRanges.length !== messages.length) {
 		throw new Error("Compaction source canonical range mapping must align with source history")
@@ -25,7 +27,7 @@ export function createCompactionSourceSnapshot(
 	return {
 		messages: detachedMessages,
 		canonicalRanges: detachedRanges,
-		messageTokenPrefixSums: buildMessageTokenPrefixSums(detachedMessages),
+		messageTokenPrefixSums: buildMessageTokenPrefixSums(detachedMessages, estimator),
 		sourceHistoryHash: hashCompactionValue(detachedMessages),
 	}
 }
@@ -64,11 +66,13 @@ export function materializeCompactionSourceSuffix(
 	return materializeCompactionSourceRange(snapshot, startMessageIndex, snapshot.messages.length - 1)
 }
 
-function buildMessageTokenPrefixSums(messages: readonly ClineStorageMessage[]): number[] {
+function buildMessageTokenPrefixSums(
+	messages: readonly ClineStorageMessage[],
+	estimator: ContextWindowCandidateEstimator,
+): number[] {
 	const prefixSums = [0]
 	for (const message of messages) {
-		const serialized = JSON.stringify(message)
-		const messageTokens = Math.max(1, Math.ceil(Buffer.byteLength(serialized, "utf8") / 4))
+		const messageTokens = estimateContextValueBreakdown(message, estimator).totalTokens
 		prefixSums.push(prefixSums[prefixSums.length - 1] + messageTokens)
 	}
 	return prefixSums
