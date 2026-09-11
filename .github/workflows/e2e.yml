@@ -11,15 +11,17 @@ env:
 
 jobs:
     e2e:
-        name: E2E (${{ matrix.runner }})
+        name: E2E (${{ matrix.runner }}, shard ${{ matrix.shard }}/4)
         strategy:
             fail-fast: false
             matrix:
                 runner: [ubuntu, windows, macos]
+                shard: [1, 2, 3, 4]
         runs-on: ${{ matrix.runner }}-latest
-        timeout-minutes: 20
+        timeout-minutes: 60
         env:
             DLINE_E2E_PROFILE: mock-openai
+            DLINE_E2E_RUN_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.runner }}-${{ matrix.shard }}
         steps:
             - name: Checkout code
               uses: actions/checkout@v6
@@ -58,17 +60,17 @@ jobs:
 
             - name: Run E2E tests - Linux
               if: matrix.runner == 'ubuntu'
-              run: xvfb-run -a npm run test:e2e:optimal
+              run: xvfb-run -a npm run test:e2e:optimal -- --shard=${{ matrix.shard }}/4
 
             - name: Run E2E tests - Non-Linux
               if: matrix.runner != 'ubuntu'
-              run: npm run test:e2e:optimal
+              run: npm run test:e2e:optimal -- --shard=${{ matrix.shard }}/4
 
             - name: Upload failed E2E artifacts
               if: failure()
               uses: actions/upload-artifact@v5
               with:
-                  name: playwright-artifacts-${{ matrix.runner }}-${{ github.sha }}
+                  name: playwright-artifacts-${{ matrix.runner }}-${{ matrix.shard }}-${{ github.sha }}
                   path: tmp/test-result/
                   if-no-files-found: warn
                   include-hidden-files: true

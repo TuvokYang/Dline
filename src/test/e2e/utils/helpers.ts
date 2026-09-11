@@ -7,10 +7,10 @@ import {
 	type RmOptions,
 	readdirSync,
 	readFileSync,
-	rmSync,
 	statSync,
 	writeFileSync,
 } from "node:fs"
+import { rm } from "node:fs/promises"
 import * as os from "node:os"
 import * as path from "node:path"
 import { type ElectronApplication, expect, type Frame, type Page, test } from "@playwright/test"
@@ -248,17 +248,18 @@ export class E2ETestHelper {
 	}
 
 	public static async rmForRetries(path: PathLike, options?: RmOptions): Promise<void> {
-		const maxAttempts = 3 // Reduced from 5
-
+		const maxAttempts = 10
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			try {
-				rmSync(path, options)
+				await rm(path, options)
 				return
 			} catch (error) {
-				if (attempt === maxAttempts) {
-					throw new Error(`Failed to rmSync ${path} after ${maxAttempts} attempts: ${error}`)
+				const code = error instanceof Error && "code" in error ? String(error.code) : undefined
+				const retryable = code === "EBUSY" || code === "ENOTEMPTY" || code === "EPERM"
+				if (!retryable || attempt === maxAttempts) {
+					throw new Error(`Failed to remove ${path} after ${attempt} attempt(s): ${error}`, { cause: error })
 				}
-				await new Promise((resolve) => setTimeout(resolve, 50 * attempt)) // Progressive delay
+				await new Promise((resolve) => setTimeout(resolve, 100 * attempt))
 			}
 		}
 	}

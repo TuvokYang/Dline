@@ -3673,7 +3673,12 @@ export class Task {
 		return true
 	}
 
-	/** Consume the one-shot manual takeover at the next retry decision boundary. */
+	/** Observe whether explicit user control owns the current retry sequence. */
+	private hasManualRetryTakeover(): boolean {
+		return this.manualRetryTakeoverActive
+	}
+
+	/** Consume the one-shot manual takeover at the canonical retry decision boundary. */
 	private consumeManualRetryTakeover(): boolean {
 		const active = this.manualRetryTakeoverActive
 		this.manualRetryTakeoverActive = false
@@ -7494,7 +7499,7 @@ export class Task {
 				const isInsufficientCredits = clineError.isErrorType(ClineErrorType.Balance)
 
 				let response: ClineAskResponse
-				const manualRetryTakeover = this.consumeManualRetryTakeover()
+				const manualRetryTakeover = this.hasManualRetryTakeover()
 				// Skip auto-retry after explicit user takeover or for non-recoverable account errors.
 				const shouldRetry =
 					!manualRetryTakeover &&
