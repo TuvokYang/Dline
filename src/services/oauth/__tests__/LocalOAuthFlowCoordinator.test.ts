@@ -4,8 +4,9 @@ import os from "node:os"
 import path from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { FileOAuthFlowLease } from "../FileOAuthFlowLease"
+import { LocalOAuthCallbackServer } from "../LocalOAuthCallbackServer"
 import { LocalOAuthFlowCoordinator } from "../LocalOAuthFlowCoordinator"
-import type { OAuthAuthorizationStrategy } from "../types"
+import type { OAuthAuthorizationStrategy, OAuthFlowLease } from "../types"
 
 interface TestCredential {
 	code: string
@@ -61,11 +62,16 @@ describe("LocalOAuthFlowCoordinator", () => {
 	})
 
 	async function createCoordinator(
-		options: { strategy?: TestStrategy; openExternal?: (url: string) => Promise<void>; timeoutMs?: number } = {},
+		options: {
+			strategy?: TestStrategy
+			lease?: OAuthFlowLease
+			openExternal?: (url: string) => Promise<void>
+			timeoutMs?: number
+		} = {},
 	): Promise<LocalOAuthFlowCoordinator<TestCredential>> {
 		tempDir ??= await fs.mkdtemp(path.join(os.tmpdir(), "dline-oauth-flow-"))
 		const coordinator = new LocalOAuthFlowCoordinator(options.strategy ?? new TestStrategy(), {
-			lease: new FileOAuthFlowLease(path.join(tempDir, "flow-lease.json")),
+			lease: options.lease ?? new FileOAuthFlowLease(path.join(tempDir, "flow-lease.json")),
 			openExternal:
 				options.openExternal ??
 				(async (authorizationUrl) => {
@@ -185,6 +191,54 @@ describe("LocalOAuthFlowCoordinator", () => {
 				await expect(flow.result).resolves.toMatchObject({ code })
 			}
 		} finally {
+			agent.destroy()
+		}
+	})
+
+	it("waits for the previous callback server close barrier before acquiring the next flow lease", async () => {
+		const port = await getAvailablePort()
+		let releaseFirstClose: () => void = () => undefined
+		const firstCloseGate = new Promise<void>((resolve) => {
+			releaseFirstClose = resolve
+		})
+		let markFirstCloseReachedBarrier: () => void = () => undefined
+		const firstCloseReachedBarrier = new Promise<void>((resolve) => {
+			markFirstCloseReachedBarrier = resolve
+		})
+		const originalClose = LocalOAuthCallbackServer.prototype.close
+		let closeCount = 0
+		vi.spyOn(LocalOAuthCallbackServer.prototype, "close").mockImplementation(async function (this: LocalOAuthCallbackServer) {
+			await originalClose.call(this)
+			closeCount++
+			if (closeCount === 1) {
+				markFirstCloseReachedBarrier()
+				await firstCloseGate
+			}
+		})
+		const acquire = vi.fn(async () => ({ release: async () => undefined }))
+		const coordinator = await createCoordinator({ strategy: new TestStrategy(port), lease: { acquire } })
+		const agent = new http.Agent({ keepAlive: true, maxSockets: 1 })
+
+		try {
+			const first = await coordinator.startFlow({ profileId: "profile-a" })
+			const authorization = lastAuthorizationUrl()
+			const response = await requestWithAgent(
+				`${authorization.searchParams.get("redirect_uri")}?code=browser-code&state=${authorization.searchParams.get("state")}`,
+				agent,
+			)
+			expect(response.status).toBe(200)
+			await expect(first.result).resolves.toMatchObject({ code: "browser-code" })
+			await firstCloseReachedBarrier
+
+			const nextFlowPromise = coordinator.startFlow({ profileId: "profile-b" })
+			expect(acquire).toHaveBeenCalledTimes(1)
+			releaseFirstClose()
+			const next = await nextFlowPromise
+			expect(acquire).toHaveBeenCalledTimes(2)
+			await coordinator.cancelFlow({ flowId: next.flowId, profileId: next.profileId })
+			await expect(next.result).rejects.toMatchObject({ code: "FLOW_CANCELLED" })
+		} finally {
+			releaseFirstClose()
 			agent.destroy()
 		}
 	})
