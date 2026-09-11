@@ -171,7 +171,7 @@ describe("getToolDisplayInfo", () => {
 		expect(getToolDisplayInfo(tool)?.displayText).toBe('"toolResult" in src/')
 	})
 
-	it("keeps a complete read path and its line range for width-aware clipping", () => {
+	it("keeps a complete read path with an independently protected line range", () => {
 		const tool = {
 			tool: "readFile",
 			path: "src/core/task/tools/handlers/ReadFileToolHandler.ts",
@@ -182,6 +182,11 @@ describe("getToolDisplayInfo", () => {
 		expect(getToolDisplayInfo(tool)).toMatchObject({
 			displayText: "src/core/task/tools/handlers/ReadFileToolHandler.ts · lines 125-416",
 			tooltipText: "src/core/task/tools/handlers/ReadFileToolHandler.ts · lines 125-416",
+			row: {
+				path: "src/core/task/tools/handlers/ReadFileToolHandler.ts",
+				suffix: "lines 125-416",
+				suffixSeparator: " · ",
+			},
 		})
 	})
 
@@ -203,9 +208,10 @@ describe("getActivityText", () => {
 	it("describes an in-flight reference lookup instead of rendering nothing", () => {
 		const tool = { tool: "findReferences", path: "src/core/task/ToolExecutor.ts" } as ClineSayTool
 
-		expect(getActivityText(tool)).toEqual({
+		expect(getActivityText(tool)).toMatchObject({
 			displayText: "Finding references in src/core/task/ToolExecutor.ts...",
 			tooltipText: "Finding references in src/core/task/ToolExecutor.ts",
+			row: { prefix: "Finding references", path: "src/core/task/ToolExecutor.ts", suffix: "" },
 		})
 	})
 
@@ -222,6 +228,16 @@ describe("getActivityText", () => {
 
 		expect(active?.displayText).toBe(`Searching ${completed?.displayText}...`)
 		expect(active?.tooltipText).toBe(`Searching ${completed?.tooltipText}`)
+	})
+
+	it("preserves known scale metadata in active search and reference rows", () => {
+		for (const tool of [
+			{ tool: "searchFiles", path: "src", regex: "needle", count: 4, files: 2 },
+			{ tool: "findReferences", path: "src/a.ts", symbolName: "MySymbol", count: 4, files: 2 },
+		] satisfies ClineSayTool[]) {
+			expect(getActivityText(tool)?.row?.suffix).toBe(getToolDisplayInfo(tool)?.row?.suffix)
+			expect(getActivityText(tool)?.tooltipText).toContain("4 ")
+		}
 	})
 
 	it("has no text for a tool without a path", () => {

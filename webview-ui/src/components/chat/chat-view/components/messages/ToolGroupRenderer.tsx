@@ -1,28 +1,17 @@
 import { ClineMessage, ClineSayTool } from "@shared/ExtensionMessage"
 import { StringRequest } from "@shared/proto/dline/common"
 import { memo, useCallback, useMemo, useState } from "react"
-import { TypewriterText } from "@/components/chat/TypewriterText"
 import { cleanPathPrefix } from "@/components/common/CodeAccordian"
-import { Button } from "@/components/ui/button"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { FileServiceClient } from "@/services/grpc-client"
 import { getIconByToolName, getToolsNotInCurrentActivities, isLowStakesTool } from "../../utils/messageUtils"
+import { ToolItemRow } from "./ToolItemRow"
+import type { ToolItemText, ToolRowParts } from "./tool-row-layout"
 
 interface ToolGroupRendererProps {
 	messages: ClineMessage[]
 	allMessages: ClineMessage[]
 	isLastGroup: boolean
-}
-
-/**
- * One tool entry rendered in the width-constrained row and in full on hover.
- */
-export interface ToolItemText {
-	/** Complete row text; layout applies ellipsis only when the available width requires it. */
-	displayText: string
-	/** Complete tooltip text, safe to select and copy. */
-	tooltipText: string
 }
 
 interface ToolWithReasoning {
@@ -86,7 +75,7 @@ export function formatScale(
 }
 
 /** Render a search as `"terms" in dir/ (pattern) (N matches · M files)`. */
-export function formatSearchDisplay(tool: ClineSayTool): ToolItemText {
+export function formatSearchDisplay(tool: ClineSayTool): ToolItemText & { row: ToolRowParts } {
 	const terms = formatSearchTerms(tool.regex || "")
 	const cleanedPath = cleanPathPrefix(tool.path || "")
 	const pattern = tool.filePattern && tool.filePattern !== "*" ? ` (${tool.filePattern})` : ""
@@ -95,6 +84,7 @@ export function formatSearchDisplay(tool: ClineSayTool): ToolItemText {
 	return {
 		displayText: `${terms.displayText} in ${cleanedPath}/${pattern}${scale}`,
 		tooltipText: `${terms.tooltipText} in ${cleanedPath}/${pattern}${scale}`,
+		row: { prefix: terms.displayText, prefixSeparator: " in ", path: `${cleanedPath}/`, suffix: `${pattern}${scale}`.trim() },
 	}
 }
 
@@ -103,7 +93,7 @@ export function formatSearchDisplay(tool: ClineSayTool): ToolItemText {
  * Falls back to a generic target when the symbol could not be resolved, so the
  * row is never empty.
  */
-export function formatReferencesDisplay(tool: ClineSayTool): ToolItemText {
+export function formatReferencesDisplay(tool: ClineSayTool): ToolItemText & { row: ToolRowParts } {
 	const target = tool.symbolName ? `"${tool.symbolName}"` : "references"
 	const cleanedPath = cleanPathPrefix(tool.path || "")
 	const scale = formatScale(tool.count, tool.files, "ref")
@@ -111,6 +101,7 @@ export function formatReferencesDisplay(tool: ClineSayTool): ToolItemText {
 	return {
 		displayText: `${target} in ${cleanedPath}${scale}`,
 		tooltipText: `${target} in ${cleanedPath}${scale}`,
+		row: { prefix: target, prefixSeparator: " in ", path: cleanedPath, suffix: scale.trim() },
 	}
 }
 
@@ -132,11 +123,23 @@ export function getActivityText(tool: ClineSayTool): ToolItemText | null {
 			return {
 				displayText: `Reading ${cleanedPath}${lineHint}...`,
 				tooltipText: `Reading ${cleanedPath}${lineHint}`,
+				row: {
+					prefix: "Reading",
+					path: cleanedPath,
+					suffix: lineHint ? `lines ${tool.readLineStart}-${tool.readLineEnd}` : "",
+					suffixSeparator: " · ",
+				},
 			}
 		}
 		case "listFilesTopLevel":
 		case "listFilesRecursive":
-			return tool.path ? { displayText: `Exploring ${cleanedPath}/...`, tooltipText: `Exploring ${cleanedPath}/` } : null
+			return tool.path
+				? {
+						displayText: `Exploring ${cleanedPath}/...`,
+						tooltipText: `Exploring ${cleanedPath}/`,
+						row: { prefix: "Exploring", path: `${cleanedPath}/` },
+					}
+				: null
 		case "searchFiles": {
 			if (!tool.regex || !tool.path) {
 				return null
@@ -145,17 +148,26 @@ export function getActivityText(tool: ClineSayTool): ToolItemText | null {
 			return {
 				displayText: `Searching ${search.displayText}...`,
 				tooltipText: `Searching ${search.tooltipText}`,
+				row: { ...search.row, prefix: `Searching ${search.row.prefix}` },
 			}
 		}
-		case "findReferences":
+		case "findReferences": {
+			if (!tool.path) return null
+			const references = formatReferencesDisplay(tool)
+			return {
+				displayText: `Finding ${references.displayText}...`,
+				tooltipText: `Finding ${references.tooltipText}`,
+				row: { ...references.row, prefix: `Finding ${references.row.prefix}` },
+			}
+		}
+		case "listCodeDefinitionNames":
 			return tool.path
 				? {
-						displayText: `Finding references in ${cleanedPath}...`,
-						tooltipText: `Finding references in ${cleanedPath}`,
+						displayText: `Analyzing ${cleanedPath}/...`,
+						tooltipText: `Analyzing ${cleanedPath}/`,
+						row: { prefix: "Analyzing", path: `${cleanedPath}/` },
 					}
 				: null
-		case "listCodeDefinitionNames":
-			return tool.path ? { displayText: `Analyzing ${cleanedPath}/...`, tooltipText: `Analyzing ${cleanedPath}/` } : null
 		default:
 			return null
 	}
@@ -321,45 +333,6 @@ export const ToolGroupRenderer = memo(({ messages, allMessages, isLastGroup }: T
 	)
 })
 
-interface ToolItemRowProps {
-	icon: React.ComponentType<{ className?: string }>
-	text: ToolItemText
-	isActive?: boolean
-	ariaExpanded?: boolean
-	onActivate?: () => void
-}
-
-/**
- * One tool line: icon plus shortened text, with the full text on hover.
- * Active and completed entries share this row so both read the same way.
- */
-function ToolItemRow({ icon: Icon, text, isActive, ariaExpanded, onActivate }: ToolItemRowProps) {
-	return (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<Button
-					aria-expanded={ariaExpanded}
-					className={cn(
-						"flex w-4/5 items-center gap-[3px] text-[13px] text-description py-[1px] min-w-0 max-w-full px-0 leading-tight -my-0.5",
-						isActive ? "" : "cursor-pointer hover:text-link",
-					)}
-					disabled={isActive}
-					onClick={onActivate}
-					size="icon"
-					variant="text">
-					<Icon className="opacity-70 shrink-0 size-[12px]" />
-					<span className="flex-1 min-w-0 whitespace-nowrap overflow-hidden text-ellipsis text-left text-[13px]">
-						{isActive ? <TypewriterText speed={15} text={text.displayText} /> : text.displayText}
-					</span>
-				</Button>
-			</TooltipTrigger>
-			<TooltipContent align="start" side="bottom">
-				<span className="select-text break-all font-mono text-[11px]">{text.tooltipText}</span>
-			</TooltipContent>
-		</Tooltip>
-	)
-}
-
 /**
  * Build tool items WITHOUT reasoning.
  * Reasoning should not be displayed in file lists - only file/folder content.
@@ -430,10 +403,10 @@ export interface ToolDisplayInfo extends ToolItemText {
 	label: string
 }
 
-/** Text for a path-only entry; the row clips it according to the available width. */
+/** Keep the original path available to the width-aware row and the full tooltip. */
 function pathOnlyText(path: string): ToolItemText {
 	const cleaned = cleanPathPrefix(path)
-	return { displayText: cleaned, tooltipText: cleaned }
+	return { displayText: cleaned, tooltipText: cleaned, row: { path: cleaned } }
 }
 
 /**
@@ -457,6 +430,11 @@ export function getToolDisplayInfo(tool: ClineSayTool): ToolDisplayInfo | null {
 				label: "read",
 				displayText: `${cleaned}${lineNote}`,
 				tooltipText: `${cleaned}${lineNote}`,
+				row: {
+					path: cleaned,
+					suffix: lineNote ? `lines ${tool.readLineStart}-${tool.readLineEnd}` : "",
+					suffixSeparator: " · ",
+				},
 			}
 		}
 		case "listFilesTopLevel":
