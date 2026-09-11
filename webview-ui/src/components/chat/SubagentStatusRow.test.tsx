@@ -97,7 +97,7 @@ describe("SubagentStatusRow", () => {
 
 		render(<SubagentStatusRow isLast={true} message={msg} />)
 
-		expect(screen.getByTestId("subagent-list-scroll")).toHaveClass("max-h-[60vh]", "overflow-y-auto", "overscroll-contain")
+		expect(screen.getByTestId("subagent-list-scroll")).toHaveClass("max-h-[60vh]", "overflow-y-auto", "overscroll-x-contain")
 		expect(screen.getByText(/do something/)).toBeInTheDocument()
 	})
 
@@ -479,7 +479,7 @@ describe("SubagentStatusRow", () => {
 		expect(item).not.toHaveTextContent("#1")
 		expect(item).not.toHaveTextContent(/\d+ tools called/)
 		expect(item).not.toHaveTextContent(jobId)
-		expect(item.parentElement).toHaveClass("max-h-[60vh]", "overflow-y-auto", "overscroll-contain")
+		expect(item.parentElement).toHaveClass("max-h-[60vh]", "overflow-y-auto", "overscroll-x-contain")
 		expect(screen.queryByText(/<task>/)).not.toBeInTheDocument()
 		expect(screen.queryByText(/<context>/)).not.toBeInTheDocument()
 	})

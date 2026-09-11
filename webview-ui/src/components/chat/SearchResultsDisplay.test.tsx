@@ -20,7 +20,7 @@ describe("SearchResultsDisplay height boundary", () => {
 		expect(screen.getByTestId("multi-workspace-search-scroll")).toHaveClass(
 			"max-h-[60vh]",
 			"overflow-y-auto",
-			"overscroll-contain",
+			"overscroll-x-contain",
 		)
 	})
 })

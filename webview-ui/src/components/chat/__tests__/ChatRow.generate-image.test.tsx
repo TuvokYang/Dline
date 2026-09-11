@@ -193,7 +193,11 @@ describe("ChatRow image generation rendering", () => {
 			/>,
 		)
 		const partialImage = await screen.findByRole("img", { name: "Generated image partial 1" })
-		expect(screen.getByTestId("image-generation-scroll")).toHaveClass("max-h-[60vh]", "overflow-y-auto", "overscroll-contain")
+		expect(screen.getByTestId("image-generation-scroll")).toHaveClass(
+			"max-h-[60vh]",
+			"overflow-y-auto",
+			"overscroll-x-contain",
+		)
 		expect(partialImage.parentElement).toHaveClass("w-full")
 		expect(partialImage.parentElement).toHaveStyle({ maxHeight: "60vh" })
 		unmount()

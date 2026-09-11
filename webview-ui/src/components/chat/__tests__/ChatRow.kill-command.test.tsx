@@ -47,7 +47,7 @@ describe("ChatRow kill command result", () => {
 		)
 
 		const result = screen.getByTestId("kill-command-result")
-		expect(screen.getByTestId("kill-command-scroll")).toHaveClass("max-h-[60vh]", "overflow-y-auto", "overscroll-contain")
+		expect(screen.getByTestId("kill-command-scroll")).toHaveClass("max-h-[60vh]", "overflow-y-auto", "overscroll-x-contain")
 		expect(within(result).getByText("Dline requested command termination:")).toBeVisible()
 		expect(within(result).getByText("npm install")).toBeVisible()
 		fireEvent.click(within(result).getByRole("button", { name: "View command activity" }))

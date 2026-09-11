@@ -10,20 +10,9 @@ const TASK_ID = "e2e-chat-message-window-scroll"
 const TASK_TEXT = "E2E_CHAT_MESSAGE_WINDOW_SCROLL_TASK"
 const BODY_MESSAGE_COUNT = 1_200
 const BROWSE_TARGET_INDEX = 650
-const FETCH_MESSAGE_METHOD = "fetchMessage"
 const STREAM_CONTINUATION = "E2E_CHAT_WINDOW_STREAM_CONTINUATION"
 const STREAM_PARTIAL_MARKER = "E2E_CHAT_WINDOW_STREAM_PARTIAL"
 const STREAM_COMPLETION_MARKER = "E2E_CHAT_WINDOW_STREAM_COMPLETE"
-
-interface GrpcLogEntry {
-	service?: string
-	method?: string
-	status?: string
-}
-
-interface GrpcSessionLog {
-	entries?: GrpcLogEntry[]
-}
 
 interface VisibleRowSnapshot {
 	ts: number
@@ -99,19 +88,33 @@ function grpcLogPath(testInfo: TestInfo): string {
 	return path.join(E2ETestHelper.CODEBASE_ROOT_DIR, "tests", "specs", `grpc_recorded_session_${fileName}.json`)
 }
 
-async function readFetchMessageRpcCount(logPath: string): Promise<number | undefined> {
-	const raw = await readFile(logPath, "utf8").catch(() => undefined)
-	if (!raw) return 0
-	try {
-		const session = JSON.parse(raw) as GrpcSessionLog
-		return (session.entries ?? []).filter(
-			(entry) =>
-				entry.service === "dline.TaskService" && entry.method === FETCH_MESSAGE_METHOD && entry.status === "completed",
-		).length
-	} catch (error: unknown) {
-		if (error instanceof SyntaxError) return undefined
-		throw error
-	}
+async function observeFetchedWindows(sidebar: Frame): Promise<void> {
+	await sidebar.evaluate(() => {
+		const completedRequests = new Set<string>()
+		const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null
+		document.documentElement.dataset.fetchedWindows = "0"
+		// Observe the real FetchMessageResponse contract in this isolated webview.
+		// The shared recorder overwrites JSON concurrently and is not a reliable live counter.
+		window.addEventListener("message", (event: MessageEvent<unknown>) => {
+			const envelope = event.data
+			if (!isRecord(envelope) || envelope.type !== "grpc_response" || !isRecord(envelope.grpc_response)) return
+			const response = envelope.grpc_response
+			if (response.error || typeof response.request_id !== "string" || !isRecord(response.message)) return
+			const payload = response.message
+			if (
+				!Array.isArray(payload.messages) ||
+				typeof payload.startIndex !== "number" ||
+				typeof payload.totalCount !== "number"
+			)
+				return
+			completedRequests.add(response.request_id)
+			document.documentElement.dataset.fetchedWindows = String(completedRequests.size)
+		})
+	})
+}
+
+async function readFetchMessageRpcCount(sidebar: Frame): Promise<number> {
+	return sidebar.evaluate(() => Number(document.documentElement.dataset.fetchedWindows ?? 0))
 }
 
 async function captureScroller(sidebar: Frame): Promise<ScrollerSnapshot> {
@@ -185,6 +188,7 @@ async function openSeededHistoryTask(
 	await E2ETestHelper.openClineSidebar(page)
 	const sidebar = await helper.getSidebar(page)
 	await helper.signin(sidebar)
+	await observeFetchedWindows(sidebar)
 	await page.getByRole("button", { name: "History", exact: true }).click()
 	await E2ETestHelper.dismissWhatsNewModal(sidebar)
 	const historyTask = sidebar.locator(".history-item").filter({ hasText: TASK_TEXT })
@@ -230,8 +234,8 @@ e2e.describe("Chat message window scroll", () => {
 				await expect(sidebar.getByRole("button", { name: "Scroll to bottom", exact: true })).toHaveCount(0)
 				const initial = await captureScroller(sidebar)
 				expectUniqueOrderedRows(initial)
-				await expect.poll(() => readFetchMessageRpcCount(recorderPath), { timeout: 30_000 }).toBeGreaterThanOrEqual(1)
-				const initialFetchCount = (await readFetchMessageRpcCount(recorderPath)) ?? 0
+				await expect.poll(() => readFetchMessageRpcCount(sidebar), { timeout: 30_000 }).toBeGreaterThanOrEqual(1)
+				const initialFetchCount = await readFetchMessageRpcCount(sidebar)
 
 				let browsing = await captureScroller(sidebar)
 				for (let attempt = 0; attempt < 40; attempt++) {
@@ -260,17 +264,19 @@ e2e.describe("Chat message window scroll", () => {
 				const anchor = browsing.visibleRows.find((row) => row.top >= -1)
 				expect(anchor, "the browser must expose a stable visible row anchor").toBeDefined()
 
-				await expect
-					.poll(() => readFetchMessageRpcCount(recorderPath), { timeout: 30_000 })
-					.toBeGreaterThan(initialFetchCount)
+				await expect.poll(() => readFetchMessageRpcCount(sidebar), { timeout: 30_000 }).toBeGreaterThan(initialFetchCount)
 				// This interval is the behavior under test: after required edge loading settles,
 				// a correct window controller must become quiescent instead of refetching the latest page forever.
 				await page.waitForTimeout(1_500)
-				const settledFetchCount = (await readFetchMessageRpcCount(recorderPath)) ?? 0
+				const settledFetchCount = await readFetchMessageRpcCount(sidebar)
 				await page.waitForTimeout(1_500)
-				const laterFetchCount = (await readFetchMessageRpcCount(recorderPath)) ?? 0
+				const laterFetchCount = await readFetchMessageRpcCount(sidebar)
 
 				const afterIdle = await captureScroller(sidebar)
+				await testInfo.attach("chat-idle-anchor-diagnostics.json", {
+					body: JSON.stringify({ anchor, browsing, afterIdle, settledFetchCount, laterFetchCount }, null, 2),
+					contentType: "application/json",
+				})
 				expectUniqueOrderedRows(afterIdle)
 				const sameAnchor = afterIdle.visibleRows.find((row) => row.ts === anchor.ts)
 				if (!sameAnchor) throw new Error("idle window maintenance must preserve the user's visible anchor")

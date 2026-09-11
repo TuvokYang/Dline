@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils"
 import { TaskServiceClient } from "@/services/grpc-client"
 import { isApiReqActive } from "@/utils/streaming"
 
+import { useBrowsingScrollAnchor } from "../../hooks/useBrowsingScrollAnchor"
 import type { ChatState, MessageHandlers, ScrollBehavior } from "../../types/chatTypes"
 import { isToolGroup } from "../../utils/messageUtils"
 import {
@@ -62,7 +63,6 @@ type PendingAnchor = {
 
 type ScrollEdge = "top" | "bottom"
 type UserScrollIntent = { direction: "up" | "down"; recordedAt: number }
-type BrowsingViewportAnchor = { ts: number; top: number }
 
 export const MessagesArea: React.FC<MessagesAreaProps> = ({
 	task,
@@ -84,10 +84,12 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 	const latestExtensionRangeRef = useRef<VisibleMessageRange | null>(null)
 	const latestVisibleAnchorTsRef = useRef<number | null>(null)
 	const userScrollIntentRef = useRef<UserScrollIntent | null>(null)
-	const browsingViewportAnchorRef = useRef<BrowsingViewportAnchor | null>(null)
-	const browsingAnchorRestorePendingRef = useRef(false)
-	const browsingAnchorRestoreFrameRef = useRef<number | null>(null)
-	const renderedMessageWindowRef = useRef(clineMessages)
+	const [scroller, setScroller] = useState<HTMLElement | null>(null)
+	const scrollerRef = useCallback((element: HTMLElement | Window | null) => {
+		setScroller(element instanceof HTMLElement ? element : null)
+	}, [])
+	const { capture: captureBrowsingViewportAnchor, scheduleRestore: scheduleBrowsingViewportAnchorRestore } =
+		useBrowsingScrollAnchor(clineMessages, task.ts, scroller, scrollBehavior)
 	const windowVersionRef = useRef(0)
 	const edgeJumpInFlightRef = useRef<ScrollEdge | null>(null)
 
@@ -98,21 +100,17 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 	const wasBtnShownRef = useRef(false)
 	const showScrollToBottomRef = useRef(false)
 	// Track webview visibility so we can pause Virtuoso updates when hidden
-	const isWebviewHiddenRef = useRef(false)
+	const [isWebviewHidden, setIsWebviewHidden] = useState(() => document.visibilityState === "hidden")
+	const isWebviewHiddenRef = useRef(isWebviewHidden)
+	isWebviewHiddenRef.current = isWebviewHidden
 	const lastMessageSignatureRef = useRef("")
-	// Cache the last visible messages snapshot so Virtuoso data stays stable while hidden
-	const cachedVisibleMessagesRef = useRef<(ClineMessage | ClineMessage[])[]>([])
+	// A hidden snapshot belongs to exactly one Task and is invalidated on visibility restoration.
+	const cachedVisibleMessagesRef = useRef<{ taskTs: number; rows: (ClineMessage | ClineMessage[])[] } | null>(null)
 
 	// Layout effects run before passive effects. Keep these mirrors current during
 	// render so initial async hydration can calculate the real loaded bottom.
 	firstItemIndexRef.current = firstItemIndex
 	clineMessagesLengthRef.current = clineMessages.length
-	if (renderedMessageWindowRef.current !== clineMessages) {
-		if (scrollBehavior.disableAutoScrollRef.current && browsingViewportAnchorRef.current) {
-			browsingAnchorRestorePendingRef.current = true
-		}
-		renderedMessageWindowRef.current = clineMessages
-	}
 
 	const lastRawMessage = useMemo(() => clineMessages.at(-1), [clineMessages])
 	const lastMessageSignature = useMemo(() => {
@@ -133,14 +131,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		latestExtensionRangeRef.current = null
 		latestVisibleAnchorTsRef.current = null
 		userScrollIntentRef.current = null
-		browsingViewportAnchorRef.current = null
-		browsingAnchorRestorePendingRef.current = false
-		if (browsingAnchorRestoreFrameRef.current !== null) {
-			cancelAnimationFrame(browsingAnchorRestoreFrameRef.current)
-			browsingAnchorRestoreFrameRef.current = null
-		}
 		lastMessageSignatureRef.current = ""
-		cachedVisibleMessagesRef.current = []
 		scrollBehavior.cancelProgrammaticScroll()
 	}, [task.ts, scrollBehavior.cancelProgrammaticScroll, scrollBehavior.disableAutoScrollRef])
 
@@ -168,7 +159,9 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 	// programmatic scroll through the shared arbiter.
 	useEffect(() => {
 		const handleVisibility = () => {
-			isWebviewHiddenRef.current = document.visibilityState === "hidden"
+			const hidden = document.visibilityState === "hidden"
+			isWebviewHiddenRef.current = hidden
+			setIsWebviewHidden(hidden)
 		}
 
 		handleVisibility()
@@ -212,95 +205,13 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		})
 	}, [groupedMessages, messageIndexByTs, firstItemIndex])
 
-	const captureBrowsingViewportAnchor = useCallback(
-		(startIndex: number, endIndex: number) => {
-			if (!disableAutoScrollRef.current || browsingAnchorRestorePendingRef.current) return
-			const anchorRow = renderRows[Math.floor((startIndex + endIndex) / 2)]
-			const anchorTs = anchorRow?.endMessageTs
-			if (anchorTs == null) return
-
-			const container = scrollContainerRef.current
-			const scroller = container?.querySelector<HTMLElement>('[data-virtuoso-scroller="true"]')
-			const elements = container?.querySelectorAll<HTMLElement>(`[data-message-ts="${anchorTs}"]`)
-			if (!scroller || !elements) return
-
-			const scrollerRect = scroller.getBoundingClientRect()
-			const element = [...elements].find((candidate) => {
-				const rect = candidate.getBoundingClientRect()
-				return rect.bottom > scrollerRect.top && rect.top < scrollerRect.bottom
-			})
-			if (!element) return
-
-			browsingViewportAnchorRef.current = {
-				ts: anchorTs,
-				top: element.getBoundingClientRect().top - scrollerRect.top,
-			}
-		},
-		[disableAutoScrollRef, renderRows, scrollContainerRef],
-	)
-
-	const restoreBrowsingViewportAnchor = useCallback(() => {
-		if (!browsingAnchorRestorePendingRef.current) return
-		if (!disableAutoScrollRef.current) {
-			browsingAnchorRestorePendingRef.current = false
-			browsingViewportAnchorRef.current = null
-			return
-		}
-
-		const anchor = browsingViewportAnchorRef.current
-		const container = scrollContainerRef.current
-		const scroller = container?.querySelector<HTMLElement>('[data-virtuoso-scroller="true"]')
-		const elements = anchor ? container?.querySelectorAll<HTMLElement>(`[data-message-ts="${anchor.ts}"]`) : undefined
-		if (!anchor || !scroller || !elements) return
-
-		const scrollerRect = scroller.getBoundingClientRect()
-		const element = [...elements].find((candidate) => {
-			const rect = candidate.getBoundingClientRect()
-			return rect.bottom > scrollerRect.top - 150 && rect.top < scrollerRect.bottom + 150
-		})
-		if (!element) return
-
-		const currentTop = element.getBoundingClientRect().top - scrollerRect.top
-		const delta = currentTop - anchor.top
-		if (Math.abs(delta) > 0.5) {
-			virtuosoRef.current?.scrollBy({ top: delta, behavior: "auto" })
-		}
-		browsingAnchorRestorePendingRef.current = false
-	}, [disableAutoScrollRef, scrollContainerRef, virtuosoRef])
-
-	const scheduleBrowsingViewportAnchorRestore = useCallback(() => {
-		if (!browsingAnchorRestorePendingRef.current) return
-		if (browsingAnchorRestoreFrameRef.current !== null) {
-			cancelAnimationFrame(browsingAnchorRestoreFrameRef.current)
-		}
-		browsingAnchorRestoreFrameRef.current = requestAnimationFrame(() => {
-			browsingAnchorRestoreFrameRef.current = null
-			restoreBrowsingViewportAnchor()
-		})
-	}, [restoreBrowsingViewportAnchor])
-
-	useEffect(
-		() => () => {
-			if (browsingAnchorRestoreFrameRef.current !== null) {
-				cancelAnimationFrame(browsingAnchorRestoreFrameRef.current)
-			}
-		},
-		[],
-	)
-
-	useLayoutEffect(() => {
-		if (browsingAnchorRestorePendingRef.current) {
-			scheduleBrowsingViewportAnchorRestore()
-		}
-	})
-
 	const visibleGroupedMessages = useMemo<(ClineMessage | ClineMessage[])[]>(() => {
 		// When the webview is hidden (user switched to another tab), return the
 		// cached snapshot so Virtuoso stays idle instead of re-laying-out invisibly.
-		if (isWebviewHiddenRef.current) {
+		if (isWebviewHidden) {
 			const cached = cachedVisibleMessagesRef.current
-			if (cached.length > 0) {
-				return cached
+			if (cached?.taskTs === task.ts) {
+				return cached.rows
 			}
 		}
 
@@ -315,9 +226,9 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		}
 		// Always update the cache when we compute a fresh result so the next
 		// hidden-cycle can reuse it.
-		cachedVisibleMessagesRef.current = result
+		cachedVisibleMessagesRef.current = { taskTs: task.ts, rows: result }
 		return result
-	}, [renderRows])
+	}, [isWebviewHidden, renderRows, task.ts])
 
 	const findRowOffsetByMessageTs = useCallback(
 		(ts: number) => {
@@ -408,6 +319,24 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		},
 		[disableAutoScrollRef, renderRows.length, requestProgrammaticScroll, scrollToBottomLast, scrollToRowOffset],
 	)
+
+	const handleMeasuredLayoutChange = useCallback(() => {
+		if (disableAutoScrollRef.current) {
+			scheduleBrowsingViewportAnchorRestore()
+			return
+		}
+		if (!isWebviewHiddenRef.current && isEdgeWindowReady("bottom")) {
+			scrollToLoadedEdge("bottom")
+		}
+	}, [disableAutoScrollRef, isEdgeWindowReady, scheduleBrowsingViewportAnchorRestore, scrollToLoadedEdge])
+
+	useEffect(() => {
+		if (!scroller) return
+		// Input/header changes resize this element without resizing window.
+		const observer = new ResizeObserver(handleMeasuredLayoutChange)
+		observer.observe(scroller)
+		return () => observer.disconnect()
+	}, [handleMeasuredLayoutChange, scroller])
 
 	useLayoutEffect(() => {
 		const pendingEdge = pendingEdgeScrollRef.current
@@ -732,9 +661,10 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 			}
 			latestVisibleMessageRangeRef.current = visible
 			latestVisibleAnchorTsRef.current = firstVisibleRow.startMessageTs ?? null
-			captureBrowsingViewportAnchor(localStart, localEnd)
+			captureBrowsingViewportAnchor()
 			const allLoaded = isWholeConversationLoaded(window)
-			setShowScrollToBottom(disableAutoScrollRef.current || !allLoaded)
+			const absoluteBottomLoaded = window.start + window.length >= window.total
+			setShowScrollToBottom(disableAutoScrollRef.current || !absoluteBottomLoaded)
 
 			// Range changes also fire while Virtuoso is establishing the initial
 			// auto-follow position. Only explicit browsing intent may grow history;
@@ -890,9 +820,10 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 					key={virtuosoInstanceKey}
 					rangeChanged={handleRangeChanged}
 					ref={virtuosoRef}
+					scrollerRef={scrollerRef}
 					style={{ overflowAnchor: "none" }}
 					totalCount={visibleGroupedMessages.length}
-					totalListHeightChanged={scheduleBrowsingViewportAnchorRestore}
+					totalListHeightChanged={handleMeasuredLayoutChange}
 				/>
 
 				{/* Floating scroll direction button — appears on scroll, auto-hides after 5s idle */}

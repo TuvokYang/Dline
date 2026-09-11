@@ -59,7 +59,7 @@ describe("MessageRenderer tool-group height boundary", () => {
 			/>,
 		)
 
-		expect(screen.getByTestId("tool-group-scroll")).toHaveClass("max-h-[60vh]", "overflow-y-auto", "overscroll-contain")
+		expect(screen.getByTestId("tool-group-scroll")).toHaveClass("max-h-[60vh]", "overflow-y-auto", "overscroll-x-contain")
 		expect(screen.getByTestId("tool-group-renderer")).toBeInTheDocument()
 	})
 })

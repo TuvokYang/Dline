@@ -45,7 +45,7 @@ describe("LoadCapabilityRow", () => {
 		expect(html).toContain("Follow every review step.")
 		expect(html).toContain("max-h-[60vh]")
 		expect(html).toContain("overflow-y-auto")
-		expect(html).toContain("overscroll-contain")
+		expect(html).toContain("overscroll-x-contain")
 	})
 
 	it("renders failed state with clear error", () => {

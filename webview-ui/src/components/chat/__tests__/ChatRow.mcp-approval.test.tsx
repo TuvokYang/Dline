@@ -56,7 +56,7 @@ describe("ChatRow MCP tool rendering", () => {
 		expect(screen.getByText("search")).toBeInTheDocument()
 		expect(screen.getByText("Search docs")).toBeInTheDocument()
 		expect(screen.queryByText("Auto-approve")).not.toBeInTheDocument()
-		expect(screen.getByTestId("mcp-request-card")).toHaveClass("max-h-[60vh]", "overflow-y-auto", "overscroll-contain")
+		expect(screen.getByTestId("mcp-request-card")).toHaveClass("max-h-[60vh]", "overflow-y-auto", "overscroll-x-contain")
 	})
 
 	it("caps MCP notifications at 60vh", () => {
@@ -72,7 +72,7 @@ describe("ChatRow MCP tool rendering", () => {
 			/>,
 		)
 
-		expect(screen.getByTestId("mcp-notification-card")).toHaveClass("max-h-[60vh]", "overflow-y-auto", "overscroll-contain")
+		expect(screen.getByTestId("mcp-notification-card")).toHaveClass("max-h-[60vh]", "overflow-y-auto", "overscroll-x-contain")
 	})
 
 	it("caps generated explanation cards without affecting excluded output rows", () => {
@@ -91,7 +91,7 @@ describe("ChatRow MCP tool rendering", () => {
 		expect(screen.getByTestId("generate-explanation-scroll")).toHaveClass(
 			"max-h-[60vh]",
 			"overflow-y-auto",
-			"overscroll-contain",
+			"overscroll-x-contain",
 		)
 	})
 })

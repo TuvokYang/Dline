@@ -24,7 +24,7 @@ describe("CompletionOutputRow height boundary", () => {
 		expect(screen.getByTestId("completion-output-scroll")).toHaveClass(
 			"max-h-[60vh]",
 			"overflow-y-auto",
-			"overscroll-contain",
+			"overscroll-x-contain",
 		)
 	})
 })
