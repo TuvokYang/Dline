@@ -16,7 +16,7 @@ describe("multifile-diff", () => {
 
 		// Create stubs for dependencies
 		messageStateHandlerStub = { clineMessages: [] }
-		checkpointTrackerStub = { getDiffSet: vi.fn() }
+		checkpointTrackerStub = { getDiffSet: vi.fn(), getTaskDiffSet: vi.fn() }
 	})
 
 	afterEach(() => {
@@ -61,8 +61,8 @@ describe("multifile-diff", () => {
 			const messagesWithCompletion: ClineMessage[] = [
 				{
 					ts: 1234567000,
-					type: "say",
-					say: "completion_result",
+					type: "ask",
+					ask: "completion_result",
 					lastCheckpointHash: "previous123",
 				},
 				...mockMessages,
@@ -72,7 +72,7 @@ describe("multifile-diff", () => {
 				get: () => messagesWithCompletion,
 			})
 
-			checkpointTrackerStub.getDiffSet.mockResolvedValue(mockChangedFiles)
+			checkpointTrackerStub.getTaskDiffSet.mockResolvedValue(mockChangedFiles)
 
 			// Act
 			await showChangedFilesDiff(
@@ -83,7 +83,7 @@ describe("multifile-diff", () => {
 			)
 
 			// Assert
-			vitestExpect(checkpointTrackerStub.getDiffSet).toHaveBeenCalledWith("previous123", mockHash)
+			vitestExpect(checkpointTrackerStub.getTaskDiffSet).toHaveBeenCalledWith("previous123", mockHash)
 			vitestExpect(HostProvider.diff.openMultiFileDiff).toHaveBeenCalledWith({
 				title: "New changes",
 				diffs: [
@@ -219,7 +219,7 @@ describe("multifile-diff", () => {
 				get: () => messagesWithFirstCheckpoint,
 			})
 
-			checkpointTrackerStub.getDiffSet.mockResolvedValue([
+			checkpointTrackerStub.getTaskDiffSet.mockResolvedValue([
 				{
 					relativePath: "test.js",
 					absolutePath: "/project/test.js",
@@ -237,7 +237,7 @@ describe("multifile-diff", () => {
 			)
 
 			// Assert
-			vitestExpect(checkpointTrackerStub.getDiffSet).toHaveBeenCalledWith("first123", mockHash)
+			vitestExpect(checkpointTrackerStub.getTaskDiffSet).toHaveBeenCalledWith("first123", mockHash)
 		})
 
 		it("should show error when no previous checkpoint hash found for new changes", async () => {

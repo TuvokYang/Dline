@@ -615,6 +615,79 @@ describe("CheckpointTracker with tracked files in an unborn user repository", ()
 		}
 	})
 
+	it("limits completion diffs to checkpoint commits owned by the requesting task", async () => {
+		const sandbox = await createUnbornSandbox()
+		const taskAId = "task-completion-owner-a"
+		const taskBId = "task-completion-owner-b"
+		try {
+			const taskATracker = await CheckpointTracker.create(taskAId, true, sandbox.workspacePath)
+			const taskBTracker = await CheckpointTracker.create(taskBId, true, sandbox.workspacePath)
+			if (!taskATracker || !taskBTracker) throw new Error("checkpoint_tracker_missing")
+			const taskAFiles = new TaskFileTracker(taskAId)
+			const taskBFiles = new TaskFileTracker(taskBId)
+			taskATracker.setTaskFileTracker(taskAFiles)
+			taskBTracker.setTaskFileTracker(taskBFiles)
+
+			const shadowGitPath = await getShadowGitPath(hashWorkingDir(sandbox.workspacePath))
+			const shadowGit = simpleGit(path.dirname(shadowGitPath))
+			const taskStartHash = (await shadowGit.revparse(["HEAD"])).trim()
+
+			taskAFiles.trackModification(sandbox.trackedFile)
+			await fs.writeFile(sandbox.trackedFile, "task A change")
+			const taskAHash = await taskATracker.commit()
+			expectCheckpointHash(taskAHash)
+			expect(await taskBTracker.getTaskDiffCount(taskStartHash, taskAHash)).toBe(0)
+
+			taskBFiles.trackModification(sandbox.staleFile)
+			await fs.writeFile(sandbox.staleFile, "task B change")
+			const taskBHash = await taskBTracker.commit()
+			expectCheckpointHash(taskBHash)
+
+			const taskADiff = await taskATracker.getTaskDiffSet(taskStartHash, taskBHash)
+			expect(taskADiff).toEqual([
+				expect.objectContaining({
+					relativePath: "write_test.txt",
+					before: "before checkpoint",
+					after: "task A change",
+				}),
+			])
+			expect(await taskATracker.getTaskDiffCount(taskStartHash, taskBHash)).toBe(1)
+		} finally {
+			WorkspaceFileRegistry.getInstance().releaseTask(taskAId)
+			WorkspaceFileRegistry.getInstance().releaseTask(taskBId)
+			await disposeSandbox(sandbox)
+		}
+	})
+
+	it("hides completion changes when a task restores its touched file to the segment baseline", async () => {
+		const sandbox = await createUnbornSandbox()
+		const taskId = "task-completion-net-zero"
+		try {
+			const tracker = await CheckpointTracker.create(taskId, true, sandbox.workspacePath)
+			if (!tracker) throw new Error("checkpoint_tracker_missing")
+			const taskFiles = new TaskFileTracker(taskId)
+			tracker.setTaskFileTracker(taskFiles)
+			const shadowGitPath = await getShadowGitPath(hashWorkingDir(sandbox.workspacePath))
+			const shadowGit = simpleGit(path.dirname(shadowGitPath))
+			const taskStartHash = (await shadowGit.revparse(["HEAD"])).trim()
+
+			taskFiles.trackModification(sandbox.trackedFile)
+			await fs.writeFile(sandbox.trackedFile, "temporary task change")
+			expectCheckpointHash(await tracker.commit())
+
+			taskFiles.trackModification(sandbox.trackedFile)
+			await fs.writeFile(sandbox.trackedFile, "before checkpoint")
+			const completionHash = await tracker.commit()
+			expectCheckpointHash(completionHash)
+
+			expect(await tracker.getTaskDiffCount(taskStartHash, completionHash)).toBe(0)
+			expect(await tracker.getTaskDiffSet(taskStartHash, completionHash)).toEqual([])
+		} finally {
+			WorkspaceFileRegistry.getInstance().releaseTask(taskId)
+			await disposeSandbox(sandbox)
+		}
+	})
+
 	it("rejects a tracked path outside the checkpoint worktree before invoking git add", async () => {
 		const workspacePath = path.resolve("checkpoint-owned-worktree")
 		const outsidePath = path.resolve("outside-worktree", "write_test.txt")

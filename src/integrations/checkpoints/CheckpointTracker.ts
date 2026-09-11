@@ -17,6 +17,13 @@ import type { TaskFileTracker } from "./TaskFileTracker"
  */
 type CheckpointOperation = "CHECKPOINT_INIT" | "CHECKPOINT_COMMIT" | "CHECKPOINT_RESTORE"
 
+type CheckpointChangedFile = {
+	relativePath: string
+	absolutePath: string
+	before: string
+	after: string
+}
+
 /**
  * CheckpointTracker Module
  *
@@ -409,7 +416,7 @@ class CheckpointTracker {
 			return this.getCurrentRestorePoint(git)
 		}
 
-		const commitMessage = `checkpoint-${this.cwdHash}-${this.taskId}`
+		const commitMessage = this.getTaskCheckpointCommitMessage()
 
 		// Ensure shadow git identity is set before committing to prevent
 		// leaking the user's global git name/email into checkpoint history.
@@ -704,6 +711,71 @@ class CheckpointTracker {
 		Logger.debug(`[CheckpointTracker] Successfully restored ${files.length} file(s) to checkpoint: ${cleanHash}`)
 	}
 
+	private getTaskCheckpointCommitMessage(): string {
+		return `checkpoint-${this.cwdHash}-${this.taskId}`
+	}
+
+	/**
+	 * Return the files with a net change between two boundaries that were touched
+	 * by checkpoint commits owned by this task. Commits from other tasks share the
+	 * same shadow branch and must not leak into completion results.
+	 */
+	private async getTaskOwnedNetChangedFileNames(git: SimpleGit, lhsHash: string, rhsHash: string): Promise<string[]> {
+		const diffRange = `${lhsHash}..${rhsHash}`
+		const logOutput = await git.raw(["log", "--format=%H%x00%s%x00", diffRange])
+		const logFields = logOutput.split("\0")
+		const taskCommitHashes: string[] = []
+		const taskCommitMessage = this.getTaskCheckpointCommitMessage()
+
+		for (let index = 0; index + 1 < logFields.length; index += 2) {
+			const commitHash = logFields[index]?.trim()
+			const subject = logFields[index + 1]?.trim()
+			if (commitHash && subject === taskCommitMessage) {
+				taskCommitHashes.push(commitHash)
+			}
+		}
+
+		if (taskCommitHashes.length === 0) {
+			return []
+		}
+
+		const taskTouchedFiles = new Set<string>()
+		for (const commitHash of taskCommitHashes) {
+			const pathsOutput = await git.raw(["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "-z", commitHash])
+			for (const filePath of pathsOutput.split("\0").filter(Boolean)) {
+				taskTouchedFiles.add(filePath)
+			}
+		}
+
+		const netChangedOutput = await git.raw(["diff", "--name-only", "-z", diffRange])
+		return netChangedOutput
+			.split("\0")
+			.filter(Boolean)
+			.filter((filePath) => taskTouchedFiles.has(filePath))
+	}
+
+	/** Return completion changes owned by this task between two checkpoint hashes. */
+	public async getTaskDiffSet(lhsHash: string, rhsHash: string): Promise<CheckpointChangedFile[]> {
+		const startTime = performance.now()
+		const cleanLhs = this.cleanCommitHash(lhsHash)
+		const cleanRhs = this.cleanCommitHash(rhsHash)
+		const git = simpleGit(path.dirname(this.shadowGitPath))
+		const changedFileNames = await this.getTaskOwnedNetChangedFileNames(git, cleanLhs, cleanRhs)
+		return this.readDiffSet(git, cleanLhs, cleanRhs, changedFileNames, startTime)
+	}
+
+	/** Return the number of completion changes owned by this task between two checkpoint hashes. */
+	public async getTaskDiffCount(lhsHash: string, rhsHash: string): Promise<number> {
+		const startTime = performance.now()
+		const cleanLhs = this.cleanCommitHash(lhsHash)
+		const cleanRhs = this.cleanCommitHash(rhsHash)
+		const git = simpleGit(path.dirname(this.shadowGitPath))
+		const changedFileNames = await this.getTaskOwnedNetChangedFileNames(git, cleanLhs, cleanRhs)
+		const durationMs = Math.round(performance.now() - startTime)
+		telemetryService.captureCheckpointUsage(this.taskId, "diff_generated", durationMs)
+		return changedFileNames.length
+	}
+
 	/**
 	 * Return an array describing changed files between one commit and either:
 	 *   - another commit (rhsHash provided): uses `git diff --name-only` (read-only, fast)
@@ -714,17 +786,7 @@ class CheckpointTracker {
 	 *                  If omitted, we compare to the working directory.
 	 * @returns Array of file changes with before/after content
 	 */
-	public async getDiffSet(
-		lhsHash: string,
-		rhsHash?: string,
-	): Promise<
-		Array<{
-			relativePath: string
-			absolutePath: string
-			before: string
-			after: string
-		}>
-	> {
+	public async getDiffSet(lhsHash: string, rhsHash?: string): Promise<CheckpointChangedFile[]> {
 		const startTime = performance.now()
 		const cleanLhs = this.cleanCommitHash(lhsHash)
 		const cleanRhs = rhsHash ? this.cleanCommitHash(rhsHash) : undefined
@@ -753,19 +815,20 @@ class CheckpointTracker {
 			})
 		}
 
-		// Read before/after content for each changed file.
-		// `git show` is read-only — safe to run outside the mutex.
-		const result: Array<{
-			relativePath: string
-			absolutePath: string
-			before: string
-			after: string
-		}> = []
+		return this.readDiffSet(git, cleanLhs, cleanRhs, changedFileNames, startTime)
+	}
+
+	private async readDiffSet(
+		git: SimpleGit,
+		cleanLhs: string,
+		cleanRhs: string | undefined,
+		changedFileNames: readonly string[],
+		startTime: number,
+	): Promise<CheckpointChangedFile[]> {
+		const result: CheckpointChangedFile[] = []
 
 		for (const filePath of changedFileNames) {
 			const absolutePath = path.join(this.cwd, filePath)
-
-			// For extensionless files or dotfiles: exclude from diff result if binary
 			const lastDotIndex = filePath.lastIndexOf(".")
 			const lastSlashIndex = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"))
 			const ext = lastDotIndex > lastSlashIndex ? filePath.substring(lastDotIndex).toLowerCase() : ""
@@ -786,7 +849,7 @@ class CheckpointTracker {
 			try {
 				beforeContent = await git.show([`${cleanLhs}:${filePath}`])
 			} catch (_) {
-				// file didn't exist in older commit => remains empty
+				// File did not exist in the older commit.
 			}
 
 			let afterContent = ""
@@ -794,13 +857,13 @@ class CheckpointTracker {
 				try {
 					afterContent = await git.show([`${cleanRhs}:${filePath}`])
 				} catch (_) {
-					// file didn't exist in newer commit => remains empty
+					// File did not exist in the newer commit.
 				}
 			} else {
 				try {
 					afterContent = await fs.readFile(absolutePath, "utf8")
 				} catch (_) {
-					// file might be deleted => remains empty
+					// File may have been deleted from the working directory.
 				}
 			}
 
@@ -814,7 +877,6 @@ class CheckpointTracker {
 
 		const durationMs = Math.round(performance.now() - startTime)
 		telemetryService.captureCheckpointUsage(this.taskId, "diff_generated", durationMs)
-
 		return result
 	}
 

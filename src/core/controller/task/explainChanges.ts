@@ -1,5 +1,5 @@
 import CheckpointTracker from "@integrations/checkpoints/CheckpointTracker"
-import { findLast } from "@shared/array"
+import { resolveCompletionDiffBaseHash } from "@integrations/checkpoints/completion-diff"
 import { Empty } from "@shared/proto/dline/common"
 import { ExplainChangesRequest } from "@shared/proto/dline/task"
 import { HostProvider } from "@/hosts/host-provider"
@@ -127,17 +127,7 @@ export async function explainChanges(controller: Controller, request: ExplainCha
 			return Empty.create({})
 		}
 
-		// Get changed files (using seeNewChangesSinceLastTaskCompletion logic)
-		const lastTaskCompletedMessageCheckpointHash = findLast(
-			clineMessages.slice(0, messageIndex),
-			(m: any) => m.say === "completion_result",
-		)?.lastCheckpointHash
-
-		const firstCheckpointMessageCheckpointHash = clineMessages.find(
-			(m: any) => m.say === "checkpoint_created",
-		)?.lastCheckpointHash
-
-		const previousCheckpointHash = lastTaskCompletedMessageCheckpointHash || firstCheckpointMessageCheckpointHash
+		const previousCheckpointHash = resolveCompletionDiffBaseHash(clineMessages, messageIndex)
 
 		if (!previousCheckpointHash) {
 			HostProvider.window.showMessage({
@@ -148,7 +138,7 @@ export async function explainChanges(controller: Controller, request: ExplainCha
 			return Empty.create({})
 		}
 
-		const changedFiles = await checkpointTracker.getDiffSet(previousCheckpointHash, hash)
+		const changedFiles = await checkpointTracker.getTaskDiffSet(previousCheckpointHash, hash)
 		if (!changedFiles?.length) {
 			HostProvider.window.showMessage({
 				type: ShowMessageType.INFORMATION,

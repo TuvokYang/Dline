@@ -1,6 +1,6 @@
 import { HostProvider } from "@/hosts/host-provider"
 import CheckpointTracker from "@/integrations/checkpoints/CheckpointTracker"
-import { findLast } from "@/shared/array"
+import { resolveCompletionDiffBaseHash } from "@/integrations/checkpoints/completion-diff"
 import { ShowMessageType } from "@/shared/proto/dline/host"
 import { Logger } from "@/shared/services/Logger"
 import { MessageStateHandler } from "./message-state"
@@ -118,20 +118,7 @@ async function getChangesSinceLastTaskCompletion(
 	messageIndex: number,
 	lastCheckpointHash: string,
 ): Promise<ChangedFile[]> {
-	// Get last task completed
-	const lastTaskCompletedMessageCheckpointHash = findLast(
-		messageStateHandler.clineMessages.slice(0, messageIndex),
-		(m) => m.say === "completion_result",
-	)?.lastCheckpointHash // ask is only used to relinquish control, its the last say we care about
-
-	// This value *should* always exist
-	const firstCheckpointMessageCheckpointHash = messageStateHandler.clineMessages.find(
-		(m) => m.say === "checkpoint_created",
-	)?.lastCheckpointHash
-
-	// either use the diff between the first checkpoint and the task completion, or the diff
-	// between the latest two task completions
-	const previousCheckpointHash = lastTaskCompletedMessageCheckpointHash || firstCheckpointMessageCheckpointHash
+	const previousCheckpointHash = resolveCompletionDiffBaseHash(messageStateHandler.clineMessages, messageIndex)
 
 	if (!previousCheckpointHash) {
 		HostProvider.window.showMessage({
@@ -141,6 +128,5 @@ async function getChangesSinceLastTaskCompletion(
 		return []
 	}
 
-	// Get changed files between current state and commit
-	return await checkpointTracker.getDiffSet(previousCheckpointHash, lastCheckpointHash)
+	return await checkpointTracker.getTaskDiffSet(previousCheckpointHash, lastCheckpointHash)
 }

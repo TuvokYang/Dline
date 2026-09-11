@@ -22,6 +22,7 @@ import { MessageStateHandler } from "../../core/task/message-state"
 import { TaskState } from "../../core/task/TaskState"
 import type { ClineContent } from "../../shared/messages/content"
 import { type ChatRestoreBoundary, resolveChatRestoreBoundary } from "./chat-restore-boundary"
+import { resolveCompletionDiffBaseHash } from "./completion-diff"
 import { CHECKPOINT_TRACKER_ATTEMPT_TIMEOUT_MS } from "./initializer"
 import { ICheckpointManager } from "./types"
 
@@ -452,18 +453,10 @@ export class TaskCheckpointManager implements ICheckpointManager {
 				| undefined
 
 			if (seeNewChangesSinceLastTaskCompletion) {
-				// Get last task completed
-				const lastTaskCompletedMessageCheckpointHash = findLast(
-					this.services.messageStateHandler.clineMessages.slice(0, messageIndex),
-					(m) => m.say === "completion_result",
-				)?.lastCheckpointHash
-
-				// This value *should* always exist
-				const firstCheckpointMessageCheckpointHash = this.services.messageStateHandler.clineMessages.find(
-					(m) => m.say === "checkpoint_created",
-				)?.lastCheckpointHash
-
-				const previousCheckpointHash = lastTaskCompletedMessageCheckpointHash || firstCheckpointMessageCheckpointHash
+				const previousCheckpointHash = resolveCompletionDiffBaseHash(
+					this.services.messageStateHandler.clineMessages,
+					messageIndex,
+				)
 
 				if (!previousCheckpointHash) {
 					const errorMessage = "Unexpected error: No checkpoint hash found"
@@ -476,8 +469,7 @@ export class TaskCheckpointManager implements ICheckpointManager {
 					return
 				}
 
-				// Get changed files between current state and commit
-				changedFiles = await this.state.checkpointTracker.getDiffSet(previousCheckpointHash, hash)
+				changedFiles = await this.state.checkpointTracker.getTaskDiffSet(previousCheckpointHash, hash)
 				if (!changedFiles?.length) {
 					HostProvider.window.showMessage({
 						type: ShowMessageType.INFORMATION,
@@ -581,21 +573,7 @@ export class TaskCheckpointManager implements ICheckpointManager {
 				return false
 			}
 
-			// Get last task completed
-			const lastTaskCompletedMessage = findLast(
-				this.services.messageStateHandler.clineMessages.slice(0, messageIndex),
-				(m) => m.say === "completion_result",
-			)
-
-			// Get last task completed
-			const lastTaskCompletedMessageCheckpointHash = lastTaskCompletedMessage?.lastCheckpointHash
-
-			// This value *should* always exist
-			const firstCheckpointMessageCheckpointHash = this.services.messageStateHandler.clineMessages.find(
-				(m) => m.say === "checkpoint_created",
-			)?.lastCheckpointHash
-
-			const previousCheckpointHash = lastTaskCompletedMessageCheckpointHash || firstCheckpointMessageCheckpointHash
+			const previousCheckpointHash = resolveCompletionDiffBaseHash(clineMessages, messageIndex)
 
 			if (!previousCheckpointHash) {
 				// A task closed before its baseline commit landed has no file
@@ -607,8 +585,7 @@ export class TaskCheckpointManager implements ICheckpointManager {
 				return false
 			}
 
-			// Get count of changed files between current state and commit
-			const changedFilesCount = (await this.state.checkpointTracker.getDiffCount(previousCheckpointHash, hash)) || 0
+			const changedFilesCount = (await this.state.checkpointTracker.getTaskDiffCount(previousCheckpointHash, hash)) || 0
 			return changedFilesCount > 0
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : "Unknown error"
