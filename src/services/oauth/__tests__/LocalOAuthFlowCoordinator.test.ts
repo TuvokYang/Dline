@@ -208,12 +208,12 @@ describe("LocalOAuthFlowCoordinator", () => {
 		const originalClose = LocalOAuthCallbackServer.prototype.close
 		let closeCount = 0
 		vi.spyOn(LocalOAuthCallbackServer.prototype, "close").mockImplementation(async function (this: LocalOAuthCallbackServer) {
-			await originalClose.call(this)
 			closeCount++
 			if (closeCount === 1) {
 				markFirstCloseReachedBarrier()
 				await firstCloseGate
 			}
+			await originalClose.call(this)
 		})
 		const acquire = vi.fn(async () => ({ release: async () => undefined }))
 		const coordinator = await createCoordinator({ strategy: new TestStrategy(port), lease: { acquire } })
